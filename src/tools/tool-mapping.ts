@@ -214,6 +214,26 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 		serverId: "godot",
 		toolName: "find_script_references"
 	},
+	"mcp_godot_list_project_global_classes": {
+		serverId: "godot",
+		toolName: "list_project_global_classes"
+	},
+	"mcp_godot_list_project_tests": {
+		serverId: "godot",
+		toolName: "list_project_tests"
+	},
+	"mcp_godot_inspect_csharp_project_support": {
+		serverId: "godot",
+		toolName: "inspect_csharp_project_support"
+	},
+	"mcp_godot_get_import_metadata": {
+		serverId: "godot",
+		toolName: "get_import_metadata"
+	},
+	"mcp_godot_audit_project_health": {
+		serverId: "godot",
+		toolName: "audit_project_health"
+	},
 	"mcp_godot_propose_create_text_file": {
 		serverId: "godot",
 		toolName: "propose_create_text_file"

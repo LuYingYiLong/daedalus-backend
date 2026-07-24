@@ -389,6 +389,47 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 			});
 		}
 
+		if (toolName.includes("list_project_global_classes")) {
+			return createDisplay("godot", "Godot", "search", "List Global Classes", "Scan Godot global classes", {
+				kind: "unknown",
+				label: "global classes"
+			});
+		}
+
+		if (toolName.includes("list_project_tests")) {
+			const targetLabel: string = getStringArg(args, "searchPath") ?? "tests";
+			return createDisplay("godot", "Godot", "search", "List Tests", `Discover project tests in ${targetLabel}`, {
+				kind: "file",
+				path: targetLabel,
+				label: targetLabel
+			});
+		}
+
+		if (toolName.includes("inspect_csharp_project_support")) {
+			const targetLabel: string = getStringArg(args, "searchPath") ?? ".";
+			return createDisplay("godot", "Godot", "read", "Inspect C# Support", `Inspect C# project support in ${targetLabel}`, {
+				kind: "file",
+				path: targetLabel,
+				label: targetLabel
+			});
+		}
+
+		if (toolName.includes("get_import_metadata")) {
+			const targetLabel: string = getStringArg(args, "resourcePath") ?? "resource";
+			return createDisplay("godot", "Godot", "read", "Read Import Metadata", `Read import metadata for ${targetLabel}`, {
+				kind: "file",
+				path: targetLabel,
+				label: targetLabel
+			});
+		}
+
+		if (toolName.includes("audit_project_health")) {
+			return createDisplay("godot", "Godot", "read", "Audit Project Health", "Audit Godot project health", {
+				kind: "unknown",
+				label: "project health"
+			});
+		}
+
 		if (toolName.includes("get_editor_config_summary")) {
 			return createDisplay("godot", "Godot", "read", "读取编辑器摘要", "读取 Godot 编辑器设置与项目编辑状态摘要", {
 				kind: "unknown",

@@ -72,6 +72,12 @@ const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
 	find_unused_resources: "mcp_godot_find_unused_resources",
 	find_scene_nodes: "mcp_godot_find_scene_nodes",
 	find_script_references: "mcp_godot_find_script_references",
+	list_project_global_classes: "mcp_godot_list_project_global_classes",
+	list_global_classes: "mcp_godot_list_project_global_classes",
+	list_project_tests: "mcp_godot_list_project_tests",
+	inspect_csharp_project_support: "mcp_godot_inspect_csharp_project_support",
+	get_import_metadata: "mcp_godot_get_import_metadata",
+	audit_project_health: "mcp_godot_audit_project_health",
 	propose_create_text_file: "mcp_godot_propose_create_text_file",
 	create_text_file: "mcp_godot_create_text_file",
 	propose_overwrite_text_file: "mcp_godot_propose_overwrite_text_file",
@@ -174,7 +180,8 @@ const RESOURCE_PATH_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_godot_lsp_get_document_symbols",
 	"mcp_godot_lsp_hover",
 	"mcp_godot_lsp_goto_definition",
-	"mcp_godot_find_script_references"
+	"mcp_godot_find_script_references",
+	"mcp_godot_get_import_metadata"
 ]);
 
 function decodeXmlEntities(text: string): string {
@@ -361,6 +368,13 @@ function defaultParameterName(toolName: string): string | undefined {
 
 	if (toolName === "mcp_godot_read_editor_config_file") {
 		return "fileId";
+	}
+
+	if (
+		toolName === "mcp_godot_list_project_tests"
+		|| toolName === "mcp_godot_inspect_csharp_project_support"
+	) {
+		return "searchPath";
 	}
 
 	if (

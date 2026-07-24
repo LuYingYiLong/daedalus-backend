@@ -14,6 +14,7 @@ const frontendRpcSkipReason: string | undefined = configuredPluginDir === undefi
 	: undefined;
 const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"attachment.image.generated.get",
+	"backend.shutdown",
 	"backend.update.check",
 	"backend.update.install",
 	"generalSettings.get",

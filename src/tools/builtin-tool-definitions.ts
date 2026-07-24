@@ -620,6 +620,52 @@ const GODOT_PROJECT_SEMANTIC_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			includeAddons: { type: "boolean" }
 		},
 		["scriptPath"]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_list_project_global_classes",
+		"Read-only scan for GDScript class_name declarations and C# [GlobalClass] classes.",
+		{
+			filter: { type: "string", description: "Optional case-insensitive filter over class name, base class, path, and language." },
+			includeAddons: { type: "boolean", description: "Defaults to false." },
+			limit: { type: "integer", minimum: 1, maximum: 500 }
+		},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_list_project_tests",
+		"Read-only static discovery for GUT, GdUnit, and Python test files. This does not run tests.",
+		{
+			searchPath: { type: "string", description: "Project-relative or res:// path. Defaults to test/ and tests/." },
+			framework: { type: "string", enum: ["gut", "gdunit", "python"] },
+			limit: { type: "integer", minimum: 1, maximum: 500 }
+		},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_inspect_csharp_project_support",
+		"Read-only scan of .csproj and .sln files for TargetFramework, Godot SDK, package references, and project references.",
+		{
+			searchPath: { type: "string", description: "Project-relative or res:// path. Defaults to project root." },
+			limit: { type: "integer", minimum: 1, maximum: 500 }
+		},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_get_import_metadata",
+		"Read-only parser for a resource's .import metadata file.",
+		{
+			resourcePath: { type: "string", description: "Resource path, for example res://assets/player.png." }
+		},
+		["resourcePath"]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_audit_project_health",
+		"Read-only static health audit combining dependency, global class, test, C#, and import metadata checks.",
+		{
+			includeAddons: { type: "boolean", description: "Defaults to false." },
+			limit: { type: "integer", minimum: 1, maximum: 500 }
+		},
+		[]
 	)
 ];
 

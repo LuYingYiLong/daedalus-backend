@@ -61,9 +61,13 @@ test("workspace tool catalog keeps dynamic MCP definitions isolated", (): void =
 test("workspace tool catalog keeps builtin metadata complete", (): void => {
 	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a" });
 	const sceneCapture = catalog.getEntry("mcp_godot_editor_capture_scene_view");
+	const healthAudit = catalog.getEntry("mcp_godot_audit_project_health");
 	assert.deepEqual(sceneCapture?.mapping, { serverId: "godot_editor", toolName: "capture_scene_view" });
 	assert.equal(sceneCapture?.policy.risk, "read");
 	assert.equal(sceneCapture?.capabilityRequirement, "sceneViewCapture");
+	assert.deepEqual(healthAudit?.mapping, { serverId: "godot", toolName: "audit_project_health" });
+	assert.equal(healthAudit?.policy.risk, "read");
+	assert.equal(catalog.getToolNamesForPhase("read").includes("mcp_godot_audit_project_health"), true);
 });
 
 test("workspace tool catalog exposes approval reason schema for write tools", (): void => {

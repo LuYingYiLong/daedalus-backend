@@ -61,6 +61,8 @@ test("builtin tool definitions expose representative Godot tools", (): void => {
 	assert.ok(names.includes("mcp_godot_read_text_file"));
 	assert.ok(names.includes("mcp_godot_propose_replace_text_in_file"));
 	assert.ok(names.includes("mcp_godot_apply_scene_patch"));
+	assert.ok(names.includes("mcp_godot_audit_project_health"));
+	assert.ok(names.includes("mcp_godot_get_import_metadata"));
 	assert.ok(names.includes("mcp_terminal_get_job_status"));
 	assert.ok(names.includes("mcp_terminal_cancel_job"));
 	assert.ok(names.includes("mcp_web_search"));
@@ -156,6 +158,10 @@ test("tool mapping resolves builtin and dynamic tools", (): void => {
 	assert.deepEqual(resolveToolMapping("mcp_godot_read_text_file"), {
 		serverId: "godot",
 		toolName: "read_text_file"
+	});
+	assert.deepEqual(resolveToolMapping("mcp_godot_audit_project_health"), {
+		serverId: "godot",
+		toolName: "audit_project_health"
 	});
 	assert.deepEqual(resolveToolMapping("mcp_terminal_get_job_status"), {
 		serverId: "terminal",

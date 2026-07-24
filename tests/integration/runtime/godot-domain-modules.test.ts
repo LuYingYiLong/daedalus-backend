@@ -46,6 +46,12 @@ test("Godot domain modules preserve file, log, and editor config behavior", asyn
 	await fs.mkdir(path.join(projectRoot, "assets"), { recursive: true });
 	await fs.mkdir(path.join(projectRoot, "scenes"), { recursive: true });
 	await fs.mkdir(path.join(projectRoot, "scripts"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "tests"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "addons", "demo"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "addons", "gut"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "addons", "gdUnit4"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "broken-csharp"), { recursive: true });
+	await fs.mkdir(path.join(projectRoot, "Shared"), { recursive: true });
 	await fs.mkdir(path.join(appData, "Godot", "app_userdata", "Daedalus Test", "logs"), { recursive: true });
 	await fs.mkdir(path.join(appData, "Godot"), { recursive: true });
 	await fs.writeFile(path.join(projectRoot, "project.godot"), [
@@ -72,8 +78,84 @@ test("Godot domain modules preserve file, log, and editor config behavior", asyn
 		"const Missing = preload(\"res://assets/missing.png\")",
 		""
 	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "scripts", "enemy.gd"), [
+		"@tool",
+		"class_name Enemy",
+		"extends CharacterBody2D",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "scripts", "duplicate_enemy.gd"), [
+		"class_name Enemy",
+		"extends Node",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "scripts", "global_thing.cs"), [
+		"using Godot;",
+		"",
+		"[GlobalClass]",
+		"public partial class GlobalThing : Node",
+		"{",
+		"}",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "addons", "demo", "addon_class.gd"), [
+		"class_name AddonClass",
+		"extends Node",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "addons", "gut", "gut_cmdln.gd"), "extends SceneTree\n", "utf8");
+	await fs.writeFile(path.join(projectRoot, "tests", "test_player.gd"), [
+		"extends GutTest",
+		"",
+		"func test_player_moves():",
+		"\tpass",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "tests", "test_math.py"), [
+		"def test_addition():",
+		"\tassert 1 + 1 == 2",
+		""
+	].join("\n"), "utf8");
 	await fs.writeFile(path.join(projectRoot, "assets", "player.png"), "", "utf8");
+	await fs.writeFile(path.join(projectRoot, "assets", "player.png.import"), [
+		"[remap]",
+		"importer=\"texture\"",
+		"type=\"CompressedTexture2D\"",
+		"uid=\"uid://player\"",
+		"path=\"res://.godot/imported/player.png-abc.ctex\"",
+		"",
+		"[deps]",
+		"source_file=\"res://assets/player.png\"",
+		"",
+		"[params]",
+		"compress/mode=0",
+		""
+	].join("\n"), "utf8");
 	await fs.writeFile(path.join(projectRoot, "assets", "unused.png"), "", "utf8");
+	await fs.writeFile(path.join(projectRoot, "Game.csproj"), [
+		"<Project Sdk=\"Godot.NET.Sdk/4.4.0\">",
+		"  <PropertyGroup>",
+		"    <TargetFramework>net8.0</TargetFramework>",
+		"  </PropertyGroup>",
+		"  <ItemGroup>",
+		"    <PackageReference Include=\"Newtonsoft.Json\" Version=\"13.0.3\" />",
+		"    <ProjectReference Include=\"Shared/Shared.csproj\" />",
+		"  </ItemGroup>",
+		"</Project>",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "Game.sln"), [
+		"Microsoft Visual Studio Solution File, Format Version 12.00",
+		"Project(\"{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}\") = \"Game\", \"Game.csproj\", \"{11111111-1111-1111-1111-111111111111}\"",
+		"EndProject",
+		""
+	].join("\n"), "utf8");
+	await fs.writeFile(path.join(projectRoot, "broken-csharp", "Broken.csproj"), [
+		"<Project Sdk=\"Godot.NET.Sdk/4.4.0\">",
+		"  <PropertyGroup>",
+		"    <TargetFramework>net8.0</TargetFramework>",
+		""
+	].join("\n"), "utf8");
 	await fs.writeFile(path.join(projectRoot, "scenes", "main.tscn"), [
 		"[gd_scene load_steps=3 format=3]",
 		"",
@@ -178,4 +260,54 @@ test("Godot domain modules preserve file, log, and editor config behavior", asyn
 		scriptPath: "res://scripts/player.gd"
 	});
 	assert.equal((scriptReferences.references as Array<Record<string, unknown>>).some((reference: Record<string, unknown>): boolean => reference.sourcePath === "scenes/main.tscn"), true);
+
+	const globalClasses = await callTool(server, "list_project_global_classes", {});
+	const classNames: string[] = (globalClasses.classes as Array<Record<string, unknown>>).map((entry: Record<string, unknown>): string => String(entry.className));
+	assert.equal(classNames.includes("Enemy"), true);
+	assert.equal(classNames.includes("GlobalThing"), true);
+	assert.equal(classNames.includes("AddonClass"), false);
+	assert.equal((globalClasses.classes as Array<Record<string, unknown>>).some((entry: Record<string, unknown>): boolean => entry.className === "Enemy" && entry.isTool === true), true);
+
+	const addonGlobalClasses = await callTool(server, "list_project_global_classes", { includeAddons: true });
+	assert.equal((addonGlobalClasses.classes as Array<Record<string, unknown>>).some((entry: Record<string, unknown>): boolean => entry.className === "AddonClass"), true);
+
+	const filteredGlobalClasses = await callTool(server, "list_project_global_classes", { filter: "global" });
+	assert.deepEqual((filteredGlobalClasses.classes as Array<Record<string, unknown>>).map((entry: Record<string, unknown>): unknown => entry.className), ["GlobalThing"]);
+
+	const projectTests = await callTool(server, "list_project_tests", {});
+	const testEntries = projectTests.tests as Array<Record<string, unknown>>;
+	assert.equal(testEntries.some((entry: Record<string, unknown>): boolean => entry.framework === "gut" && entry.runnable === true), true);
+	assert.equal(testEntries.some((entry: Record<string, unknown>): boolean => entry.framework === "python" && (entry.matchedFunctions as string[]).includes("test_addition")), true);
+	const missingTests = await callTool(server, "list_project_tests", { searchPath: "missing-tests" });
+	assert.equal(missingTests.count, 0);
+
+	const csharpSupport = await callTool(server, "inspect_csharp_project_support", {});
+	assert.equal(csharpSupport.projectCount, 2);
+	assert.equal(csharpSupport.solutionCount, 1);
+	const csharpProject = (csharpSupport.projects as Array<Record<string, unknown>>)[0]!;
+	assert.equal(csharpProject.usesGodotSdk, true);
+	assert.deepEqual(csharpProject.targetFrameworks, ["net8.0"]);
+	assert.deepEqual(csharpProject.projectReferences, ["Shared/Shared.csproj"]);
+	const brokenCsharpSupport = await callTool(server, "inspect_csharp_project_support", { searchPath: "broken-csharp" });
+	assert.match(String(((brokenCsharpSupport.projects as Array<Record<string, unknown>>)[0]?.issues as string[])[0]), /Malformed XML/u);
+
+	const importMetadata = await callTool(server, "get_import_metadata", { resourcePath: "res://assets/player.png" });
+	assert.equal(importMetadata.exists, true);
+	assert.equal(importMetadata.importer, "texture");
+	assert.equal(importMetadata.resourceType, "CompressedTexture2D");
+	assert.equal(importMetadata.uid, "uid://player");
+	assert.equal((importMetadata.params as Record<string, string>)["compress/mode"], "0");
+
+	const missingImportMetadata = await callTool(server, "get_import_metadata", { resourcePath: "assets/unused.png" });
+	assert.equal(missingImportMetadata.exists, false);
+	await assert.rejects(callTool(server, "get_import_metadata", { resourcePath: "res://.godot/imported/player.ctex" }));
+
+	const projectHealth = await callTool(server, "audit_project_health", {});
+	assert.equal(projectHealth.status, "issues_found");
+	const healthSummary = projectHealth.summary as Record<string, unknown>;
+	assert.equal(healthSummary.duplicateGlobalClasses, 1);
+	assert.equal(healthSummary.discoveredTests, 2);
+	assert.equal(healthSummary.csharpProjects, 2);
+	assert.equal((projectHealth.issues as Array<Record<string, unknown>>).some((issue: Record<string, unknown>): boolean => issue.kind === "duplicate_global_class"), true);
+	assert.equal((projectHealth.issues as Array<Record<string, unknown>>).some((issue: Record<string, unknown>): boolean => issue.kind === "import_metadata" && issue.issue === "missing_import_metadata"), true);
 });

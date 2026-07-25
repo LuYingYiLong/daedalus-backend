@@ -218,6 +218,8 @@ test("chat orchestrator cancel requests abort and leaves finalization to the act
 	assert.equal(cancelBlock.includes("status: \"cancelling\""), true);
 	assert.equal(cancelBlock.includes("controller.abort();"), true);
 	assert.equal(cancelBlock.includes("cancellationRequested: controller !== undefined"), true);
+	assert.equal(cancelBlock.includes("const alreadyFinished: boolean = controller === undefined"), true);
+	assert.equal(cancelBlock.includes("alreadyFinished,"), true);
 	assert.equal(cancelBlock.includes("sendAgentCancelled(socket, targetRequestId, session);"), false);
 	const pendingCancellationGuard: number = cancelBlock.indexOf("if (cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0)");
 	const finishRun: number = cancelBlock.indexOf("finishSessionRun(session.sessionId, targetRequestId);");

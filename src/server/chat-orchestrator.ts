@@ -1247,6 +1247,13 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			}
 			const cancelledApprovalIds: string[] = await cancelPendingApprovalsForRequest(session, targetRequestId);
 			const cancelledToolBudgetIds: string[] = cancelPendingToolBudgetsForRequest(session, targetRequestId);
+			// The aborted stream can finish while this cancellation RPC awaits approval cleanup.
+			// Treat that terminal race as an accepted, idempotent cancellation instead of
+			// reporting a false failure back to the Studio client.
+			const alreadyFinished: boolean = controller === undefined
+				&& cancelledApprovalIds.length === 0
+				&& cancelledToolBudgetIds.length === 0
+				&& session.completedRequestIds.has(targetRequestId);
 			if (cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0) {
 				session.activeRunRequestId = session.activeRunRequestId === targetRequestId
 					? undefined
@@ -1265,6 +1272,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				result: {
 					cancelled: controller !== undefined || cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0,
 					cancellationRequested: controller !== undefined,
+					alreadyFinished,
 					requestId: targetRequestId,
 					cancelledApprovalIds,
 					cancelledToolBudgetIds

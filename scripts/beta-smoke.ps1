@@ -130,7 +130,7 @@ try {
 
 	Write-Host "Beta smoke passed. Backend logs: $backendLog ; $backendErrorLog"
 } finally {
-	if ($backendProcess -ne $null -and -not $backendProcess.HasExited) {
+	if ($null -ne $backendProcess -and -not $backendProcess.HasExited) {
 		Stop-Process -Id $backendProcess.Id -Force
 	}
 	Remove-Item Env:\WS_URL -ErrorAction SilentlyContinue

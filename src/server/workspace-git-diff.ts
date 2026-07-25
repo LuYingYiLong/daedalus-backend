@@ -15,9 +15,11 @@ export type WorkspaceGitDiffResult = {
 
 export type WorkspaceGitDiffOptions = {
 	patchLimitChars?: number | undefined;
+	untrackedFileLimit?: number | undefined;
 };
 
 const DEFAULT_PATCH_LIMIT_CHARS: number = 1024 * 1024;
+const DEFAULT_UNTRACKED_FILE_LIMIT: number = 200;
 
 function splitNullTerminated(text: string): string[] {
 	return text.split("\0").filter((item: string): boolean => item.length > 0);
@@ -108,22 +110,38 @@ export async function readWorkspaceGitDiff(
 	}
 
 	const branch: string | null = await readGitBranch(workspaceRoot);
+	const patchLimitChars: number = Math.max(0, Math.trunc(options.patchLimitChars ?? DEFAULT_PATCH_LIMIT_CHARS));
+	const untrackedFileLimit: number = Math.max(0, Math.trunc(options.untrackedFileLimit ?? DEFAULT_UNTRACKED_FILE_LIMIT));
 	const chunks: string[] = [await readTrackedPatch(workspaceRoot)];
+	let collectedPatchChars: number = chunks[0]?.length ?? 0;
+	let truncated: boolean = collectedPatchChars > patchLimitChars;
 	const untrackedFiles: string[] = await listUntrackedFiles(workspaceRoot);
-	for (const relativePath of untrackedFiles) {
-		chunks.push(await readUntrackedPatch(workspaceRoot, relativePath));
+	let inspectedUntrackedFiles: number = 0;
+	while (
+		inspectedUntrackedFiles < untrackedFiles.length
+		&& inspectedUntrackedFiles < untrackedFileLimit
+		&& !truncated
+	) {
+		const relativePath: string = untrackedFiles[inspectedUntrackedFiles]!;
+		const patch: string = await readUntrackedPatch(workspaceRoot, relativePath);
+		chunks.push(patch);
+		collectedPatchChars += patch.length;
+		inspectedUntrackedFiles += 1;
+		truncated = collectedPatchChars > patchLimitChars;
+	}
+	if (inspectedUntrackedFiles < untrackedFiles.length) {
+		truncated = true;
 	}
 
-	const fullPatch: string = joinPatchChunks(chunks);
-	const counts = countChangedLines(fullPatch);
-	const patchLimitChars: number = Math.max(0, Math.trunc(options.patchLimitChars ?? DEFAULT_PATCH_LIMIT_CHARS));
-	const truncated: boolean = fullPatch.length > patchLimitChars;
+	const collectedPatch: string = joinPatchChunks(chunks);
+	const patch: string = truncated ? collectedPatch.slice(0, patchLimitChars) : collectedPatch;
+	const counts = countChangedLines(collectedPatch);
 
 	return {
 		workspaceId,
 		hasGitRepository: true,
 		branch,
-		patch: truncated ? fullPatch.slice(0, patchLimitChars) : fullPatch,
+		patch,
 		additions: counts.additions,
 		deletions: counts.deletions,
 		changedFiles: await countChangedFiles(workspaceRoot),

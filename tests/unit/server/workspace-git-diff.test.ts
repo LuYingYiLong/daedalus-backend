@@ -92,6 +92,28 @@ test("workspace git diff includes untracked files", async (): Promise<void> => {
 	}
 });
 
+test("workspace git diff stops scanning an oversized untracked tree", async (): Promise<void> => {
+	const repoPath: string = await createTempDir();
+	try {
+		await initRepo(repoPath);
+		await writeFile(path.join(repoPath, "00-first.gd"), "extends Node\n", "utf8");
+		await writeFile(path.join(repoPath, "99-last.gd"), "extends Node2D\n", "utf8");
+
+		const result: WorkspaceGitDiffResult = await readWorkspaceGitDiff("workspace-a", repoPath, {
+			patchLimitChars: 10_000,
+			untrackedFileLimit: 1
+		});
+
+		assert.equal(result.truncated, true);
+		assert.equal(result.untrackedFiles, 2);
+		assert.equal(result.changedFiles, 2);
+		assert.match(result.patch, /00-first\.gd/);
+		assert.doesNotMatch(result.patch, /99-last\.gd/);
+	} finally {
+		await rm(repoPath, { recursive: true, force: true });
+	}
+});
+
 test("workspace git diff truncates oversized patches", async (): Promise<void> => {
 	const repoPath: string = await createTempDir();
 	try {

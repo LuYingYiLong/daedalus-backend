@@ -80,7 +80,8 @@ function parseClientRequest(socket: WebSocket, data: WebSocket.RawData, isBinary
 	if (!validationResult.success) {
 		logger.warn("rpc", "invalid_request", {
 			code: "invalid_request",
-			issues: validationResult.error.issues
+			issueCount: validationResult.error.issues.length,
+			firstIssueCode: validationResult.error.issues[0]?.code ?? "unknown"
 		});
 		sendProtocolError(socket, "invalid_request", validationResult.error.message);
 		return null;
@@ -216,7 +217,8 @@ function handleSocketMessage(
 		failed = true;
 		sendUnhandledRequestError(socket, requestData, error);
 	}).finally((): void => {
-		logger.info("rpc", "request_finished", {
+		// 成功 RPC 包含健康检查、心跳和 UI 轮询，仅在传输排障时保留。
+		logger.debug("rpc", "request_finished", {
 			requestId: requestData.id,
 			method: requestData.method,
 			sessionId: connectionSession.sessionId,
@@ -239,7 +241,7 @@ function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: M
 		abortActiveRequests(connectionSession);
 		scheduleSessionSaveOnDisconnect(connectionSession);
 	}
-	logger.info("websocket", "client_disconnected", {
+	logger.debug("websocket", "client_disconnected", {
 		remoteAddress,
 		sessionId: connectionSession.sessionId,
 		workspaceId: connectionSession.activeWorkspace?.id
@@ -259,7 +261,7 @@ function attachSocketHandlers(socket: WebSocket, session: ClientSession, mcpHost
 function handleConnection(socket: WebSocket, request: Parameters<WebSocketServer["emit"]>[1], mcpHost: McpHost): void {
 	const session: ClientSession = createSessionForConnection();
 	const remoteAddress: string = getRemoteAddress(request);
-	logger.info("websocket", "client_connected", {
+	logger.debug("websocket", "client_connected", {
 		remoteAddress
 	});
 

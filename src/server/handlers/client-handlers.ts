@@ -74,7 +74,8 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				editorInstanceId: params.editorInstanceId,
 				capabilities: readCapabilities(params.capabilities)
 			});
-			logger.info("client", "hello", {
+			// Studio 正常重连时握手频繁，仅在传输排障时保留这类元数据。
+			logger.debug("client", "hello", {
 				connectionId: info.connectionId,
 				clientType: info.clientType,
 				clientName: info.clientName,

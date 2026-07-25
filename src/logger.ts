@@ -1,5 +1,5 @@
-import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, createWriteStream, readdirSync, statSync, unlinkSync, type WriteStream } from "node:fs";
+import { basename, join } from "node:path";
 import { inspect } from "node:util";
 import { getLogsDir } from "./app-paths.js";
 
@@ -17,6 +17,12 @@ type LogRecord = {
 	error?: unknown;
 };
 
+type LogFile = {
+	path: string;
+	sizeBytes: number;
+	modifiedAtMs: number;
+};
+
 const LEVEL_PRIORITIES: Record<LogLevel, number> = {
 	debug: 10,
 	info: 20,
@@ -27,10 +33,16 @@ const LEVEL_PRIORITIES: Record<LogLevel, number> = {
 const MAX_STRING_LENGTH: number = 2000;
 const MAX_ARRAY_LENGTH: number = 50;
 const MAX_OBJECT_KEYS: number = 80;
+const DEFAULT_MAX_LOG_FILE_BYTES: number = 10 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_LOG_BYTES: number = 250 * 1024 * 1024;
+const MIN_LOG_LIMIT_BYTES: number = 1024;
 const REDACTED: string = "[redacted]";
 
 let stream: WriteStream | null | undefined;
 let streamPath: string | null | undefined;
+let streamDateStamp: string | null | undefined;
+let streamSizeBytes: number = 0;
+const closingStreams: Set<Promise<void>> = new Set<Promise<void>>();
 let processHandlersInstalled: boolean = false;
 
 function parseLevel(value: string | undefined): LogLevel {
@@ -58,6 +70,24 @@ function getLogDateStamp(date: Date = new Date()): string {
 	return date.toISOString().slice(0, 10);
 }
 
+function readLogLimit(envName: "DAEDALUS_LOG_MAX_FILE_BYTES" | "DAEDALUS_LOG_MAX_TOTAL_BYTES", fallback: number): number {
+	const configured: string | undefined = process.env[envName];
+	if (configured === undefined || configured.trim().length === 0) {
+		return fallback;
+	}
+
+	const parsed: number = Number.parseInt(configured, 10);
+	return Number.isSafeInteger(parsed) && parsed >= MIN_LOG_LIMIT_BYTES ? parsed : fallback;
+}
+
+function getMaxLogFileBytes(): number {
+	return readLogLimit("DAEDALUS_LOG_MAX_FILE_BYTES", DEFAULT_MAX_LOG_FILE_BYTES);
+}
+
+function getMaxTotalLogBytes(): number {
+	return Math.max(getMaxLogFileBytes(), readLogLimit("DAEDALUS_LOG_MAX_TOTAL_BYTES", DEFAULT_MAX_TOTAL_LOG_BYTES));
+}
+
 function resolveLogDir(): string | null {
 	const override: string | undefined = process.env.DAEDALUS_LOG_DIR;
 	if (override !== undefined && override.trim().length > 0) {
@@ -71,27 +101,136 @@ function resolveLogDir(): string | null {
 	}
 }
 
-function createLogStream(): WriteStream | null {
-	if (stream !== undefined) {
-		return stream;
+function getLogFileName(dateStamp: string, index: number): string {
+	return index === 0 ? `backend-${dateStamp}.log` : `backend-${dateStamp}-${index}.log`;
+}
+
+function readLogFileIndex(fileName: string, dateStamp: string): number | null {
+	const match: RegExpMatchArray | null = fileName.match(new RegExp(`^backend-${dateStamp}(?:-(\\d+))?\\.log$`));
+	if (match === null) {
+		return null;
+	}
+	return match[1] === undefined ? 0 : Number.parseInt(match[1], 10);
+}
+
+function listBackendLogs(logDir: string): LogFile[] {
+	return readdirSync(logDir, { withFileTypes: true })
+		.filter((entry): boolean => entry.isFile() && /^backend-.+\.log$/.test(entry.name))
+		.map((entry): LogFile => {
+			const path: string = join(logDir, entry.name);
+			const stat = statSync(path);
+			return { path, sizeBytes: stat.size, modifiedAtMs: stat.mtimeMs };
+		})
+		.sort((left, right): number => left.modifiedAtMs - right.modifiedAtMs);
+}
+
+function resolveWritableLogFile(
+	logDir: string,
+	dateStamp: string,
+	nextRecordBytes: number,
+	excludedPath: string | null | undefined
+): { path: string; sizeBytes: number } {
+	const candidates: Array<{ index: number; path: string; sizeBytes: number }> = readdirSync(logDir, { withFileTypes: true })
+		.filter((entry): boolean => entry.isFile())
+		.map((entry): { index: number; path: string; sizeBytes: number } | null => {
+			const index: number | null = readLogFileIndex(entry.name, dateStamp);
+			if (index === null) {
+				return null;
+			}
+			const path: string = join(logDir, entry.name);
+			return { index, path, sizeBytes: statSync(path).size };
+		})
+		.filter((entry): entry is { index: number; path: string; sizeBytes: number } => entry !== null)
+		.sort((left, right): number => right.index - left.index);
+
+	const latest = candidates[0];
+	if (latest !== undefined && latest.path !== excludedPath && latest.sizeBytes + nextRecordBytes <= getMaxLogFileBytes()) {
+		return { path: latest.path, sizeBytes: latest.sizeBytes };
 	}
 
+	const excludedIndex: number | null = excludedPath === null || excludedPath === undefined
+		? null
+		: readLogFileIndex(basename(excludedPath), dateStamp);
+	const nextIndex: number = Math.max(latest?.index ?? -1, excludedIndex ?? -1) + 1;
+	return {
+		path: join(logDir, getLogFileName(dateStamp, nextIndex)),
+		sizeBytes: 0
+	};
+}
+
+function endStream(target: WriteStream): Promise<void> {
+	const closing: Promise<void> = new Promise<void>((resolve): void => {
+		target.end(resolve);
+	});
+	closingStreams.add(closing);
+	void closing.finally((): void => {
+		closingStreams.delete(closing);
+	});
+	return closing;
+}
+
+function pruneLogs(logDir: string, activePath: string): void {
+	const entries: LogFile[] = listBackendLogs(logDir);
+	let totalBytes: number = entries.reduce((total: number, entry: LogFile): number => total + entry.sizeBytes, 0);
+	for (const entry of entries) {
+		if (totalBytes <= getMaxTotalLogBytes()) {
+			break;
+		}
+		if (entry.path === activePath) {
+			continue;
+		}
+		try {
+			unlinkSync(entry.path);
+			totalBytes -= entry.sizeBytes;
+		} catch (error: unknown) {
+			console.warn("[logger] failed to prune backend log:", error instanceof Error ? error.message : String(error));
+		}
+	}
+}
+
+function createLogStream(nextRecordBytes: number = 0): WriteStream | null {
 	const logDir: string | null = resolveLogDir();
 	if (logDir === null) {
 		stream = null;
 		streamPath = null;
+		streamDateStamp = null;
+		streamSizeBytes = 0;
 		return null;
 	}
 
+	const dateStamp: string = getLogDateStamp();
+	if (
+		stream !== undefined
+		&& stream !== null
+		&& streamDateStamp === dateStamp
+		&& streamSizeBytes + nextRecordBytes <= getMaxLogFileBytes()
+	) {
+		return stream;
+	}
+
+	const previousPath: string | null | undefined = streamPath;
+	if (stream !== undefined && stream !== null) {
+		void endStream(stream);
+	}
+
 	mkdirSync(logDir, { recursive: true });
-	streamPath = join(logDir, `backend-${getLogDateStamp()}.log`);
-	stream = createWriteStream(streamPath, { flags: "a", encoding: "utf8" });
-	stream.on("error", (error: Error): void => {
-		stream = null;
-		// 这里保留 stderr，因为 logger 自身失效时不能再递归调用 logger。
+	const target = resolveWritableLogFile(logDir, dateStamp, nextRecordBytes, previousPath);
+	const createdStream: WriteStream = createWriteStream(target.path, { flags: "a", encoding: "utf8" });
+	stream = createdStream;
+	streamPath = target.path;
+	streamDateStamp = dateStamp;
+	streamSizeBytes = target.sizeBytes;
+	createdStream.on("error", (error: Error): void => {
+		if (stream === createdStream) {
+			stream = null;
+			streamPath = null;
+			streamDateStamp = null;
+			streamSizeBytes = 0;
+		}
 		console.error("[logger] failed to write backend log:", error.message);
 	});
-	return stream;
+	pruneLogs(logDir, target.path);
+	return createdStream;
 }
 
 function isSensitiveKey(key: string): boolean {
@@ -167,9 +306,18 @@ function writeRecord(record: LogRecord): void {
 		error: record.error === undefined ? undefined : redactForLog(record.error)
 	};
 	const line: string = `${JSON.stringify(redactedRecord)}\n`;
-	const logStream: WriteStream | null = createLogStream();
+	const lineBytes: number = Buffer.byteLength(line, "utf8");
+	const logStream: WriteStream | null = createLogStream(lineBytes);
 	if (logStream !== null) {
 		logStream.write(line);
+		streamSizeBytes += lineBytes;
+		const activePath: string | null | undefined = streamPath;
+		if (activePath !== null && activePath !== undefined && streamSizeBytes >= getMaxLogFileBytes()) {
+			const logDir: string | null = resolveLogDir();
+			if (logDir !== null) {
+				pruneLogs(logDir, activePath);
+			}
+		}
 	}
 	if (!shouldLogToConsole()) {
 		return;
@@ -248,12 +396,17 @@ export function installProcessLogHandlers(): void {
 
 export async function closeLogger(): Promise<void> {
 	const currentStream: WriteStream | null | undefined = stream;
+	const currentPath: string | null | undefined = streamPath;
+	const logDir: string | null = resolveLogDir();
 	stream = undefined;
 	streamPath = undefined;
-	if (currentStream === null || currentStream === undefined) {
-		return;
+	streamDateStamp = undefined;
+	streamSizeBytes = 0;
+	if (currentStream !== null && currentStream !== undefined) {
+		await endStream(currentStream);
 	}
-	await new Promise<void>((resolve): void => {
-		currentStream.end(resolve);
-	});
+	await Promise.all([...closingStreams]);
+	if (logDir !== null && currentPath !== null && currentPath !== undefined) {
+		pruneLogs(logDir, currentPath);
+	}
 }

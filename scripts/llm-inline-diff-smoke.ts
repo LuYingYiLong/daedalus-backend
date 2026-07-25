@@ -378,7 +378,7 @@ function startBackend(options: CliOptions): StartedBackend {
 
 	const backendProcess: ChildProcess = spawn(
 		process.execPath,
-		["--import", "tsx", "src/main.ts"],
+		["--import", "tsx", "src/cli.ts", "serve"],
 		{
 			cwd: process.cwd(),
 			env,

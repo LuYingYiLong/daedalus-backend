@@ -34,6 +34,24 @@ $logStamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $backendLog = Join-Path $logDir ("backend-{0}.stdout.log" -f $logStamp)
 $backendErrorLog = Join-Path $logDir ("backend-{0}.stderr.log" -f $logStamp)
 
+function Write-BackendLogs {
+	param(
+		[string]$Label
+	)
+
+	foreach ($stream in @(
+		@{ Name = "stdout"; Path = $backendLog },
+		@{ Name = "stderr"; Path = $backendErrorLog }
+	)) {
+		Write-Host "Backend $Label $($stream.Name) log: $($stream.Path)"
+		if (Test-Path -LiteralPath $stream.Path -PathType Leaf) {
+			Get-Content -LiteralPath $stream.Path -Raw | Write-Host
+		} else {
+			Write-Host "(log file was not created)"
+		}
+	}
+}
+
 function Invoke-GodotSmokeCommand {
 	param(
 		[string]$Label,
@@ -60,7 +78,7 @@ function Invoke-GodotSmokeCommand {
 Write-Host "Starting backend on $backendUrl"
 $env:PORT = [string]$Port
 $backendProcess = Start-Process -FilePath (Get-Command node).Source `
-	-ArgumentList @("--import", "tsx", "src/main.ts") `
+	-ArgumentList @("--import", "tsx", "src/cli.ts", "serve") `
 	-WorkingDirectory (Get-Location).Path `
 	-RedirectStandardOutput $backendLog `
 	-RedirectStandardError $backendErrorLog `
@@ -81,6 +99,7 @@ try {
 	}
 
 	if (-not $healthy) {
+		Write-BackendLogs -Label "startup failure"
 		throw "Backend did not become healthy before timeout. Logs: $backendLog ; $backendErrorLog"
 	}
 

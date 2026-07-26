@@ -332,3 +332,27 @@ export function createServer(
 
 	return server;
 }
+
+export function waitForServerListening(server: WebSocketServer): Promise<void> {
+	if (server.address() !== null) {
+		return Promise.resolve();
+	}
+
+	return new Promise<void>((resolve, reject): void => {
+		const cleanup = (): void => {
+			server.off("listening", handleListening);
+			server.off("error", handleError);
+		};
+		const handleListening = (): void => {
+			cleanup();
+			resolve();
+		};
+		const handleError = (error: Error): void => {
+			cleanup();
+			reject(error);
+		};
+
+		server.once("listening", handleListening);
+		server.once("error", handleError);
+	});
+}

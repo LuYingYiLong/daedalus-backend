@@ -97,6 +97,29 @@ test("additional context exposes image ids for image generation tools", (): void
 	assert.doesNotMatch(section, /aGVsbG8=/);
 });
 
+test("additional context formats local git review comments with file and line targets", (): void => {
+	const section: string = createAdditionalContextPromptSection([{
+		id: "review-comment-1",
+		kind: "git_diff_comment",
+		source: "manual",
+		title: "scripts/player.gd",
+		resourcePath: "scripts/player.gd",
+		pinned: true,
+		data: {
+			workspaceId: "workspace-a",
+			newLine: 42,
+			changeType: "insert",
+			lineText: "velocity = speed",
+			comment: "Use the configured movement speed here."
+		}
+	}]);
+
+	assert.match(section, /resourcePath: scripts\/player\.gd/);
+	assert.match(section, /new line 42/);
+	assert.match(section, /Use the configured movement speed here/);
+	assert.match(section, /local code-review request/);
+});
+
 test("additional context preserves external absolute file references", (): void => {
 	const section: string = createAdditionalContextPromptSection([{
 		id: "external-file-1",

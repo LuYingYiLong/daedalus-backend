@@ -11,7 +11,7 @@ import { logger } from "../../logger.js";
 import { deleteSessionsByWorkspace, listArchivedSessions, listSessions } from "../../session/session-store.js";
 import { checkoutWorkspaceGitBranch, createWorkspaceGitBranch, listWorkspaceGitBranches } from "../workspace-git-branches.js";
 import { commitOrPushWorkspaceGit, generateWorkspaceGitCommitMessage } from "../workspace-git-commit.js";
-import { readWorkspaceGitDiff } from "../workspace-git-diff.js";
+import { readWorkspaceGitDiff, readWorkspaceGitDiffFile, readWorkspaceGitDiffSummary } from "../workspace-git-diff.js";
 import { evaluateWorkspaceSelectionForSession, type WorkspaceSelectionDecision } from "../workspace-selection-guard.js";
 
 export async function handleWorkspaceRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
@@ -211,6 +211,64 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: await readWorkspaceGitDiff(workspace.id, workspace.rootPath)
 		});
+		break;
+	}
+	case "workspace.git.diff.summary.get": {
+		const workspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+		if (!workspace) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "workspace_not_found",
+					message: `Workspace not found: ${request.params.workspaceId}`
+				}
+			});
+			break;
+		}
+
+		sendJson(socket, {
+			type: "response",
+			id: request.id,
+			ok: true,
+			result: await readWorkspaceGitDiffSummary(workspace.id, workspace.rootPath, request.params.cursor, request.params.limit)
+		});
+		break;
+	}
+	case "workspace.git.diff.file.get": {
+		const workspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+		if (!workspace) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "workspace_not_found",
+					message: `Workspace not found: ${request.params.workspaceId}`
+				}
+			});
+			break;
+		}
+
+		try {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: await readWorkspaceGitDiffFile(workspace.id, workspace.rootPath, request.params.path)
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "workspace_git_diff_file_unavailable",
+					message: error instanceof Error ? error.message : "Unable to read Git diff file."
+				}
+			});
+		}
 		break;
 	}
 	case "workspace.git.commit.message.generate": {

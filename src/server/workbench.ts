@@ -89,6 +89,9 @@ function getContextKey(context: AdditionalContextItem): string {
 			].join("\n");
 		}
 	}
+	if (context.kind === "git_diff_comment") {
+		return [context.kind, context.id].join("\n");
+	}
 	return [context.kind, context.resourcePath ?? "", context.nodePath ?? ""].join("\n");
 }
 
@@ -101,7 +104,9 @@ function normalizeContexts(contexts: readonly AdditionalContextItem[]): Addition
 		}
 		const key: string = getContextKey(context);
 		const existingIndex: number | undefined = indexesByKey.get(key);
-		const cloned: AdditionalContextItem = cloneContext(context);
+		const cloned: AdditionalContextItem = context.kind === "git_diff_comment"
+			? { ...cloneContext(context), pinned: true }
+			: cloneContext(context);
 		if (existingIndex === undefined) {
 			indexesByKey.set(key, normalized.length);
 			normalized.push(cloned);
@@ -329,7 +334,10 @@ export function applyWorkbenchPatch(session: ClientSession, patch: WorkbenchPatc
 			const index: number = findContextIndex(session.workbenchComposer.additionalContext, action.contextId);
 			if (index >= 0) {
 				const context: AdditionalContextItem = session.workbenchComposer.additionalContext[index] as AdditionalContextItem;
-				session.workbenchComposer.additionalContext[index] = { ...context, pinned: action.pinned };
+				session.workbenchComposer.additionalContext[index] = {
+					...context,
+					pinned: context.kind === "git_diff_comment" ? true : action.pinned
+				};
 				changed = true;
 			}
 		} else if (action.action === "clearUnpinned") {

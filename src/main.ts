@@ -12,7 +12,7 @@ import { startStudioParentMonitor } from "./runtime/parent-monitor.js";
 import { registerBackendShutdownHandler } from "./runtime/shutdown.js";
 import { closeSessionDatabases } from "./session/session-database.js";
 import { getBackendPortFromEnv } from "./server/backend-runtime.js";
-import { createServer } from "./server/websocket-server.js";
+import { createServer, waitForServerListening } from "./server/websocket-server.js";
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
@@ -61,6 +61,19 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		host: "127.0.0.1",
 		authToken: process.env.DAEDALUS_BACKEND_AUTH_TOKEN
 	});
+	try {
+		await waitForServerListening(server);
+	} catch (error: unknown) {
+		const message: string = error instanceof Error ? error.message : String(error);
+		logger.error("backend", "startup_failed", error, { port });
+		await mcpHost.closeAll();
+		await Promise.all([
+			closeSessionDatabases(),
+			closeUsageMetricsStore()
+		]);
+		await closeLogger();
+		throw new Error(`Daedalus backend could not listen on 127.0.0.1:${port}: ${message}`);
+	}
 	const runtimeConnectionId: string | null =
 		process.env[BACKEND_CONNECTION_ID_ENV]?.trim() || null;
 	const runtimeAuthToken: string | null =

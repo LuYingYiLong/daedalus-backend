@@ -63,7 +63,7 @@ const sessionUiMetadataParamsSchema = z.object({
 
 export const additionalContextItemSchema = z.object({
 	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image"]),
+	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "git_diff_comment"]),
 	title: z.string().min(1).max(200),
 	subtitle: z.string().max(400).optional(),
 	pinned: z.boolean().optional(),
@@ -1107,6 +1107,25 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			workspaceId: z.string().min(1),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.git.diff.summary.get"),
+		params: z.object({
+			workspaceId: z.string().min(1),
+			cursor: z.number().int().nonnegative().optional(),
+			limit: z.number().int().min(1).max(100).optional(),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.git.diff.file.get"),
+		params: z.object({
+			workspaceId: z.string().min(1),
+			path: z.string().min(1).max(1000),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

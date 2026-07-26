@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { readWorkspaceGitDiff, type WorkspaceGitDiffResult } from "../../../src/server/workspace-git-diff.js";
+import {
+	readWorkspaceGitDiff,
+	readWorkspaceGitDiffFile,
+	readWorkspaceGitDiffSummary,
+	type WorkspaceGitDiffResult
+} from "../../../src/server/workspace-git-diff.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +135,53 @@ test("workspace git diff truncates oversized patches", async (): Promise<void> =
 		assert.equal(result.truncated, true);
 		assert.equal(result.patch.length, 120);
 		assert.ok(result.additions > 1);
+	} finally {
+		await rm(repoPath, { recursive: true, force: true });
+	}
+});
+
+test("workspace git diff summary pages file metadata without patches", async (): Promise<void> => {
+	const repoPath: string = await createTempDir();
+	try {
+		await initRepo(repoPath);
+		await commitFile(repoPath, "script.gd", "extends Node\n");
+		await writeFile(path.join(repoPath, "script.gd"), "extends Node2D\n", "utf8");
+		await writeFile(path.join(repoPath, "tiny.gd"), "extends Node\nfunc test():\n", "utf8");
+		await writeFile(path.join(repoPath, "large.txt"), "x".repeat(160_000), "utf8");
+
+		const firstPage = await readWorkspaceGitDiffSummary("workspace-a", repoPath, 0, 1);
+
+		assert.equal(firstPage.hasGitRepository, true);
+		assert.equal(firstPage.changedFiles, 3);
+		assert.equal(firstPage.files.length, 1);
+		assert.notEqual(firstPage.nextCursor, null);
+		assert.equal("patch" in firstPage.files[0]!, false);
+		assert.ok(firstPage.files.some((file) => file.canAutoExpand));
+
+		const secondPage = await readWorkspaceGitDiffSummary("workspace-a", repoPath, firstPage.nextCursor!, 100);
+		assert.equal(
+			[...firstPage.files, ...secondPage.files].find((file) => file.path === "tiny.gd")?.additions,
+			2
+		);
+		assert.equal(secondPage.files.some((file) => file.path === "large.txt" && !file.canAutoExpand), true);
+	} finally {
+		await rm(repoPath, { recursive: true, force: true });
+	}
+});
+
+test("workspace git diff file preview rejects paths outside the workspace and caps oversized files", async (): Promise<void> => {
+	const repoPath: string = await createTempDir();
+	try {
+		await initRepo(repoPath);
+		await writeFile(path.join(repoPath, "large.txt"), Array.from({ length: 40_000 }, (_value: unknown, index: number): string => `line ${index}`).join("\n"), "utf8");
+
+		await assert.rejects(async (): Promise<void> => {
+			await readWorkspaceGitDiffFile("workspace-a", repoPath, "../outside.txt");
+		});
+
+		const result = await readWorkspaceGitDiffFile("workspace-a", repoPath, "large.txt");
+		assert.equal(result.tooLargeToRender, true);
+		assert.equal(result.patch, "");
 	} finally {
 		await rm(repoPath, { recursive: true, force: true });
 	}

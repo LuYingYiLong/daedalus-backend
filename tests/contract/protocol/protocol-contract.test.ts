@@ -36,6 +36,8 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"usage.metrics.trends.get",
 	"workspace.delete",
 	"workspace.git.diff.get",
+	"workspace.git.diff.summary.get",
+	"workspace.git.diff.file.get",
 	"workspace.git.commit.message.generate",
 	"workspace.git.commitOrPush",
 	"workspace.git.branches.list",
@@ -166,6 +168,21 @@ test("workspace git commit requests are accepted", (): void => {
 			message: "Add local tic-tac-toe",
 			includeUnstagedChanges: true
 		}
+	}).success, true);
+});
+
+test("workspace git diff summary and file requests are accepted", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-git-diff-summary",
+		method: "workspace.git.diff.summary.get",
+		params: { workspaceId: "workspace-a", cursor: 0, limit: 100 }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-git-diff-file",
+		method: "workspace.git.diff.file.get",
+		params: { workspaceId: "workspace-a", path: "scripts/player.gd" }
 	}).success, true);
 });
 

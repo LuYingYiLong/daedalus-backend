@@ -136,6 +136,35 @@ export function appendFilesystemSelectionPromptLines(lines: string[], item: Addi
 	lines.push("  - note: 大文件和文件夹不内联内容；只在需要时按 resourcePath 读取或搜索。");
 }
 
+function appendGitDiffCommentPromptLines(lines: string[], item: AdditionalContextItem): void {
+	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
+	const oldLine: number | undefined = getContextNumber(data, "oldLine");
+	const newLine: number | undefined = getContextNumber(data, "newLine");
+	const changeType: string = getContextString(data, "changeType");
+	const lineText: string = getContextString(data, "lineText");
+	const comment: string = getContextString(data, "comment") || item.summary || "";
+	const locations: string[] = [];
+	if (oldLine !== undefined && oldLine > 0) {
+		locations.push(`old line ${oldLine}`);
+	}
+	if (newLine !== undefined && newLine > 0) {
+		locations.push(`new line ${newLine}`);
+	}
+	if (locations.length > 0) {
+		lines.push(`  - location: ${locations.join(", ")}`);
+	}
+	if (changeType.length > 0) {
+		lines.push(`  - changeType: ${clipTextByChars(changeType, 80)}`);
+	}
+	if (lineText.length > 0) {
+		lines.push(`  - changedLine: ${clipTextByChars(lineText, 500)}`);
+	}
+	if (comment.length > 0) {
+		lines.push(`  - requestedChange: ${clipTextByChars(comment, 1200)}`);
+	}
+	lines.push("  - instruction: Treat this as an explicit local code-review request. Inspect the current file before editing and address the requested change when it remains applicable.");
+}
+
 function appendExternalLocalFilePromptLines(lines: string[], item: AdditionalContextItem): void {
 	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
 	if (data?.external !== true) {
@@ -203,10 +232,12 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 			appendScriptSelectionPromptLines(lines, item);
 		} else if (item.kind === "filesystem_selection") {
 			appendFilesystemSelectionPromptLines(lines, item);
+		} else if (item.kind === "git_diff_comment") {
+			appendGitDiffCommentPromptLines(lines, item);
 		} else if (item.kind === "file" || item.kind === "folder") {
 			appendExternalLocalFilePromptLines(lines, item);
 		}
-		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image") {
+		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "git_diff_comment") {
 			lines.push(`  - data: ${clipTextByChars(JSON.stringify(createPreviewValue(item.data)), 1000)}`);
 		}
 	}

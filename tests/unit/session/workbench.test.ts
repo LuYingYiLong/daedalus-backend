@@ -101,6 +101,31 @@ test("workbench additional context actions dedupe, pin and clear unpinned", (): 
 	assert.equal(session.workbenchComposer.additionalContext[0]?.pinned, true);
 });
 
+test("git review comments remain pinned and keep independent line identities", (): void => {
+	const session = createClientSession(undefined);
+	const commentA: AdditionalContextItem = {
+		id: "review-a",
+		kind: "git_diff_comment",
+		title: "scripts/player.gd",
+		source: "manual",
+		resourcePath: "scripts/player.gd",
+		pinned: false,
+		data: { newLine: 12, comment: "Rename this variable." }
+	};
+	const commentB: AdditionalContextItem = {
+		...commentA,
+		id: "review-b",
+		data: { newLine: 20, comment: "Handle the missing input." }
+	};
+
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "set", items: [commentA, commentB] } });
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "pin", contextId: "review-a", pinned: false } });
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "clearUnpinned" } });
+
+	assert.deepEqual(session.workbenchComposer.additionalContext.map((context: AdditionalContextItem): string => context.id), ["review-a", "review-b"]);
+	assert.equal(session.workbenchComposer.additionalContext.every((context: AdditionalContextItem): boolean => context.pinned === true), true);
+});
+
 test("workbench snapshot derives active run and pending approval shape", (): void => {
 	const session = createClientSession(undefined);
 	session.activeRunRequestId = "run-1";

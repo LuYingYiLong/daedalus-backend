@@ -518,39 +518,6 @@ function markRunningImageGenerationFailed(parts: TimelineBodyPart[], error: stri
 	}
 }
 
-function appendVerificationWarning(parts: TimelineBodyPart[], eventData: Record<string, unknown>): void {
-	if (asString(eventData.resultStatus) !== "completed_with_warnings") {
-		return;
-	}
-	if (parts.some((part: TimelineBodyPart): boolean => {
-		return part.type === "status" && part.code === "verification_unverified";
-	})) {
-		return;
-	}
-
-	const warningsValue: unknown = eventData.warnings;
-	const warnings: string[] = Array.isArray(warningsValue)
-		? warningsValue
-			.filter((warning: unknown): warning is string => typeof warning === "string")
-			.map((warning: string): string => warning.trim())
-			.filter((warning: string): boolean => warning.length > 0)
-		: [];
-	if (warnings.length === 0) {
-		return;
-	}
-
-	const details: string = warnings.join("\n");
-	const canConfigureGodot: boolean = /Godot executable|GODOT_EXECUTABLE_PATH|ENOENT|not found/iu.test(details);
-	appendStatusPart(parts, {
-		status: "warning",
-		title: "Completed, but verification was unavailable",
-		details,
-		actionLabel: canConfigureGodot ? "Configure Godot" : "",
-		actionId: canConfigureGodot ? "configure_godot" : "",
-		code: "verification_unverified"
-	});
-}
-
 function parsePlanRecommendedReplies(value: unknown): TimelinePlanRecommendedReply[] {
 	if (!Array.isArray(value)) {
 		return [];
@@ -857,12 +824,6 @@ function buildAssistantBodyParts(
 				details: reason,
 				code: "agent_run_cancelled"
 			});
-		} else if (
-			event.event === "workflow.done"
-			|| event.event === "agent.run.done"
-			|| event.event === "ai.done"
-		) {
-			appendVerificationWarning(parts, eventData);
 		} else if (event.event === "plan.generated" || event.event === "plan.revised") {
 			const planPart: TimelinePlanPart | null = createPlanPart(eventData);
 			if (planPart !== null) {

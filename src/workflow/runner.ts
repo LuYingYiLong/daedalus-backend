@@ -210,6 +210,10 @@ function formatPhaseOutput(output: WorkflowPhaseOutput): string {
 		parts.push("requiredFixes:");
 		parts.push(...output.requiredFixes.map((fix: string): string => `- ${fix}`));
 	}
+	if (output.warnings !== undefined && output.warnings.length > 0) {
+		parts.push("warnings:");
+		parts.push(...output.warnings.map((warning: string): string => `- ${warning}`));
+	}
 	if (output.text !== undefined && output.text.trim().length > 0) {
 		parts.push("rawText:");
 		parts.push(output.text);

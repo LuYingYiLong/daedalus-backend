@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectWorkflowCompletionStatus } from "../../../src/server/workflow/continuation.js";
+import { collectWorkflowCompletionStatus, createFinalSummaryVerificationContext } from "../../../src/server/workflow/continuation.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowToolObservation } from "../../../src/workflow/types.js";
 
 function phase(id: string, toolGroup: WorkflowPhase["toolGroup"]): WorkflowPhase {
@@ -84,4 +84,25 @@ test("only a successful verify after the latest write produces verified completi
 	assert.equal(result.resultStatus, "completed");
 	assert.equal(result.verificationStatus, "verified");
 	assert.deepEqual(result.warnings, []);
+});
+
+test("final summary receives unverified completion constraints as prompt context", (): void => {
+	const plan: WorkflowPlan = {
+		id: "workflow-main",
+		title: "Create main scene",
+		phases: [phase("write", "write"), phase("summarize", "summarize")],
+		todos: []
+	};
+	const context: string = createFinalSummaryVerificationContext(plan, [
+		output("write", [{
+			toolCallId: "write-main",
+			toolName: "mcp_godot_apply_scene_patch",
+			risk: "write",
+			status: "succeeded",
+			artifactRefs: ["scenes/Main.tscn"]
+		}])
+	]);
+
+	assert.match(context, /最后一次写入后没有成功的验证阶段/u);
+	assert.match(context, /不要声称验证已经通过/u);
 });

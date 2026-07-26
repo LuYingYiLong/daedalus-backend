@@ -775,7 +775,7 @@ test("canonical timeline restores image generation body part from tool events", 
 	}
 });
 
-test("canonical timeline restores completion warnings once", (): void => {
+test("canonical timeline leaves completion warnings to the final assistant summary", (): void => {
 	const warning = "Godot executable was not found; verification was skipped.";
 	const stored: StoredSession = session(
 		[
@@ -798,15 +798,7 @@ test("canonical timeline restores completion warnings once", (): void => {
 	const warningParts = assistant.bodyParts.filter((part) => {
 		return part.type === "status" && part.code === "verification_unverified";
 	});
-	assert.equal(warningParts.length, 1);
-	const warningPart = warningParts[0];
-	assert.equal(warningPart?.type, "status");
-	if (warningPart?.type === "status") {
-		assert.equal(warningPart.status, "warning");
-		assert.equal(warningPart.details, warning);
-		assert.equal(warningPart.actionId, "configure_godot");
-		assert.equal(warningPart.actionLabel, "Configure Godot");
-	}
+	assert.equal(warningParts.length, 0);
 });
 
 test("canonical timeline marks an interrupted image generation as failed", (): void => {

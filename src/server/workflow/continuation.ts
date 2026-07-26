@@ -76,6 +76,19 @@ export function collectWorkflowCompletionStatus(
 	};
 }
 
+export function createFinalSummaryVerificationContext(plan: WorkflowPlan, outputs: WorkflowPhaseOutput[]): string {
+	const completionStatus = collectWorkflowCompletionStatus(plan, outputs);
+	if (completionStatus.warnings.length === 0) {
+		return "";
+	}
+
+	return [
+		"## 最终交付的验证限制",
+		"以下验证限制来自已执行的工具结果。必须在最终总结中用自然、简洁的语言如实说明；不要声称验证已经通过，也不要把这段原文作为系统状态块复述。",
+		...completionStatus.warnings.map((warning: string): string => `- ${warning}`)
+	].join("\n");
+}
+
 function stringifyWorkflowFailedChecks(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		return [];
@@ -258,7 +271,13 @@ export async function continueWorkflowExecution(
 			}, persistRequestId);
 		}
 
-		const phaseMessage: string = createPhaseMessage(state.originalParams, plan, phase, phaseOutputs);
+		const finalSummaryVerificationContext: string = plan.phases.length > 1 && isFinalPhase && phase.toolGroup === "summarize"
+			? createFinalSummaryVerificationContext(plan, phaseOutputs)
+			: "";
+		const phaseMessage: string = [
+			createPhaseMessage(state.originalParams, plan, phase, phaseOutputs),
+			finalSummaryVerificationContext
+		].filter((section: string): boolean => section.length > 0).join("\n\n");
 		// 流式请求的所有阶段都走流式通路，避免非最终阶段在长时间推理时完全没有进度事件。
 		const streamPhase: boolean = streamFinal;
 		const phaseParams: AiChatParams = createPhaseParams(state.originalParams, phase, phaseMessage, streamPhase);

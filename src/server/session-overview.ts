@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getSessionDir, openSession, type SessionMetadata } from "../session/session-store.js";
-import type { GeneratedImageArtifactMetadata, ImageAttachmentMetadata } from "../session/session-attachments.js";
+import type { GeneratedImageArtifactMetadata, ImageAttachmentMetadata, TextAttachmentMetadata } from "../session/session-attachments.js";
 import { getSessionDatabase, parseSqlJson } from "../session/session-database.js";
 import { isInsideGitWorkTree, readGitBranch, runGit } from "./git-utils.js";
 
@@ -27,14 +27,15 @@ export type SessionOverviewPlanItem = {
 
 export type SessionOverviewSourceItem = {
 	id: string;
-	kind: "image_attachment" | "generated_image";
+	kind: "image_attachment" | "generated_image" | "text_attachment";
 	title: string;
 	mimeType: string;
 	createdAt: string;
 	width?: number | undefined;
 	height?: number | undefined;
 	byteSize: number;
-	thumbnailDataUrl: string;
+	thumbnailDataUrl?: string | undefined;
+	textPreview?: string | undefined;
 };
 
 export type SessionOverviewResult = {
@@ -196,6 +197,29 @@ async function readGeneratedImageSource(sessionId: string, metadataRaw: Record<s
 	}
 }
 
+async function readTextAttachmentSource(sessionId: string, metadataRaw: Record<string, unknown>): Promise<SessionOverviewSourceItem | null> {
+	const metadata: TextAttachmentMetadata = metadataRaw as TextAttachmentMetadata;
+	if (!metadata.id?.startsWith("text-") || metadata.mimeType !== "text/plain") {
+		return null;
+	}
+
+	try {
+		const textPath: string = path.join(getSessionDir(sessionId), "attachments", "text", metadata.fileName);
+		const content: string = await readFile(textPath, "utf8");
+		return {
+			id: metadata.id,
+			kind: "text_attachment",
+			title: metadata.title || metadata.fileName || metadata.id,
+			mimeType: metadata.mimeType,
+			createdAt: metadata.createdAt || "",
+			byteSize: metadata.byteSize,
+			textPreview: content.slice(0, 12_000)
+		};
+	} catch {
+		return null;
+	}
+}
+
 async function listSourceItems(sessionId: string, limit: number): Promise<{ total: number; items: SessionOverviewSourceItem[] }> {
 	const db = await getSessionDatabase();
 	const countRow = db.prepare("SELECT COUNT(*) AS total FROM attachments WHERE session_id = ?").get(sessionId) as Record<string, unknown>;
@@ -207,7 +231,9 @@ async function listSourceItems(sessionId: string, limit: number): Promise<{ tota
 		const metadata: Record<string, unknown> = parseSqlJson<Record<string, unknown>>(row.metadata_json);
 		const item: SessionOverviewSourceItem | null = row.kind === "generated_image"
 			? await readGeneratedImageSource(sessionId, metadata)
-			: await readAttachmentSource(sessionId, metadata);
+			: row.kind === "text"
+				? await readTextAttachmentSource(sessionId, metadata)
+				: await readAttachmentSource(sessionId, metadata);
 		if (item !== null) {
 			items.push(item);
 		}

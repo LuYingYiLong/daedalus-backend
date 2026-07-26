@@ -16,11 +16,12 @@ export function cloneAdditionalContextItems(items: readonly AdditionalContextIte
 
 	return items.map((item: AdditionalContextItem): AdditionalContextItem => {
 		const clonedItem: AdditionalContextItem = { ...item };
-		if (item.kind === "image" && item.data !== undefined && typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)) {
+		if ((item.kind === "image" || item.kind === "text_attachment") && item.data !== undefined && typeof item.data === "object" && item.data !== null && !Array.isArray(item.data)) {
 			const data: Record<string, unknown> = { ...(item.data as Record<string, unknown>) };
 			if (typeof data.attachmentId === "string" && data.attachmentId.length > 0) {
 				delete data.dataUrl;
 				delete data.thumbnailDataUrl;
+				delete data.content;
 			}
 			clonedItem.data = data;
 		}
@@ -178,6 +179,22 @@ function appendExternalLocalFilePromptLines(lines: string[], item: AdditionalCon
 	lines.push("  - note: 这是用户显式拖入的工作区外本机文件；当前只提供绝对路径引用，不把它当成 workspace 内文件。");
 }
 
+function appendTextAttachmentPromptLines(lines: string[], item: AdditionalContextItem): void {
+	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
+	const attachmentId: string = getContextString(data, "attachmentId");
+	const content: string = getContextString(data, "content");
+	if (attachmentId.length > 0) {
+		lines.push(`  - attachmentId: ${clipTextByChars(attachmentId, 160)}`);
+	}
+	if (content.length > 0) {
+		lines.push("  - content:");
+		lines.push(clipTextByChars(content, 60_000));
+		if (content.length > 60_000) {
+			lines.push("  - contentTruncated: true");
+		}
+	}
+}
+
 export function createAdditionalContextPromptSection(items: readonly AdditionalContextItem[] | undefined): string {
 	if (items === undefined || items.length === 0) {
 		return "";
@@ -228,6 +245,9 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 			}
 			lines.push("  - note: 图片二进制已作为多模态 image_url content part 单独发送给模型；不要在文本上下文中期待 base64。");
 		}
+		if (item.kind === "text_attachment") {
+			appendTextAttachmentPromptLines(lines, item);
+		}
 		if (item.kind === "script_selection") {
 			appendScriptSelectionPromptLines(lines, item);
 		} else if (item.kind === "filesystem_selection") {
@@ -237,7 +257,7 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 		} else if (item.kind === "file" || item.kind === "folder") {
 			appendExternalLocalFilePromptLines(lines, item);
 		}
-		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "git_diff_comment") {
+		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "text_attachment" && item.kind !== "git_diff_comment") {
 			lines.push(`  - data: ${clipTextByChars(JSON.stringify(createPreviewValue(item.data)), 1000)}`);
 		}
 	}

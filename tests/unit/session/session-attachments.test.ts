@@ -45,6 +45,38 @@ test("schema accepts session-backed image additional context", (): void => {
 	assert.equal(result.success, true);
 });
 
+test("text attachments are saved under the session and hydrate into prompt context", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const additionalContext = await import("../../../src/server/additional-context.js");
+		const metadata = await sessionStore.createSession("Text attachment test");
+		const content: string = "First line\nSecond line\n".repeat(20);
+		const context = await attachments.saveTextAttachment({
+			sessionId: metadata.id,
+			content,
+			title: "Pasted notes.txt"
+		});
+
+		assert.equal(context.kind, "text_attachment");
+		assert.equal(context.title, "Pasted notes.txt");
+		const attachmentId: string = String((context.data as Record<string, unknown>).attachmentId);
+		assert.match(attachmentId, /^text-/);
+		assert.equal((await attachments.readTextAttachmentContent(metadata.id, attachmentId)).content, content);
+
+		const hydrated = await attachments.hydrateAttachmentContexts(metadata.id, {
+			message: "Review these notes",
+			additionalContext: [context]
+		});
+		const data: Record<string, unknown> = hydrated.additionalContext?.[0]?.data as Record<string, unknown>;
+		assert.equal(data.content, content);
+		assert.match(additionalContext.createAdditionalContextPromptSection(hydrated.additionalContext), /First line/u);
+
+		const stored = additionalContext.cloneAdditionalContextItems(hydrated.additionalContext);
+		assert.equal((stored?.[0]?.data as Record<string, unknown>).content, undefined);
+	});
+});
+
 test("image attachments are saved under the session and hydrate to dataUrl", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");

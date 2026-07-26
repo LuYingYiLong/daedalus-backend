@@ -86,6 +86,12 @@ test("session store creates, opens, pages, rewinds, archives, restores, and dele
 			runId: "workflow-run-req-2",
 			text: "stale assistant response"
 		});
+		const { getSessionDatabase } = await import("../../../src/session/session-database.js");
+		const db = await getSessionDatabase();
+		db.prepare(`
+			UPDATE session_events SET created_at = ?
+			WHERE session_id = ? AND channel = 'timeline'
+		`).run("2026-07-03T00:00:02.000Z", metadata.id);
 
 		const rewound = await store.rewindSessionFromRequest(metadata.id, "req-2");
 		assert.equal(rewound.length, 1);

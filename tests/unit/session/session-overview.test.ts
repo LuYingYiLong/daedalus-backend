@@ -60,6 +60,11 @@ test("session overview lists recent plans and image sources", async (): Promise<
 			model: "gpt-image-1",
 			prompt: "Generated source"
 		});
+		await attachments.saveTextAttachment({
+			sessionId: metadata.id,
+			content: "Pasted notes for the current session.",
+			title: "Pasted notes.txt"
+		});
 
 		const result = await overview.createSessionOverview({
 			sessionId: metadata.id,
@@ -72,10 +77,16 @@ test("session overview lists recent plans and image sources", async (): Promise<
 		assert.equal(result.plans.total, 4);
 		assert.equal(result.plans.items.length, 3);
 		assert.deepEqual(result.plans.items.map((plan) => plan.title), ["Plan 3", "Plan 2", "Plan 1"]);
-		assert.equal(result.sources.total, 2);
+		assert.equal(result.sources.total, 3);
 		assert.equal(result.sources.items.some((source) => source.kind === "image_attachment"), true);
 		assert.equal(result.sources.items.some((source) => source.kind === "generated_image"), true);
-		assert.equal(result.sources.items.every((source) => source.thumbnailDataUrl.startsWith(`data:${source.mimeType};base64,`)), true);
+		assert.equal(result.sources.items.some((source) => source.kind === "text_attachment" && source.textPreview === "Pasted notes for the current session."), true);
+		assert.equal(
+			result.sources.items
+				.filter((source) => source.thumbnailDataUrl !== undefined)
+				.every((source) => source.thumbnailDataUrl?.startsWith(`data:${source.mimeType};base64,`) === true),
+			true
+		);
 	});
 });
 

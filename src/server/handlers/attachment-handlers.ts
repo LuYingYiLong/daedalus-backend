@@ -3,7 +3,7 @@ import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
-import { readGeneratedImageDataUrl, saveImageAttachment } from "../../session/session-attachments.js";
+import { readGeneratedImageDataUrl, readImageAttachmentDataUrl, saveImageAttachment, saveTextAttachment } from "../../session/session-attachments.js";
 
 export async function handleAttachmentRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, _mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
@@ -76,6 +76,61 @@ export async function handleAttachmentRequest(socket: WebSocket, request: Client
 						code: "generated_image_read_failed",
 						message: error instanceof Error ? error.message : "Failed to read generated image"
 					}
+				});
+			}
+			return;
+		}
+
+		case "attachment.image.get": {
+			if (session.sessionId === undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "session_required", message: "Open a session before reading image attachments." }
+				});
+				return;
+			}
+
+			try {
+				const dataUrl = await readImageAttachmentDataUrl(session.sessionId, request.params.attachmentId);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { attachmentId: request.params.attachmentId, dataUrl }
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "attachment_image_read_failed", message: error instanceof Error ? error.message : "Failed to read image attachment" }
+				});
+			}
+			return;
+		}
+
+		case "attachment.text.save": {
+			if (session.sessionId === undefined || session.sessionId !== request.params.sessionId) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "session_mismatch", message: "Text attachments can only be saved for the active session." }
+				});
+				return;
+			}
+
+			try {
+				const attachment = await saveTextAttachment(request.params);
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { attachment } });
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "attachment_text_save_failed", message: error instanceof Error ? error.message : "Failed to save text attachment" }
 				});
 			}
 			return;

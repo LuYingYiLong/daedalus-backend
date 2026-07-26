@@ -39,6 +39,14 @@ const imageContextDataSchema = z.object({
 	height: z.number().int().positive().optional()
 });
 
+const textAttachmentContextDataSchema = z.object({
+	attachmentId: z.string().min(1).max(160),
+	mimeType: z.literal("text/plain"),
+	byteSize: z.number().int().positive().max(1_000_000),
+	fileName: z.string().min(1).max(200),
+	content: z.string().max(1_000_000).optional()
+});
+
 const providerTaskModelRefSchema = z.object({
 	provider: providerIdSchema,
 	model: z.string().min(1)
@@ -63,7 +71,7 @@ const sessionUiMetadataParamsSchema = z.object({
 
 export const additionalContextItemSchema = z.object({
 	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "git_diff_comment"]),
+	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment"]),
 	title: z.string().min(1).max(200),
 	subtitle: z.string().max(400).optional(),
 	pinned: z.boolean().optional(),
@@ -75,6 +83,17 @@ export const additionalContextItemSchema = z.object({
 	summary: z.string().max(1200).optional(),
 	data: z.unknown().optional()
 }).superRefine((item, context): void => {
+	if (item.kind === "text_attachment") {
+		if (!textAttachmentContextDataSchema.safeParse(item.data).success) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "Text attachment context data must contain attachment metadata."
+			});
+		}
+		return;
+	}
+
 	if (item.kind !== "image") {
 		return;
 	}
@@ -1106,6 +1125,24 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.diff.get"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("attachment.image.get"),
+		params: z.object({
+			attachmentId: z.string().min(1).max(160),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("attachment.text.save"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			content: z.string().min(1).max(1_000_000),
+			title: z.string().min(1).max(200).optional(),
 		}),
 	}),
 	z.object({

@@ -8,6 +8,8 @@ import { getSessionDatabase, parseSqlJson, sqlJson } from "./session-database.js
 
 const ATTACHMENT_ID_PATTERN: RegExp = /^image-[a-zA-Z0-9_-]+$/;
 const GENERATED_IMAGE_ID_PATTERN: RegExp = /^generated-image-[a-zA-Z0-9_-]+$/;
+const TEXT_ATTACHMENT_ID_PATTERN: RegExp = /^text-[a-zA-Z0-9_-]+$/;
+const MAX_TEXT_ATTACHMENT_BYTES: number = 1_000_000;
 
 export type SaveImageAttachmentInput = {
 	sessionId: string;
@@ -52,6 +54,24 @@ export type GeneratedImageArtifactMetadata = {
 	storagePath: string;
 };
 
+export type SaveTextAttachmentInput = {
+	sessionId: string;
+	content: string;
+	title?: string | undefined;
+};
+
+export type TextAttachmentMetadata = {
+	id: string;
+	mimeType: "text/plain";
+	byteSize: number;
+	title: string;
+	source: "manual";
+	summary: string;
+	createdAt: string;
+	fileName: string;
+	storagePath: string;
+};
+
 export type SaveGeneratedImageArtifactInput = {
 	sessionId: string;
 	bytes: Buffer;
@@ -72,6 +92,10 @@ function getGeneratedImagesDir(sessionId: string): string {
 	return join(getAttachmentsDir(sessionId), "images");
 }
 
+function getTextAttachmentsDir(sessionId: string): string {
+	return join(getAttachmentsDir(sessionId), "text");
+}
+
 function assertSafeAttachmentId(attachmentId: string): string {
 	if (!ATTACHMENT_ID_PATTERN.test(attachmentId)) {
 		throw new Error(`Invalid image attachment id: ${attachmentId}`);
@@ -90,6 +114,13 @@ function assertSafeGeneratedImageId(imageId: string): string {
 	return imageId;
 }
 
+function assertSafeTextAttachmentId(attachmentId: string): string {
+	if (!TEXT_ATTACHMENT_ID_PATTERN.test(attachmentId)) {
+		throw new Error(`Invalid text attachment id: ${attachmentId}`);
+	}
+	return attachmentId;
+}
+
 function getImageExtension(mimeType: string): string {
 	if (mimeType === "image/jpeg") {
 		return "jpg";
@@ -106,6 +137,14 @@ function generatedImagePath(sessionId: string, imageId: string, mimeType: string
 
 function generatedImageStoragePath(fileName: string): string {
 	return `attachments/images/${fileName}`;
+}
+
+function textAttachmentPath(sessionId: string, attachmentId: string): string {
+	return join(getTextAttachmentsDir(sessionId), `${assertSafeTextAttachmentId(attachmentId)}.txt`);
+}
+
+function textAttachmentStoragePath(fileName: string): string {
+	return `attachments/text/${fileName}`;
 }
 
 function parseImageDataUrl(mimeType: string, dataUrl: string): Buffer {
@@ -166,11 +205,29 @@ function createImageAttachmentContext(metadata: ImageAttachmentMetadata, thumbna
 	};
 }
 
+function createTextAttachmentContext(metadata: TextAttachmentMetadata): AdditionalContextItem {
+	return {
+		id: metadata.id,
+		kind: "text_attachment",
+		title: metadata.title,
+		subtitle: `text/plain · ${formatByteSize(metadata.byteSize)}`,
+		pinned: false,
+		source: "manual",
+		summary: metadata.summary,
+		data: {
+			attachmentId: metadata.id,
+			mimeType: metadata.mimeType,
+			byteSize: metadata.byteSize,
+			fileName: metadata.fileName
+		}
+	};
+}
+
 async function writeAttachmentMetadata(
 	sessionId: string,
 	attachmentId: string,
-	kind: "image" | "generated_image",
-	metadata: ImageAttachmentMetadata | GeneratedImageArtifactMetadata,
+	kind: "image" | "generated_image" | "text",
+	metadata: ImageAttachmentMetadata | GeneratedImageArtifactMetadata | TextAttachmentMetadata,
 	storagePath: string
 ): Promise<void> {
 	(await getSessionDatabase()).prepare(`
@@ -247,6 +304,50 @@ export async function readImageAttachmentDataUrl(sessionId: string, attachmentId
 	);
 	const bytes: Buffer = await readFile(attachmentImagePath(sessionId, attachmentId));
 	return `data:${metadata.mimeType};base64,${bytes.toString("base64")}`;
+}
+
+export async function saveTextAttachment(input: SaveTextAttachmentInput): Promise<AdditionalContextItem> {
+	await openSession(input.sessionId);
+	const bytes: Buffer = Buffer.from(input.content, "utf8");
+	if (bytes.byteLength === 0 || bytes.byteLength > MAX_TEXT_ATTACHMENT_BYTES) {
+		throw new Error("Text attachment must be between 1 byte and 1 MiB.");
+	}
+
+	const attachmentId: string = `text-${randomUUID()}`;
+	const createdAt: string = new Date().toISOString();
+	const fileName: string = `${attachmentId}.txt`;
+	const metadata: TextAttachmentMetadata = {
+		id: attachmentId,
+		mimeType: "text/plain",
+		byteSize: bytes.byteLength,
+		title: input.title?.trim() || `Pasted text ${createdAt.replace("T", " ").slice(0, 19)}.txt`,
+		source: "manual",
+		summary: "Pasted text saved as a session attachment for this turn.",
+		createdAt,
+		fileName,
+		storagePath: textAttachmentStoragePath(fileName)
+	};
+
+	await mkdir(getTextAttachmentsDir(input.sessionId), { recursive: true });
+	await writeFile(textAttachmentPath(input.sessionId, attachmentId), bytes);
+	try {
+		await writeAttachmentMetadata(input.sessionId, attachmentId, "text", metadata, metadata.storagePath);
+	} catch (error: unknown) {
+		await rm(textAttachmentPath(input.sessionId, attachmentId), { force: true });
+		throw error;
+	}
+	return createTextAttachmentContext(metadata);
+}
+
+export async function readTextAttachmentContent(sessionId: string, attachmentId: string): Promise<{ metadata: TextAttachmentMetadata; content: string }> {
+	await openSession(sessionId);
+	const safeAttachmentId: string = assertSafeTextAttachmentId(attachmentId);
+	const metadata: TextAttachmentMetadata = await readAttachmentMetadata<TextAttachmentMetadata>(sessionId, safeAttachmentId, "text");
+	const bytes: Buffer = await readFile(textAttachmentPath(sessionId, safeAttachmentId));
+	if (bytes.byteLength !== metadata.byteSize) {
+		throw new Error("Text attachment bytes do not match metadata.");
+	}
+	return { metadata, content: bytes.toString("utf8") };
 }
 
 export async function saveGeneratedImageArtifact(input: SaveGeneratedImageArtifactInput): Promise<GeneratedImageArtifactMetadata> {
@@ -344,7 +445,7 @@ export async function deleteGeneratedImageArtifact(metadata: GeneratedImageArtif
 	`).run(metadata.sessionId, metadata.imageId);
 }
 
-export async function hydrateImageAttachmentContexts(sessionId: string | undefined, params: AiChatParams): Promise<AiChatParams> {
+export async function hydrateAttachmentContexts(sessionId: string | undefined, params: AiChatParams): Promise<AiChatParams> {
 	if (sessionId === undefined || params.additionalContext === undefined) {
 		return params;
 	}
@@ -352,31 +453,38 @@ export async function hydrateImageAttachmentContexts(sessionId: string | undefin
 	let changed: boolean = false;
 	const additionalContext: AdditionalContextItem[] = [];
 	for (const item of params.additionalContext) {
-		if (item.kind !== "image" || typeof item.data !== "object" || item.data === null || Array.isArray(item.data)) {
+		if (typeof item.data !== "object" || item.data === null || Array.isArray(item.data)) {
 			additionalContext.push(item);
 			continue;
 		}
 
 		const data: Record<string, unknown> = item.data as Record<string, unknown>;
-		if (typeof data.dataUrl === "string" && data.dataUrl.length > 0) {
+		if (item.kind === "image" && typeof data.dataUrl === "string" && data.dataUrl.length > 0) {
 			additionalContext.push(item);
 			continue;
 		}
-		if (typeof data.attachmentId !== "string" || data.attachmentId.length === 0) {
+		if (item.kind === "text_attachment" && typeof data.content === "string") {
+			additionalContext.push(item);
+			continue;
+		}
+		if ((item.kind !== "image" && item.kind !== "text_attachment") || typeof data.attachmentId !== "string" || data.attachmentId.length === 0) {
 			additionalContext.push(item);
 			continue;
 		}
 
-		const dataUrl: string = await readImageAttachmentDataUrl(sessionId, data.attachmentId);
+		const hydratedData: Record<string, unknown> = item.kind === "image"
+			? { ...data, dataUrl: await readImageAttachmentDataUrl(sessionId, data.attachmentId) }
+			: { ...data, content: (await readTextAttachmentContent(sessionId, data.attachmentId)).content };
 		additionalContext.push({
 			...item,
-			data: {
-				...data,
-				dataUrl
-			}
+			data: hydratedData
 		});
 		changed = true;
 	}
 
 	return changed ? { ...params, additionalContext } : params;
+}
+
+export async function hydrateImageAttachmentContexts(sessionId: string | undefined, params: AiChatParams): Promise<AiChatParams> {
+	return hydrateAttachmentContexts(sessionId, params);
 }

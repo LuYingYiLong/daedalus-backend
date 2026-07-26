@@ -704,6 +704,24 @@ function findRewindBoundaryCreatedAt(events: RewindableEvent[], removedRequestId
 	return boundary;
 }
 
+function findRewindTimelineSequence(
+	db: DatabaseSync,
+	sessionId: string,
+	requestIds: string[]
+): number | null {
+	if (requestIds.length === 0) {
+		return null;
+	}
+	const placeholders: string = requestIds.map((): string => "?").join(",");
+	const row = db.prepare(`
+		SELECT MIN(sequence) AS sequence
+		FROM session_events
+		WHERE session_id = ? AND channel = 'timeline' AND request_id IN (${placeholders})
+	`).get(sessionId, ...requestIds) as Record<string, unknown>;
+	const sequence: unknown = row.sequence;
+	return typeof sequence === "number" && Number.isInteger(sequence) ? sequence : null;
+}
+
 export async function rewindSessionFromRequest(sessionId: string, requestId: string): Promise<StoredMessage[]> {
 	return enqueueTranscriptWrite(sessionId, async (): Promise<StoredMessage[]> => {
 		const stored: StoredSession = await openSession(sessionId);
@@ -723,19 +741,22 @@ export async function rewindSessionFromRequest(sessionId: string, requestId: str
 				.map((message: StoredMessage): string | undefined => message.requestId)
 				.filter((value: string | undefined): value is string => value !== undefined && value.length > 0)
 		]);
-		const boundary: string = findRewindBoundaryCreatedAt(stored.events, removedRequestIds)
-			?? (startIndex >= 0 ? stored.messages[startIndex]?.createdAt : eventBoundary)
-			?? "";
 		const db: DatabaseSync = await getSessionDatabase();
 		runSessionTransaction(db, (): void => {
 			replaceMessages(db, sessionId, keptMessages);
 			const ids: string[] = [...removedRequestIds];
 			if (ids.length > 0) {
 				const placeholders: string = ids.map((): string => "?").join(",");
+				const timelineSequence: number | null = findRewindTimelineSequence(db, sessionId, ids);
 				db.prepare(`
 					DELETE FROM session_events
-					WHERE session_id = ? AND (request_id IN (${placeholders}) OR (? <> '' AND created_at >= ?))
-				`).run(sessionId, ...ids, boundary, boundary);
+					WHERE session_id = ? AND channel = 'timeline'
+						AND (request_id IN (${placeholders}) OR (? IS NOT NULL AND sequence >= ?))
+				`).run(sessionId, ...ids, timelineSequence, timelineSequence);
+				db.prepare(`
+					DELETE FROM session_events
+					WHERE session_id = ? AND channel = 'approval' AND request_id IN (${placeholders})
+				`).run(sessionId, ...ids);
 				db.prepare(`DELETE FROM plans WHERE session_id = ? AND request_id IN (${placeholders})`)
 					.run(sessionId, ...ids);
 			}

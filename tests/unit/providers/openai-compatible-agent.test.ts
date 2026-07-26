@@ -768,6 +768,37 @@ test("streaming agent retries when required first tool call returns only prelude
 	});
 });
 
+test("streaming agent suppresses generic textual tool-call markup and retries with API tool calls", async (): Promise<void> => {
+	await withMissingToolCallRetryMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const events: string[] = [];
+		const result = await runOpenAICompatibleAgentStreaming(
+			{
+				message: "Read the attached text.",
+				options: { stream: true }
+			},
+			{ provider: "zhipu", apiKey: "test-key", baseUrl, model: "glm-5.2" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			["mcp_godot_read_text_file"],
+			(event): void => {
+				if (event.type === "ai.delta") {
+					events.push(event.text);
+				}
+			}
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "读取完成。");
+		assert.equal(requests.length, 3);
+		assert.match(JSON.stringify(requests[1]?.body.messages), /tool_calls/);
+		assert.doesNotMatch(events.join(""), /<\/?tool_calls|<\/?tool_call/);
+	}, {
+		content: "I will inspect the available tools.\n\n<tool_calls>\n<tool_call name=\"mcp_godot_read_text_file\">\n</tool_call>\n</tool_calls>"
+	});
+});
+
 test("streaming agent tolerates two required tool-call prelude retries", async (): Promise<void> => {
 	await withRepeatedMissingToolCallRetryMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
 		const params: AiChatParams = {

@@ -416,7 +416,13 @@ export function createReasoningOnlyCorrectionMessage(allowedToolNames: readonly 
 }
 
 function containsKnownToolSyntax(text: string | null | undefined): boolean {
-	return containsDsmlToolCalls(text) || containsLooseToolCalls(text);
+	return containsDsmlToolCalls(text) || containsLooseToolCalls(text) || containsGenericToolCallMarkup(text);
+}
+
+function containsGenericToolCallMarkup(text: string | null | undefined): boolean {
+	return text !== null
+		&& text !== undefined
+		&& /<\s*\/?\s*tool_calls(?:\s|>)|<\s*\/?\s*tool_call(?:\s|>)/iu.test(text);
 }
 
 function createToolCallPreludeDelta(
@@ -472,13 +478,27 @@ function isDsmlToolCallsOpeningTag(openingTag: string): boolean {
 	return /^<\s*[｜|]+\s*DSML\s*[｜|]+\s*tool_calls\s*>$/iu.test(openingTag);
 }
 
+function isGenericToolCallsOpeningTag(openingTag: string): boolean {
+	return /^<\s*tool_calls(?:\s+[^<>]*?)?\s*>$/iu.test(openingTag);
+}
+
+function isGenericToolCallTagName(tagName: string): boolean {
+	return tagName.toLowerCase() === "tool_call";
+}
+
+function isPotentialGenericToolTagName(tagName: string): boolean {
+	const normalizedTagName: string = tagName.toLowerCase();
+	return "tool_calls".startsWith(normalizedTagName) || "tool_call".startsWith(normalizedTagName);
+}
+
 function isPotentialToolOpeningFragment(text: string): boolean {
 	if (/^<\s*[｜|]/u.test(text)) {
 		return true;
 	}
 
 	const match: RegExpMatchArray | null = /^<\s*([A-Za-z_][A-Za-z0-9_.:-]*)/u.exec(text);
-	return match?.[1] !== undefined && isPotentialLooseToolTagName(match[1]);
+	return match?.[1] !== undefined
+		&& (isPotentialLooseToolTagName(match[1]) || isPotentialGenericToolTagName(match[1]));
 }
 
 function findLooseClosingTagEnd(text: string, tagName: string): number {
@@ -493,10 +513,16 @@ function findDsmlClosingTagEnd(text: string): number {
 	return match === null ? -1 : match.index + match[0].length;
 }
 
+function findGenericToolCallsClosingTagEnd(text: string): number {
+	const match: RegExpExecArray | null = /<\/\s*tool_calls\s*>/iu.exec(text);
+	return match === null ? -1 : match.index + match[0].length;
+}
+
 class ToolSyntaxStreamFilter {
 	private pendingText: string = "";
 	private strippingTagName: string | null = null;
 	private strippingDsmlToolCalls: boolean = false;
+	private strippingGenericToolCalls: boolean = false;
 	private emittedText: string = "";
 	private suppressedSyntax: boolean = false;
 
@@ -555,6 +581,21 @@ class ToolSyntaxStreamFilter {
 				continue;
 			}
 
+			if (this.strippingGenericToolCalls) {
+				const closingEnd: number = findGenericToolCallsClosingTagEnd(this.pendingText);
+				if (closingEnd < 0) {
+					if (flush) {
+						this.pendingText = "";
+						this.strippingGenericToolCalls = false;
+					}
+					break;
+				}
+
+				this.pendingText = this.pendingText.slice(closingEnd);
+				this.strippingGenericToolCalls = false;
+				continue;
+			}
+
 			const tagStart: number = this.pendingText.indexOf("<");
 			if (tagStart < 0) {
 				visibleText += this.pendingText;
@@ -583,7 +624,7 @@ class ToolSyntaxStreamFilter {
 
 			const openingTag: string = this.pendingText.slice(0, tagEnd + 1);
 			const looseOpeningTag: LooseOpeningTag | null = parseLooseOpeningTag(openingTag);
-			if (looseOpeningTag !== null && isKnownLooseToolTagName(looseOpeningTag.tagName)) {
+			if (looseOpeningTag !== null && (isKnownLooseToolTagName(looseOpeningTag.tagName) || isGenericToolCallTagName(looseOpeningTag.tagName))) {
 				this.suppressedSyntax = true;
 				this.pendingText = this.pendingText.slice(tagEnd + 1);
 				this.strippingTagName = looseOpeningTag.selfClosing ? null : looseOpeningTag.tagName;
@@ -594,6 +635,13 @@ class ToolSyntaxStreamFilter {
 				this.suppressedSyntax = true;
 				this.pendingText = this.pendingText.slice(tagEnd + 1);
 				this.strippingDsmlToolCalls = true;
+				continue;
+			}
+
+			if (isGenericToolCallsOpeningTag(openingTag)) {
+				this.suppressedSyntax = true;
+				this.pendingText = this.pendingText.slice(tagEnd + 1);
+				this.strippingGenericToolCalls = true;
 				continue;
 			}
 

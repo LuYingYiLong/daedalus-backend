@@ -29,6 +29,7 @@ export type SessionMetadata = {
 	id: string;
 	title: string;
 	temporary?: boolean | undefined;
+	pinned?: boolean | undefined;
 	workspaceId?: string | undefined;
 	workspaceName?: string | undefined;
 	workspaceKind?: "godot" | undefined;

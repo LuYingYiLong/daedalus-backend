@@ -233,13 +233,16 @@ test("session metadata updates do not rewrite persisted messages", async (): Pro
 
 		const updated = await store.updateSessionMetadata(metadata.id, {
 			workflowTodoCollapsed: true,
-			model: "MiniMax-M3"
+			model: "MiniMax-M3",
+			pinned: true
 		});
 		assert.equal(updated.workflowTodoCollapsed, true);
+		assert.equal(updated.pinned, true);
 
 		const after = await store.openSession(metadata.id);
 		assert.equal(after.metadata.workflowTodoCollapsed, true);
 		assert.equal(after.metadata.model, "MiniMax-M3");
+		assert.equal(after.metadata.pinned, true);
 		assert.deepEqual(after.messages, before.messages);
 	});
 });

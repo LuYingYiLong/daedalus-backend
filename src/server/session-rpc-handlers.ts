@@ -1055,6 +1055,19 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 		}
 
+		case "session.pin.set": {
+			const metadata: SessionMetadata = await updateSessionMetadata(request.params.sessionId, {
+				pinned: request.params.pinned
+			});
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: metadata
+			});
+			break;
+		}
+
 		case "session.context.estimate": {
 			try {
 				sendJson(socket, {

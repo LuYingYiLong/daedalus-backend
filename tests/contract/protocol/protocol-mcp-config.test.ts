@@ -231,6 +231,25 @@ test("session create and save schema accept frontend session metadata", (): void
 
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
+		id: "session-pin-set",
+		method: "session.pin.set",
+		params: {
+			sessionId: "session-20260726-pinned",
+			pinned: true
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "session-pin-set-invalid",
+		method: "session.pin.set",
+		params: {
+			sessionId: "session-20260726-pinned"
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
 		id: "session-save-bad-approval-mode",
 		method: "session.save",
 		params: {

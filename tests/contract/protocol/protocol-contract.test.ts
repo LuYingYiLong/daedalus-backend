@@ -28,6 +28,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"session.guide.reorder",
 	"session.integrity.check",
 	"session.model.set",
+	"session.pin.set",
 	"session.overview.get",
 	"session.workflow.todo.dismiss",
 	"skill.install",

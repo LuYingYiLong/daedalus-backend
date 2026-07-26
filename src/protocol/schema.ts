@@ -1132,6 +1132,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.pin.set"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			pinned: z.boolean(),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("workspace.update"),
 		params: z.object({
 			workspaceId: z.string().min(1),

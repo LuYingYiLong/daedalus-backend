@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getDefaultArchivedSessionsDir, getDefaultSessionsDir } from "../app-paths.js";
 import type { ChatMessage } from "../protocol/types.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import { findContainingWorkspaceSourceFolder } from "../workspace/registry.js";
 import {
 	getSessionDatabase,
 	parseSqlJson,
@@ -1046,6 +1047,116 @@ export async function deleteSessionsByWorkspace(workspaceId: string): Promise<{ 
 		await deleteArchivedSession(id);
 	}
 	return { deletedSessionIds, deletedArchivedSessionIds };
+}
+
+export type WorkspaceSessionMove = {
+	sessionId: string;
+	archived: boolean;
+	workspaceId: string;
+};
+
+export type WorkspaceSessionReassignmentResult = {
+	movedSessions: WorkspaceSessionMove[];
+	deletedSessionIds: string[];
+	deletedArchivedSessionIds: string[];
+};
+
+function findSessionDestination(
+	metadata: SessionMetadata,
+	workspaces: WorkspaceConfig[]
+): WorkspaceConfig | undefined {
+	if (metadata.workspaceRoot === undefined) {
+		return undefined;
+	}
+
+	return workspaces
+		.map((workspace: WorkspaceConfig) => ({
+			workspace,
+			sourceFolder: findContainingWorkspaceSourceFolder(workspace, metadata.workspaceRoot!)
+		}))
+		.filter((candidate): candidate is {
+			workspace: WorkspaceConfig;
+			sourceFolder: WorkspaceConfig["sourceFolders"][number];
+		} => candidate.sourceFolder !== undefined)
+		.sort((left, right): number => right.sourceFolder.path.length - left.sourceFolder.path.length)[0]?.workspace;
+}
+
+export async function updateSessionsForWorkspace(workspace: WorkspaceConfig): Promise<SessionMetadata[]> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const rows = db.prepare("SELECT metadata_json FROM sessions WHERE workspace_id = ?").all(workspace.id) as Record<string, unknown>[];
+	const updatedSessions: SessionMetadata[] = rows.map((row: Record<string, unknown>): SessionMetadata => {
+		const metadata: SessionMetadata = parseSqlJson<SessionMetadata>(row.metadata_json);
+		return {
+			...metadata,
+			workspaceId: workspace.id,
+			workspaceName: workspace.name,
+			workspaceKind: workspace.kind,
+			workspaceRoot: workspace.rootPath,
+			godotExecutablePath: workspace.godotExecutablePath,
+			updatedAt: new Date().toISOString()
+		};
+	});
+	runSessionTransaction(db, (): void => {
+		for (const metadata of updatedSessions) {
+			writeMetadataRow(db, metadata);
+		}
+	});
+	for (const metadata of updatedSessions) {
+		invalidateTimelineCache(metadata.id);
+	}
+	return updatedSessions;
+}
+
+export async function reassignOrDeleteSessionsForWorkspace(
+	workspaceId: string,
+	remainingWorkspaces: WorkspaceConfig[]
+): Promise<WorkspaceSessionReassignmentResult> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const rows = db.prepare("SELECT metadata_json FROM sessions WHERE workspace_id = ?").all(workspaceId) as Record<string, unknown>[];
+	const movedSessions: WorkspaceSessionMove[] = [];
+	const deleteTargets: Array<{ id: string; archived: boolean }> = [];
+	const movedMetadata: SessionMetadata[] = [];
+
+	for (const row of rows) {
+		const metadata: SessionMetadata = parseSqlJson<SessionMetadata>(row.metadata_json);
+		const destination: WorkspaceConfig | undefined = findSessionDestination(metadata, remainingWorkspaces);
+		if (destination === undefined) {
+			deleteTargets.push({ id: metadata.id, archived: metadata.archivedAt !== undefined });
+			continue;
+		}
+		movedMetadata.push({
+			...metadata,
+			workspaceId: destination.id,
+			workspaceName: destination.name,
+			workspaceKind: destination.kind,
+			workspaceRoot: destination.rootPath,
+			godotExecutablePath: destination.godotExecutablePath,
+			updatedAt: new Date().toISOString()
+		});
+		movedSessions.push({
+			sessionId: metadata.id,
+			archived: metadata.archivedAt !== undefined,
+			workspaceId: destination.id
+		});
+	}
+
+	runSessionTransaction(db, (): void => {
+		for (const metadata of movedMetadata) {
+			writeMetadataRow(db, metadata);
+		}
+	});
+	for (const metadata of movedMetadata) {
+		invalidateTimelineCache(metadata.id);
+	}
+	for (const target of deleteTargets) {
+		await deleteSessionRecord(target.id, target.archived);
+	}
+
+	return {
+		movedSessions,
+		deletedSessionIds: deleteTargets.filter((target): boolean => !target.archived).map((target) => target.id),
+		deletedArchivedSessionIds: deleteTargets.filter((target): boolean => target.archived).map((target) => target.id)
+	};
 }
 
 export async function renameSession(sessionId: string, newTitle: string): Promise<SessionMetadata> {

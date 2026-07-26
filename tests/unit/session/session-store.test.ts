@@ -125,6 +125,14 @@ test("session store persists workspace metadata snapshot", async (): Promise<voi
 			name: "Project A",
 			kind: "godot",
 			rootPath: "D:/GodotProjects/project-a",
+			icon: 0,
+			color: 0,
+			sourceFolders: [{
+				id: "primary-a",
+				path: "D:/GodotProjects/project-a",
+				capabilities: { git: false, godot: true }
+			}],
+			primarySourceFolderId: "primary-a",
 			godotExecutablePath: "D:/Godot/Godot.exe"
 		});
 
@@ -242,13 +250,21 @@ test("workspace metadata backfill does not overwrite an existing session workspa
 			id: "workspace-a",
 			name: "Project A",
 			kind: "godot" as const,
-			rootPath: "D:/ProjectA"
+			rootPath: "D:/ProjectA",
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "primary-a", path: "D:/ProjectA", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary-a"
 		};
 		const otherWorkspace = {
 			id: "workspace-b",
 			name: "Project B",
 			kind: "godot" as const,
-			rootPath: "D:/ProjectB"
+			rootPath: "D:/ProjectB",
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "primary-b", path: "D:/ProjectB", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary-b"
 		};
 		const metadata = await store.createSession("Workspace session", originalWorkspace.id, undefined, originalWorkspace);
 
@@ -262,7 +278,11 @@ test("workspace metadata backfill fills only sessions without workspace metadata
 			id: "workspace-a",
 			name: "Project A",
 			kind: "godot" as const,
-			rootPath: "D:/ProjectA"
+			rootPath: "D:/ProjectA",
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "primary-a", path: "D:/ProjectA", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary-a"
 		};
 		const metadata = await store.createSession("No workspace session");
 
@@ -311,6 +331,79 @@ test("session store deletes active and archived sessions by workspace", async ()
 		assert.deepEqual(result.deletedArchivedSessionIds, [archived.id]);
 		assert.deepEqual((await store.listSessions()).map((metadata) => metadata.id), [other.id]);
 		assert.deepEqual(await store.listArchivedSessions(), []);
+	});
+});
+
+test("workspace deletion reassigns every session kind to the most specific remaining project", async (): Promise<void> => {
+	await withTempAppData(async (store, appDataDir): Promise<void> => {
+		const broadRoot: string = path.join(appDataDir, "projects");
+		const specificRoot: string = path.join(broadRoot, "game");
+		const oldRoot: string = path.join(specificRoot, "scenes");
+		const orphanRoot: string = path.join(appDataDir, "orphan");
+		const deletedWorkspace = {
+			id: "workspace-deleted",
+			name: "Deleted",
+			kind: "godot" as const,
+			rootPath: oldRoot,
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "deleted-primary", path: oldRoot, capabilities: { git: false, godot: true } }],
+			primarySourceFolderId: "deleted-primary"
+		};
+		const orphanWorkspace = {
+			...deletedWorkspace,
+			rootPath: orphanRoot,
+			sourceFolders: [{ id: "orphan-primary", path: orphanRoot, capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "orphan-primary"
+		};
+		const broadWorkspace = {
+			id: "workspace-broad",
+			name: "All projects",
+			kind: "godot" as const,
+			rootPath: broadRoot,
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "broad", path: broadRoot, capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "broad"
+		};
+		const specificWorkspace = {
+			id: "workspace-specific",
+			name: "Game",
+			kind: "godot" as const,
+			rootPath: specificRoot,
+			icon: 5 as const,
+			color: 4 as const,
+			sourceFolders: [{ id: "specific", path: specificRoot, capabilities: { git: true, godot: true } }],
+			primarySourceFolderId: "specific"
+		};
+
+		const active = await store.createSession("Active", deletedWorkspace.id, undefined, deletedWorkspace);
+		const archived = await store.createSession("Archived", deletedWorkspace.id, undefined, deletedWorkspace);
+		const temporary = await store.createSession("Temporary", deletedWorkspace.id, undefined, deletedWorkspace, { temporary: true });
+		const orphan = await store.createSession("Orphan", deletedWorkspace.id, undefined, orphanWorkspace);
+		await store.archiveSession(archived.id);
+
+		const result = await store.reassignOrDeleteSessionsForWorkspace(deletedWorkspace.id, [
+			broadWorkspace,
+			specificWorkspace
+		]);
+
+		assert.deepEqual(
+			result.movedSessions
+				.map((move) => ({ sessionId: move.sessionId, workspaceId: move.workspaceId, archived: move.archived }))
+				.sort((left, right) => left.sessionId.localeCompare(right.sessionId)),
+			[
+				{ sessionId: active.id, workspaceId: specificWorkspace.id, archived: false },
+				{ sessionId: archived.id, workspaceId: specificWorkspace.id, archived: true },
+				{ sessionId: temporary.id, workspaceId: specificWorkspace.id, archived: false }
+			].sort((left, right) => left.sessionId.localeCompare(right.sessionId))
+		);
+		assert.deepEqual(result.deletedSessionIds, [orphan.id]);
+		assert.deepEqual(result.deletedArchivedSessionIds, []);
+		assert.equal((await store.openSession(active.id)).metadata.workspaceName, "Game");
+		assert.equal((await store.listArchivedSessions()).find((session) => session.id === archived.id)?.workspaceId, specificWorkspace.id);
+		assert.equal((await store.listTemporarySessions())[0]?.workspaceId, specificWorkspace.id);
+		await assert.rejects(() => store.openSession(orphan.id), /Session not found/);
 	});
 });
 

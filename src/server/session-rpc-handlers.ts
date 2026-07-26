@@ -25,6 +25,7 @@ import { composeSkillPrompt, getSkill, isSkillId, listSkills } from "../skills/r
 import type { SkillId } from "../skills/registry.js";
 import { legacySkillIdToRef } from "../skills/catalog.js";
 import {
+	createRuntimeWorkspace,
 	findWorkspace,
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
@@ -201,11 +202,10 @@ function restoreWorkspaceFromSessionMetadata(metadata: SessionMetadata): Workspa
 
 	const fallbackName: string = path.basename(metadata.workspaceRoot) || metadata.workspaceRoot;
 	return upsertRuntimeWorkspace({
+		...createRuntimeWorkspace(metadata.workspaceRoot, metadata.godotExecutablePath),
 		id: metadata.workspaceId,
 		name: metadata.workspaceName ?? fallbackName,
-		kind: metadata.workspaceKind ?? "godot",
-		rootPath: metadata.workspaceRoot,
-		godotExecutablePath: metadata.godotExecutablePath
+		kind: metadata.workspaceKind ?? "godot"
 	});
 }
 

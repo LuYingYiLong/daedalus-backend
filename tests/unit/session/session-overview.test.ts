@@ -113,7 +113,11 @@ test("session overview returns git env info only for git workspaces", async (t):
 			id: "workspace-git",
 			name: "Git Workspace",
 			kind: "godot",
-			rootPath: workspaceRoot
+			rootPath: workspaceRoot,
+			icon: 0,
+			color: 0,
+			sourceFolders: [{ id: "primary", path: workspaceRoot, capabilities: { git: true, godot: false } }],
+			primarySourceFolderId: "primary"
 		});
 
 		const result = await overview.createSessionOverview({

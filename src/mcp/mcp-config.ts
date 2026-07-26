@@ -13,6 +13,17 @@ const defaultWs = getDefaultWorkspace();
 const DEFAULT_GODOT_PROJECT_PATH: string | undefined = process.env.GODOT_PROJECT_PATH ?? defaultWs?.rootPath;
 const DEFAULT_GODOT_EXECUTABLE_PATH: string | undefined = process.env.GODOT_EXECUTABLE_PATH ?? defaultWs?.godotExecutablePath;
 
+export function getSourceScopedServerId(
+	baseServerId: string,
+	workspace: WorkspaceConfig,
+	sourceFolderId?: string | undefined
+): string {
+	const effectiveSourceId: string = sourceFolderId?.trim() || workspace.primarySourceFolderId;
+	return effectiveSourceId === workspace.primarySourceFolderId
+		? baseServerId
+		: `${baseServerId}:${effectiveSourceId}`;
+}
+
 export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string | undefined): McpServerConfig[] {
 	const terminalInvocation = createSelfInvocation(["mcp", "terminal"]);
 	const skillsInvocation = createSelfInvocation(["mcp", "skills"]);
@@ -53,9 +64,7 @@ export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string 
 }
 
 export function buildMcpServerConfigs(workspace?: WorkspaceConfig, defaultGodotExecutablePath?: string | undefined): McpServerConfig[] {
-	const projectPath: string | undefined = workspace?.rootPath;
-
-	if (!projectPath) {
+	if (workspace === undefined || workspace.sourceFolders.length === 0) {
 		return [];
 	}
 
@@ -63,45 +72,59 @@ export function buildMcpServerConfigs(workspace?: WorkspaceConfig, defaultGodotE
 	const workspaceInvocation = createSelfInvocation(["mcp", "workspace"]);
 	const godotInvocation = createSelfInvocation(["mcp", "godot"]);
 	const skillsInvocation = createSelfInvocation(["mcp", "skills"]);
-	configs.push({
-		id: WORKSPACE_MCP_SERVER_ID,
-		name: "Workspace MCP",
-		transport: "stdio",
-		command: workspaceInvocation.command,
-		args: workspaceInvocation.args,
-		env: {
-			WORKSPACE_ID: workspace?.id ?? "default",
-			WORKSPACE_ROOT: projectPath
-		}
-	});
-
-	const isGodotProject: boolean = existsSync(join(projectPath, "project.godot"));
-	if (isGodotProject) {
-		const godotExecutablePath: string | undefined = workspace?.godotExecutablePath ?? defaultGodotExecutablePath;
+	for (const sourceFolder of workspace.sourceFolders) {
+		const projectPath: string = sourceFolder.path;
+		const workspaceServerId: string = getSourceScopedServerId(WORKSPACE_MCP_SERVER_ID, workspace, sourceFolder.id);
 		configs.push({
-			id: "godot",
-			name: "Godot Project MCP",
+			id: workspaceServerId,
+			name: sourceFolder.id === workspace.primarySourceFolderId
+				? "Workspace MCP"
+				: `Workspace MCP (${sourceFolder.id})`,
 			transport: "stdio",
-			command: godotInvocation.command,
-			args: godotInvocation.args,
+			command: workspaceInvocation.command,
+			args: workspaceInvocation.args,
 			env: {
-				GODOT_PROJECT_PATH: projectPath,
-				...(godotExecutablePath === undefined ? {} : { GODOT_EXECUTABLE_PATH: godotExecutablePath })
+				WORKSPACE_ID: workspace.id,
+				WORKSPACE_SOURCE_FOLDER_ID: sourceFolder.id,
+				WORKSPACE_ROOT: projectPath
+			}
+		});
+
+		const isGodotProject: boolean = existsSync(join(projectPath, "project.godot"));
+		if (isGodotProject) {
+			const godotExecutablePath: string | undefined = workspace.godotExecutablePath ?? defaultGodotExecutablePath;
+			configs.push({
+				id: getSourceScopedServerId("godot", workspace, sourceFolder.id),
+				name: sourceFolder.id === workspace.primarySourceFolderId
+					? "Godot Project MCP"
+					: `Godot Project MCP (${sourceFolder.id})`,
+				transport: "stdio",
+				command: godotInvocation.command,
+				args: godotInvocation.args,
+				env: {
+					DAEDALUS_WORKSPACE_ID: workspace.id,
+					DAEDALUS_SOURCE_FOLDER_ID: sourceFolder.id,
+					GODOT_PROJECT_PATH: projectPath,
+					...(godotExecutablePath === undefined ? {} : { GODOT_EXECUTABLE_PATH: godotExecutablePath })
+				}
+			});
+		}
+
+		configs.push({
+			id: getSourceScopedServerId("skills", workspace, sourceFolder.id),
+			name: sourceFolder.id === workspace.primarySourceFolderId
+				? "Daedalus Skills MCP"
+				: `Daedalus Skills MCP (${sourceFolder.id})`,
+			transport: "stdio",
+			command: skillsInvocation.command,
+			args: skillsInvocation.args,
+			env: {
+				DAEDALUS_WORKSPACE_ID: workspace.id,
+				DAEDALUS_SOURCE_FOLDER_ID: sourceFolder.id,
+				GODOT_PROJECT_PATH: projectPath
 			}
 		});
 	}
-
-	configs.push({
-		id: "skills",
-		name: "Daedalus Skills MCP",
-		transport: "stdio",
-		command: skillsInvocation.command,
-		args: skillsInvocation.args,
-		env: {
-			DAEDALUS_WORKSPACE_ID: workspace?.id ?? "default",
-			GODOT_PROJECT_PATH: projectPath
-		}
-	});
 
 	return configs;
 }

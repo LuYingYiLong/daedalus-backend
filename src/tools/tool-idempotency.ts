@@ -11,6 +11,7 @@ import { logger } from "../logger.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
 import { stripApprovalReasonArg } from "./approval-reason.js";
 import type { TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import { createSourceScopedWorkspace, findWorkspace } from "../workspace/registry.js";
 
 const TOOL_EXECUTION_DEDUP_TTL_MS: number = 30 * 60 * 1000;
 const MAX_COMPLETED_TOOL_EXECUTIONS: number = 500;
@@ -313,7 +314,12 @@ function refreshEditorFilesystemAfterGodotMutation(
 	}
 
 	const changedPaths: string[] = collectGodotRefreshPaths(llmToolName, args);
-	void mcpHost.getEditorBridge().refreshFilesystem(changedPaths, workspaceId).catch((error: unknown): void => {
+	const workspace = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
+	const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined;
+	const editorWorkspaceId: string | undefined = workspace === undefined
+		? workspaceId
+		: createSourceScopedWorkspace(workspace, sourceFolderId).id;
+	void mcpHost.getEditorBridge().refreshFilesystem(changedPaths, editorWorkspaceId).catch((error: unknown): void => {
 		logger.warn("godot_editor", "filesystem_refresh_failed", {
 			llmToolName,
 			changedPaths,
@@ -410,6 +416,7 @@ async function executeImageWorkspaceImportTool(
 		relativePath,
 		sessionId,
 		workspaceId,
+		sourceFolderId: typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined,
 		abortSignal
 	});
 	const content: string = JSON.stringify(imported);

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { stat, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { McpHost } from "../mcp/mcp-host.js";
-import { findWorkspace } from "../workspace/registry.js";
+import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
 
 const MAX_FILE_EDIT_SNAPSHOT_BYTES: number = 1024 * 1024;
 
@@ -278,7 +278,8 @@ export async function captureFileEditBatchDraft<T extends { content: string; reu
 		return await execute();
 	}
 
-	const workspaceRoot: string = path.resolve(workspace.rootPath);
+	const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined;
+	const workspaceRoot: string = path.resolve(getWorkspaceSourceFolder(workspace, sourceFolderId).path);
 	const targets: TrackedTarget[] = collectTrackedTargets(mcpHost, workspaceRoot, llmToolName, args);
 	if (targets.length === 0) {
 		return await execute();

@@ -1,10 +1,21 @@
-import { buildGlobalMcpServerConfigs, buildMcpServerConfigs, TERMINAL_MCP_SERVER_ID } from "./mcp-config.js";
+import {
+	buildGlobalMcpServerConfigs,
+	buildMcpServerConfigs,
+	getSourceScopedServerId,
+	TERMINAL_MCP_SERVER_ID
+} from "./mcp-config.js";
 import { buildCustomMcpServerConfigs } from "./custom-mcp-config-store.js";
 import { GODOT_DIAGNOSTICS_SERVER_ID, GodotDiagnosticsBridge } from "./godot/bridges/diagnostics-bridge.js";
 import { GODOT_EDITOR_SERVER_ID, GodotEditorBridge } from "./godot/bridges/editor-bridge.js";
 import { McpSession } from "./mcp-session.js";
 import type { McpServerConfig } from "./types.js";
-import { findWorkspace, getDefaultWorkspace } from "../workspace/registry.js";
+import {
+	createSourceScopedWorkspace,
+	findContainingWorkspaceSourceFolder,
+	findWorkspace,
+	getDefaultWorkspace,
+	getWorkspaceSourceFolder
+} from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import {
 	clearDynamicMcpToolsForWorkspace,
@@ -586,10 +597,22 @@ export class McpHost {
 				__daedalusCommandAuthorization: commandAuthorization
 			};
 		}
+		const workspace: WorkspaceConfig | undefined = findWorkspace(resolvedWorkspaceId);
+		let sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
+			? args.sourceFolderId
+			: undefined;
+		if (workspace !== undefined) {
+			const requestedCwd: string | undefined = typeof args.cwd === "string" ? args.cwd.trim() : undefined;
+			if (sourceFolderId === undefined && requestedCwd !== undefined && requestedCwd.length > 0) {
+				sourceFolderId = findContainingWorkspaceSourceFolder(workspace, requestedCwd)?.id;
+			}
+			getWorkspaceSourceFolder(workspace, sourceFolderId);
+		}
 
 		return {
 			...args,
 			__daedalusWorkspaceId: resolvedWorkspaceId,
+			__daedalusSourceFolderId: sourceFolderId,
 			__daedalusApprovalMode: approvalMode,
 			__daedalusCommandAuthorization: commandAuthorization
 		};
@@ -619,6 +642,9 @@ export class McpHost {
 		editorInstanceId?: string | undefined,
 		commandAuthorization?: TerminalCommandAuthorization | undefined
 	) {
+		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
+			? args.sourceFolderId
+			: undefined;
 		if (serverId === TERMINAL_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 			return this.getSession(serverId, workspaceId).callTool(
@@ -628,15 +654,34 @@ export class McpHost {
 		}
 
 		if (serverId === GODOT_EDITOR_SERVER_ID) {
-			return this.editorBridge.callTool(name, args, workspaceId, editorInstanceId);
+			const workspace: WorkspaceConfig | undefined = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
+			const routedWorkspaceId: string | undefined = workspace === undefined
+				? workspaceId
+				: createSourceScopedWorkspace(workspace, sourceFolderId).id;
+			const forwardedArgs: Record<string, unknown> = { ...args };
+			delete forwardedArgs.sourceFolderId;
+			return this.editorBridge.callTool(name, forwardedArgs, routedWorkspaceId, editorInstanceId);
 		}
 
 		if (serverId === GODOT_DIAGNOSTICS_SERVER_ID) {
-			this.selectDiagnosticsWorkspace(workspaceId);
-			return this.diagnosticsBridge.callTool(name, args);
+			const workspace: WorkspaceConfig = this.selectDiagnosticsWorkspace(workspaceId);
+			this.diagnosticsBridge.setWorkspace(createSourceScopedWorkspace(workspace, sourceFolderId));
+			const forwardedArgs: Record<string, unknown> = { ...args };
+			delete forwardedArgs.sourceFolderId;
+			return this.diagnosticsBridge.callTool(name, forwardedArgs);
 		}
 
-		return this.getSession(serverId, workspaceId).callTool(name, args);
+		const resolvedWorkspaceId: string | undefined = workspaceId ?? getCurrentMcpWorkspaceId() ?? this.activeWorkspaceId;
+		const workspace: WorkspaceConfig | undefined = resolvedWorkspaceId === undefined
+			? undefined
+			: findWorkspace(resolvedWorkspaceId);
+		const forwardedArgs: Record<string, unknown> = { ...args };
+		delete forwardedArgs.sourceFolderId;
+		const sourceScoped: boolean = serverId === "workspace" || serverId === "godot" || serverId === "skills";
+		const routedServerId: string = workspace === undefined || !sourceScoped
+			? serverId
+			: getSourceScopedServerId(serverId, workspace, getWorkspaceSourceFolder(workspace, sourceFolderId).id);
+		return this.getSession(routedServerId, workspaceId).callTool(name, forwardedArgs);
 	}
 
 	async listResources(serverId: string, workspaceId?: string | undefined) {

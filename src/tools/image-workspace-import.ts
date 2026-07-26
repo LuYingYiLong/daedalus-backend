@@ -1,7 +1,7 @@
 import { constants as fsConstants, copyFile, link, lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { findWorkspace } from "../workspace/registry.js";
+import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
 import {
 	getGeneratedImageArtifactLocalPath,
 	readGeneratedImageArtifact,
@@ -146,6 +146,7 @@ export async function executeImageWorkspaceImport(params: {
 	relativePath: string;
 	sessionId: string;
 	workspaceId: string;
+	sourceFolderId?: string | undefined;
 	abortSignal?: AbortSignal | undefined;
 }): Promise<ImageWorkspaceImportResult> {
 	throwIfAborted(params.abortSignal);
@@ -153,9 +154,10 @@ export async function executeImageWorkspaceImport(params: {
 	if (workspace === undefined) {
 		throw new Error(`Workspace is not registered: ${params.workspaceId}`);
 	}
+	const sourceFolder = getWorkspaceSourceFolder(workspace, params.sourceFolderId);
 	const generated = await readGeneratedImageArtifact(params.sessionId, params.imageId);
 	const metadata: GeneratedImageArtifactMetadata = generated.metadata;
-	const destination = await resolveSafeDestination(workspace.rootPath, params.relativePath);
+	const destination = await resolveSafeDestination(sourceFolder.path, params.relativePath);
 	if (normalizedDestinationExtension(destination.relativePath) !== mimeExtension(metadata.mimeType)) {
 		throw new Error(`Destination extension must match ${metadata.mimeType}.`);
 	}

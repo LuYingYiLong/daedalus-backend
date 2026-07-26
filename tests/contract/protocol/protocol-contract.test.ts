@@ -37,6 +37,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"usage.metrics.logs.list",
 	"usage.metrics.trends.get",
 	"workspace.delete",
+	"workspace.update",
 	"workspace.git.diff.get",
 	"workspace.git.diff.summary.get",
 	"workspace.git.diff.file.get",
@@ -136,13 +137,33 @@ test("workspace.delete accepts workspace id", (): void => {
 	}).success, true);
 });
 
+test("workspace.update accepts a multi-root project configuration", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-update",
+		method: "workspace.update",
+		params: {
+			workspaceId: "workspace-a",
+			name: "Gameplay",
+			icon: 5,
+			color: 4,
+			sourceFolders: [
+				{ id: "game", path: "D:/Projects/game" },
+				{ id: "tools", path: "D:/Projects/tools" }
+			],
+			primarySourceFolderId: "game"
+		}
+	}).success, true);
+});
+
 test("workspace.git.diff.get accepts workspace id", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
 		id: "workspace-git-diff",
 		method: "workspace.git.diff.get",
 		params: {
-			workspaceId: "workspace-a"
+			workspaceId: "workspace-a",
+			sourceFolderId: "tools"
 		}
 	}).success, true);
 });

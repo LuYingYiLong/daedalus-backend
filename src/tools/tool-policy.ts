@@ -1,5 +1,6 @@
 import { isDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { HARD_BLOCKED_TOOLS, TOOL_POLICIES } from "./tool-policy-table.js";
+import { findWorkspace, isPathInsideWorkspaceSources } from "../workspace/registry.js";
 
 export type ApprovalMode = "manual" | "auto-safe" | "full-trust";
 
@@ -72,7 +73,11 @@ export type ToolReviewAudit = {
 	model?: string | undefined;
 };
 
-function getRequiredConsentForToolCall(toolName: string, args: Record<string, unknown>): ToolRequiredConsent | undefined {
+function getRequiredConsentForToolCall(
+	toolName: string,
+	args: Record<string, unknown>,
+	workspaceId?: string | undefined
+): ToolRequiredConsent | undefined {
 	if (toolName !== "mcp_terminal_run_command") {
 		return undefined;
 	}
@@ -83,6 +88,10 @@ function getRequiredConsentForToolCall(toolName: string, args: Record<string, un
 	}
 
 	if (!/^(?:[A-Za-z]:[\\/]|\/)/u.test(cwd.trim())) {
+		return undefined;
+	}
+	const workspace = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
+	if (workspace !== undefined && isPathInsideWorkspaceSources(workspace, cwd.trim())) {
 		return undefined;
 	}
 
@@ -108,7 +117,7 @@ export function evaluateToolCall(
 		return { action: "deny", reason: "该工具已被硬性禁用" };
 	}
 
-	const requiredConsent: ToolRequiredConsent | undefined = getRequiredConsentForToolCall(toolName, args);
+	const requiredConsent: ToolRequiredConsent | undefined = getRequiredConsentForToolCall(toolName, args, workspaceId);
 	if (requiredConsent !== undefined && mode !== "full-trust") {
 		return {
 			action: "request_approval",

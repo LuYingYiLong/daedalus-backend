@@ -22,7 +22,7 @@ import {
 	normalizeWakeAfterMs,
 	resolveWorkingDirectory
 } from "./presets.js";
-import { findWorkspace } from "../../workspace/registry.js";
+import { findWorkspace, getWorkspaceSourceFolder } from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { CommandPreset, CommandRunInput, PresetRunInput, TerminalCommandResult, TerminalJobRecord } from "./types.js";
 import { logger } from "../../logger.js";
@@ -115,6 +115,7 @@ function createJobStartedResult(record: TerminalJobRecord): Record<string, unkno
 
 type TerminalInternalInput = {
 	__daedalusWorkspaceId?: string | undefined;
+	__daedalusSourceFolderId?: string | undefined;
 	__daedalusApprovalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	__daedalusConsentText?: string | undefined;
 	__daedalusCommandAuthorization?: TerminalCommandAuthorization | undefined;
@@ -141,11 +142,13 @@ function resolveTerminalContext(input: TerminalInternalInput): {
 		};
 	}
 
-	const workspaceRoot: string = workspace?.rootPath ?? "";
+	const workspaceRoot: string = workspace === undefined
+		? ""
+		: getWorkspaceSourceFolder(workspace, input.__daedalusSourceFolderId).path;
 	const workspaceHasGodotProject: boolean = workspaceRoot.length > 0 && fs.existsSync(path.join(workspaceRoot, "project.godot"));
 	const workspaceGodotProjectPath: string = workspace === undefined
 		? GODOT_PROJECT
-		: (workspaceHasGodotProject || workspace.godotExecutablePath !== undefined ? workspace.rootPath : "");
+		: (workspaceHasGodotProject || workspace.godotExecutablePath !== undefined ? workspaceRoot : "");
 
 	return {
 		workspaceId,
@@ -168,7 +171,7 @@ function createCommandLineEnv(inputEnv: Record<string, string> | undefined, trus
 }
 
 function resolveCommandCwd(input: CommandRunInput & TerminalInternalInput, context: ReturnType<typeof resolveTerminalContext>, allowOutsideWorkspace: boolean): string {
-	const workspaceRoot: string = context.workspace?.rootPath ?? context.godotProjectPath;
+	const workspaceRoot: string = context.workspaceRoot;
 	if (workspaceRoot.length === 0) {
 		throw new Error("Workspace is not selected for terminal command execution.");
 	}
@@ -191,7 +194,7 @@ function resolveCommandCwd(input: CommandRunInput & TerminalInternalInput, conte
 async function runCommand(input: CommandRunInput & TerminalInternalInput): Promise<Record<string, unknown>> {
 	const context = resolveTerminalContext(input);
 	const trusted: boolean = input.__daedalusApprovalMode === "full-trust";
-	const workspaceRoot: string = context.workspace?.rootPath ?? context.godotProjectPath;
+	const workspaceRoot: string = context.workspaceRoot;
 	const hasCrossWorkspaceConsent: boolean = typeof input.__daedalusConsentText === "string" && input.__daedalusConsentText.startsWith("ALLOW CROSS-WORKSPACE: ");
 	const startedAtMs: number = Date.now();
 

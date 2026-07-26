@@ -1126,7 +1126,24 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.diff.get"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.update"),
+		params: z.object({
+			workspaceId: z.string().min(1),
+			name: z.string().max(120),
+			icon: z.number().int().min(0).max(6),
+			color: z.number().int().min(0).max(7),
+			sourceFolders: z.array(z.object({
+				id: z.string().min(1).max(160).regex(/^[A-Za-z0-9._-]+$/u).optional(),
+				path: z.string().min(1).max(4000),
+			}).strict()).min(1).max(32),
+			primarySourceFolderId: z.string().min(1),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1152,6 +1169,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.diff.summary.get"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			cursor: z.number().int().nonnegative().optional(),
 			limit: z.number().int().min(1).max(100).optional(),
 		}).strict(),
@@ -1162,6 +1180,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.diff.file.get"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			path: z.string().min(1).max(1000),
 		}).strict(),
 	}),
@@ -1171,6 +1190,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.commit.message.generate"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			includeUnstagedChanges: z.boolean(),
 			provider: providerIdSchema.optional(),
 			model: z.string().min(1).optional(),
@@ -1182,6 +1202,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.commitOrPush"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			action: z.enum(["commit", "push", "commit_and_push"]),
 			message: z.string().max(20000).optional(),
 			includeUnstagedChanges: z.boolean(),
@@ -1193,6 +1214,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.branches.list"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 		}).strict(),
 	}),
 	z.object({
@@ -1201,6 +1223,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.branch.checkout"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			branchName: z.string().min(1).max(240),
 		}).strict(),
 	}),
@@ -1210,6 +1233,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("workspace.git.branch.create"),
 		params: z.object({
 			workspaceId: z.string().min(1),
+			sourceFolderId: z.string().min(1).optional(),
 			branchName: z.string().min(1).max(240),
 			startPoint: z.string().min(1).max(240).optional(),
 		}).strict(),

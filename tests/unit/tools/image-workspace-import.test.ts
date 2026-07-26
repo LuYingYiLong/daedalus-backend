@@ -29,7 +29,11 @@ test("generated images can be proposed, created, and replaced inside their activ
 			id: workspaceId,
 			name: "Image workspace",
 			kind: "godot",
-			rootPath: workspaceRoot
+			rootPath: workspaceRoot,
+			icon: 0,
+			color: 0,
+			sourceFolders: [{ id: "primary", path: workspaceRoot, capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary"
 		});
 
 		const proposal = await imageImport.executeImageWorkspaceImport({
@@ -112,7 +116,11 @@ test("image workspace import enforces session, extension, traversal, and symlink
 			id: workspaceId,
 			name: "Guard workspace",
 			kind: "godot",
-			rootPath: workspaceRoot
+			rootPath: workspaceRoot,
+			icon: 0,
+			color: 0,
+			sourceFolders: [{ id: "primary", path: workspaceRoot, capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary"
 		});
 		const base = {
 			mode: "propose" as const,

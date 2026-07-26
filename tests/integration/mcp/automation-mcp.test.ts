@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
 import test from "node:test";
 import { WebSocketServer, WebSocket } from "ws";
 import { AUTOMATION_MCP_TOOL_NAMES, createAutomationConfig } from "../../../src/mcp/automation/config.js";
@@ -60,13 +61,59 @@ test("terminal MCP is a global internal server instead of a workspace server", (
 		id: "workspace-terminal-test",
 		name: "workspace-terminal-test",
 		kind: "godot",
-		rootPath: process.cwd()
+		rootPath: process.cwd(),
+		icon: 0,
+		color: 0,
+		sourceFolders: [{ id: "primary", path: process.cwd(), capabilities: { git: false, godot: false } }],
+		primarySourceFolderId: "primary"
 	}).map((server): string => server.id);
 
 	assert.ok(globalServerIds.includes("terminal"));
 	assert.ok(!workspaceServerIds.includes("terminal"));
 	assert.ok(globalServerIds.includes("skills"));
 	assert.ok(workspaceServerIds.includes("skills"));
+});
+
+test("multi-root workspaces create source-scoped MCP sessions without changing LLM tool names", (): void => {
+	const workspace = {
+		id: "workspace-multi-root",
+		name: "Multi root",
+		kind: "godot" as const,
+		rootPath: process.cwd(),
+		icon: 5 as const,
+		color: 4 as const,
+		sourceFolders: [
+			{ id: "primary", path: process.cwd(), capabilities: { git: true, godot: false } },
+			{ id: "tools", path: path.resolve(process.cwd(), "tests"), capabilities: { git: false, godot: false } }
+		],
+		primarySourceFolderId: "primary"
+	};
+	const configs = buildMcpServerConfigs(workspace);
+	const serverIds: string[] = configs.map((config): string => config.id);
+
+	assert.ok(serverIds.includes("workspace"));
+	assert.ok(serverIds.includes("workspace:tools"));
+	assert.ok(serverIds.includes("skills"));
+	assert.ok(serverIds.includes("skills:tools"));
+	assert.equal(configs.find((config) => config.id === "workspace:tools")?.env?.WORKSPACE_ROOT, path.resolve(process.cwd(), "tests"));
+
+	const toolDefinitions = getToolDefinitions();
+	const workspaceTool = toolDefinitions.find((tool) => tool.type === "function"
+		&& "function" in tool
+		&& tool.function.name === "mcp_workspace_read_text_file");
+	const imageGenerateTool = toolDefinitions.find((tool) => tool.type === "function"
+		&& "function" in tool
+		&& tool.function.name === "mcp_image_generate");
+	assert.ok(workspaceTool !== undefined && workspaceTool.type === "function");
+	assert.ok(imageGenerateTool !== undefined && imageGenerateTool.type === "function");
+	if (workspaceTool !== undefined && workspaceTool.type === "function") {
+		const properties = (workspaceTool.function.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+		assert.ok("sourceFolderId" in properties);
+	}
+	if (imageGenerateTool !== undefined && imageGenerateTool.type === "function") {
+		const properties = (imageGenerateTool.function.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ?? {};
+		assert.ok(!("sourceFolderId" in properties));
+	}
 });
 
 test("automation MCP config requires explicit enable flag and supports backend overrides", (): void => {

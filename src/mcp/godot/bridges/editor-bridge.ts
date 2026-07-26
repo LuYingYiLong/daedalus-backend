@@ -204,7 +204,9 @@ export class GodotEditorBridge {
 
 	listInstances(workspaceId?: string | undefined): GodotEditorInstanceSummary[] {
 		return Array.from(this.connectionsByInstanceId.values())
-			.filter((connection: EditorConnection): boolean => workspaceId === undefined || connection.workspaceId === workspaceId)
+			.filter((connection: EditorConnection): boolean => workspaceId === undefined
+				|| connection.workspaceId === workspaceId
+				|| connection.workspaceId?.startsWith(`${workspaceId}::`) === true)
 			.map((connection: EditorConnection): GodotEditorInstanceSummary => this.createInstanceSummary(connection));
 	}
 

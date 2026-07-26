@@ -4,11 +4,23 @@ import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { clearActiveSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
-import { deleteWorkspace, findWorkspace, hydrateWorkspacesFromSessionMetadata, loadWorkspaces } from "../../workspace/registry.js";
-import type { WorkspaceConfig } from "../../workspace/types.js";
+import {
+	deleteWorkspace,
+	findWorkspace,
+	getWorkspaceSourceFolder,
+	hydrateWorkspacesFromSessionMetadata,
+	loadWorkspaces,
+	updateWorkspace
+} from "../../workspace/registry.js";
+import type { WorkspaceColor, WorkspaceConfig, WorkspaceIcon } from "../../workspace/types.js";
 import { getClientConnection, updateClientConnection } from "../client-connections.js";
 import { logger } from "../../logger.js";
-import { deleteSessionsByWorkspace, listArchivedSessions, listSessions } from "../../session/session-store.js";
+import {
+	listArchivedSessions,
+	listSessions,
+	reassignOrDeleteSessionsForWorkspace,
+	updateSessionsForWorkspace
+} from "../../session/session-store.js";
 import { checkoutWorkspaceGitBranch, createWorkspaceGitBranch, listWorkspaceGitBranches } from "../workspace-git-branches.js";
 import { commitOrPushWorkspaceGit, generateWorkspaceGitCommitMessage } from "../workspace-git-commit.js";
 import { readWorkspaceGitDiff, readWorkspaceGitDiffFile, readWorkspaceGitDiffSummary } from "../workspace-git-diff.js";
@@ -116,14 +128,67 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: {
 				selected: true,
-				workspace: {
-					id: workspace.id,
-					name: workspace.name,
-					kind: workspace.kind,
-					rootPath: workspace.rootPath
-				}
+				workspace
 			}
 		});
+		break;
+	}
+
+	case "workspace.update": {
+		const existingWorkspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+		if (existingWorkspace === undefined) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "workspace_not_found",
+					message: `Workspace not found: ${request.params.workspaceId}`
+				}
+			});
+			break;
+		}
+
+		try {
+			const wasConnected: boolean = mcpHost.getConnectedWorkspaceIds().includes(existingWorkspace.id);
+			const workspace: WorkspaceConfig = updateWorkspace(existingWorkspace.id, {
+				name: request.params.name,
+				icon: request.params.icon as WorkspaceIcon,
+				color: request.params.color as WorkspaceColor,
+				sourceFolders: request.params.sourceFolders,
+				primarySourceFolderId: request.params.primarySourceFolderId
+			});
+			await updateSessionsForWorkspace(workspace);
+			await mcpHost.closeWorkspace(workspace.id);
+			if (session.activeWorkspace?.id === workspace.id) {
+				await mcpHost.switchWorkspace(workspace);
+				session.activeWorkspace = workspace;
+				session.godotProjectPath = workspace.rootPath;
+				session.godotExecutablePath = workspace.godotExecutablePath;
+				updateClientConnection(socket, {
+					workspaceId: workspace.id,
+					workspaceRoot: workspace.rootPath
+				});
+			} else if (wasConnected) {
+				await mcpHost.ensureWorkspace(workspace);
+			}
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: { workspace }
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "workspace_update_failed",
+					message: error instanceof Error ? error.message : "Failed to update workspace"
+				}
+			});
+		}
 		break;
 	}
 
@@ -143,14 +208,32 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			break;
 		}
 
-		const deletion = await deleteSessionsByWorkspace(workspace.id);
+		const remainingWorkspaces: WorkspaceConfig[] = loadWorkspaces().filter(
+			(candidate: WorkspaceConfig): boolean => candidate.id !== workspace.id
+		);
+		const deletion = await reassignOrDeleteSessionsForWorkspace(workspace.id, remainingWorkspaces);
 		deleteWorkspace(workspace.id);
 		await mcpHost.closeWorkspace(workspace.id);
 
-		if (session.sessionId !== undefined && deletion.deletedSessionIds.includes(session.sessionId)) {
+		const activeSessionMove = session.sessionId === undefined
+			? undefined
+			: deletion.movedSessions.find((move): boolean => move.sessionId === session.sessionId);
+		if (activeSessionMove !== undefined) {
+			const destination: WorkspaceConfig | undefined = findWorkspace(activeSessionMove.workspaceId);
+			if (destination !== undefined) {
+				session.activeWorkspace = destination;
+				session.godotProjectPath = destination.rootPath;
+				session.godotExecutablePath = destination.godotExecutablePath;
+				await mcpHost.ensureWorkspace(destination);
+				updateClientConnection(socket, {
+					workspaceId: destination.id,
+					workspaceRoot: destination.rootPath
+				});
+			}
+		} else if (session.sessionId !== undefined && deletion.deletedSessionIds.includes(session.sessionId)) {
 			clearActiveSession(session);
 		}
-		if (session.activeWorkspace?.id === workspace.id) {
+		if (session.activeWorkspace?.id === workspace.id && activeSessionMove === undefined) {
 			session.activeWorkspace = undefined;
 			session.godotProjectPath = undefined;
 			session.godotExecutablePath = undefined;
@@ -174,6 +257,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			result: {
 				deleted: true,
 				workspaceId: workspace.id,
+				movedSessions: deletion.movedSessions,
 				deletedSessionIds: deletion.deletedSessionIds,
 				deletedArchivedSessionIds: deletion.deletedArchivedSessionIds
 			}
@@ -209,7 +293,10 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			type: "response",
 			id: request.id,
 			ok: true,
-			result: await readWorkspaceGitDiff(workspace.id, workspace.rootPath)
+			result: await readWorkspaceGitDiff(
+				workspace.id,
+				getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path
+			)
 		});
 		break;
 	}
@@ -232,7 +319,12 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			type: "response",
 			id: request.id,
 			ok: true,
-			result: await readWorkspaceGitDiffSummary(workspace.id, workspace.rootPath, request.params.cursor, request.params.limit)
+			result: await readWorkspaceGitDiffSummary(
+				workspace.id,
+				getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
+				request.params.cursor,
+				request.params.limit
+			)
 		});
 		break;
 	}
@@ -256,7 +348,11 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				type: "response",
 				id: request.id,
 				ok: true,
-				result: await readWorkspaceGitDiffFile(workspace.id, workspace.rootPath, request.params.path)
+				result: await readWorkspaceGitDiffFile(
+					workspace.id,
+					getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
+					request.params.path
+				)
 			});
 		} catch (error: unknown) {
 			sendJson(socket, {
@@ -292,7 +388,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: await generateWorkspaceGitCommitMessage({
 				workspaceId: workspace.id,
-				workspaceRoot: workspace.rootPath,
+				workspaceRoot: getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
 				includeUnstagedChanges: request.params.includeUnstagedChanges,
 				provider: request.params.provider,
 				model: request.params.model,
@@ -323,7 +419,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: await commitOrPushWorkspaceGit({
 				workspaceId: workspace.id,
-				workspaceRoot: workspace.rootPath,
+				workspaceRoot: getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
 				action: request.params.action,
 				message: request.params.message,
 				includeUnstagedChanges: request.params.includeUnstagedChanges
@@ -350,7 +446,10 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			type: "response",
 			id: request.id,
 			ok: true,
-			result: await listWorkspaceGitBranches(workspace.id, workspace.rootPath)
+			result: await listWorkspaceGitBranches(
+				workspace.id,
+				getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path
+			)
 		});
 		break;
 	}
@@ -375,7 +474,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: await checkoutWorkspaceGitBranch({
 				workspaceId: workspace.id,
-				workspaceRoot: workspace.rootPath,
+				workspaceRoot: getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
 				branchName: request.params.branchName
 			})
 		});
@@ -402,7 +501,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			ok: true,
 			result: await createWorkspaceGitBranch({
 				workspaceId: workspace.id,
-				workspaceRoot: workspace.rootPath,
+				workspaceRoot: getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
 				branchName: request.params.branchName,
 				startPoint: request.params.startPoint
 			})

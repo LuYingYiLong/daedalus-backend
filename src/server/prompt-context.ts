@@ -286,6 +286,8 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 			name: session.activeWorkspace.name,
 			kind: session.activeWorkspace.kind,
 			rootPath: session.activeWorkspace.rootPath,
+			primarySourceFolderId: session.activeWorkspace.primarySourceFolderId,
+			sourceFolders: session.activeWorkspace.sourceFolders,
 			godotExecutablePath: session.activeWorkspace.godotExecutablePath ?? null
 		} : null,
 		activeSkillId: null
@@ -330,6 +332,17 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	} else {
 		sections.push("## Workspace 工具规则");
 		sections.push(`- 当前 workspace：\`${session.activeWorkspace.name}\`，根目录：\`${session.activeWorkspace.rootPath}\`。`);
+		sections.push(`- 主 Source folder ID：\`${session.activeWorkspace.primarySourceFolderId}\`。不传 \`sourceFolderId\` 时所有路径工具默认使用该目录。`);
+		for (const source of session.activeWorkspace.sourceFolders) {
+			const capabilities: string = [
+				"files",
+				"terminal",
+				source.capabilities.git ? "git" : "",
+				source.capabilities.godot ? "godot" : ""
+			].filter((value: string): boolean => value.length > 0).join(", ");
+			sections.push(`- Source folder \`${source.id}\`：\`${source.path}\`（${capabilities}）。访问非主目录时必须显式传入该 \`sourceFolderId\`。`);
+		}
+		sections.push("- 已声明的 Source folders 都属于当前项目，在这些目录之间操作不构成跨 workspace；声明目录之外仍需用户授权。");
 		sections.push("- 普通非 Godot 文件任务（列文件、读文件、搜索文本、新建/覆盖/替换/删除文本文件）优先使用 `mcp_workspace_*` 工具。Godot 项目内的脚本、场景、资源、项目配置和其它会被编辑器导入/扫描的文件写入，优先使用 `mcp_godot_*` 写入工具；这些工具会在写入后请求在线 Godot 编辑器重新扫描文件系统。");
 		sections.push("- 终端验证、构建、测试和长任务优先使用 `mcp_terminal_run_command`。正常安全模式下命令只能在当前 workspace 的 OS 沙箱内运行；需要跨 workspace 或绝对路径执行时，必须触发带确认短语的审批。Full Trust 模式下仍要谨慎说明风险。");
 		sections.push("- `mcp_workspace_replace_line_in_file` 的 `lineNumber` 是 1-based；必须提供和当前行完全一致的 `expectedText`，避免行号漂移误改。");
@@ -385,7 +398,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 			sections.push(`  - ${String(record.code ?? "warning")}: ${String(record.message ?? "")}`);
 		}
 	}
-	if (session.activeWorkspace && !serverIds.includes("godot")) {
+	if (session.activeWorkspace && !serverIds.some((serverId: string): boolean => serverId === "godot" || serverId.startsWith("godot:"))) {
 		sections.push("- 当前 workspace 不是 Godot 项目或没有 `project.godot`，Godot Project MCP 不会连接；不要尝试用 Godot MCP 读取后端 TypeScript 仓库文件。");
 	}
 	sections.push("如果 LSP/DAP 返回 no active workspace 或不可用，先依据以上运行时状态判断是 workspace 绑定、editor 在线状态、端口探测还是诊断服务问题；不要笼统归因成用户环境问题。");

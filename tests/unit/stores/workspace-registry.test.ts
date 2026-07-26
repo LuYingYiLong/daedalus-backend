@@ -52,6 +52,10 @@ test("workspace registry persists runtime workspaces", async (): Promise<void> =
 		assert.equal(persisted[0]?.name, workspace.name);
 		assert.equal(persisted[0]?.kind, "godot");
 		assert.equal(persisted[0]?.rootPath, workspace.rootPath);
+		assert.equal(persisted[0]?.icon, 0);
+		assert.equal(persisted[0]?.color, 0);
+		assert.deepEqual(persisted[0]?.sourceFolders, workspace.sourceFolders);
+		assert.equal(persisted[0]?.primarySourceFolderId, workspace.primarySourceFolderId);
 		assert.equal(persisted[0]?.godotExecutablePath, "D:/Godot/Godot.exe");
 
 		const reloadedRegistry = await import(`../../../src/workspace/registry.js?case=reload-${Date.now()}-${Math.random()}`);
@@ -59,6 +63,114 @@ test("workspace registry persists runtime workspaces", async (): Promise<void> =
 		assert.equal(loaded.some((item: WorkspaceConfig): boolean => item.id === workspace.id && item.rootPath === workspace.rootPath), true);
 
 		await fs.rm(projectDir, { recursive: true, force: true });
+	});
+});
+
+test("workspace registry normalizes legacy single-root projects", async (): Promise<void> => {
+	await withTempAppData(async (registry): Promise<void> => {
+		const rootPath: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-legacy-root-"));
+		const normalized: WorkspaceConfig = registry.normalizeWorkspaceConfig({
+			id: "legacy-workspace",
+			name: "",
+			kind: "godot",
+			rootPath
+		});
+
+		assert.equal(normalized.id, "legacy-workspace");
+		assert.equal(normalized.name, path.basename(rootPath));
+		assert.equal(normalized.icon, 0);
+		assert.equal(normalized.color, 0);
+		assert.equal(normalized.sourceFolders.length, 1);
+		assert.equal(normalized.sourceFolders[0]?.path, path.resolve(rootPath));
+		assert.equal(normalized.primarySourceFolderId, normalized.sourceFolders[0]?.id);
+		await fs.rm(rootPath, { recursive: true, force: true });
+	});
+});
+
+test("workspace registry updates project appearance, primary root, and capabilities", async (): Promise<void> => {
+	await withTempAppData(async (registry): Promise<void> => {
+		const primaryPath: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-primary-"));
+		const toolsPath: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-tools-"));
+		await fs.writeFile(path.join(primaryPath, "project.godot"), "[application]\n", "utf8");
+		await fs.mkdir(path.join(toolsPath, ".git"));
+		const original: WorkspaceConfig = registry.upsertRuntimeWorkspace(registry.createRuntimeWorkspace(primaryPath));
+		const originalId: string = original.id;
+
+		const updated: WorkspaceConfig = registry.updateWorkspace(original.id, {
+			name: "Daedalus Project",
+			icon: 5,
+			color: 4,
+			sourceFolders: [
+				{ id: original.primarySourceFolderId, path: primaryPath },
+				{ id: "tools", path: toolsPath }
+			],
+			primarySourceFolderId: "tools"
+		});
+
+		assert.equal(updated.id, originalId);
+		assert.equal(updated.name, "Daedalus Project");
+		assert.equal(updated.icon, 5);
+		assert.equal(updated.color, 4);
+		assert.equal(path.basename(updated.rootPath), path.basename(toolsPath));
+		assert.equal((await fs.stat(updated.rootPath)).isDirectory(), true);
+		assert.equal(updated.primarySourceFolderId, "tools");
+		assert.equal(updated.sourceFolders.find((source) => source.id === original.primarySourceFolderId)?.capabilities.godot, true);
+		assert.equal(updated.sourceFolders.find((source) => source.id === "tools")?.capabilities.git, true);
+		assert.equal(registry.getWorkspaceSourceFolder(updated).id, "tools");
+		assert.equal(
+			path.basename(registry.getWorkspaceSourceFolder(updated, original.primarySourceFolderId).path),
+			path.basename(primaryPath)
+		);
+		assert.equal(
+			registry.findContainingWorkspaceSourceFolder(updated, path.join(primaryPath, "scenes", "Main.tscn"))?.id,
+			original.primarySourceFolderId
+		);
+		assert.equal(
+			registry.findContainingWorkspaceSourceFolder(updated, path.join(toolsPath, "scripts", "build.ts"))?.id,
+			"tools"
+		);
+		assert.equal(registry.isPathInsideWorkspaceSources(updated, path.join(toolsPath, "scripts")), true);
+		assert.equal(registry.isPathInsideWorkspaceSources(updated, path.join(os.tmpdir(), "outside-project")), false);
+		const scoped: WorkspaceConfig | undefined = registry.findWorkspace(`${updated.id}::${original.primarySourceFolderId}`);
+		assert.equal(scoped?.rootPath.endsWith(path.basename(primaryPath)), true);
+		assert.equal(registry.loadWorkspaces().some((workspace) => workspace.id.includes("::")), false);
+
+		await fs.rm(primaryPath, { recursive: true, force: true });
+		await fs.rm(toolsPath, { recursive: true, force: true });
+	});
+});
+
+test("workspace registry rejects duplicate real paths inside one project", async (): Promise<void> => {
+	await withTempAppData(async (registry, appDataDir): Promise<void> => {
+		const rootPath: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-duplicate-"));
+		const workspace: WorkspaceConfig = registry.upsertRuntimeWorkspace(registry.createRuntimeWorkspace(rootPath));
+
+		assert.throws((): void => {
+			registry.updateWorkspace(workspace.id, {
+				name: workspace.name,
+				icon: 0,
+				color: 0,
+				sourceFolders: [
+					{ id: "first", path: rootPath },
+					{ id: "second", path: path.join(rootPath, ".") }
+				],
+				primarySourceFolderId: "first"
+			});
+		}, /Duplicate source folder/);
+		assert.throws((): void => {
+			registry.updateWorkspace(workspace.id, {
+				name: workspace.name,
+				icon: 0,
+				color: 0,
+				sourceFolders: [
+					{ id: "same", path: rootPath },
+					{ id: "same", path: appDataDir }
+				],
+				primarySourceFolderId: "same"
+			});
+		}, /Duplicate source folder id/);
+
+		await fs.rm(rootPath, { recursive: true, force: true });
 	});
 });
 

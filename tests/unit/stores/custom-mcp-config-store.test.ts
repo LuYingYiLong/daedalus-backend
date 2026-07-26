@@ -94,7 +94,11 @@ test("custom MCP config update preserves identity and applies secret update sema
 			id: "workspace-a",
 			name: "Workspace A",
 			kind: "godot",
-			rootPath: "D:/Projects/Game"
+			rootPath: "D:/Projects/Game",
+			icon: 0,
+			color: 0,
+			sourceFolders: [{ id: "primary", path: "D:/Projects/Game", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary"
 		};
 		const configs: McpServerConfig[] = await buildCustomMcpServerConfigs(workspace);
 		assert.equal(configs.length, 0, "disabled custom MCP is not launched");
@@ -179,7 +183,11 @@ test("custom MCP plan access is migrated and never exposed to plan mode", async 
 			id: "workspace-a",
 			name: "Workspace A",
 			kind: "godot",
-			rootPath: "D:/Projects/Game"
+			rootPath: "D:/Projects/Game",
+			icon: 0,
+			color: 0,
+			sourceFolders: [{ id: "primary", path: "D:/Projects/Game", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary"
 		};
 		const configs: McpServerConfig[] = await buildCustomMcpServerConfigs(workspace);
 		assert.equal(configs[0]?.planAccess, "disabled");

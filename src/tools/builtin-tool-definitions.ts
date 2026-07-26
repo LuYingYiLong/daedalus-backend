@@ -12,6 +12,13 @@ function createSceneToolDefinition(
 	properties: Record<string, unknown>,
 	required: string[]
 ): ChatCompletionTool {
+	const supportsSourceFolder: boolean = name.startsWith("mcp_workspace_")
+		|| name.startsWith("mcp_godot_")
+		|| name.startsWith("mcp_terminal_")
+		|| name.startsWith("mcp_skills_")
+		|| name === "mcp_image_propose_import_to_workspace"
+		|| name === "mcp_image_import_to_workspace"
+		|| name === "mcp_image_replace_workspace_asset";
 	return {
 		type: "function",
 		function: {
@@ -19,7 +26,15 @@ function createSceneToolDefinition(
 			description,
 			parameters: {
 				type: "object",
-				properties,
+				properties: supportsSourceFolder
+					? {
+						sourceFolderId: {
+							type: "string",
+							description: "Optional source folder id. Omit to use the workspace primary source folder."
+						},
+						...properties
+					}
+					: properties,
 				required
 			}
 		}

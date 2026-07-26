@@ -4,7 +4,13 @@ import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import { getClientConnection, updateClientConnection } from "../client-connections.js";
-import { createRuntimeWorkspace, findWorkspace, upsertRuntimeWorkspace } from "../../workspace/registry.js";
+import {
+	createRuntimeWorkspace,
+	createSourceScopedWorkspace,
+	findWorkspace,
+	findWorkspaceSourceByPath,
+	upsertRuntimeWorkspace
+} from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 
 function readString(value: unknown): string | undefined {
@@ -24,6 +30,10 @@ function resolveEditorWorkspaceFromParams(params: Record<string, unknown>): Work
 
 	const workspaceRoot: string | undefined = readString(params.workspaceRoot) ?? readString(params.godotProjectPath);
 	if (workspaceRoot !== undefined) {
+		const configuredSource = findWorkspaceSourceByPath(workspaceRoot);
+		if (configuredSource !== undefined) {
+			return createSourceScopedWorkspace(configuredSource.workspace, configuredSource.sourceFolder.id);
+		}
 		return upsertRuntimeWorkspace(createRuntimeWorkspace(workspaceRoot));
 	}
 

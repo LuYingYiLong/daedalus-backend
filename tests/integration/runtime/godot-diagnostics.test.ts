@@ -59,7 +59,11 @@ async function createTempWorkspace(): Promise<{ workspace: WorkspaceConfig; appD
 		id: "diagnostics-test",
 		name: "Diagnostics Test",
 		kind: "godot",
-		rootPath
+		rootPath,
+		icon: 0,
+		color: 0,
+		sourceFolders: [{ id: "primary", path: rootPath, capabilities: { git: false, godot: true } }],
+		primarySourceFolderId: "primary"
 	};
 
 	return {

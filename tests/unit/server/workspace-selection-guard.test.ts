@@ -7,14 +7,22 @@ const workspaceA: WorkspaceConfig = {
 	id: "workspace-a",
 	name: "Project A",
 	kind: "godot",
-	rootPath: "D:/ProjectA"
+	rootPath: "D:/ProjectA",
+	icon: 0,
+	color: 0,
+	sourceFolders: [{ id: "primary-a", path: "D:/ProjectA", capabilities: { git: false, godot: false } }],
+	primarySourceFolderId: "primary-a"
 };
 
 const workspaceB: WorkspaceConfig = {
 	id: "workspace-b",
 	name: "Project B",
 	kind: "godot",
-	rootPath: "D:/ProjectB"
+	rootPath: "D:/ProjectB",
+	icon: 0,
+	color: 0,
+	sourceFolders: [{ id: "primary-b", path: "D:/ProjectB", capabilities: { git: false, godot: false } }],
+	primarySourceFolderId: "primary-b"
 };
 
 test("Studio workspace selection allows sessions without an active session id", (): void => {

@@ -91,7 +91,7 @@ export class ApprovalGateway {
 			) {
 				return deterministicDecision;
 			}
-			const hardRiskReason: string | null = commandRequiresUserApproval(args);
+			const hardRiskReason: string | null = commandRequiresUserApproval(args, workspaceId);
 			if (hardRiskReason !== null) {
 				return { action: "request_approval", reason: hardRiskReason };
 			}

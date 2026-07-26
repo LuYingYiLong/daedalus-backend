@@ -10,7 +10,12 @@ import {
 	type ClientType
 } from "../client-connections.js";
 import { logger } from "../../logger.js";
-import { createRuntimeWorkspace, upsertRuntimeWorkspace } from "../../workspace/registry.js";
+import {
+	createRuntimeWorkspace,
+	createSourceScopedWorkspace,
+	findWorkspaceSourceByPath,
+	upsertRuntimeWorkspace
+} from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 
 function readClientType(value: unknown): ClientType {
@@ -41,10 +46,13 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 			const clientType: ClientType = readClientType(params.clientType);
 			let workspace: WorkspaceConfig | undefined;
 			if (clientType === "godot_plugin" && params.workspaceRoot !== undefined) {
-				workspace = upsertRuntimeWorkspace(createRuntimeWorkspace(
-					params.workspaceRoot,
-					params.godotExecutablePath ?? session.godotExecutablePath
-				));
+				const configuredSource = findWorkspaceSourceByPath(params.workspaceRoot);
+				workspace = configuredSource === undefined
+					? upsertRuntimeWorkspace(createRuntimeWorkspace(
+						params.workspaceRoot,
+						params.godotExecutablePath ?? session.godotExecutablePath
+					))
+					: createSourceScopedWorkspace(configuredSource.workspace, configuredSource.sourceFolder.id);
 
 				// 在异步初始化 MCP 前先绑定会话，避免后续并发请求继续使用持久化默认工作区。
 				session.activeWorkspace = workspace;

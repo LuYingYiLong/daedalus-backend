@@ -502,6 +502,9 @@ async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Prom
 	if (workspace === undefined) {
 		return false;
 	}
+	if (workspace.sourceFolders.some((source): boolean => source.capabilities.godot)) {
+		return true;
+	}
 
 	try {
 		await fs.access(path.join(workspace.rootPath, "project.godot"));

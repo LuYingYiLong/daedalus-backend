@@ -574,6 +574,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			title: z.string().min(1),
 			workspaceId: z.string().min(1).nullable().optional(),
+			temporary: z.boolean().optional(),
 		}).merge(sessionUiMetadataParamsSchema),
 	}),
 	z.object({

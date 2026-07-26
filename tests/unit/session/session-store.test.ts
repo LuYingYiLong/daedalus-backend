@@ -322,6 +322,19 @@ test("session store rejects unsafe session ids", async (): Promise<void> => {
 	});
 });
 
+test("temporary sessions stay hidden until they are promoted", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const temporary = await store.createSession("Draft", undefined, undefined, undefined, { temporary: true });
+		assert.equal((await store.listSessions()).some((session) => session.id === temporary.id), false);
+		assert.deepEqual((await store.listTemporarySessions()).map((session) => session.id), [temporary.id]);
+
+		const promoted = await store.promoteTemporarySession(temporary.id);
+		assert.equal(promoted.temporary, undefined);
+		assert.equal((await store.listSessions()).some((session) => session.id === temporary.id), true);
+		assert.equal((await store.listTemporarySessions()).length, 0);
+	});
+});
+
 test("recent timeline pagination only decodes payloads for the selected SQL page", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const metadata = await store.createSession("Paged payload session");

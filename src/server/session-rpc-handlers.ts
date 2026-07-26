@@ -231,6 +231,7 @@ function createSessionUiMetadata(params: {
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
+	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
 		return {};
@@ -251,6 +252,9 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.workflowTodoCollapsed !== undefined) {
 		metadata.workflowTodoCollapsed = params.workflowTodoCollapsed;
+	}
+	if (params.temporary === true) {
+		metadata.temporary = true;
 	}
 
 	return metadata;

@@ -27,6 +27,7 @@ export type SessionChatMode = "agent" | "ask" | "plan";
 export type SessionMetadata = {
 	id: string;
 	title: string;
+	temporary?: boolean | undefined;
 	workspaceId?: string | undefined;
 	workspaceName?: string | undefined;
 	workspaceKind?: "godot" | undefined;
@@ -694,6 +695,22 @@ export async function updateSessionMetadata(sessionId: string, metadata: Partial
 	return updated;
 }
 
+/** Promotes a Studio-only draft before its first accepted chat request. */
+export async function promoteTemporarySession(sessionId: string): Promise<SessionMetadata> {
+	const existing: SessionMetadata = await readSessionMetadata(sessionId, false);
+	if (existing.temporary !== true) {
+		return existing;
+	}
+	const { temporary: _temporary, ...promoted } = existing;
+	const updated: SessionMetadata = {
+		...promoted,
+		updatedAt: new Date().toISOString()
+	};
+	writeMetadataRow(await getSessionDatabase(), updated);
+	invalidateTimelineCache(sessionId);
+	return updated;
+}
+
 function findRewindBoundaryCreatedAt(events: RewindableEvent[], removedRequestIds: Set<string>): string | null {
 	let boundary: string | null = null;
 	for (const event of events) {
@@ -918,7 +935,14 @@ export async function listSessions(): Promise<SessionMetadata[]> {
 	const db: DatabaseSync = await getSessionDatabase();
 	return listMetadataRows(db.prepare(`
 		SELECT metadata_json FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC
-	`).all() as Record<string, unknown>[]);
+	`).all() as Record<string, unknown>[]).filter((metadata: SessionMetadata): boolean => metadata.temporary !== true);
+}
+
+export async function listTemporarySessions(): Promise<SessionMetadata[]> {
+	const db: DatabaseSync = await getSessionDatabase();
+	return listMetadataRows(db.prepare(`
+		SELECT metadata_json FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC
+	`).all() as Record<string, unknown>[]).filter((metadata: SessionMetadata): boolean => metadata.temporary === true);
 }
 
 export async function listArchivedSessions(): Promise<SessionMetadata[]> {

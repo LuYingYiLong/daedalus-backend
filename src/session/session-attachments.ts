@@ -147,6 +147,77 @@ function textAttachmentStoragePath(fileName: string): string {
 	return `attachments/text/${fileName}`;
 }
 
+function collectPersistedAttachmentIds(value: unknown, ids: Set<string>): void {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			collectPersistedAttachmentIds(item, ids);
+		}
+		return;
+	}
+	if (typeof value !== "object" || value === null) {
+		return;
+	}
+	const record: Record<string, unknown> = value as Record<string, unknown>;
+	const kind: unknown = record.kind;
+	const data: unknown = record.data;
+	if ((kind === "image" || kind === "text_attachment") && typeof data === "object" && data !== null) {
+		const attachmentId: unknown = (data as Record<string, unknown>).attachmentId;
+		if (typeof attachmentId === "string") {
+			ids.add(attachmentId);
+		}
+	}
+	for (const child of Object.values(record)) {
+		collectPersistedAttachmentIds(child, ids);
+	}
+}
+
+/**
+ * Composer-only attachments are intentionally short-lived. Only snapshots that
+ * were persisted with a message or queued event survive a backend restart.
+ */
+export async function cleanupUnsentSessionAttachments(): Promise<number> {
+	const db = await getSessionDatabase();
+	const referencedIdsBySession: Map<string, Set<string>> = new Map();
+	const addReferences = (sessionId: string, json: unknown): void => {
+		let parsed: unknown;
+		try {
+			parsed = parseSqlJson<unknown>(json);
+		} catch {
+			return;
+		}
+		const ids: Set<string> = referencedIdsBySession.get(sessionId) ?? new Set<string>();
+		collectPersistedAttachmentIds(parsed, ids);
+		referencedIdsBySession.set(sessionId, ids);
+	};
+	for (const row of db.prepare("SELECT session_id, payload_json FROM messages").all() as Record<string, unknown>[]) {
+		addReferences(String(row.session_id), row.payload_json);
+	}
+	for (const row of db.prepare("SELECT session_id, data_json FROM session_events").all() as Record<string, unknown>[]) {
+		addReferences(String(row.session_id), row.data_json);
+	}
+
+	const rows = db.prepare(`
+		SELECT attachment_id, session_id, kind FROM attachments
+		WHERE kind IN ('image', 'text')
+	`).all() as Record<string, unknown>[];
+	let removed: number = 0;
+	for (const row of rows) {
+		const attachmentId: string = String(row.attachment_id);
+		const sessionId: string = String(row.session_id);
+		const kind: string = String(row.kind);
+		if (referencedIdsBySession.get(sessionId)?.has(attachmentId) === true) {
+			continue;
+		}
+		const filePath: string = kind === "image"
+			? attachmentImagePath(sessionId, attachmentId)
+			: textAttachmentPath(sessionId, attachmentId);
+		await rm(filePath, { force: true }).catch((): void => {});
+		db.prepare("DELETE FROM attachments WHERE attachment_id = ? AND session_id = ?").run(attachmentId, sessionId);
+		removed += 1;
+	}
+	return removed;
+}
+
 function parseImageDataUrl(mimeType: string, dataUrl: string): Buffer {
 	const prefix: string = `data:${mimeType};base64,`;
 	if (!dataUrl.startsWith(prefix)) {

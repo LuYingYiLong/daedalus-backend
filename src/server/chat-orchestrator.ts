@@ -45,7 +45,7 @@ import {
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
 	rewindSessionFromRequest,
 	readSummary, writeSummary,
-	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents, updateSessionMetadata,
+	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents, updateSessionMetadata, promoteTemporarySession,
 	openSessionRecentTimeline, openSessionTimelinePage,
 	type SessionMetadata,
 	type SessionSummary,
@@ -1323,6 +1323,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				mode: rawParams.mode ?? session.workbenchComposer.chatMode,
 				additionalContext: rawParams.additionalContext ?? session.workbenchComposer.additionalContext
 			});
+			if (session.sessionId !== undefined) {
+				await promoteTemporarySession(session.sessionId);
+			}
 			const queueItemId: number | undefined = getQueueItemIdFromParams(params);
 			const modelSnapshotChanged: boolean = applyChatRequestModelSnapshot(session, params);
 			if (modelSnapshotChanged && session.sessionId !== undefined) {

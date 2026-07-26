@@ -11,6 +11,8 @@ import {
 import { startStudioParentMonitor } from "./runtime/parent-monitor.js";
 import { registerBackendShutdownHandler } from "./runtime/shutdown.js";
 import { closeSessionDatabases } from "./session/session-database.js";
+import { cleanupUnsentSessionAttachments } from "./session/session-attachments.js";
+import { deleteSession, listTemporarySessions } from "./session/session-store.js";
 import { getBackendPortFromEnv } from "./server/backend-runtime.js";
 import { createServer, waitForServerListening } from "./server/websocket-server.js";
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
@@ -47,6 +49,21 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		logPath: getCurrentBackendLogPath()
 	});
 	await initializeUsageMetricsStore();
+	try {
+		const temporarySessions = await listTemporarySessions();
+		for (const temporarySession of temporarySessions) {
+			await deleteSession(temporarySession.id);
+		}
+		const removedAttachmentCount: number = await cleanupUnsentSessionAttachments();
+		logger.info("session", "startup_draft_cleanup_completed", {
+			removedTemporarySessions: temporarySessions.length,
+			removedUnsentAttachments: removedAttachmentCount
+		});
+	} catch (error: unknown) {
+		logger.warn("session", "startup_draft_cleanup_failed", {
+			error: error instanceof Error ? error.message : String(error)
+		});
+	}
 
 	const mcpHost: McpHost = new McpHost();
 	try {

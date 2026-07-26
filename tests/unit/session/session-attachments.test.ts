@@ -77,6 +77,28 @@ test("text attachments are saved under the session and hydrate into prompt conte
 	});
 });
 
+test("startup cleanup removes unsent composer attachments but preserves message snapshots", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const metadata = await sessionStore.createSession("Attachment cleanup");
+		const unsent = await attachments.saveTextAttachment({ sessionId: metadata.id, content: "draft only" });
+		const sent = await attachments.saveTextAttachment({ sessionId: metadata.id, content: "sent context" });
+
+		await sessionStore.appendMessage(metadata.id, {
+			role: "user",
+			content: "Use the attached note",
+			requestId: "request-sent",
+			additionalContext: [sent]
+		});
+		assert.equal(await attachments.cleanupUnsentSessionAttachments(), 1);
+		const unsentId = String((unsent.data as Record<string, unknown>).attachmentId);
+		const sentId = String((sent.data as Record<string, unknown>).attachmentId);
+		await assert.rejects(attachments.readTextAttachmentContent(metadata.id, unsentId));
+		assert.equal((await attachments.readTextAttachmentContent(metadata.id, sentId)).content, "sent context");
+	});
+});
+
 test("image attachments are saved under the session and hydrate to dataUrl", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");

@@ -240,7 +240,10 @@ test("workflow cancellation cannot fall through to fallback planning or a later 
 	assert.ok(plannerEnd > plannerStart);
 	assert.equal(plannerBlock.includes("if (isCancellationError(error, abortSignal))"), true);
 	assert.equal(plannerBlock.includes("throw error;"), true);
-	assert.equal(chatSource.includes("if (isCancellationError(error, abortController.signal)) {\n\t\t\t\t\t\t\tthrow error;"), true);
+	assert.match(
+		chatSource,
+		/if \(isCancellationError\(error, abortController\.signal\)\) \{\s*throw error;/
+	);
 	assert.equal(continuationSource.includes("throwIfAborted(abortSignal);\n\t\tconst candidatePhase"), true);
 	assert.equal(continuationSource.includes("awaitWithAbort(runWorkflowPhase("), true);
 	assert.equal(continuationSource.includes("awaitWithAbort(reviseLlmWorkflowPlan("), true);

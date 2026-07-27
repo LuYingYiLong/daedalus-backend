@@ -244,10 +244,16 @@ test("workflow cancellation cannot fall through to fallback planning or a later 
 		chatSource,
 		/if \(isCancellationError\(error, abortController\.signal\)\) \{\s*throw error;/
 	);
-	assert.equal(continuationSource.includes("throwIfAborted(abortSignal);\n\t\tconst candidatePhase"), true);
+	assert.match(
+		continuationSource,
+		/throwIfAborted\(abortSignal\);\s*const candidatePhase/
+	);
 	assert.equal(continuationSource.includes("awaitWithAbort(runWorkflowPhase("), true);
 	assert.equal(continuationSource.includes("awaitWithAbort(reviseLlmWorkflowPlan("), true);
-	assert.equal(phaseRunnerSource.includes("throwIfAborted(abortSignal);\n\tconst runtimePhase"), true);
+	assert.match(
+		phaseRunnerSource,
+		/throwIfAborted\(abortSignal\);\s*const runtimePhase/
+	);
 	assert.equal(approvalSource.includes("session.activeAbortControllers.set(continuationRequestId, abortController);"), true);
 });
 

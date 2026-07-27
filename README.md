@@ -1,6 +1,6 @@
-# Godot Daedalus Backend
+# Daedalus Backend
 
-Godot Daedalus Backend is the TypeScript runtime service for the Godot Daedalus editor plugin. It provides the WebSocket/RPC backend, multi-provider chat integration, approval-gated Godot project tools, session persistence, MCP host support, and Godot MCP servers.
+Daedalus Backend is the TypeScript runtime service for the Godot Daedalus editor plugin. It provides the WebSocket/RPC backend, multi-provider chat integration, approval-gated Godot project tools, session persistence, MCP host support, and Godot MCP servers.
 
 This npm package is a source-runtime package. It publishes the TypeScript source and small JavaScript bin launchers, then runs the source through `tsx` at runtime. It does not publish compiled `dist/` output.
 

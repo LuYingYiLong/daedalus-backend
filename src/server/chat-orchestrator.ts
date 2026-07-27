@@ -71,6 +71,7 @@ import { preprocessImageAttachmentsForTextModel, type ImageRecognitionPreprocess
 import { hydrateImageAttachmentContexts } from "../session/session-attachments.js";
 import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, isProviderId } from "../providers/provider-registry.js";
+import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent } from "../providers/provider-error.js";
 import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
@@ -201,7 +202,7 @@ import { withProviderUsageContext } from "../usage/provider-recorder.js";
 const WEB_SEARCH_TOOL_NAME: string = "mcp_web_search";
 
 function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatParams): boolean {
-	if (params.provider === undefined && params.model === undefined) {
+	if (params.provider === undefined && params.model === undefined && params.options?.reasoningEffort === undefined) {
 		return false;
 	}
 
@@ -211,6 +212,7 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 	}
 
 	const providerChanged: boolean = nextProvider !== session.activeProvider;
+	const previousProvider: ProviderId = session.activeProvider;
 	const currentModel: string = session.providerModel ?? session.modelProfile.model ?? getProviderDefaultModel(session.activeProvider);
 	const requestedModel: string | undefined = params.model?.trim();
 	const nextModel: string = requestedModel !== undefined && requestedModel.length > 0
@@ -218,13 +220,16 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 		: providerChanged
 			? getProviderDefaultModel(nextProvider)
 			: currentModel;
-	if (!providerChanged && nextModel === currentModel) {
+	if (!providerChanged && nextModel === currentModel && params.options?.reasoningEffort === undefined) {
 		return false;
 	}
 
 	session.activeProvider = nextProvider;
 	session.providerModel = nextModel;
 	session.modelProfile = resolveModelProfile(nextProvider, nextModel);
+	session.workbenchComposer.reasoningEffort = params.options?.reasoningEffort === undefined
+		? resolveReasoningEffortForModelChange(previousProvider, currentModel, session.workbenchComposer.reasoningEffort, nextProvider, nextModel)
+		: resolveReasoningEffort(nextProvider, nextModel, params.options.reasoningEffort);
 	if (providerChanged) {
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;

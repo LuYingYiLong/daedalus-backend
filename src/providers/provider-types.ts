@@ -16,11 +16,21 @@ export type ProviderModelCapabilities = {
 	imageInput?: boolean | undefined;
 	videoInput?: boolean | undefined;
 	reasoning?: boolean | undefined;
+	reasoningEfforts?: ProviderReasoningEffortOption[] | undefined;
 	tools?: boolean | undefined;
 	webSearch?: boolean | undefined;
 	vision?: boolean | undefined;
 	imageGeneration?: boolean | undefined;
 	imageEdit?: boolean | undefined;
+};
+
+export type BaseReasoningEffort = "low" | "medium" | "high" | "max";
+
+/** A provider/model-specific reasoning option exposed to the client. */
+export type ProviderReasoningEffortOption = {
+	id: string;
+	/** Normalized strength used when the user switches to another model. */
+	fallback: BaseReasoningEffort;
 };
 
 export type ProviderModelInfo = {
@@ -84,11 +94,39 @@ export type ProviderRuntimeConfig = {
 	modelProfile: ModelProfile;
 };
 
-function copyBooleanCapability(target: ProviderModelCapabilities, source: ProviderModelCapabilities, key: keyof ProviderModelCapabilities): void {
+function copyBooleanCapability(target: ProviderModelCapabilities, source: ProviderModelCapabilities, key: Exclude<keyof ProviderModelCapabilities, "reasoningEfforts">): void {
 	const value: boolean | undefined = source[key];
 	if (value !== undefined) {
 		target[key] = value;
 	}
+}
+
+function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOption[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const options: ProviderReasoningEffortOption[] = [];
+	const seen: Set<string> = new Set();
+	for (const item of value) {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) {
+			continue;
+		}
+		const record: Record<string, unknown> = item as Record<string, unknown>;
+		const id: string | undefined = typeof record.id === "string" ? record.id.trim() : undefined;
+		const fallback: unknown = record.fallback;
+		if (
+			id === undefined
+			|| id.length === 0
+			|| id.length > 32
+			|| seen.has(id)
+			|| (fallback !== "low" && fallback !== "medium" && fallback !== "high" && fallback !== "max")
+		) {
+			continue;
+		}
+		seen.add(id);
+		options.push({ id, fallback });
+	}
+	return options.length > 0 ? options : undefined;
 }
 
 export function normalizeProviderModelCapabilities(capabilities: ProviderModelCapabilities | undefined): ProviderModelCapabilities {
@@ -102,6 +140,10 @@ export function normalizeProviderModelCapabilities(capabilities: ProviderModelCa
 	copyBooleanCapability(normalized, source, "webSearch");
 	copyBooleanCapability(normalized, source, "imageGeneration");
 	copyBooleanCapability(normalized, source, "imageEdit");
+	const reasoningEfforts = normalizeReasoningEfforts(source.reasoningEfforts);
+	if (reasoningEfforts !== undefined) {
+		normalized.reasoningEfforts = reasoningEfforts;
+	}
 	normalized.vision = source.vision ?? (source.imageInput === true || source.videoInput === true);
 
 	return normalized;

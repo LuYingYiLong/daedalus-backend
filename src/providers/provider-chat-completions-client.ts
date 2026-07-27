@@ -11,6 +11,7 @@ import { createProviderMessages } from "./provider-image-content.js";
 import { normalizeConfiguredProviderBaseUrl, resolveProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderChatOptions } from "./provider-types.js";
 import { getProviderDefaultModel, getProviderEndpointConfig } from "./provider-registry.js";
+import { resolveReasoningEffort } from "./reasoning-effort.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
 
@@ -58,6 +59,17 @@ export function applyChatOptions(requestBody: ChatCompletionCreateParamsBase, pa
 
 	if (params.options?.responseFormat === "json") {
 		requestBody.response_format = { type: "json_object" };
+	}
+
+	const reasoningEffort: string | undefined = resolveReasoningEffort(
+		options.provider,
+		resolveChatModel(options),
+		params.options?.reasoningEffort
+	);
+	if (reasoningEffort !== undefined && options.provider === "deepseek") {
+		const providerRequest = requestBody as unknown as Record<string, unknown>;
+		providerRequest.reasoning_effort = reasoningEffort;
+		providerRequest.thinking = { type: "enabled" };
 	}
 }
 

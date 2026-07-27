@@ -10,6 +10,7 @@ import type {
 } from "openai/resources/responses/responses";
 import type { AiChatParams, ChatMessage } from "../protocol/types.js";
 import { getProviderDefaultModel } from "./provider-registry.js";
+import { resolveReasoningEffort } from "./reasoning-effort.js";
 import { getImageAttachments, type ProviderImageAttachment } from "./provider-image-content.js";
 import type { ProviderChatOptions } from "./deepseek-client.js";
 import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
@@ -84,6 +85,11 @@ export function applyOpenAIResponsesOptions(requestBody: ResponseCreateParamsBas
 		requestBody.text = {
 			format: { type: "json_object" }
 		};
+	}
+	const model: string = typeof requestBody.model === "string" ? requestBody.model : "";
+	const reasoningEffort: string | undefined = resolveReasoningEffort("openai", model, params.options?.reasoningEffort);
+	if (reasoningEffort !== undefined) {
+		(requestBody as unknown as { reasoning?: { effort: string } }).reasoning = { effort: reasoningEffort };
 	}
 }
 

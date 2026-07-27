@@ -1,6 +1,7 @@
 import type WebSocket from "ws";
 import type { AdditionalContextItem, ProviderId } from "../protocol/types.js";
 import { getProviderDefaultModel, getProviderDisplayName } from "../providers/provider-registry.js";
+import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import { serializePendingToolBudget } from "../session/pending-tool-budget.js";
@@ -32,6 +33,7 @@ export type WorkbenchPatch = {
 		chatMode?: "agent" | "ask" | "plan" | undefined;
 		provider?: ProviderId | undefined;
 		model?: string | undefined;
+		reasoningEffort?: string | undefined;
 		additionalContext?: AdditionalContextItem[] | undefined;
 	} | undefined;
 	additionalContextAction?: WorkbenchAdditionalContextAction | undefined;
@@ -254,11 +256,19 @@ function applyWorkbenchModelSelection(
 		return false;
 	}
 
+	const nextReasoningEffort: string | undefined = resolveReasoningEffortForModelChange(
+		session.activeProvider,
+		currentModel,
+		session.workbenchComposer.reasoningEffort,
+		nextProvider,
+		nextModel
+	);
 	session.activeProvider = nextProvider;
 	session.providerModel = nextModel;
 	session.modelProfile = resolveModelProfile(nextProvider, nextModel);
 	session.workbenchComposer.provider = undefined;
 	session.workbenchComposer.model = undefined;
+	session.workbenchComposer.reasoningEffort = nextReasoningEffort;
 	if (providerChanged) {
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;
@@ -277,6 +287,7 @@ export function serializeWorkbench(session: ClientSession): Record<string, unkno
 			provider: session.activeProvider,
 			providerDisplayName: getProviderDisplayName(session.activeProvider),
 			model: session.providerModel ?? session.modelProfile.model,
+			reasoningEffort: session.workbenchComposer.reasoningEffort ?? null,
 			additionalContext: cloneContexts(session.workbenchComposer.additionalContext),
 			updatedAt: session.workbenchComposer.updatedAt
 		},
@@ -310,6 +321,14 @@ export function applyWorkbenchPatch(session: ClientSession, patch: WorkbenchPatc
 		}
 		if (patch.composer.provider !== undefined || patch.composer.model !== undefined) {
 			changed = applyWorkbenchModelSelection(session, patch.composer.provider, patch.composer.model) || changed;
+		}
+		if (patch.composer.reasoningEffort !== undefined) {
+			const model: string = session.providerModel ?? session.modelProfile.model;
+			const resolved: string | undefined = resolveReasoningEffort(session.activeProvider, model, patch.composer.reasoningEffort);
+			if (resolved !== session.workbenchComposer.reasoningEffort) {
+				session.workbenchComposer.reasoningEffort = resolved;
+				changed = true;
+			}
 		}
 		if (patch.composer.additionalContext !== undefined) {
 			session.workbenchComposer.additionalContext = normalizeContexts(patch.composer.additionalContext);

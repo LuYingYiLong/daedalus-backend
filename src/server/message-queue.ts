@@ -20,6 +20,7 @@ export type QueueMessageInput = {
 	mode?: "agent" | "ask" | "plan" | undefined;
 	provider?: string | undefined;
 	model?: string | undefined;
+	reasoningEffort?: string | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 };
 
@@ -49,6 +50,7 @@ function normalizeQueueInput(input: QueueMessageInput, existing?: QueuedMessage 
 		mode: input.mode ?? existing?.mode,
 		provider: input.provider ?? existing?.provider,
 		model: input.model ?? existing?.model,
+		reasoningEffort: input.reasoningEffort ?? existing?.reasoningEffort,
 		skillRefs: cloneSkillRefs(input.skillRefs ?? existing?.skillRefs)
 	};
 }
@@ -117,6 +119,7 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 		mode: readMode(record.mode),
 		provider: readString(record.provider),
 		model: readString(record.model),
+		reasoningEffort: readString(record.reasoningEffort),
 		skillRefs: readSkillRefs(record.skillRefs),
 		status: normalizeHydratedStatus(readStatus(record.status)),
 		createdAt,
@@ -151,6 +154,7 @@ export function serializeQueuedMessage(message: QueuedMessage): Record<string, u
 		mode: message.mode ?? null,
 		provider: message.provider ?? null,
 		model: message.model ?? null,
+		reasoningEffort: message.reasoningEffort ?? null,
 		skillRefs: message.skillRefs ?? [],
 		status: message.status,
 		createdAt: message.createdAt,
@@ -254,6 +258,7 @@ export function enqueueMessage(session: ClientSession, input: QueueMessageInput)
 		mode: normalized.mode,
 		provider: normalized.provider,
 		model: normalized.model,
+		reasoningEffort: normalized.reasoningEffort,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
 		createdAt: now,
@@ -304,6 +309,7 @@ export function updateQueuedMessage(
 		&& existing.mode === normalized.mode
 		&& existing.provider === normalized.provider
 		&& existing.model === normalized.model
+		&& existing.reasoningEffort === normalized.reasoningEffort
 		&& JSON.stringify(existing.skillRefs ?? []) === JSON.stringify(normalized.skillRefs ?? [])
 	) {
 		return { item: existing, changed: false };
@@ -316,6 +322,7 @@ export function updateQueuedMessage(
 		mode: normalized.mode,
 		provider: normalized.provider,
 		model: normalized.model,
+		reasoningEffort: normalized.reasoningEffort,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
 		updatedAt: new Date().toISOString()
@@ -399,6 +406,13 @@ export function removeQueuedMessage(session: ClientSession, queueId: number): bo
 }
 
 export function createQueuedChatRequest(queueItem: QueuedMessage, requestId: string): ClientRequest {
+	const options: NonNullable<AiChatParams["options"]> = {
+		stream: true,
+		queueItemId: queueItem.id
+	};
+	if (queueItem.reasoningEffort !== undefined) {
+		options.reasoningEffort = queueItem.reasoningEffort;
+	}
 	return {
 		type: "request",
 		id: requestId,
@@ -407,10 +421,7 @@ export function createQueuedChatRequest(queueItem: QueuedMessage, requestId: str
 			message: queueItem.text,
 			skillRefs: queueItem.skillRefs,
 			additionalContext: cloneAdditionalContextItems(queueItem.additionalContext),
-			options: {
-				stream: true,
-				queueItemId: queueItem.id
-			}
+			options
 		}
 	} as ClientRequest;
 }

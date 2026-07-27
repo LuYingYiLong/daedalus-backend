@@ -337,6 +337,47 @@ test("session store deletes active and archived sessions by workspace", async ()
 	});
 });
 
+test("timeline navigation index returns every user turn with a compact preview and block offset", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Navigation index");
+		const other = await store.createSession("Other session");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: `${"first turn ".repeat(20)}with whitespace\n\ncollapsed`,
+			requestId: "request-first",
+			createdAt: "2026-07-05T00:00:00.000Z"
+		});
+		await store.appendMessage(metadata.id, {
+			role: "assistant",
+			content: "assistant response",
+			requestId: "request-first",
+			createdAt: "2026-07-05T00:00:01.000Z"
+		});
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "second turn",
+			requestId: "request-second",
+			createdAt: "2026-07-05T00:00:02.000Z"
+		});
+		await store.appendMessage(other.id, {
+			role: "user",
+			content: "other session turn",
+			requestId: "request-other",
+			createdAt: "2026-07-05T00:00:03.000Z"
+		});
+
+		const index = await store.getSessionTimelineNavigationIndex(metadata.id);
+		assert.equal(index.blockCount, 3);
+		assert.deepEqual(index.entries.map((entry) => entry.requestId), ["request-first", "request-second"]);
+		assert.deepEqual(index.entries.map((entry) => entry.blockOffset), [0, 2]);
+		assert.equal(index.entries[0]?.entryId, "message:request-first:user:2026-07-05T00:00:00.000Z");
+		assert.equal(index.entries[0]?.preview.length, 120);
+		assert.equal(index.entries[0]?.preview.endsWith("..."), true);
+		assert.equal(index.entries[0]?.preview.includes("\n"), false);
+		assert.deepEqual((await store.getSessionTimelineNavigationIndex(other.id)).entries.map((entry) => entry.requestId), ["request-other"]);
+	});
+});
+
 test("workspace deletion reassigns every session kind to the most specific remaining project", async (): Promise<void> => {
 	await withTempAppData(async (store, appDataDir): Promise<void> => {
 		const broadRoot: string = path.join(appDataDir, "projects");

@@ -8,6 +8,10 @@
     "maxOutputTokens": 384000,
     "capabilities": {
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "high", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true
     },
     "ownedBy": "deepseek"
@@ -21,6 +25,10 @@
     "maxOutputTokens": 384000,
     "capabilities": {
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "high", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true
     },
     "ownedBy": "deepseek"
@@ -180,6 +188,13 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "xhigh", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -196,6 +211,13 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "xhigh", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -212,6 +234,13 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "xhigh", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -228,6 +257,12 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true,
       "vision": true
     },
@@ -243,6 +278,12 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
       "tools": true,
       "webSearch": true,
       "vision": true

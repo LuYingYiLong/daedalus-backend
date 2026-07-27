@@ -5,6 +5,7 @@ import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-profiles.js";
 import { getProviderDefaultModel, isProviderId } from "../providers/provider-registry.js";
+import { resolveReasoningEffort } from "../providers/reasoning-effort.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 
 export type PendingGuide = {
@@ -25,6 +26,7 @@ export type QueuedMessage = {
 	mode?: "agent" | "ask" | "plan" | undefined;
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
+	reasoningEffort?: string | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 	status: QueuedMessageStatus;
 	createdAt: string;
@@ -36,6 +38,7 @@ export type WorkbenchComposer = {
 	chatMode?: "agent" | "ask" | "plan" | undefined;
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
+	reasoningEffort?: string | undefined;
 	additionalContext: AdditionalContextItem[];
 	updatedAt: string;
 };
@@ -198,5 +201,9 @@ export function applySessionMetadata(session: ClientSession, metadata: SessionMe
 		session.modelProfile = resolveModelProfile(metadata.provider, session.providerModel);
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;
+	}
+	if (metadata.reasoningEffort !== undefined) {
+		const model: string = session.providerModel ?? session.modelProfile.model;
+		session.workbenchComposer.reasoningEffort = resolveReasoningEffort(session.activeProvider, model, metadata.reasoningEffort);
 	}
 }

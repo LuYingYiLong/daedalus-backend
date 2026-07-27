@@ -38,7 +38,7 @@ import {
 	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents,
 	checkSessionIntegrity,
 	updateSessionMetadata,
-	openSessionRecentTimeline, openSessionTimelinePage, openSessionTimelinePageAfter,
+	getSessionTimelineNavigationIndex, openSessionRecentTimeline, openSessionTimelinePage, openSessionTimelinePageAfter,
 	type SessionChatMode,
 	type SessionMetadata,
 	type SessionSummary,
@@ -63,6 +63,7 @@ import {
 	ProviderImageInputError
 } from "../providers/provider-image-content.js";
 import { getProviderAdapterFamily, getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, getProviderEndpointTypeForModel, isProviderId } from "../providers/provider-registry.js";
+import { resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent } from "../providers/provider-error.js";
 import { generateSessionTitle, shouldApplyGeneratedSessionTitle } from "./session-title.js";
 import { createSingleAnswerPlan, planWorkflow, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
@@ -228,6 +229,7 @@ function applyWorkspaceToSessionRuntime(socket: WebSocket, session: ClientSessio
 function createSessionUiMetadata(params: {
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
+	reasoningEffort?: string | undefined;
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
@@ -243,6 +245,9 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.model !== undefined) {
 		metadata.model = params.model;
+	}
+	if (params.reasoningEffort !== undefined) {
+		metadata.reasoningEffort = params.reasoningEffort;
 	}
 	if (params.chatMode !== undefined) {
 		metadata.chatMode = params.chatMode;
@@ -618,6 +623,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				chatMode: request.params.chatMode,
 				provider: request.params.provider,
 				model: request.params.model,
+				reasoningEffort: session.workbenchComposer.reasoningEffort,
 				additionalContext: [],
 				updatedAt: new Date().toISOString()
 			};
@@ -694,7 +700,8 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						text: "",
 						chatMode: timeline.metadata.chatMode,
 						provider: timeline.metadata.provider,
-						model: timeline.metadata.model,
+							model: timeline.metadata.model,
+							reasoningEffort: session.workbenchComposer.reasoningEffort,
 						additionalContext: [],
 						updatedAt: new Date().toISOString()
 					};
@@ -990,25 +997,30 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				break;
 			}
 
-			await waitForSessionEventPersistence(session);
-			await updateSessionMetadata(session.sessionId, {
-				...createRuntimeSessionUiMetadata(session),
-				provider,
-				model,
-			});
-
 			const providerChanged: boolean = provider !== session.activeProvider;
+			const previousProvider: ProviderId = session.activeProvider;
+			const previousModel: string = session.providerModel ?? session.modelProfile.model;
+			const reasoningEffort: string | undefined = resolveReasoningEffortForModelChange(
+				previousProvider,
+				previousModel,
+				session.workbenchComposer.reasoningEffort,
+				provider,
+				model
+			);
 			session.activeProvider = provider;
 			session.providerModel = model;
 			session.modelProfile = resolveModelProfile(provider, model);
 			session.workbenchComposer.provider = undefined;
 			session.workbenchComposer.model = undefined;
+			session.workbenchComposer.reasoningEffort = reasoningEffort;
 			session.workbenchComposer.updatedAt = new Date().toISOString();
 			if (providerChanged) {
 				session.providerApiKey = undefined;
 				session.providerBaseUrl = undefined;
 			}
 			bumpWorkbenchRevision(session);
+			await waitForSessionEventPersistence(session);
+			await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
 
 			const stored = await openSession(session.sessionId);
 			emitWorkbenchUpdated(socket, request.id, session);
@@ -1048,6 +1060,36 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result: metadata
 			});
+			break;
+		}
+
+		case "session.timeline.index": {
+			const sessionId: string | undefined = request.params?.sessionId ?? session.sessionId;
+			if (sessionId === undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "no_session", message: "No active session" }
+				});
+				break;
+			}
+			try {
+				const index = await getSessionTimelineNavigationIndex(sessionId);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { timelineIndex: true, ...index }
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_timeline_index_error", "Failed to load session timeline index")
+				});
+			}
 			break;
 		}
 

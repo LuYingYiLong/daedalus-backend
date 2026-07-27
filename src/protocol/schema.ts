@@ -64,6 +64,7 @@ const providerModelRoutingSchema = z.object({
 const sessionUiMetadataParamsSchema = z.object({
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
+	reasoningEffort: z.string().min(1).max(32).optional(),
 	chatMode: z.enum(["agent", "ask", "plan"]).optional(),
 	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 	workflowTodoCollapsed: z.boolean().optional()
@@ -140,6 +141,7 @@ export const aiChatParamsSchema = z.object({
 		temperature: z.number().min(0).max(2).optional(),
 		topP: z.number().min(0).max(1).optional(),
 		maxTokens: z.number().int().positive().optional(),
+		reasoningEffort: z.string().min(1).max(32).optional(),
 		stop: z.union([z.string(), z.array(z.string())]).optional(),
 		responseFormat: z.union([z.literal("text"), z.literal("json")]).optional(),
 		stream: z.boolean().optional(),
@@ -155,6 +157,7 @@ const queuedMessageSnapshotSchema = z.object({
 	mode: z.enum(["agent", "ask", "plan"]).optional(),
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
+	reasoningEffort: z.string().min(1).max(32).optional(),
 	skillRefs: z.array(skillRefSchema).max(4).optional(),
 	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
 }).strict();
@@ -187,6 +190,7 @@ const workbenchPatchParamsSchema = z.object({
 		chatMode: z.enum(["agent", "ask", "plan"]).optional(),
 		provider: providerIdSchema.optional(),
 		model: z.string().min(1).optional(),
+		reasoningEffort: z.string().min(1).max(32).optional(),
 		additionalContext: z.array(additionalContextItemSchema).max(10).optional()
 	}).strict().optional(),
 	additionalContextAction: workbenchAdditionalContextActionSchema.optional(),
@@ -1131,6 +1135,14 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			workspaceId: z.string().min(1),
 			sourceFolderId: z.string().min(1).optional(),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.timeline.index"),
+		params: z.object({
+			sessionId: z.string().min(1).optional(),
+		}).optional(),
 	}),
 	z.object({
 		type: z.literal("request"),

@@ -38,6 +38,7 @@ export type SessionMetadata = {
 	activeSkillId?: string | undefined;
 	provider?: string | undefined;
 	model?: string | undefined;
+	reasoningEffort?: string | undefined;
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
@@ -107,6 +108,20 @@ export type StoredSessionTimelinePage = {
 	latestAgentSnapshot: unknown | null;
 	latestPlanClarification: TimelinePlanClarification | null;
 	latestPlanApproval: TimelinePlanApproval | null;
+};
+
+export type SessionTimelineNavigationEntry = {
+	entryId: string;
+	requestId: string;
+	blockOffset: number;
+	sentAtUtc: string;
+	preview: string;
+};
+
+export type SessionTimelineNavigationIndex = {
+	sessionId: string;
+	blockCount: number;
+	entries: SessionTimelineNavigationEntry[];
 };
 
 type RewindableEvent = {
@@ -356,6 +371,11 @@ type TimelineBlockIndex = {
 
 function timelineBlockKey(requestId: string, type: "user" | "assistant"): string {
 	return `${requestId}\n${type}`;
+}
+
+function createTimelineNavigationPreview(content: string): string {
+	const normalized: string = content.replace(/\s+/gu, " ").trim();
+	return normalized.length <= 120 ? normalized : `${normalized.slice(0, 117)}...`;
 }
 
 function parseAliasRequestId(value: unknown): string {
@@ -632,6 +652,51 @@ export async function openSessionRecentTimeline(sessionId: string, limit: number
 	const stored: StoredSession = await openSession(sessionId);
 	const blockCount: number = getTimelineBuildResult(stored).blocks.length;
 	return createTimelinePage(stored, Math.max(0, blockCount - limit), limit);
+}
+
+/** Returns the complete, lightweight user-turn index without hydrating assistant timeline content. */
+export async function getSessionTimelineNavigationIndex(sessionId: string): Promise<SessionTimelineNavigationIndex> {
+	const safeSessionId: string = assertSafeSessionId(sessionId);
+	const db: DatabaseSync = await getSessionDatabase();
+	rowMetadata(
+		db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ? AND archived_at IS NULL").get(safeSessionId) as Record<string, unknown> | undefined,
+		safeSessionId
+	);
+	const blockIndex: TimelineBlockIndex[] | null = buildTimelineBlockIndex(db, safeSessionId);
+	if (blockIndex === null) {
+		throw new Error(`Timeline index is unavailable for session: ${safeSessionId}`);
+	}
+	const userRows = db.prepare(`
+		SELECT request_id, created_at, payload_json
+		FROM messages
+		WHERE session_id = ? AND role = 'user'
+		ORDER BY sequence
+	`).all(safeSessionId) as Record<string, unknown>[];
+	const userMessages = new Map<string, StoredMessage>();
+	for (const row of userRows) {
+		const message: StoredMessage = parseSqlJson<StoredMessage>(row.payload_json);
+		userMessages.set(String(row.request_id), message);
+	}
+
+	const entries: SessionTimelineNavigationEntry[] = [];
+	for (let blockOffset: number = 0; blockOffset < blockIndex.length; blockOffset += 1) {
+		const block: TimelineBlockIndex = blockIndex[blockOffset]!;
+		if (block.type !== "user") {
+			continue;
+		}
+		const message: StoredMessage | undefined = userMessages.get(block.requestId);
+		if (message === undefined) {
+			continue;
+		}
+		entries.push({
+			entryId: `message:${block.requestId}:user:${message.createdAt}`,
+			requestId: block.requestId,
+			blockOffset,
+			sentAtUtc: message.createdAt,
+			preview: createTimelineNavigationPreview(message.content)
+		});
+	}
+	return { sessionId: safeSessionId, blockCount: blockIndex.length, entries };
 }
 
 export async function openSessionTimelinePage(sessionId: string, beforeOffset: number, limit: number): Promise<StoredSessionTimelinePage> {

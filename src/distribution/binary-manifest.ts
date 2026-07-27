@@ -17,6 +17,8 @@ export const backendPayloadManifestV1Schema = z.object({
 	arch: z.literal("x64"),
 	nodeVersion: z.string().min(1),
 	protocolVersion: z.number().int().positive(),
+	minPluginProtocolVersion: z.number().int().positive(),
+	maxPluginProtocolVersion: z.number().int().positive(),
 	minStudioVersion: semverSchema,
 	publishedAt: z.string().datetime(),
 	authenticode: z.enum(["signed", "unsigned"]),
@@ -38,4 +40,3 @@ export type BackendReleaseManifestV1 = z.infer<typeof backendReleaseManifestV1Sc
 export function parseBackendReleaseManifest(value: unknown): BackendReleaseManifestV1 {
 	return backendReleaseManifestV1Schema.parse(value);
 }
-

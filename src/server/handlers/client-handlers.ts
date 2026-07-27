@@ -90,6 +90,9 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				workspaceId: info.workspaceId,
 				workspaceRoot: info.workspaceRoot,
 				editorInstanceId: info.editorInstanceId,
+				pluginVersion: params.pluginVersion,
+				pluginProtocolVersion: params.pluginProtocolVersion,
+				studioBindingVersion: params.studioBindingVersion,
 				capabilities: info.capabilities,
 				sessionId: session.sessionId
 			});
@@ -103,6 +106,12 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 					multiClient: {
 						enabled: true,
 						protocolVersion: 2
+					},
+					pluginCompatibility: {
+						minProtocolVersion: 1,
+						maxProtocolVersion: 1,
+						accepted: params.pluginProtocolVersion === undefined
+							|| params.pluginProtocolVersion === 1
 					}
 				}
 			});

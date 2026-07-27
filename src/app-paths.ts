@@ -17,6 +17,7 @@ export type DaedalusPathKey =
 	| "sessions.database"
 	| "logs.root"
 	| "backend.connection"
+	| "backend.runtimeRoot"
 	| "backend.nativeRoot"
 	| "backend.runtimeAssetsRoot"
 	| "terminalJobs.root"
@@ -52,6 +53,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"sessions.database": join(root, "sessions.sqlite"),
 		"logs.root": join(root, "logs"),
 		"backend.connection": join(root, "backend", "connection.json"),
+		"backend.runtimeRoot": join(root, "backend", "runtime"),
 		"backend.nativeRoot": join(root, "backend", "native"),
 		"backend.runtimeAssetsRoot": join(root, "backend", "runtime-assets"),
 		"terminalJobs.root": join(root, "terminal-jobs"),
@@ -122,6 +124,10 @@ export function getBackendNativeRoot(): string {
 
 export function getBackendConnectionPath(): string {
 	return getDaedalusPath("backend.connection");
+}
+
+export function getBackendRuntimeRoot(): string {
+	return getDaedalusPath("backend.runtimeRoot");
 }
 
 export function getBackendRuntimeAssetsRoot(): string {

@@ -90,7 +90,7 @@ function parseRuntimeConnectionMetadata(value: unknown): RuntimeConnectionMetada
 	};
 }
 
-async function readMetadata(): Promise<RuntimeConnectionMetadata | null> {
+export async function readRuntimeConnectionMetadata(): Promise<RuntimeConnectionMetadata | null> {
 	try {
 		return parseRuntimeConnectionMetadata(
 			JSON.parse(await readFile(getBackendConnectionPath(), "utf8")) as unknown
@@ -136,7 +136,7 @@ export async function publishRuntimeConnection(
 		throw new Error("Runtime connection port is invalid.");
 	}
 
-	const previous: RuntimeConnectionMetadata | null = await readMetadata();
+	const previous: RuntimeConnectionMetadata | null = await readRuntimeConnectionMetadata();
 	const build = getBackendBuildMetadata();
 	const metadata: RuntimeConnectionMetadata = {
 		schemaVersion: CONNECTION_SCHEMA_VERSION,
@@ -180,7 +180,7 @@ export async function readRuntimeConnectionAuthProtocol(
 	connectionIdInput: string
 ): Promise<string> {
 	const connectionId: string = assertConnectionId(connectionIdInput);
-	const metadata: RuntimeConnectionMetadata | null = await readMetadata();
+	const metadata: RuntimeConnectionMetadata | null = await readRuntimeConnectionMetadata();
 	if (
 		metadata === null
 		|| metadata.connectionId !== connectionId
@@ -201,7 +201,7 @@ export async function readRuntimeConnectionAuthProtocol(
 
 export async function clearRuntimeConnection(connectionIdInput: string): Promise<void> {
 	const connectionId: string = assertConnectionId(connectionIdInput);
-	const metadata: RuntimeConnectionMetadata | null = await readMetadata();
+	const metadata: RuntimeConnectionMetadata | null = await readRuntimeConnectionMetadata();
 	if (metadata?.connectionId === connectionId) {
 		await rm(getBackendConnectionPath(), { force: true });
 	}

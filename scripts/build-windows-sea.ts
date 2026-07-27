@@ -46,6 +46,8 @@ type PackageManifest = {
 	daedalusBinary: {
 		minStudioVersion: string;
 		protocolVersion: number;
+		minPluginProtocolVersion: number;
+		maxPluginProtocolVersion: number;
 	};
 };
 
@@ -405,6 +407,89 @@ async function runServerSmokeTest(): Promise<void> {
 	}
 }
 
+async function runSharedRuntimeSmokeTest(expectedVersion: string): Promise<void> {
+	const profilePath: string = resolve(WORK_ROOT, "shared-runtime-smoke-profile");
+	await mkdir(profilePath, { recursive: true });
+	const commandEnvironment: NodeJS.ProcessEnv = {
+		...process.env,
+		USERPROFILE: profilePath,
+		DAEDALUS_LOG_CONSOLE: "0"
+	};
+	const acquireResult = await run(
+		EXECUTABLE_PATH,
+		["runtime", "acquire", "--client", "studio", "--json"],
+		{ env: commandEnvironment }
+	);
+	const acquire = JSON.parse(acquireResult.stdout) as {
+		ok?: unknown;
+		url?: unknown;
+		authProtocol?: unknown;
+		connection?: {
+			version?: unknown;
+			buildId?: unknown;
+		};
+	};
+	if (
+		acquire.ok !== true
+		|| typeof acquire.url !== "string"
+		|| typeof acquire.authProtocol !== "string"
+		|| !acquire.authProtocol.startsWith("daedalus-auth.")
+		|| acquire.connection?.version !== expectedVersion
+	) {
+		throw new Error("SEA shared runtime acquire returned invalid connection metadata.");
+	}
+	const authToken: string = acquire.authProtocol.slice("daedalus-auth.".length);
+	const healthResponse: Record<string, unknown> = await requestBackend(
+		acquire.url,
+		authToken,
+		"backend.health"
+	);
+	if (healthResponse.ok !== true) {
+		throw new Error("SEA shared runtime rejected its acquired credential.");
+	}
+	const statusResult = await run(
+		EXECUTABLE_PATH,
+		["runtime", "status", "--json"],
+		{ env: commandEnvironment }
+	);
+	const status = JSON.parse(statusResult.stdout) as {
+		ok?: unknown;
+		running?: unknown;
+		connection?: { buildId?: unknown };
+	};
+	if (
+		status.ok !== true
+		|| status.running !== true
+		|| status.connection?.buildId !== acquire.connection?.buildId
+	) {
+		throw new Error("SEA shared runtime status did not report the acquired backend.");
+	}
+	const shutdownResponse: Record<string, unknown> = await requestBackend(
+		acquire.url,
+		authToken,
+		"backend.shutdown"
+	);
+	if (shutdownResponse.ok !== true) {
+		throw new Error("SEA shared runtime rejected authenticated shutdown.");
+	}
+	const deadline: number = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		const nextStatusResult = await run(
+			EXECUTABLE_PATH,
+			["runtime", "status", "--json"],
+			{ env: commandEnvironment }
+		);
+		const nextStatus = JSON.parse(nextStatusResult.stdout) as { running?: unknown };
+		if (nextStatus.running === false) {
+			return;
+		}
+		await new Promise((resolveWait): void => {
+			setTimeout(resolveWait, 200);
+		});
+	}
+	throw new Error("SEA shared runtime did not stop after authenticated shutdown.");
+}
+
 async function smokeMcpSubcommand(
 	name: "terminal" | "workspace" | "godot" | "skills",
 	env: Record<string, string>
@@ -491,6 +576,8 @@ async function main(): Promise<void> {
 		arch: "x64",
 		nodeVersion: EXPECTED_NODE_VERSION,
 		protocolVersion: manifest.daedalusBinary.protocolVersion,
+		minPluginProtocolVersion: manifest.daedalusBinary.minPluginProtocolVersion,
+		maxPluginProtocolVersion: manifest.daedalusBinary.maxPluginProtocolVersion,
 		minStudioVersion: manifest.daedalusBinary.minStudioVersion,
 		publishedAt,
 		authenticode: process.env.DAEDALUS_AUTHENTICODE_SIGNED === "1" ? "signed" : "unsigned",
@@ -505,6 +592,7 @@ async function main(): Promise<void> {
 	await runExecutableSelfTests(payloadManifest);
 	await runMcpSmokeTests();
 	await runServerSmokeTest();
+	await runSharedRuntimeSmokeTest(manifest.version);
 	await createArchive();
 
 	const archiveInfo = await stat(ARCHIVE_PATH);

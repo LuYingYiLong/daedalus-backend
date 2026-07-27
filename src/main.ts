@@ -15,9 +15,15 @@ import { cleanupUnsentSessionAttachments } from "./session/session-attachments.j
 import { deleteSession, listTemporarySessions } from "./session/session-store.js";
 import { getBackendPortFromEnv } from "./server/backend-runtime.js";
 import { createServer, waitForServerListening } from "./server/websocket-server.js";
+import {
+	getActiveClientConnectionCount,
+	hasActiveSessionRuns
+} from "./server/client-connections.js";
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
+const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
+const SHARED_RUNTIME_IDLE_POLL_MS: number = 5_000;
 
 export type BackendApplication = {
 	server: WebSocketServer;
@@ -155,6 +161,7 @@ export async function runBackendUntilShutdown(): Promise<void> {
 	const application: BackendApplication = await startBackendApplication();
 	let shuttingDown: boolean = false;
 	let stopParentMonitor: () => void = (): void => {};
+	let idleSince: number | null = null;
 	const shutdown = (reason: string): Promise<void> => {
 		if (shuttingDown) {
 			return Promise.resolve();
@@ -176,4 +183,18 @@ export async function runBackendUntilShutdown(): Promise<void> {
 	process.once("SIGTERM", (): void => {
 		void shutdown("SIGTERM");
 	});
+	if (process.env.DAEDALUS_BACKEND_MODE === "runtime") {
+		const idleTimer: NodeJS.Timeout = setInterval((): void => {
+			if (getActiveClientConnectionCount() > 0 || hasActiveSessionRuns()) {
+				idleSince = null;
+				return;
+			}
+			idleSince ??= Date.now();
+			if (Date.now() - idleSince >= SHARED_RUNTIME_IDLE_TIMEOUT_MS) {
+				clearInterval(idleTimer);
+				void shutdown("shared_runtime_idle");
+			}
+		}, SHARED_RUNTIME_IDLE_POLL_MS);
+		idleTimer.unref();
+	}
 }

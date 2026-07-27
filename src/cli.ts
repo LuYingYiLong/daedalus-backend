@@ -1,6 +1,12 @@
 import { getBackendBuildMetadata } from "./runtime/build-metadata.js";
 import { readRuntimeConnectionAuthProtocol } from "./runtime/connection-registry.js";
 import { runBackendSelfTest } from "./runtime/self-test.js";
+import {
+	acquireSharedRuntime,
+	getSharedRuntimeStatus,
+	releaseSharedRuntimeLease,
+	type SharedRuntimeClient
+} from "./runtime/shared-runtime.js";
 
 type McpCommand = "terminal" | "workspace" | "godot" | "skills" | "external";
 
@@ -27,6 +33,9 @@ function printUsage(): void {
 		"  daedalus-backend self-test [--json] [--require-secret-store]",
 		"  daedalus-backend version [--json]",
 		"  daedalus-backend connection-token --connection-id <id> [--json]",
+		"  daedalus-backend runtime acquire --client studio|godot [--project <path>] --json",
+		"  daedalus-backend runtime status --json",
+		"  daedalus-backend runtime release --lease <id> --json",
 		"  daedalus-backend mcp terminal|workspace|godot|skills|external",
 		""
 	].join("\n"));
@@ -103,6 +112,34 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
 			process.stdout.write(`${authProtocol}\n`);
 		}
 		return;
+	}
+	if (command === "runtime") {
+		if (subcommand === "status") {
+			writeJson(await getSharedRuntimeStatus());
+			return;
+		}
+		if (subcommand === "acquire") {
+			const clientValue: string | null = readFlagValue(args, "--client");
+			if (clientValue !== "studio" && clientValue !== "godot") {
+				throw new Error("runtime acquire requires --client studio|godot.");
+			}
+			const client: SharedRuntimeClient = clientValue;
+			const projectPath: string | null = readFlagValue(args, "--project");
+			writeJson(await acquireSharedRuntime({
+				client,
+				...(projectPath === null ? {} : { projectPath })
+			}));
+			return;
+		}
+		if (subcommand === "release") {
+			const leaseId: string | null = readFlagValue(args, "--lease");
+			if (leaseId === null) {
+				throw new Error("runtime release requires --lease <id>.");
+			}
+			writeJson(releaseSharedRuntimeLease(leaseId));
+			return;
+		}
+		throw new Error(`Unknown runtime command: ${subcommand ?? ""}`);
 	}
 	if (command === "mcp" && isMcpCommand(subcommand)) {
 		await runMcp(subcommand);

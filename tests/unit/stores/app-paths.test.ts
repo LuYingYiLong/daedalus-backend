@@ -63,6 +63,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("sessions.archivedRoot"), getDefaultArchivedSessionsDir());
 		assert.equal(getDaedalusPath("logs.root"), getLogsDir());
 		assert.equal(getDaedalusPath("backend.connection"), getBackendConnectionPath());
+		assert.equal(getDaedalusPath("backend.runtimeRoot"), join(root, "backend", "runtime"));
 		assert.equal(getDaedalusPath("terminalJobs.root"), getTerminalJobsDir());
 		assert.equal(getDaedalusPath("toolExecution.ledger"), getToolExecutionLedgerPath());
 		assert.equal(getDaedalusPath("metrics.usageDb"), getUsageMetricsDbPath());

@@ -92,6 +92,12 @@ jobs:
           if ($manifest.authenticode -ne "unsigned") {
             throw "Unsigned release workflow produced an unexpected Authenticode status."
           }
+          if (
+            $manifest.minPluginProtocolVersion -ne 1 `
+            -or $manifest.maxPluginProtocolVersion -ne 1
+          ) {
+            throw "Backend manifest does not declare the expected Godot plugin protocol range."
+          }
           Get-ChildItem -LiteralPath $releaseDir -File | Format-Table Name, Length
 
       - name: Upload build artifact

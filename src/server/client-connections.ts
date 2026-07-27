@@ -127,6 +127,22 @@ export function getActiveConnectionSessions(): ClientSession[] {
 	return Array.from(new Set(Array.from(socketConnections.values()).map((record: ConnectionRecord): ClientSession => record.session)));
 }
 
+export function getActiveClientConnectionCount(): number {
+	return socketConnections.size;
+}
+
+export function getActiveClientTypeCounts(): Partial<Record<ClientType, number>> {
+	const counts: Partial<Record<ClientType, number>> = {};
+	for (const record of socketConnections.values()) {
+		counts[record.clientType] = (counts[record.clientType] ?? 0) + 1;
+	}
+	return counts;
+}
+
+export function hasActiveSessionRuns(): boolean {
+	return activeSessionRuns.size > 0;
+}
+
 export function hasOtherConnectionsForSession(socket: WebSocket, sessionId: string | undefined): boolean {
 	if (sessionId === undefined) {
 		return false;

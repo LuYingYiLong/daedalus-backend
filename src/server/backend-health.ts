@@ -2,6 +2,11 @@ import { getCurrentBackendLogPath } from "../logger.js";
 import { getBackendBuildMetadata, type BackendDistribution } from "../runtime/build-metadata.js";
 import { getUsageMetricsAvailabilitySnapshot } from "../usage/metrics-store.js";
 import { getBackendPortFromEnv, getBackendRuntimeMode, type BackendRuntimeMode } from "./backend-runtime.js";
+import {
+	getActiveClientConnectionCount,
+	getActiveClientTypeCounts,
+	type ClientType
+} from "./client-connections.js";
 
 const BACKEND_HEALTH_NAME: string = "godot-daedalus-backend";
 
@@ -22,6 +27,10 @@ export type BackendHealthResult = {
 	multiClient: {
 		enabled: boolean;
 		protocolVersion: number;
+	};
+	clients: {
+		total: number;
+		byType: Partial<Record<ClientType, number>>;
 	};
 	logPath: string | null;
 	metrics: {
@@ -55,6 +64,10 @@ export function createBackendHealthResult(): BackendHealthResult {
 		multiClient: {
 			enabled: true,
 			protocolVersion: build.protocolVersion
+		},
+		clients: {
+			total: getActiveClientConnectionCount(),
+			byType: getActiveClientTypeCounts()
 		},
 		logPath: getCurrentBackendLogPath(),
 		metrics: {

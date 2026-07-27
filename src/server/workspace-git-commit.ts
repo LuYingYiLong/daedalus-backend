@@ -3,7 +3,10 @@ import type { AiChatParams, ChatMessage, ProviderId } from "../protocol/types.js
 import { chatWithDeepSeek, type ProviderChatOptions } from "../providers/deepseek-client.js";
 import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
 import { loadProviderConfigWithSecret, type ProviderConfigWithSecret } from "../providers/provider-config-store.js";
-import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
+import {
+	ProviderTaskModelError,
+	resolveConfiguredProviderTaskModelOptions
+} from "../providers/task-model-routing.js";
 import { normalizeConfiguredProviderBaseUrl } from "../providers/provider-base-url.js";
 import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointTypeForModel, isProviderId } from "../providers/provider-registry.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
@@ -485,18 +488,32 @@ function createProviderOptions(session: ClientSession, provider: ProviderId, mod
 	return options;
 }
 
-async function createConfiguredProviderOptions(
+export type GitCommitProviderOptionsDependencies = {
+	resolveConfiguredTaskModel?: typeof resolveConfiguredProviderTaskModelOptions;
+	loadProviderConfig?: typeof loadProviderConfigWithSecret;
+};
+
+export async function resolveGitCommitProviderOptions(
 	session: ClientSession,
 	providerInput: string | undefined,
-	modelInput: string | undefined
+	modelInput: string | undefined,
+	dependencies: GitCommitProviderOptionsDependencies = {}
 ): Promise<ProviderChatOptions> {
 	if (providerInput === undefined && modelInput === undefined) {
-		const currentOptions: ProviderChatOptions = await createConfiguredProviderOptions(session, session.activeProvider, session.providerModel);
-		return (await resolveProviderTaskModelOptions("gitCommit", currentOptions)).options;
+		const resolveConfiguredTaskModel = dependencies.resolveConfiguredTaskModel
+			?? resolveConfiguredProviderTaskModelOptions;
+		try {
+			return (await resolveConfiguredTaskModel("gitCommit")).options;
+		} catch (error: unknown) {
+			if (!(error instanceof ProviderTaskModelError) || error.code !== "task_model_not_configured") {
+				throw error;
+			}
+		}
 	}
 
 	const provider: ProviderId = resolveRequestedProvider(session, providerInput);
-	const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret(provider);
+	const loadProviderConfig = dependencies.loadProviderConfig ?? loadProviderConfigWithSecret;
+	const config: ProviderConfigWithSecret | null = await loadProviderConfig(provider);
 	if (config === null || config.apiKey === undefined) {
 		throw new Error(`Provider is not configured: ${provider}`);
 	}
@@ -612,7 +629,7 @@ export async function generateWorkspaceGitCommitMessage(params: WorkspaceGitComm
 	}
 
 	const options: ProviderChatOptions = withProviderUsageContext(
-		await createConfiguredProviderOptions(params.session, params.provider, params.model),
+		await resolveGitCommitProviderOptions(params.session, params.provider, params.model),
 		{
 			requestId: params.requestId,
 			runId: params.requestId,

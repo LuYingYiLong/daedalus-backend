@@ -5,7 +5,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { commitOrPushWorkspaceGit, createCommitMessageDiffContext, type CandidateDiff } from "../../../src/server/workspace-git-commit.js";
+import {
+	commitOrPushWorkspaceGit,
+	createCommitMessageDiffContext,
+	resolveGitCommitProviderOptions,
+	type CandidateDiff
+} from "../../../src/server/workspace-git-commit.js";
+import { ProviderTaskModelError } from "../../../src/providers/task-model-routing.js";
+import { createClientSession } from "../../../src/server/client-session.js";
+import type { ProviderChatOptions } from "../../../src/providers/deepseek-client.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -44,6 +52,92 @@ function createCandidateDiff(patch: string, overrides: Partial<CandidateDiff> = 
 		...overrides
 	};
 }
+
+function createGitCommitOptions(): ProviderChatOptions {
+	return {
+		provider: "deepseek",
+		apiKey: "configured-git-commit-key",
+		model: "deepseek-v4-pro",
+		endpointType: "openai-chat-completions",
+		adapterFamily: "openai-compatible",
+		modelProfile: {
+			provider: "deepseek",
+			model: "deepseek-v4-pro",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			defaultOutputReserveTokens: 8_192,
+			safetyMarginTokens: 2_560
+		}
+	};
+}
+
+test("Git commit generation uses its configured model before reading an unconfigured current provider", async (): Promise<void> => {
+	const session = createClientSession(undefined);
+	session.activeProvider = "opencode";
+	session.providerModel = "kimi-k2.7-code";
+	let activeProviderRead: boolean = false;
+
+	const options = await resolveGitCommitProviderOptions(session, undefined, undefined, {
+		resolveConfiguredTaskModel: async () => ({
+			kind: "gitCommit",
+			source: "configured",
+			provider: "deepseek",
+			model: "deepseek-v4-pro",
+			options: createGitCommitOptions()
+		}),
+		loadProviderConfig: async () => {
+			activeProviderRead = true;
+			return null;
+		}
+	});
+
+	assert.equal(options.provider, "deepseek");
+	assert.equal(options.apiKey, "configured-git-commit-key");
+	assert.equal(activeProviderRead, false);
+});
+
+test("Git commit generation falls back to the current model only when no task model is configured", async (): Promise<void> => {
+	const session = createClientSession(undefined);
+	session.activeProvider = "opencode";
+	session.providerModel = "kimi-k2.7-code";
+
+	const options = await resolveGitCommitProviderOptions(session, undefined, undefined, {
+		resolveConfiguredTaskModel: async () => {
+			throw new ProviderTaskModelError("task_model_not_configured", "No Git commit model configured.");
+		},
+		loadProviderConfig: async () => ({
+			provider: "opencode",
+			apiKey: "current-provider-key",
+			model: "kimi-k2.7-code"
+		})
+	});
+
+	assert.equal(options.provider, "opencode");
+	assert.equal(options.model, "kimi-k2.7-code");
+	assert.equal(options.apiKey, "current-provider-key");
+});
+
+test("Git commit generation does not fall back when its configured provider is missing an API key", async (): Promise<void> => {
+	const session = createClientSession(undefined);
+	session.activeProvider = "opencode";
+	let activeProviderRead: boolean = false;
+
+	await assert.rejects(
+		async (): Promise<void> => {
+			await resolveGitCommitProviderOptions(session, undefined, undefined, {
+				resolveConfiguredTaskModel: async () => {
+					throw new ProviderTaskModelError("task_model_api_key_missing", "DeepSeek API key is missing.");
+				},
+				loadProviderConfig: async () => {
+					activeProviderRead = true;
+					return null;
+				}
+			});
+		},
+		/DeepSeek API key is missing/u
+	);
+	assert.equal(activeProviderRead, false);
+});
 
 test("workspace git commit message context omits blank-only changed lines", (): void => {
 	const context = createCommitMessageDiffContext(createCandidateDiff([

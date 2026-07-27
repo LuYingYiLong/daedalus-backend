@@ -29,6 +29,7 @@ import { createRuntimeWorkflowPhase, createWorkflowPhasePrompt, runWorkflowPhase
 import { scheduleWorkflowApproval, scheduleWorkflowPhaseOutcome, scheduleWorkflowPhaseStart } from "../../workflow/scheduler.js";
 import { logger } from "../../logger.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
+import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 
 const MAX_WORKFLOW_WRITE_GUARD_RETRY_ATTEMPTS: number = 2;
 
@@ -210,6 +211,7 @@ export async function continueWorkflowExecution(
 	initialToolObservations: WorkflowToolObservation[] = [],
 	initialPhaseRunResult?: WorkflowPhaseRunResult | undefined
 ): Promise<void> {
+	throwIfAborted(abortSignal);
 	let state: WorkflowRunState = workflowState;
 	let plan: WorkflowPlan = state.plan;
 	let phaseOutputs = state.phaseOutputs;
@@ -220,11 +222,13 @@ export async function continueWorkflowExecution(
 	const planningContext: string = state.planningContext ?? "";
 
 	for (let index: number = state.phaseIndex; index < plan.phases.length; index += 1) {
+		throwIfAborted(abortSignal);
 		const candidatePhase: WorkflowPhase | undefined = plan.phases[index];
 		if (candidatePhase === undefined) {
 			break;
 		}
 		const phaseRunId: string = createWorkflowPhaseRunId(candidatePhase.id);
+		throwIfAborted(abortSignal);
 		const startCommand = scheduleWorkflowPhaseStart({ ...state, plan, phaseIndex: index, phaseOutputs }, phaseRunId);
 		if (startCommand.type === "finish") {
 			break;
@@ -289,7 +293,11 @@ export async function continueWorkflowExecution(
 			pendingGuidePromptSection
 		].filter((section: string): boolean => section.length > 0).join("\n\n");
 		const runtimePhase: WorkflowPhase = createRuntimeWorkflowPhase(phase, mcpHost, session);
-		const fullSystemPrompt: string = await createWorkflowPhasePrompt(runtimePhase, phaseParams, mcpHost, session, requestId, guidePromptSection);
+		const fullSystemPrompt: string = await awaitWithAbort(
+			createWorkflowPhasePrompt(runtimePhase, phaseParams, mcpHost, session, requestId, guidePromptSection),
+			abortSignal
+		);
+		throwIfAborted(abortSignal);
 		let agentResult: ProviderAgentResult;
 		let phaseToolStats: WorkflowPhaseToolStats = createEmptyWorkflowPhaseToolStats();
 		let phaseToolObservations: WorkflowToolObservation[] = [];
@@ -319,7 +327,7 @@ export async function continueWorkflowExecution(
 				}];
 				agentResultOverrideToolObservations = [];
 			} else {
-				let phaseRunResult: WorkflowPhaseRunResult = await runWorkflowPhase(
+				let phaseRunResult: WorkflowPhaseRunResult = await awaitWithAbort(runWorkflowPhase(
 					socket,
 					phaseParams,
 					options,
@@ -334,7 +342,8 @@ export async function continueWorkflowExecution(
 					phaseRunId,
 					streamPhase,
 					abortSignal
-				);
+				), abortSignal);
+				throwIfAborted(abortSignal);
 				agentResult = phaseRunResult.agentResult;
 				phaseToolStats = phaseRunResult.toolStats;
 				phaseToolObservations = phaseRunResult.toolObservations;
@@ -347,6 +356,7 @@ export async function continueWorkflowExecution(
 					&& !didWorkflowWritePhaseExecute(phase, phaseToolStats)
 					&& writeGuardRetryAttempt < MAX_WORKFLOW_WRITE_GUARD_RETRY_ATTEMPTS
 				) {
+					throwIfAborted(abortSignal);
 					writeGuardRetryAttempt += 1;
 					const retryAllowedTools: string[] = getWorkflowWriteGuardRetryAllowedTools(phase);
 					const retryPhase: WorkflowPhase = retryAllowedTools.length > 0
@@ -362,7 +372,7 @@ export async function continueWorkflowExecution(
 						...(retryPhaseParams.options ?? {}),
 						requireToolCallOnFirstStep: true
 					} as AiChatParams["options"] & Record<string, unknown>;
-					phaseRunResult = await runWorkflowPhase(
+					phaseRunResult = await awaitWithAbort(runWorkflowPhase(
 						socket,
 						retryPhaseParams,
 						options,
@@ -377,7 +387,8 @@ export async function continueWorkflowExecution(
 						phaseRunId,
 						false,
 						abortSignal
-					);
+					), abortSignal);
+					throwIfAborted(abortSignal);
 					agentResult = phaseRunResult.agentResult;
 					phaseToolStats = phaseRunResult.toolStats;
 					phaseToolObservations = phaseRunResult.toolObservations;
@@ -387,6 +398,7 @@ export async function continueWorkflowExecution(
 		} catch (error: unknown) {
 			throw new WorkflowExecutionError(error instanceof Error ? error.message : "Workflow phase failed", plan, error);
 		}
+		throwIfAborted(abortSignal);
 		agentResultOverride = undefined;
 
 		if (agentResult.status === "approval_required") {
@@ -569,8 +581,9 @@ export async function continueWorkflowExecution(
 		sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs);
 
 		if (isFinalPhase) {
+			throwIfAborted(abortSignal);
 			const completionStatus = collectWorkflowCompletionStatus(plan, phaseOutputs);
-			await appendChatTurnToSession(
+			await awaitWithAbort(appendChatTurnToSession(
 				session,
 				state.history,
 				state.originalParams.message,
@@ -582,7 +595,8 @@ export async function continueWorkflowExecution(
 					...(state.originalParams.additionalContext ?? []),
 					...(state.capturedAttachments ?? [])
 				]
-			);
+			), abortSignal);
+			throwIfAborted(abortSignal);
 			sendWorkflowEvent(socket, requestId, session, "workflow.done", {
 				workflowId: plan.id,
 				requestId: persistRequestId,
@@ -661,7 +675,7 @@ export async function continueWorkflowExecution(
 						].filter((section: string): boolean => section.length > 0).join("\n\n")
 					};
 				}
-				const revisedPlan: WorkflowPlan = await reviseLlmWorkflowPlan(
+				const revisedPlan: WorkflowPlan = await awaitWithAbort(reviseLlmWorkflowPlan(
 					plan,
 					index,
 					state.originalParams,
@@ -672,13 +686,17 @@ export async function continueWorkflowExecution(
 					state.history,
 					revisionPlanningContext,
 					abortSignal
-				);
+				), abortSignal);
+				throwIfAborted(abortSignal);
 				if ((revisedPlan.revision ?? 0) !== (plan.revision ?? 0)) {
 					plan = revisedPlan;
 					state = { ...state, plan, phaseIndex: index + 1, phaseOutputs };
 					sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs);
 				}
 			} catch (error: unknown) {
+				if (error instanceof WorkflowExecutionError || (error instanceof Error && error.name === "AbortError") || abortSignal?.aborted === true) {
+					throw error;
+				}
 				logger.error("workflow", "plan_revision_failed", error, {
 					requestId,
 					sessionId: session.sessionId,

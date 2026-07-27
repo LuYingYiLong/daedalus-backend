@@ -113,7 +113,7 @@ import {
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "../chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "../prompt-trace.js";
-import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage } from "../request-lifecycle.js";
+import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "../request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt } from "../token-budget.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "../session-preview.js";
 import { createProviderChatOptions } from "../provider-chat-options.js";
@@ -203,16 +203,15 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 }
 
 import { createProviderRuntimeContext, createSafeMarkdownFence, createMcpSystemContext } from "../prompt-context.js";
-import { getApprovalMode, setApprovalMode } from "../../approval-settings-store.js";
+import { setApprovalMode } from "../../approval-settings-store.js";
 import { getActiveConnectionSessions } from "../client-connections.js";
 import { emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun } from "../workbench.js";
+import { synchronizeSessionApprovalMode } from "../approval-mode-sync.js";
 
 const FULL_TRUST_CONFIRMATION_TEXT: string = "ENABLE FULL TRUST";
 
 async function applyGlobalApprovalMode(session: ClientSession): Promise<ApprovalMode> {
-	const mode: ApprovalMode = await getApprovalMode();
-	session.approvalGateway.setMode(mode);
-	return mode;
+	return await synchronizeSessionApprovalMode(session);
 }
 
 function applyApprovalModeToActiveSessions(mode: ApprovalMode): void {
@@ -285,6 +284,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 		let continuationRequestId: string = request.id;
 		let queueItemId: number | undefined;
 		try {
+			await synchronizeSessionApprovalMode(session);
 			const apiKey: string | undefined = await ensureProviderConfigured(session);
 			const hydrated = await loadHydratedPendingApprovalStates(session, apiKey);
 			const pending = session.approvalGateway.getPending(request.params.approvalId);
@@ -340,6 +340,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			}
 			continuationRequestId = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
 			queueItemId = pendingContinuation?.params.options?.queueItemId;
+			// A continuation keeps the original AI request id. Register the same controller
+			// under that id so ai.cancel can abort it instead of only the approval RPC.
+			session.activeAbortControllers.set(continuationRequestId, abortController);
+			throwIfAborted(abortController.signal);
 			if (pendingState?.continuation !== undefined && pendingContinuation === undefined) {
 				const message: string = `当前没有可用的 ${getProviderDisplayName(session.activeProvider)} API key，无法恢复审批后的 LLM continuation。请先配置 provider 后重试。`;
 				if (session.sessionId !== undefined) {
@@ -363,7 +367,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					startedAt: new Date().toISOString()
 				});
 			}
-			const result = await session.approvalGateway.approve(request.params.approvalId, mcpHost);
+			const result = await awaitWithAbort(
+				session.approvalGateway.approve(request.params.approvalId, mcpHost),
+				abortController.signal
+			);
+			throwIfAborted(abortController.signal);
 			const approvedToolObservation: WorkflowToolObservation = createApprovedWorkflowToolObservation(pending, result.content);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executed", {
@@ -443,15 +451,19 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				pendingContinuation.requestId,
 				mcpHost
 			);
-			const continuationParams: AiChatParams = await hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params);
+			const continuationParams: AiChatParams = await awaitWithAbort(
+				hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
+				abortController.signal
+			);
+			throwIfAborted(abortController.signal);
 			const continuationWorkflowState = pendingContinuation.workflowState !== undefined
 				? {
 					...pendingContinuation.workflowState,
 					originalParams: continuationParams
 				}
 				: undefined;
-			const agentResult: ProviderAgentResult = pendingContinuation.stream
-				? await continueProviderAgentStreaming(
+			const agentResultPromise: Promise<ProviderAgentResult> = pendingContinuation.stream
+				? continueProviderAgentStreaming(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -466,7 +478,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					abortController.signal,
 					{ workspaceId: pending.workspaceId ?? session.activeWorkspace?.id, editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId, sessionId: pending.sessionId ?? session.sessionId }
 				)
-				: await continueProviderAgent(
+				: continueProviderAgent(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -481,9 +493,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					abortController.signal,
 					{ workspaceId: pending.workspaceId ?? session.activeWorkspace?.id, editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId, sessionId: pending.sessionId ?? session.sessionId }
 				);
+			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
+			throwIfAborted(abortController.signal);
 
 			if (continuationWorkflowState !== undefined) {
-				await continueWorkflowExecution(
+				await awaitWithAbort(continueWorkflowExecution(
 					socket,
 					pendingContinuation.requestId,
 					session,
@@ -495,7 +509,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pendingContinuation.requestId,
 					abortController.signal,
 					[approvedToolObservation]
-				);
+				), abortController.signal);
+				throwIfAborted(abortController.signal);
 				setWorkbenchActiveRun(session, { status: "idle" });
 				const queueHelpers = await import("../chat-orchestrator.js");
 				await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
@@ -572,6 +587,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			});
 		} finally {
 			session.activeAbortControllers.delete(request.id);
+			session.activeAbortControllers.delete(continuationRequestId);
 		}
 		break;
 	}

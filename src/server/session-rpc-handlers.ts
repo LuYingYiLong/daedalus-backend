@@ -174,8 +174,8 @@ import { ensureProviderConfigured } from "../application/provider-session-servic
 import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
 import { logger } from "../logger.js";
-import { getApprovalMode } from "../approval-settings-store.js";
 import { resolveSessionCreateWorkspaceId } from "./session-create-workspace.js";
+import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
 
 function sessionRpcError(
 	error: unknown,
@@ -260,13 +260,8 @@ function createSessionUiMetadata(params: {
 	return metadata;
 }
 
-async function applySessionApprovalMode(session: ClientSession, metadata?: Pick<SessionMetadata, "approvalMode"> | undefined): Promise<void> {
-	if (metadata?.approvalMode !== undefined) {
-		session.approvalGateway.setMode(metadata.approvalMode);
-		return;
-	}
-
-	session.approvalGateway.setMode(await getApprovalMode());
+async function applySessionApprovalMode(session: ClientSession, _metadata?: Pick<SessionMetadata, "approvalMode"> | undefined): Promise<void> {
+	await synchronizeSessionApprovalMode(session);
 }
 
 type ContextEstimateSource = "provider" | "local";
@@ -641,6 +636,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result: {
 					...metadata,
+					approvalMode: session.approvalGateway.getMode(),
 					workbench: serializeWorkbench(session)
 				}
 			});
@@ -729,7 +725,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						opened: true,
 						metadata: {
 							...timeline.metadata,
-							approvalMode: timeline.metadata.approvalMode ?? session.approvalGateway.getMode(),
+							approvalMode: session.approvalGateway.getMode(),
 							activeSkillId: undefined,
 							legacySkillRefs: timeline.metadata.activeSkillId === undefined
 								? []

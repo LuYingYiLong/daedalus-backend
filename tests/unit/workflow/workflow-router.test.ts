@@ -138,7 +138,7 @@ test("workflow router fallback treats short edit confirmations as workflow", ():
 test("chat orchestrator has a hidden answer path that does not emit workflow todo snapshots", async (): Promise<void> => {
 	const source: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
 	const hiddenAnswerStart: number = source.indexOf("async function runHiddenAnswerExecution");
-	const workflowStart: number = source.indexOf("await startWorkflowExecution");
+	const workflowStart: number = source.indexOf("startWorkflowExecution(", hiddenAnswerStart);
 
 	assert.ok(hiddenAnswerStart >= 0);
 	assert.ok(workflowStart > hiddenAnswerStart);
@@ -182,7 +182,7 @@ test("chat orchestrator emits run started before workflow routing", async (): Pr
 	const source: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
 	const registerIndex: number = source.indexOf("registerSessionRunController(runSessionId, request.id, abortController)");
 	const startedIndex: number = source.indexOf("sendSessionEvent(socket, request.id, session, \"agent.run.started\"");
-	const routeIndex: number = source.indexOf("routeDecision = await routeWorkflowExecution");
+	const routeIndex: number = source.indexOf("routeWorkflowExecution(", startedIndex);
 
 	assert.ok(registerIndex >= 0);
 	assert.ok(startedIndex > registerIndex);
@@ -225,6 +225,27 @@ test("chat orchestrator cancel requests abort and leaves finalization to the act
 	const finishRun: number = cancelBlock.indexOf("finishSessionRun(session.sessionId, targetRequestId);");
 	assert.ok(pendingCancellationGuard >= 0);
 	assert.ok(finishRun > pendingCancellationGuard);
+});
+
+test("workflow cancellation cannot fall through to fallback planning or a later phase", async (): Promise<void> => {
+	const chatSource: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
+	const continuationSource: string = await readFile(new URL("../../../src/server/workflow/continuation.ts", import.meta.url), "utf8");
+	const phaseRunnerSource: string = await readFile(new URL("../../../src/server/workflow/phase-runner.ts", import.meta.url), "utf8");
+	const approvalSource: string = await readFile(new URL("../../../src/server/handlers/approval-handlers.ts", import.meta.url), "utf8");
+	const plannerStart: number = chatSource.indexOf("async function createWorkflowPlanForRoute");
+	const plannerEnd: number = chatSource.indexOf("async function createGodotTemplateWorkflowPlanForRuntime", plannerStart);
+	const plannerBlock: string = chatSource.slice(plannerStart, plannerEnd);
+
+	assert.ok(plannerStart >= 0);
+	assert.ok(plannerEnd > plannerStart);
+	assert.equal(plannerBlock.includes("if (isCancellationError(error, abortSignal))"), true);
+	assert.equal(plannerBlock.includes("throw error;"), true);
+	assert.equal(chatSource.includes("if (isCancellationError(error, abortController.signal)) {\n\t\t\t\t\t\t\tthrow error;"), true);
+	assert.equal(continuationSource.includes("throwIfAborted(abortSignal);\n\t\tconst candidatePhase"), true);
+	assert.equal(continuationSource.includes("awaitWithAbort(runWorkflowPhase("), true);
+	assert.equal(continuationSource.includes("awaitWithAbort(reviseLlmWorkflowPlan("), true);
+	assert.equal(phaseRunnerSource.includes("throwIfAborted(abortSignal);\n\tconst runtimePhase"), true);
+	assert.equal(approvalSource.includes("session.activeAbortControllers.set(continuationRequestId, abortController);"), true);
 });
 
 test("chat orchestrator final cleanup only updates the workbench for the owned run", async (): Promise<void> => {

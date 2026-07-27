@@ -7,6 +7,54 @@ import type { ClientSession } from "./client-session.js";
 const REQUEST_DEDUP_TTL_MS: number = 5 * 60 * 1000;
 const MAX_COMPLETED_REQUEST_IDS: number = 512;
 
+function createCancellationError(): Error {
+	const error: Error = new Error("Request cancelled");
+	error.name = "AbortError";
+	return error;
+}
+
+/**
+ * Cancellation is a control-flow boundary, not a recoverable provider error.
+ * Call this before scheduling any follow-up work after an asynchronous step.
+ */
+export function throwIfAborted(abortSignal?: AbortSignal | undefined): void {
+	if (abortSignal?.aborted) {
+		throw createCancellationError();
+	}
+}
+
+/**
+ * Stop awaiting orchestration work immediately while the underlying operation
+ * receives the same signal and can release its own network/process resources.
+ */
+export async function awaitWithAbort<T>(operation: Promise<T>, abortSignal?: AbortSignal | undefined): Promise<T> {
+	throwIfAborted(abortSignal);
+	if (abortSignal === undefined) {
+		return await operation;
+	}
+
+	return await new Promise<T>((resolve, reject): void => {
+		const onAbort = (): void => {
+			abortSignal.removeEventListener("abort", onAbort);
+			reject(createCancellationError());
+		};
+		const cleanup = (): void => {
+			abortSignal.removeEventListener("abort", onAbort);
+		};
+		abortSignal.addEventListener("abort", onAbort, { once: true });
+		operation.then(
+			(value: T): void => {
+				cleanup();
+				resolve(value);
+			},
+			(error: unknown): void => {
+				cleanup();
+				reject(error);
+			}
+		);
+	});
+}
+
 export function isCancellationError(error: unknown, abortSignal?: AbortSignal | undefined): boolean {
 	if (abortSignal?.aborted) {
 		return true;

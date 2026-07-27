@@ -192,9 +192,6 @@ export function clearActiveSession(session: ClientSession): void {
 export function applySessionMetadata(session: ClientSession, metadata: SessionMetadata): void {
 	session.sessionId = metadata.id;
 	session.sessionTitle = metadata.title;
-	if (metadata.approvalMode !== undefined) {
-		session.approvalGateway.setMode(metadata.approvalMode);
-	}
 	if (metadata.provider !== undefined && isProviderId(metadata.provider)) {
 		session.activeProvider = metadata.provider;
 		session.providerModel = metadata.model ?? getProviderDefaultModel(metadata.provider);

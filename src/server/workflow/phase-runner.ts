@@ -23,6 +23,7 @@ import { createSceneViewToolResultEnricher } from "./scene-view-enricher.js";
 import { filterToolNamesForWorkspace } from "../../tools/tool-catalog.js";
 import { isWebSearchToolAvailable } from "../../web-search-settings-store.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
+import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 
 const SCENE_VIEW_CAPTURE_TOOL: string = "mcp_godot_editor_capture_scene_view";
 const SKILL_LOAD_TOOL: string = "mcp_skills_load";
@@ -73,7 +74,9 @@ export async function runWorkflowPhase(
 	streamPhase: boolean,
 	abortSignal?: AbortSignal | undefined
 ): Promise<WorkflowPhaseRunResult> {
-	const runtimePhase: WorkflowPhase = await createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session);
+	throwIfAborted(abortSignal);
+	const runtimePhase: WorkflowPhase = await awaitWithAbort(createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session), abortSignal);
+	throwIfAborted(abortSignal);
 	const phaseOptions: ProviderChatOptions = withProviderUsageContext(options, {
 		operation: "workflow_phase",
 		phaseId: runtimePhase.id
@@ -94,10 +97,15 @@ export async function runWorkflowPhase(
 	};
 	let agentResult: ProviderAgentResult;
 	try {
-		agentResult = streamPhase
-			? await runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId })
-			: await runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId });
+		agentResult = await awaitWithAbort(
+			streamPhase
+				? runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId })
+				: runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId }),
+			abortSignal
+		);
+		throwIfAborted(abortSignal);
 	} catch (error: unknown) {
+		throwIfAborted(abortSignal);
 		if (phase.toolGroup === "write" && isEmptyProviderResponseError(error)) {
 			agentResult = {
 				status: "completed",

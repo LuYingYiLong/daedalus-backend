@@ -136,7 +136,7 @@ import { bumpWorkbenchRevision, clearWorkbenchComposer, emitWorkbenchUpdated, se
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
-import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage } from "./request-lifecycle.js";
+import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "./request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, estimateTextTokensForProvider, estimateCurrentMessageTokensForProvider, computeHistoryBudget, appendChatTurnToSession, appendUserMessageToSession, appendFailedChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterLlmContextMessages } from "./token-budget.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
@@ -190,6 +190,7 @@ import { startWorkflowExecution } from "./workflow/executor.js";
 import { ensureProviderConfigured } from "../application/provider-session-service.js";
 import { beginSessionRun, findSessionWithPendingToolBudget, finishSessionRun, getActiveSessionRunController, registerSessionRunController } from "./client-connections.js";
 import { logger } from "../logger.js";
+import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
 import { createInitialPlan } from "./plan-mode.js";
 import { createPlanGetResult, type StoredPlan } from "./plan-store.js";
 import { getUserPrompt } from "../user-prompt-store.js";
@@ -443,6 +444,7 @@ async function createWorkflowPlanForRoute(
 	abortSignal?: AbortSignal | undefined,
 	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined
 ): Promise<WorkflowPlan | null> {
+	throwIfAborted(abortSignal);
 	const templateParams: AiChatParams = {
 		...params,
 		options: {
@@ -451,7 +453,11 @@ async function createWorkflowPlanForRoute(
 		}
 	};
 	if (params.options?.workflow !== "llm_planned") {
-		const preferredTemplate: WorkflowPlan | null = await createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext);
+		const preferredTemplate: WorkflowPlan | null = await awaitWithAbort(
+			createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext),
+			abortSignal
+		);
+		throwIfAborted(abortSignal);
 		if (preferredTemplate !== null) {
 			return preferredTemplate;
 		}
@@ -459,20 +465,33 @@ async function createWorkflowPlanForRoute(
 
 	try {
 		const plannerOptions: ProviderChatOptions = withProviderUsageContext(
-			(await resolveProviderTaskModelOptions("workflowPlanner", options)).options,
+			(await awaitWithAbort(resolveProviderTaskModelOptions("workflowPlanner", options), abortSignal)).options,
 			{ operation: "workflow_planner" }
 		);
-		const plan: WorkflowPlan | null = await createLlmWorkflowPlan(params, plannerOptions, history, planningContext, abortSignal);
+		throwIfAborted(abortSignal);
+		const plan: WorkflowPlan | null = await awaitWithAbort(
+			createLlmWorkflowPlan(params, plannerOptions, history, planningContext, abortSignal),
+			abortSignal
+		);
+		throwIfAborted(abortSignal);
 		if (plan !== null) {
 			return plan;
 		}
 	} catch (error: unknown) {
+		if (isCancellationError(error, abortSignal)) {
+			throw error;
+		}
 		logger.warn("ai", "llm_workflow_planner_failed_fallback", {
 			message: error instanceof Error ? error.message : "LLM planner failed"
 		});
 	}
 
-	const templateFallback: WorkflowPlan | null = await createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext);
+	throwIfAborted(abortSignal);
+	const templateFallback: WorkflowPlan | null = await awaitWithAbort(
+		createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext),
+		abortSignal
+	);
+	throwIfAborted(abortSignal);
 	if (templateFallback !== null) {
 		return templateFallback;
 	}
@@ -529,6 +548,7 @@ async function runHiddenAnswerExecution(params: {
 	userCreatedAt: string;
 	abortSignal?: AbortSignal | undefined;
 }): Promise<void> {
+	throwIfAborted(params.abortSignal);
 	const runId: string = params.requestId;
 	const stepRunId: string = `${params.requestId}:answer`;
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
@@ -542,7 +562,7 @@ async function runHiddenAnswerExecution(params: {
 		params.requestId,
 		params.mcpHost
 	);
-	const agentResult: ProviderAgentResult = await runProviderAgentStreaming(
+	const agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
 		chatParams,
 		withProviderUsageContext(params.options, {
 			operation: params.routeDecision.execution === "direct_answer" ? "direct_answer" : "tool_answer"
@@ -561,7 +581,8 @@ async function runHiddenAnswerExecution(params: {
 			sessionId: params.session.sessionId,
 			requestId: params.requestId
 		}
-	);
+	), params.abortSignal);
+	throwIfAborted(params.abortSignal);
 
 	if (agentResult.status === "approval_required") {
 		throw new Error("Hidden answer execution unexpectedly requested approval.");
@@ -943,6 +964,7 @@ async function handleToolBudgetDecision(
 		return;
 	}
 
+	await synchronizeSessionApprovalMode(session);
 	const sessionRun = beginSessionRun(session.sessionId, pending.requestId);
 	if (!sessionRun.ok) {
 		sendJson(socket, {
@@ -1033,7 +1055,11 @@ async function runToolBudgetDecisionContinuation(params: {
 
 	try {
 		const pendingContinuation: PendingAiContinuation = pending.continuation;
-		const continuationParams: AiChatParams = await hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params);
+		const continuationParams: AiChatParams = await awaitWithAbort(
+			hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
+			abortController.signal
+		);
+		throwIfAborted(abortController.signal);
 		const toolStats: PendingToolBudgetPhaseStats = cloneToolBudgetPhaseStats(pending.workflowPhaseToolStats);
 		let toolObservations: WorkflowToolObservation[] = pending.workflowToolObservations?.map((observation: WorkflowToolObservation): WorkflowToolObservation => ({ ...observation })) ?? [];
 		const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
@@ -1059,9 +1085,9 @@ async function runToolBudgetDecisionContinuation(params: {
 			sessionId: session.sessionId,
 			requestId: pending.requestId
 		};
-		const agentResult: ProviderAgentResult = decision === "continue"
+		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
-				? await continueProviderAgentAfterToolBudgetStreaming(
+				? continueProviderAgentAfterToolBudgetStreaming(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -1072,7 +1098,7 @@ async function runToolBudgetDecisionContinuation(params: {
 					abortController.signal,
 					toolContext
 				)
-				: await continueProviderAgentAfterToolBudget(
+				: continueProviderAgentAfterToolBudget(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -1084,7 +1110,7 @@ async function runToolBudgetDecisionContinuation(params: {
 					toolContext
 				)
 			: pendingContinuation.stream
-				? await finalizeProviderAgentAfterToolBudgetStreaming(
+				? finalizeProviderAgentAfterToolBudgetStreaming(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -1094,7 +1120,7 @@ async function runToolBudgetDecisionContinuation(params: {
 					abortController.signal,
 					toolContext
 				)
-				: await finalizeProviderAgentAfterToolBudget(
+				: finalizeProviderAgentAfterToolBudget(
 					continuationParams,
 					pendingContinuation.options,
 					pendingContinuation.continuation,
@@ -1104,6 +1130,8 @@ async function runToolBudgetDecisionContinuation(params: {
 					abortController.signal,
 					toolContext
 				);
+		const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
+		throwIfAborted(abortController.signal);
 
 		if (pendingContinuation.workflowState !== undefined) {
 			const continuationWorkflowState: WorkflowRunState = {
@@ -1116,7 +1144,7 @@ async function runToolBudgetDecisionContinuation(params: {
 				toolObservations,
 				capturedAttachments: []
 			};
-			await continueWorkflowExecution(
+			await awaitWithAbort(continueWorkflowExecution(
 				socket,
 				pending.requestId,
 				session,
@@ -1129,9 +1157,10 @@ async function runToolBudgetDecisionContinuation(params: {
 				abortController.signal,
 				[],
 				phaseRunResult
-			);
+			), abortController.signal);
+			throwIfAborted(abortController.signal);
 		} else {
-			await sendContinuedAgentResult(
+			await awaitWithAbort(sendContinuedAgentResult(
 				socket,
 				pending.requestId,
 				session,
@@ -1141,7 +1170,8 @@ async function runToolBudgetDecisionContinuation(params: {
 					...pendingContinuation,
 					params: continuationParams
 				}
-			);
+			), abortController.signal);
+			throwIfAborted(abortController.signal);
 		}
 
 		if (session.approvalGateway.listPending().length > 0 || session.pendingToolBudgets.size > 0) {
@@ -1371,6 +1401,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				break;
 			}
 
+			await synchronizeSessionApprovalMode(session);
 			const runSessionId: string | undefined = session.sessionId;
 			const sessionRun = beginSessionRun(runSessionId, request.id);
 			if (session.activeRunRequestId !== undefined || !sessionRun.ok) {
@@ -1432,15 +1463,17 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				});
 				const isFirstUserTurn: boolean = isFirstSessionUserTurn(session.messages, request.id);
 				maybeScheduleSessionTitleGeneration(socket, request.id, session, params, options, isFirstUserTurn);
-				const hydratedParams: AiChatParams = await hydrateImageAttachmentContexts(session.sessionId, params);
-				const imagePreprocess: ImageRecognitionPreprocessResult = await preprocessImageAttachmentsForTextModel(
+				const hydratedParams: AiChatParams = await awaitWithAbort(hydrateImageAttachmentContexts(session.sessionId, params), abortController.signal);
+				throwIfAborted(abortController.signal);
+				const imagePreprocess: ImageRecognitionPreprocessResult = await awaitWithAbort(preprocessImageAttachmentsForTextModel(
 					hydratedParams,
 					options,
 					abortController.signal,
 					(progress): void => {
 						sendSessionEvent(socket, request.id, session, "ai.status", progress);
 					}
-				);
+				), abortController.signal);
+				throwIfAborted(abortController.signal);
 				const storedUserPrompt: string = await getUserPrompt();
 				await mcpHost.ensureGlobalCustomServers();
 				const effectiveParams: AiChatParams = {
@@ -1592,17 +1625,22 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				} else {
 					try {
 						const routerOptions: ProviderChatOptions = withProviderUsageContext(
-							(await resolveProviderTaskModelOptions("workflowPlanner", options)).options,
+							(await awaitWithAbort(resolveProviderTaskModelOptions("workflowPlanner", options), abortController.signal)).options,
 							{ operation: "workflow_router" }
 						);
-						routeDecision = await routeWorkflowExecution(
+						throwIfAborted(abortController.signal);
+						routeDecision = await awaitWithAbort(routeWorkflowExecution(
 							effectiveParams,
 							routerOptions,
 							history,
 							createWorkflowRouteContext(session, mcpHost, effectiveParams.additionalContext),
 							abortController.signal
-						);
+						), abortController.signal);
+						throwIfAborted(abortController.signal);
 					} catch (error: unknown) {
+						if (isCancellationError(error, abortController.signal)) {
+							throw error;
+						}
 						logger.warn("ai", "workflow_router_failed_fallback", {
 							requestId: request.id,
 							sessionId: session.sessionId,
@@ -1611,6 +1649,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						routeDecision = createFallbackWorkflowRoute(effectiveParams, error instanceof Error ? error.message : "Workflow router failed.");
 					}
 				}
+				throwIfAborted(abortController.signal);
 				routeDecision = applyExplicitSkillWriteRequirement(
 					routeDecision,
 					effectiveParams,
@@ -1659,7 +1698,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 								historyBudgetTokens,
 								allowedToolCount: allowedToolNames?.length ?? null
 							});
-							await startWorkflowExecution(
+							throwIfAborted(abortController.signal);
+							await awaitWithAbort(startWorkflowExecution(
 								socket,
 								request.id,
 								session,
@@ -1673,10 +1713,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 								planningContext,
 								guidePromptSection,
 								abortController.signal
-							);
+							), abortController.signal);
 						} else {
 							routeDecision = createFallbackWorkflowRoute(effectiveParams, "Workflow planner returned no executable plan.");
-							await runHiddenAnswerExecution({
+							throwIfAborted(abortController.signal);
+							await awaitWithAbort(runHiddenAnswerExecution({
 								socket,
 								requestId: request.id,
 								session,
@@ -1690,10 +1731,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 								allowedToolNames: resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session),
 								userCreatedAt: turnStartedAt,
 								abortSignal: abortController.signal
-							});
+							}), abortController.signal);
 						}
 					} else {
-						await runHiddenAnswerExecution({
+						throwIfAborted(abortController.signal);
+						await awaitWithAbort(runHiddenAnswerExecution({
 							socket,
 							requestId: request.id,
 							session,
@@ -1707,7 +1749,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							allowedToolNames: hiddenAnswerToolNames,
 							userCreatedAt: turnStartedAt,
 							abortSignal: abortController.signal
-						});
+						}), abortController.signal);
 					}
 				} finally {
 					session.approvalGateway = originalApprovalGateway;
@@ -1913,7 +1955,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				finishSessionRun(runSessionId, request.id);
 				await finishQueueItemForRun(socket, request.id, session, queueItemId, queuedRunForcedStatus);
 				const queueItemStillExists: boolean = queueItemId !== undefined && findQueuedMessage(session, queueItemId) !== undefined;
-				if (queueItemId === undefined || !queueItemStillExists) {
+				if (queuedRunForcedStatus !== "cancelled" && (queueItemId === undefined || !queueItemStillExists)) {
 					void drainMessageQueue(socket, request.id, session, mcpHost);
 				}
 			}

@@ -41,7 +41,7 @@ The Godot plugin connects to this backend over WebSocket. Provider configuration
 
 ## Providers
 
-The built-in catalog includes DeepSeek, Moonshot, OpenAI, and Zhipu AI. Zhipu AI uses the standard PaaS OpenAI-compatible base URL `https://open.bigmodel.cn/api/paas/v4`; its default text model is `glm-5.2`. Set an image-capable model such as `glm-5v-turbo` for the Image Recognition task when sending screenshots or other image attachments.
+The built-in provider and model catalog is defined in `src/providers/catalog/` and exposed dynamically to clients. Xiaomi MiMo uses the OpenAI-compatible base URL `https://api.xiaomimimo.com/v1`; its default model is `mimo-v2.5-pro`, while `mimo-v2.5` adds multimodal input. Zhipu AI uses `https://open.bigmodel.cn/api/paas/v4` and defaults to `glm-5.2`.
 
 API keys are stored in keytar only. They are never written to `%USERPROFILE%\.daedalus` configuration files. A custom base URL remains available for a compatible proxy or specialized provider endpoint.
 

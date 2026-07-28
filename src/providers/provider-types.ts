@@ -48,6 +48,7 @@ export type ProviderEndpointConfig = {
 	baseUrl: string;
 	adapterFamily: AdapterFamily;
 	modelsPath: string;
+	maxTokensField?: "max_tokens" | "max_completion_tokens" | undefined;
 	tokenEstimatePath?: string | undefined;
 	requiredToolChoice?: "auto" | "omit" | undefined;
 	toolCallsSwitch?: boolean | undefined;

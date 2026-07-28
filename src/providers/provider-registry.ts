@@ -38,6 +38,7 @@ type RawEndpointConfig = {
 	baseUrl: string;
 	adapterFamily: AdapterFamily;
 	modelsPath?: string | undefined;
+	maxTokensField?: "max_tokens" | "max_completion_tokens" | undefined;
 	tokenEstimatePath?: string | undefined;
 	requiredToolChoice?: "auto" | "omit" | undefined;
 	toolCallsSwitch?: unknown;
@@ -142,6 +143,12 @@ function parseEndpointConfig(value: unknown, providerId: string, endpointType: s
 			? value.modelsPath.trim()
 			: DEFAULT_MODELS_PATH
 	};
+	if (value.maxTokensField !== undefined) {
+		if (value.maxTokensField !== "max_tokens" && value.maxTokensField !== "max_completion_tokens") {
+			throw new Error(`Provider ${providerId} endpoint ${endpointType} has unsupported maxTokensField`);
+		}
+		config.maxTokensField = value.maxTokensField;
+	}
 	if (typeof value.tokenEstimatePath === "string" && value.tokenEstimatePath.trim().length > 0) {
 		config.tokenEstimatePath = value.tokenEstimatePath.trim();
 	}

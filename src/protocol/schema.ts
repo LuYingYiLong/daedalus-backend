@@ -504,6 +504,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			provider: providerIdSchema.optional(),
 			model: z.string().min(1).optional(),
 			maxResults: z.number().min(0).max(100).optional(),
+			maxKeywords: z.number().min(1).max(3).optional(),
 		}),
 	}),
 	z.object({

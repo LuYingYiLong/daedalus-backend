@@ -47,7 +47,7 @@ npm test
 
 ## LLM Provider 与模型配置
 
-- 当前内置 provider id 为 `deepseek`、`moonshot`、`openai` 和 `zhipu`；新增 provider 时必须同步更新 JSON catalog、协议 schema、adapter 能力、模型 profile/fallback、前端供应商/模型控件和测试。
+- 内置 provider 与模型清单以 `src/providers/catalog/` 为唯一来源，客户端必须动态读取；新增 provider 时必须同步更新 JSON catalog、协议 schema、adapter 能力、模型 profile/fallback、前端供应商/模型控件和测试。
 - 模型列表不得在前端写死为唯一来源；前端应通过 `provider.models.list` 动态获取，并只把内置列表作为失败或离线 fallback。
 - Provider 配置使用 v3 结构：保存 active model ref 与各 provider 的 `model/baseUrl/keyStorage/updatedAt/modelsCache` 等元数据；API Key 只存 keytar，账号名使用 `provider:<provider>:api_key`，不得写入配置文件或日志。
 - 不保留旧 `provider.json` 或旧 keytar 账号兼容逻辑；迁移需求必须显式提出后再实现。

@@ -10,13 +10,21 @@ import {
 	type ProviderModelInfo
 } from "./providers/provider-registry.js";
 import { loadProviderConfigWithSecret } from "./providers/provider-config-store.js";
+import {
+	getRegisteredWebSearchProviders,
+	getWebSearchProviderAdapter,
+	type WebSearchExecutionConfig,
+	type WebSearchProviderOptions
+} from "./providers/web-search-adapter.js";
+import "./providers/web-search-adapters.js";
 
 export type WebSearchSettings = {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	enabled: boolean;
 	provider: ProviderId;
 	model: string;
 	maxResults: number;
+	maxKeywords: number;
 	updatedAt: string;
 };
 
@@ -25,6 +33,7 @@ export type WebSearchSettingsPatch = {
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	maxResults?: number | undefined;
+	maxKeywords?: number | undefined;
 };
 
 export type WebSearchModelOption = {
@@ -37,6 +46,7 @@ export type WebSearchModelOption = {
 	baseUrl: string;
 	contextWindowTokens: number;
 	maxOutputTokens: number;
+	searchOptions?: WebSearchProviderOptions | undefined;
 };
 
 export type WebSearchSettingsStatus = WebSearchSettings & {
@@ -47,27 +57,24 @@ export type WebSearchSettingsStatus = WebSearchSettings & {
 	models: WebSearchModelOption[];
 };
 
-export type WebSearchRuntimeConfig = {
-	provider: ProviderId;
-	model: string;
-	maxResults: number;
-	apiKey: string;
-	baseUrl?: string | undefined;
-};
+export type WebSearchRuntimeConfig = WebSearchExecutionConfig;
 
-const SUPPORTED_WEB_SEARCH_PROVIDERS: ReadonlySet<ProviderId> = new Set(["zhipu"]);
 const FALLBACK_PROVIDER: ProviderId = "zhipu";
 const FALLBACK_MODEL: string = "glm-5.2";
 const DEFAULT_MAX_RESULTS: number = 5;
 const MIN_MAX_RESULTS: number = 0;
 const MAX_MAX_RESULTS: number = 100;
+const DEFAULT_MAX_KEYWORDS: number = 1;
+const MIN_MAX_KEYWORDS: number = 1;
+const MAX_MAX_KEYWORDS: number = 3;
 
 export const DEFAULT_WEB_SEARCH_SETTINGS: WebSearchSettings = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	enabled: false,
 	provider: FALLBACK_PROVIDER,
 	model: FALLBACK_MODEL,
 	maxResults: DEFAULT_MAX_RESULTS,
+	maxKeywords: DEFAULT_MAX_KEYWORDS,
 	updatedAt: ""
 };
 
@@ -86,7 +93,7 @@ function maskApiKey(apiKey: string | undefined): string | null {
 }
 
 export function isProviderNativeWebSearchProvider(provider: ProviderId): boolean {
-	return SUPPORTED_WEB_SEARCH_PROVIDERS.has(provider);
+	return getWebSearchProviderAdapter(provider) !== undefined;
 }
 
 export function isProviderNativeWebSearchModel(provider: ProviderId, model: string): boolean {
@@ -117,8 +124,15 @@ function normalizeMaxResults(value: unknown): number {
 	return Math.min(MAX_MAX_RESULTS, Math.max(MIN_MAX_RESULTS, Math.floor(value)));
 }
 
+function normalizeMaxKeywords(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return DEFAULT_WEB_SEARCH_SETTINGS.maxKeywords;
+	}
+	return Math.min(MAX_MAX_KEYWORDS, Math.max(MIN_MAX_KEYWORDS, Math.floor(value)));
+}
+
 export function normalizeWebSearchSettings(value: unknown): WebSearchSettings {
-	if (!isRecord(value) || value.schemaVersion !== 1) {
+	if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) {
 		return { ...DEFAULT_WEB_SEARCH_SETTINGS };
 	}
 
@@ -131,17 +145,23 @@ export function normalizeWebSearchSettings(value: unknown): WebSearchSettings {
 		: getDefaultSearchModel(provider);
 
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_WEB_SEARCH_SETTINGS.enabled,
 		provider,
 		model,
 		maxResults: normalizeMaxResults(value.maxResults),
+		maxKeywords: value.schemaVersion === 1 ? DEFAULT_MAX_KEYWORDS : normalizeMaxKeywords(value.maxKeywords),
 		updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : ""
 	};
 }
 
 export async function getWebSearchSettings(): Promise<WebSearchSettings> {
-	return normalizeWebSearchSettings(await readJsonFile<unknown>(getWebSearchSettingsConfigPath()));
+	const raw: unknown = await readJsonFile<unknown>(getWebSearchSettingsConfigPath());
+	const normalized: WebSearchSettings = normalizeWebSearchSettings(raw);
+	if (isRecord(raw) && raw.schemaVersion === 1) {
+		await writeJsonFileAtomic(getWebSearchSettingsConfigPath(), normalized);
+	}
+	return normalized;
 }
 
 function validateSettings(settings: WebSearchSettings): void {
@@ -167,11 +187,12 @@ export async function updateWebSearchSettings(patch: WebSearchSettingsPatch): Pr
 		? getDefaultSearchModel(provider)
 		: current.model);
 	const next: WebSearchSettings = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		enabled: patch.enabled ?? current.enabled,
 		provider,
 		model,
 		maxResults: patch.maxResults === undefined ? current.maxResults : normalizeMaxResults(patch.maxResults),
+		maxKeywords: patch.maxKeywords === undefined ? current.maxKeywords : normalizeMaxKeywords(patch.maxKeywords),
 		updatedAt: new Date().toISOString()
 	};
 	validateSettings(next);
@@ -185,9 +206,10 @@ export async function getWebSearchSettingsStatus(): Promise<WebSearchSettingsSta
 	let configured: boolean = false;
 	let apiKeyMasked: string | null = null;
 
-	for (const provider of SUPPORTED_WEB_SEARCH_PROVIDERS) {
+	for (const provider of getRegisteredWebSearchProviders()) {
 		const config = await loadProviderConfigWithSecret(provider);
 		const providerConfigured: boolean = config?.apiKey !== undefined;
+		const searchOptions: WebSearchProviderOptions | undefined = getWebSearchProviderAdapter(provider)?.options;
 		for (const model of getProviderFallbackModels(provider)) {
 			if (model.capabilities.webSearch !== true) {
 				continue;
@@ -201,7 +223,8 @@ export async function getWebSearchSettingsStatus(): Promise<WebSearchSettingsSta
 				apiKeyMasked: maskApiKey(config?.apiKey),
 				baseUrl: config?.baseUrl ?? getProviderDefaultBaseUrl(provider),
 				contextWindowTokens: model.contextWindowTokens,
-				maxOutputTokens: model.maxOutputTokens
+				maxOutputTokens: model.maxOutputTokens,
+				...(searchOptions === undefined ? {} : { searchOptions })
 			});
 		}
 
@@ -240,6 +263,7 @@ export async function resolveWebSearchRuntimeConfig(): Promise<WebSearchRuntimeC
 		provider: settings.provider,
 		model: settings.model,
 		maxResults: settings.maxResults,
+		maxKeywords: settings.maxKeywords,
 		apiKey: config.apiKey,
 		baseUrl: config.baseUrl
 	};

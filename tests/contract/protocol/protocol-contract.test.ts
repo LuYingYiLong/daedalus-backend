@@ -444,7 +444,8 @@ test("web search settings get and update are accepted", (): void => {
 		params: {
 			enabled: true,
 			provider: "zhipu",
-			model: "glm-5.2"
+			model: "glm-5.2",
+			maxKeywords: 3
 		}
 	}).success, true);
 });

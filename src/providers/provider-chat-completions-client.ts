@@ -50,7 +50,14 @@ export function applyChatOptions(requestBody: ChatCompletionCreateParamsBase, pa
 	}
 
 	if (params.options?.maxTokens !== undefined) {
-		requestBody.max_tokens = params.options.maxTokens;
+		const maxTokensField = getProviderEndpointConfig(options.provider, options.endpointType).maxTokensField ?? "max_tokens";
+		if (maxTokensField === "max_completion_tokens") {
+			const providerRequest = requestBody as unknown as Record<string, unknown>;
+			providerRequest.max_completion_tokens = params.options.maxTokens;
+			delete providerRequest.max_tokens;
+		} else {
+			requestBody.max_tokens = params.options.maxTokens;
+		}
 	}
 
 	if (params.options?.stop !== undefined) {

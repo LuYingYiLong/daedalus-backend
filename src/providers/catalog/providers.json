@@ -216,5 +216,28 @@
     },
     "envBaseUrl": "QIANFAN_BASE_URL",
     "envModel": "QIANFAN_MODEL"
+  },
+  {
+    "id": "mimo",
+    "displayName": "Xiaomi MiMo",
+    "authType": "api-key",
+    "defaultModel": "mimo-v2.5-pro",
+    "modelListMode": "catalog-recommended",
+    "defaultEndpointType": "openai-chat-completions",
+    "endpointConfigs": {
+      "openai-chat-completions": {
+        "baseUrl": "https://api.xiaomimimo.com/v1",
+        "adapterFamily": "openai-compatible",
+        "modelsPath": "/models",
+        "requiredToolChoice": "auto",
+        "maxTokensField": "max_completion_tokens",
+        "temperature": {
+          "min": 0,
+          "max": 1.5
+        }
+      }
+    },
+    "envBaseUrl": "MIMO_BASE_URL",
+    "envModel": "MIMO_MODEL"
   }
 ]

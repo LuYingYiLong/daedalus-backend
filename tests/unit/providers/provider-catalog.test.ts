@@ -15,7 +15,7 @@ import { listProviderModels } from "../../../src/providers/provider-models.js";
 
 test("provider catalog exposes valid built-in providers and model references", (): void => {
 	const providerIds: string[] = getProviderIds();
-	assert.deepEqual(providerIds, ["deepseek", "moonshot", "openai", "zhipu", "dashscope", "volcengine", "minimax", "stepfun", "iflytek", "opencode", "opencode_go", "qianfan"]);
+	assert.deepEqual(providerIds, ["deepseek", "moonshot", "openai", "zhipu", "dashscope", "volcengine", "minimax", "stepfun", "iflytek", "opencode", "opencode_go", "qianfan", "mimo"]);
 	assert.equal(isProviderId("deepseek"), true);
 	assert.equal(isProviderId("unknown"), false);
 
@@ -196,6 +196,16 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(qianfanModels.find((model) => model.id === "ernie-4.5-turbo-128k")?.maxOutputTokens, 12_288);
 	assert.equal(qianfanModels.find((model) => model.id === "ernie-4.5-turbo-vl")?.capabilities.imageInput, true);
 	assert.equal(qianfanModels.find((model) => model.id === "ernie-4.5-turbo-vl-32k")?.contextWindowTokens, 32_768);
+	assert.equal(getProviderDefaultModel("mimo"), "mimo-v2.5-pro");
+	assert.equal(getProviderDefinition("mimo").modelListMode, "catalog-recommended");
+	assert.equal(getProviderDefinition("mimo").defaultBaseUrl, "https://api.xiaomimimo.com/v1");
+	assert.equal(getProviderDefinition("mimo").endpointConfigs["openai-chat-completions"]?.maxTokensField, "max_completion_tokens");
+	assert.equal(getProviderDefinition("mimo").endpointConfigs["openai-chat-completions"]?.requiredToolChoice, "auto");
+	const mimoModels = getProviderFallbackModels("mimo");
+	assert.equal(mimoModels.length, 2);
+	assert.equal(mimoModels.find((model) => model.id === "mimo-v2.5-pro")?.capabilities.webSearch, true);
+	assert.equal(mimoModels.find((model) => model.id === "mimo-v2.5")?.capabilities.imageInput, true);
+	assert.equal(mimoModels.find((model) => model.id === "mimo-v2.5")?.capabilities.videoInput, true);
 	const openaiModels = getProviderFallbackModels("openai");
 	assert.equal(openaiModels.find((model) => model.id === "gpt-5.6-sol")?.contextWindowTokens, 1_050_000);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-5.6-sol")?.maxOutputTokens, 128_000);
@@ -223,6 +233,7 @@ test("provider model list fallback returns normalized capabilities", async (): P
 	const opencodeResult = await listProviderModels("opencode", undefined, undefined);
 	const opencodeGoResult = await listProviderModels("opencode_go", undefined, undefined);
 	const qianfanResult = await listProviderModels("qianfan", undefined, undefined);
+	const mimoResult = await listProviderModels("mimo", undefined, undefined);
 
 	assert.equal(result.source, "fallback");
 	assert.equal(model?.capabilities.reasoning, true);
@@ -264,4 +275,6 @@ test("provider model list fallback returns normalized capabilities", async (): P
 	assert.equal(qianfanResult.models.find((item) => item.id === "ernie-5.1")?.capabilities.tools, true);
 	assert.equal(qianfanResult.models.find((item) => item.id === "ernie-5.0")?.capabilities.vision, true);
 	assert.equal(qianfanResult.models.find((item) => item.id === "ernie-x1.1")?.contextWindowTokens, 65_536);
+	assert.deepEqual(mimoResult.models.map((item) => item.id), ["mimo-v2.5-pro", "mimo-v2.5"]);
+	assert.equal(mimoResult.models.every((item) => item.capabilities.webSearch === true), true);
 });

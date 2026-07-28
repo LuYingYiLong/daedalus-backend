@@ -64,7 +64,7 @@ export type ProviderDefinition = {
 	authType: "api-key";
 	defaultEndpointType: EndpointType;
 	defaultBaseUrl: string;
-	defaultModel: string;
+	defaultModel: string | null;
 	modelListMode: ProviderModelListMode;
 	modelsPath: string;
 	tokenEstimatePath?: string | undefined;

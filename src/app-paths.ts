@@ -5,6 +5,7 @@ const DAEDALUS_DIR_NAME: string = ".daedalus";
 export type DaedalusPathKey =
 	| "config.workspaces"
 	| "config.provider"
+	| "config.providerCustomizations"
 	| "config.mcpServers"
 	| "config.skillSettings"
 	| "config.userPrompt"
@@ -41,6 +42,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 	return {
 		"config.workspaces": join(configRoot, "workspaces.json"),
 		"config.provider": join(configRoot, "provider.json"),
+		"config.providerCustomizations": join(configRoot, "provider-customizations.json"),
 		"config.mcpServers": join(configRoot, "mcp-servers.json"),
 		"config.skillSettings": join(configRoot, "skill-settings.json"),
 		"config.userPrompt": join(configRoot, "user-prompt.json"),
@@ -72,6 +74,10 @@ export function getDefaultWorkspaceConfigPath(): string {
 
 export function getProviderConfigPath(): string {
 	return getDaedalusPath("config.provider");
+}
+
+export function getProviderCustomizationsPath(): string {
+	return getDaedalusPath("config.providerCustomizations");
 }
 
 export function getMcpServersConfigPath(): string {

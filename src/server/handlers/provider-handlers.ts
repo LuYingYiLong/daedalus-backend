@@ -12,10 +12,33 @@ import { normalizeConfiguredProviderBaseUrl } from "../../providers/provider-bas
 import { applyProviderConfigToRuntime, ensureProviderConfigured, resetProviderRuntime } from "../../application/provider-session-service.js";
 import { SecretStoreUnavailableError } from "../../secrets/secret-store.js";
 import { logger } from "../../logger.js";
+import { getClientConnection } from "../client-connections.js";
+import {
+	addCustomModel,
+	addCustomProvider,
+	ProviderCustomizationError,
+	updateModelCustomization
+} from "../../providers/provider-customizations-service.js";
 
 export { ensureProviderConfigured } from "../../application/provider-session-service.js";
 
 export async function handleProviderRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
+	if (
+		(request.method === "provider.custom.add" || request.method === "provider.model.add" || request.method === "provider.model.update")
+		&& getClientConnection(socket)?.clientType !== "studio"
+	) {
+		sendJson(socket, {
+			type: "response",
+			id: request.id,
+			ok: false,
+			error: {
+				code: "studio_only",
+				message: `${request.method} is only available to Daedalus Studio.`
+			}
+		});
+		return;
+	}
+
 	switch (request.method) {
 	case "provider.configure":
 		session.activeProvider = request.params.provider;
@@ -224,6 +247,75 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 		}
 		break;
 	}
+
+	case "provider.custom.add":
+		try {
+			const providerId: ProviderId = await addCustomProvider(request.params);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: {
+					providerId,
+					selection: await getProviderModelSelectionStatus()
+				}
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
+					message: error instanceof Error ? error.message : "Failed to add custom provider"
+				}
+			});
+		}
+		break;
+
+	case "provider.model.add":
+		try {
+			await addCustomModel(request.params);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: await getProviderModelSelectionStatus()
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
+					message: error instanceof Error ? error.message : "Failed to add provider model"
+				}
+			});
+		}
+		break;
+
+	case "provider.model.update":
+		try {
+			await updateModelCustomization(request.params);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: await getProviderModelSelectionStatus()
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
+					message: error instanceof Error ? error.message : "Failed to update provider model"
+				}
+			});
+		}
+		break;
 
 		default:
 			throw new Error(`Unsupported provider method: ${request.method}`);

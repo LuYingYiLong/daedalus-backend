@@ -13,6 +13,7 @@ import { registerBackendShutdownHandler } from "./runtime/shutdown.js";
 import { closeSessionDatabases } from "./session/session-database.js";
 import { cleanupUnsentSessionAttachments } from "./session/session-attachments.js";
 import { deleteSession, listTemporarySessions } from "./session/session-store.js";
+import { initializeProviderCustomizations } from "./providers/provider-customizations-store.js";
 import { getBackendPortFromEnv } from "./server/backend-runtime.js";
 import { createServer, waitForServerListening } from "./server/websocket-server.js";
 import {
@@ -54,6 +55,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		distribution: build.distribution,
 		logPath: getCurrentBackendLogPath()
 	});
+	await initializeProviderCustomizations();
 	await initializeUsageMetricsStore();
 	try {
 		const temporarySessions = await listTemporarySessions();

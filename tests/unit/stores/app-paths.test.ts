@@ -14,6 +14,7 @@ import {
 	getMcpServersConfigPath,
 	getPersonalSkillsDir,
 	getProviderConfigPath,
+	getProviderCustomizationsPath,
 	getSkillSettingsPath,
 	getTerminalJobsDir,
 	getToolExecutionLedgerPath,
@@ -35,6 +36,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusDir(), root);
 		assert.equal(getDefaultWorkspaceConfigPath(), join(configRoot, "workspaces.json"));
 		assert.equal(getProviderConfigPath(), join(configRoot, "provider.json"));
+		assert.equal(getProviderCustomizationsPath(), join(configRoot, "provider-customizations.json"));
 		assert.equal(getMcpServersConfigPath(), join(configRoot, "mcp-servers.json"));
 		assert.equal(getSkillSettingsPath(), join(configRoot, "skill-settings.json"));
 		assert.equal(getUserPromptConfigPath(), join(configRoot, "user-prompt.json"));
@@ -52,6 +54,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 
 		assert.equal(getDaedalusPath("config.workspaces"), getDefaultWorkspaceConfigPath());
 		assert.equal(getDaedalusPath("config.provider"), getProviderConfigPath());
+		assert.equal(getDaedalusPath("config.providerCustomizations"), getProviderCustomizationsPath());
 		assert.equal(getDaedalusPath("config.mcpServers"), getMcpServersConfigPath());
 		assert.equal(getDaedalusPath("config.skillSettings"), getSkillSettingsPath());
 		assert.equal(getDaedalusPath("config.userPrompt"), getUserPromptConfigPath());

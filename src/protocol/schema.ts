@@ -414,6 +414,41 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("provider.custom.add"),
+		params: z.object({
+			displayName: z.string().trim().min(1).max(80),
+			providerType: z.enum(["openai", "openai-responses", "anthropic"]),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.model.add"),
+		params: z.object({
+			provider: providerIdSchema,
+			id: z.string().trim().min(1).max(200),
+			displayName: z.string().trim().min(1).max(120),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.model.update"),
+		params: z.object({
+			provider: providerIdSchema,
+			id: z.string().trim().min(1).max(200),
+			displayName: z.string().trim().min(1).max(120),
+			capabilities: z.object({
+				vision: z.boolean(),
+				webSearch: z.boolean(),
+				reasoning: z.boolean(),
+				tools: z.boolean(),
+			}),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("ai.chat"),
 		params: aiChatParamsSchema,
 	}),

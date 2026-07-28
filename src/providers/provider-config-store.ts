@@ -5,16 +5,20 @@ import type { ProviderId } from "../protocol/types.js";
 import { deleteSecret, readSecret, writeSecret } from "../secrets/secret-store.js";
 import {
 	DEFAULT_PROVIDER_ID,
+	getCustomProviderType,
 	getProviderDefaultBaseUrl,
 	getProviderDefaultModel,
+	getProviderDefaultModelOrNull,
 	getProviderDisplayName,
 	getProviderFallbackModels,
 	getProviderIds,
+	isCustomProvider,
 	isProviderId,
 	mergeProviderModelsWithCatalog,
 	normalizeProviderModelCapabilities,
 	type ProviderModelInfo
 } from "./provider-registry.js";
+import type { CustomProviderType } from "./provider-customizations-store.js";
 import type { ModelRef } from "./provider-types.js";
 
 const KEYTAR_SERVICE: string = "Godot Daedalus";
@@ -77,8 +81,11 @@ export type ProviderConfigProviderStatus = {
 	configured: boolean;
 	model: string | null;
 	baseUrl: string | null;
-	defaultModel: string;
+	defaultModel: string | null;
 	defaultBaseUrl: string;
+	custom: boolean;
+	providerType: CustomProviderType | null;
+	ready: boolean;
 	modelsCache: ProviderModelInfo[];
 	fallbackModels: readonly ProviderModelInfo[];
 	apiKeyMasked: string | null;
@@ -106,8 +113,11 @@ export type ProviderModelSelectionProviderStatus = {
 	selected: boolean;
 	selectedModel: string | null;
 	selectedModelDisplayName: string | null;
-	defaultModel: string;
+	defaultModel: string | null;
 	baseUrl: string;
+	custom: boolean;
+	providerType: CustomProviderType | null;
+	ready: boolean;
 	apiKeyMasked: string | null;
 	models: ProviderModelInfo[];
 	modelsSource: "cache" | "fallback";
@@ -302,7 +312,14 @@ function parseModelInfo(value: unknown): ProviderModelInfo | null {
 			? record.capabilities as ProviderModelInfo["capabilities"]
 			: {})
 	};
-	if (typeof record.endpointType === "string" && (record.endpointType === "openai-chat-completions" || record.endpointType === "openai-responses")) {
+	if (
+		typeof record.endpointType === "string"
+		&& (
+			record.endpointType === "openai-chat-completions"
+			|| record.endpointType === "openai-responses"
+			|| record.endpointType === "anthropic-messages"
+		)
+	) {
 		model.endpointType = record.endpointType;
 	}
 	if (typeof record.ownedBy === "string") {
@@ -450,9 +467,16 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 		updatedAt: new Date().toISOString()
 	};
 
-	const model: string | undefined = normalizeOptionalString(input.model) ?? existing?.model ?? getProviderDefaultModel(input.provider);
-	const baseUrl: string | undefined = input.baseUrl === null ? undefined : (normalizeOptionalString(input.baseUrl) ?? existing?.baseUrl);
-	entry.model = model;
+	const model: string | undefined = normalizeOptionalString(input.model)
+		?? existing?.model
+		?? getProviderDefaultModelOrNull(input.provider)
+		?? undefined;
+	const baseUrl: string | undefined = input.baseUrl === null
+		? undefined
+		: (normalizeOptionalString(input.baseUrl) ?? existing?.baseUrl ?? normalizeOptionalString(getProviderDefaultBaseUrl(input.provider)));
+	if (model !== undefined) {
+		entry.model = model;
+	}
 	if (baseUrl !== undefined && input.baseUrl !== null) {
 		entry.baseUrl = baseUrl;
 	}
@@ -463,6 +487,18 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 	stored.providers[input.provider] = entry;
 	stored.modelRouting = mergeModelRouting(stored.modelRouting, input.modelRouting);
 	if (input.activate !== false) {
+		if (model === undefined) {
+			throw new Error(`provider_not_ready: Provider ${input.provider} has no models.`);
+		}
+		if (isCustomProvider(input.provider) && baseUrl === undefined) {
+			throw new Error(`provider_base_url_required: Provider ${input.provider} requires a Base URL before activation.`);
+		}
+		const effectiveModels: ProviderModelInfo[] = existing?.modelsCache === undefined
+			? getProviderFallbackModels(input.provider)
+			: mergeProviderModelsWithCatalog(input.provider, existing.modelsCache.models);
+		if (isCustomProvider(input.provider) && !effectiveModels.some((candidate: ProviderModelInfo): boolean => candidate.id === model)) {
+			throw new Error(`provider_model_not_found: Model ${model} does not exist for provider ${input.provider}.`);
+		}
 		stored.activeModel = createModelRef(input.provider, model);
 	}
 
@@ -501,16 +537,26 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 	for (const provider of getProviderIds()) {
 		const entry: StoredProviderEntry | undefined = stored.providers[provider];
 		const apiKey: string | null = await readKeytarPassword(provider);
+		const fallbackModels: ProviderModelInfo[] = getProviderFallbackModels(provider);
+		const models: ProviderModelInfo[] = entry?.modelsCache === undefined
+			? fallbackModels
+			: mergeProviderModelsWithCatalog(provider, entry.modelsCache.models);
+		const defaultBaseUrl: string = getProviderDefaultBaseUrl(provider);
+		const resolvedBaseUrl: string = entry?.baseUrl ?? defaultBaseUrl;
+		const custom: boolean = isCustomProvider(provider);
 		providers.push({
 			provider,
 			displayName: getProviderDisplayName(provider),
 			configured: apiKey !== null,
 			model: entry?.model ?? null,
 			baseUrl: entry?.baseUrl ?? null,
-			defaultModel: getProviderDefaultModel(provider),
-			defaultBaseUrl: getProviderDefaultBaseUrl(provider),
+			defaultModel: getProviderDefaultModelOrNull(provider),
+			defaultBaseUrl,
+			custom,
+			providerType: getCustomProviderType(provider),
+			ready: !custom || (models.length > 0 && resolvedBaseUrl.trim().length > 0),
 			modelsCache: entry?.modelsCache?.models ?? [],
-			fallbackModels: getProviderFallbackModels(provider),
+			fallbackModels,
 			apiKeyMasked: maskApiKey(apiKey),
 			keyStorage: "keytar",
 			updatedAt: entry?.updatedAt ?? null,
@@ -578,6 +624,9 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 				selectedModelDisplayName: selectedModel === null ? null : getModelDisplayName(models, selectedModel),
 				defaultModel: providerStatus.defaultModel,
 				baseUrl: providerStatus.baseUrl ?? providerStatus.defaultBaseUrl,
+				custom: providerStatus.custom,
+				providerType: providerStatus.providerType,
+				ready: providerStatus.ready,
 				apiKeyMasked: providerStatus.apiKeyMasked,
 				models,
 				modelsSource,
@@ -604,7 +653,13 @@ export async function clearProviderConfig(provider?: ProviderId | undefined): Pr
 	}
 
 	if (stored.activeModel.providerId === providerToClear) {
-		const nextProvider: ProviderId = Object.keys(stored.providers).find(isProviderId) ?? DEFAULT_PROVIDER_ID;
+		const nextProvider: ProviderId = Object.keys(stored.providers).find((value: string): value is ProviderId => {
+			if (!isProviderId(value)) {
+				return false;
+			}
+			const nextEntry: StoredProviderEntry | undefined = stored.providers[value];
+			return nextEntry?.model !== undefined && (!isCustomProvider(value) || (nextEntry.baseUrl?.trim().length ?? 0) > 0);
+		}) ?? DEFAULT_PROVIDER_ID;
 		stored.activeModel = createModelRef(nextProvider, stored.providers[nextProvider]?.model);
 	}
 
@@ -622,9 +677,12 @@ export async function saveProviderModelsCache(provider: ProviderId, models: Prov
 	const existing: StoredProviderEntry | undefined = stored.providers[provider];
 	const entry: StoredProviderEntry = existing ?? {
 		keyStorage: "keytar",
-		updatedAt: new Date().toISOString(),
-		model: getProviderDefaultModel(provider)
+		updatedAt: new Date().toISOString()
 	};
+	const defaultModel: string | null = getProviderDefaultModelOrNull(provider);
+	if (entry.model === undefined && defaultModel !== null) {
+		entry.model = defaultModel;
+	}
 	entry.modelsCache = {
 		models,
 		updatedAt: new Date().toISOString()

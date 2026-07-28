@@ -1,0 +1,203 @@
+import { randomUUID } from "node:crypto";
+import type { ProviderId } from "../protocol/types.js";
+import {
+	getProviderModelsCache
+} from "./provider-config-store.js";
+import {
+	getCustomProviderRecord,
+	getModelCustomizationRecords,
+	initializeProviderCustomizations,
+	updateProviderCustomizations,
+	type CustomProviderType,
+	type EditableModelCapabilities,
+	type ModelCustomizationRecord,
+	type ProviderCustomizations
+} from "./provider-customizations-store.js";
+import {
+	getProviderDisplayName,
+	getProviderFallbackModels,
+	getProviderIds,
+	isCustomProvider,
+	isProviderId,
+	mergeProviderModelsWithCatalog,
+	type ProviderModelInfo
+} from "./provider-registry.js";
+
+export class ProviderCustomizationError extends Error {
+	readonly code: string;
+
+	constructor(code: string, message: string) {
+		super(message);
+		this.name = "ProviderCustomizationError";
+		this.code = code;
+	}
+}
+
+export type AddCustomProviderInput = {
+	displayName: string;
+	providerType: CustomProviderType;
+};
+
+export type AddCustomModelInput = {
+	provider: ProviderId;
+	id: string;
+	displayName: string;
+};
+
+export type UpdateModelCustomizationInput = AddCustomModelInput & {
+	capabilities: EditableModelCapabilities;
+};
+
+function normalizeRequiredString(value: string, fieldName: string, maxLength: number): string {
+	const normalized: string = value.trim();
+	if (normalized.length === 0 || normalized.length > maxLength) {
+		throw new ProviderCustomizationError(
+			"provider_customization_invalid",
+			`${fieldName} must contain between 1 and ${maxLength} characters.`
+		);
+	}
+	return normalized;
+}
+
+function createCustomProviderId(): ProviderId {
+	return `custom-${randomUUID()}`;
+}
+
+async function getEffectiveProviderModels(provider: ProviderId): Promise<ProviderModelInfo[]> {
+	const cache = await getProviderModelsCache(provider);
+	return cache === undefined
+		? getProviderFallbackModels(provider)
+		: mergeProviderModelsWithCatalog(provider, cache.models);
+}
+
+export async function addCustomProvider(input: AddCustomProviderInput): Promise<ProviderId> {
+	await initializeProviderCustomizations();
+	const displayName: string = normalizeRequiredString(input.displayName, "Provider name", 80);
+	const nameKey: string = displayName.toLocaleLowerCase();
+	if (getProviderIds().some((provider: ProviderId): boolean => getProviderDisplayName(provider).toLocaleLowerCase() === nameKey)) {
+		throw new ProviderCustomizationError(
+			"provider_name_conflict",
+			`A provider named ${displayName} already exists.`
+		);
+	}
+
+	const providerId: ProviderId = createCustomProviderId();
+	const now: string = new Date().toISOString();
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		if (Object.values(draft.providers).some((provider): boolean => provider.displayName.toLocaleLowerCase() === nameKey)) {
+			throw new ProviderCustomizationError(
+				"provider_name_conflict",
+				`A provider named ${displayName} already exists.`
+			);
+		}
+		draft.providers[providerId] = {
+			displayName,
+			providerType: input.providerType,
+			defaultModel: null,
+			createdAt: now,
+			updatedAt: now
+		};
+	});
+	return providerId;
+}
+
+export async function addCustomModel(input: AddCustomModelInput): Promise<void> {
+	await initializeProviderCustomizations();
+	const provider: ProviderId = input.provider;
+	if (!isProviderId(provider)) {
+		throw new ProviderCustomizationError("provider_not_found", `Unknown provider: ${provider}`);
+	}
+	const id: string = normalizeRequiredString(input.id, "Model ID", 200);
+	const displayName: string = normalizeRequiredString(input.displayName, "Model name", 120);
+	const models: ProviderModelInfo[] = await getEffectiveProviderModels(provider);
+	if (models.some((model: ProviderModelInfo): boolean => model.id === id)) {
+		throw new ProviderCustomizationError(
+			"provider_model_exists",
+			`Model ${id} already exists for provider ${provider}.`
+		);
+	}
+
+	const now: string = new Date().toISOString();
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		const providerModels: Record<string, ModelCustomizationRecord> = draft.models[provider] ?? {};
+		if (providerModels[id] !== undefined) {
+			throw new ProviderCustomizationError(
+				"provider_model_exists",
+				`Model ${id} already exists for provider ${provider}.`
+			);
+		}
+		providerModels[id] = {
+			source: "custom",
+			displayName,
+			capabilities: {
+				vision: false,
+				webSearch: false,
+				reasoning: false,
+				tools: false
+			},
+			updatedAt: now
+		};
+		draft.models[provider] = providerModels;
+		const customProvider = draft.providers[provider];
+		if (customProvider !== undefined && customProvider.defaultModel === null) {
+			customProvider.defaultModel = id;
+			customProvider.updatedAt = now;
+		}
+	});
+}
+
+export async function updateModelCustomization(input: UpdateModelCustomizationInput): Promise<void> {
+	await initializeProviderCustomizations();
+	const provider: ProviderId = input.provider;
+	if (!isProviderId(provider)) {
+		throw new ProviderCustomizationError("provider_not_found", `Unknown provider: ${provider}`);
+	}
+	const id: string = normalizeRequiredString(input.id, "Model ID", 200);
+	const displayName: string = normalizeRequiredString(input.displayName, "Model name", 120);
+	const models: ProviderModelInfo[] = await getEffectiveProviderModels(provider);
+	if (!models.some((model: ProviderModelInfo): boolean => model.id === id)) {
+		throw new ProviderCustomizationError(
+			"provider_model_not_found",
+			`Model ${id} does not exist for provider ${provider}.`
+		);
+	}
+
+	const existing: ModelCustomizationRecord | undefined = getModelCustomizationRecords(provider)[id];
+	const now: string = new Date().toISOString();
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		const providerModels: Record<string, ModelCustomizationRecord> = draft.models[provider] ?? {};
+		providerModels[id] = {
+			source: existing?.source ?? "override",
+			displayName,
+			capabilities: {
+				vision: input.capabilities.vision,
+				webSearch: input.capabilities.webSearch,
+				reasoning: input.capabilities.reasoning,
+				tools: input.capabilities.tools
+			},
+			updatedAt: now
+		};
+		draft.models[provider] = providerModels;
+	});
+}
+
+export async function ensureCustomProviderDefaultModel(provider: ProviderId, modelId: string): Promise<void> {
+	await initializeProviderCustomizations();
+	const customProvider = getCustomProviderRecord(provider);
+	if (customProvider === undefined || customProvider.defaultModel !== null) {
+		return;
+	}
+	const normalizedModelId: string = normalizeRequiredString(modelId, "Model ID", 200);
+	const now: string = new Date().toISOString();
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		const providerRecord = draft.providers[provider];
+		if (providerRecord !== undefined && providerRecord.defaultModel === null) {
+			providerRecord.defaultModel = normalizedModelId;
+			providerRecord.updatedAt = now;
+		}
+	});
+}
+
+export function getProviderReadiness(provider: ProviderId, models: readonly ProviderModelInfo[]): boolean {
+	return !isCustomProvider(provider) || models.length > 0;
+}

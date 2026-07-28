@@ -166,6 +166,62 @@ test("provider.config.set schema accepts task model routing", (): void => {
 	}).success, true);
 });
 
+test("provider customization schemas accept valid fields and reject invalid capabilities", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-add",
+		method: "provider.custom.add",
+		params: {
+			displayName: "Private OpenAI",
+			providerType: "openai-responses"
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "model-add",
+		method: "provider.model.add",
+		params: {
+			provider: "custom-demo",
+			id: "model-1",
+			displayName: "Model 1"
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "model-update",
+		method: "provider.model.update",
+		params: {
+			provider: "custom-demo",
+			id: "model-1",
+			displayName: "Model One",
+			capabilities: {
+				vision: true,
+				webSearch: false,
+				reasoning: true,
+				tools: true
+			}
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "model-update-missing-tools",
+		method: "provider.model.update",
+		params: {
+			provider: "custom-demo",
+			id: "model-1",
+			displayName: "Model One",
+			capabilities: {
+				vision: true,
+				webSearch: false,
+				reasoning: true
+			}
+		}
+	}).success, false);
+});
+
 test("session create and save schema accept frontend session metadata", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",

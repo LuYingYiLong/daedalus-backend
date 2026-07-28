@@ -9,6 +9,7 @@ import {
 	normalizeProviderModelCapabilities
 } from "./provider-registry.js";
 import { getProviderModelsCache, saveProviderModelsCache, type StoredProviderModelsCache } from "./provider-config-store.js";
+import { ensureCustomProviderDefaultModel } from "./provider-customizations-service.js";
 import { resolveProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderChatOptions } from "./provider-types.js";
 import { resolveProviderAdapter } from "./provider-adapter.js";
@@ -162,6 +163,9 @@ export async function listProviderModels(
 		try {
 			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, await resolveProviderAdapter(options).listModels(options, refresh));
 			await saveProviderModelsCache(provider, models);
+			if (models[0] !== undefined) {
+				await ensureCustomProviderDefaultModel(provider, models[0].id);
+			}
 			return { provider, models, stale: false, source: "api" };
 		} catch (error: unknown) {
 			const cache: StoredProviderModelsCache | undefined = await getProviderModelsCache(provider);
@@ -194,6 +198,9 @@ export async function listProviderModels(
 		try {
 			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, await resolveProviderAdapter(options).listModels(options));
 			await saveProviderModelsCache(provider, models);
+			if (models[0] !== undefined) {
+				await ensureCustomProviderDefaultModel(provider, models[0].id);
+			}
 			return { provider, models, stale: false, source: "api" };
 		} catch (error: unknown) {
 			return {

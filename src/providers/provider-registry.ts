@@ -1,5 +1,14 @@
 import type { ProviderId } from "../protocol/types.js";
 import { readRuntimeAssetTextSync } from "../runtime/runtime-assets.js";
+import {
+	getCustomProviderRecord,
+	getModelCustomizationRecords,
+	getProviderCustomizationsSnapshot,
+	type CustomProviderRecord,
+	type CustomProviderType,
+	type EditableModelCapabilities,
+	type ModelCustomizationRecord
+} from "./provider-customizations-store.js";
 import { normalizeProviderModelCapabilities } from "./provider-types.js";
 import type {
 	AdapterFamily,
@@ -65,6 +74,8 @@ type ProviderCatalog = {
 };
 
 const DEFAULT_MODELS_PATH: string = "/models";
+const CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS: number = 128_000;
+const CUSTOM_MODEL_MAX_OUTPUT_TOKENS: number = 8_192;
 export const DEFAULT_PROVIDER_ID: ProviderId = "deepseek";
 
 function readJsonAsset(assetKey: "provider.providers" | "provider.models"): unknown {
@@ -336,19 +347,130 @@ function buildCatalog(): ProviderCatalog {
 	};
 }
 
+function getCustomProviderEndpoint(providerType: CustomProviderType): {
+	endpointType: EndpointType;
+	adapterFamily: AdapterFamily;
+} {
+	switch (providerType) {
+		case "openai":
+			return {
+				endpointType: "openai-chat-completions",
+				adapterFamily: "openai-compatible"
+			};
+		case "openai-responses":
+			return {
+				endpointType: "openai-responses",
+				adapterFamily: "openai-responses"
+			};
+		case "anthropic":
+			return {
+				endpointType: "anthropic-messages",
+				adapterFamily: "anthropic-compatible"
+			};
+	}
+}
+
+function applyEditableCapabilities(
+	base: ProviderModelCapabilities,
+	editable: EditableModelCapabilities
+): ProviderModelCapabilities {
+	const capabilities: ProviderModelCapabilities = {
+		...base,
+		vision: editable.vision,
+		imageInput: editable.vision,
+		webSearch: editable.webSearch,
+		reasoning: editable.reasoning,
+		tools: editable.tools
+	};
+	return normalizeProviderModelCapabilities(capabilities);
+}
+
+function applyModelCustomizations(
+	provider: ProviderId,
+	models: readonly ProviderModelInfo[],
+	defaultEndpointType: EndpointType
+): ProviderModelInfo[] {
+	const customizations: Record<string, ModelCustomizationRecord> = getModelCustomizationRecords(provider);
+	const seen: Set<string> = new Set();
+	const result: ProviderModelInfo[] = models.map((model: ProviderModelInfo): ProviderModelInfo => {
+		seen.add(model.id);
+		const customization: ModelCustomizationRecord | undefined = customizations[model.id];
+		if (customization === undefined) {
+			return {
+				...model,
+				capabilities: { ...model.capabilities }
+			};
+		}
+		return {
+			...model,
+			displayName: customization.displayName,
+			capabilities: applyEditableCapabilities(model.capabilities, customization.capabilities)
+		};
+	});
+
+	for (const [modelId, customization] of Object.entries(customizations)) {
+		if (customization.source !== "custom" || seen.has(modelId)) {
+			continue;
+		}
+		result.push({
+			id: modelId,
+			displayName: customization.displayName,
+			provider,
+			endpointType: defaultEndpointType,
+			contextWindowTokens: CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS,
+			maxOutputTokens: CUSTOM_MODEL_MAX_OUTPUT_TOKENS,
+			capabilities: applyEditableCapabilities({}, customization.capabilities)
+		});
+	}
+	return result;
+}
+
+function createCustomProviderDefinition(provider: ProviderId, record: CustomProviderRecord): ProviderDefinition {
+	const endpoint = getCustomProviderEndpoint(record.providerType);
+	const endpointConfig: ProviderEndpointConfig = {
+		baseUrl: "",
+		adapterFamily: endpoint.adapterFamily,
+		modelsPath: DEFAULT_MODELS_PATH
+	};
+	return {
+		id: provider,
+		displayName: record.displayName,
+		authType: "api-key",
+		defaultEndpointType: endpoint.endpointType,
+		defaultBaseUrl: "",
+		defaultModel: record.defaultModel,
+		modelListMode: "api-plus-catalog",
+		modelsPath: DEFAULT_MODELS_PATH,
+		endpointConfigs: {
+			[endpoint.endpointType]: endpointConfig
+		},
+		fallbackModels: applyModelCustomizations(provider, [], endpoint.endpointType)
+	};
+}
+
 const CATALOG: ProviderCatalog = buildCatalog();
 export const PROVIDER_DEFINITIONS: Record<ProviderId, ProviderDefinition> = CATALOG.providers;
 
 export function getProviderIds(): ProviderId[] {
-	return Object.keys(CATALOG.providers);
+	return [
+		...Object.keys(CATALOG.providers),
+		...Object.keys(getProviderCustomizationsSnapshot().providers)
+	];
 }
 
 export function getProviderDefinition(provider: ProviderId): ProviderDefinition {
 	const definition: ProviderDefinition | undefined = CATALOG.providers[provider];
-	if (definition === undefined) {
-		throw new Error(`Unknown provider: ${provider}`);
+	if (definition !== undefined) {
+		return {
+			...definition,
+			fallbackModels: applyModelCustomizations(provider, definition.fallbackModels, definition.defaultEndpointType)
+		};
 	}
-	return definition;
+	const customProvider: CustomProviderRecord | undefined = getCustomProviderRecord(provider);
+	if (customProvider !== undefined) {
+		return createCustomProviderDefinition(provider, customProvider);
+	}
+	throw new Error(`Unknown provider: ${provider}`);
 }
 
 export function getProviderDisplayName(provider: ProviderId): string {
@@ -393,6 +515,16 @@ export function getProviderDefaultBaseUrl(provider: ProviderId): string {
 export function getProviderDefaultModel(provider: ProviderId): string {
 	const definition: ProviderDefinition = getProviderDefinition(provider);
 	const envModel: string | undefined = definition.envModel !== undefined ? process.env[definition.envModel] : undefined;
+	const model: string | null = envModel !== undefined && envModel.trim().length > 0 ? envModel.trim() : definition.defaultModel;
+	if (model === null) {
+		throw new Error(`provider_not_ready: Provider ${provider} has no models.`);
+	}
+	return model;
+}
+
+export function getProviderDefaultModelOrNull(provider: ProviderId): string | null {
+	const definition: ProviderDefinition = getProviderDefinition(provider);
+	const envModel: string | undefined = definition.envModel !== undefined ? process.env[definition.envModel] : undefined;
 	return envModel !== undefined && envModel.trim().length > 0 ? envModel.trim() : definition.defaultModel;
 }
 
@@ -432,7 +564,7 @@ export function mergeProviderModelsWithCatalog(provider: ProviderId, models: Pro
 		}
 	}
 
-	return mergedModels;
+	return applyModelCustomizations(provider, mergedModels, definition.defaultEndpointType);
 }
 
 export function getCatalogModel(provider: ProviderId, modelId: string): ProviderModelInfo | undefined {
@@ -440,12 +572,18 @@ export function getCatalogModel(provider: ProviderId, modelId: string): Provider
 }
 
 export function getCatalogModels(): ProviderModelInfo[] {
-	return CATALOG.models.map((model: ProviderModelInfo): ProviderModelInfo => ({
-		...model,
-		capabilities: { ...model.capabilities }
-	}));
+	return getProviderIds().flatMap((provider: ProviderId): ProviderModelInfo[] => getProviderFallbackModels(provider));
 }
 
 export function isProviderId(value: unknown): value is ProviderId {
-	return typeof value === "string" && CATALOG.providers[value] !== undefined;
+	return typeof value === "string"
+		&& (CATALOG.providers[value] !== undefined || getCustomProviderRecord(value) !== undefined);
+}
+
+export function isCustomProvider(provider: ProviderId): boolean {
+	return getCustomProviderRecord(provider) !== undefined;
+}
+
+export function getCustomProviderType(provider: ProviderId): CustomProviderType | null {
+	return getCustomProviderRecord(provider)?.providerType ?? null;
 }

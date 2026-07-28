@@ -17,6 +17,11 @@ import {
 	upsertRuntimeWorkspace
 } from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
+import {
+	isPluginProtocolSupported,
+	MAX_PLUGIN_PROTOCOL_VERSION,
+	MIN_PLUGIN_PROTOCOL_VERSION
+} from "../plugin-compatibility.js";
 
 function readClientType(value: unknown): ClientType {
 	return value === "godot_plugin" || value === "studio" || value === "cli" || value === "smoke" || value === "external_mcp"
@@ -108,10 +113,9 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 						protocolVersion: 2
 					},
 					pluginCompatibility: {
-						minProtocolVersion: 1,
-						maxProtocolVersion: 1,
-						accepted: params.pluginProtocolVersion === undefined
-							|| params.pluginProtocolVersion === 1
+						minProtocolVersion: MIN_PLUGIN_PROTOCOL_VERSION,
+						maxProtocolVersion: MAX_PLUGIN_PROTOCOL_VERSION,
+						accepted: isPluginProtocolSupported(params.pluginProtocolVersion)
 					}
 				}
 			});

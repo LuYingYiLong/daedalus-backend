@@ -80,7 +80,7 @@
     "minStudioVersion": "1.0.1",
     "protocolVersion": 2,
     "minPluginProtocolVersion": 1,
-    "maxPluginProtocolVersion": 1
+    "maxPluginProtocolVersion": 2
   },
   "allowScripts": {
     "esbuild@0.28.1": true,

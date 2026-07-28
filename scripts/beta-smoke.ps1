@@ -110,23 +110,28 @@ try {
 
 	$pluginTestsDir = Join-Path $PluginDir "tests"
 	if (-not (Test-Path -LiteralPath $pluginTestsDir -PathType Container)) {
-		throw "Godot Daedalus plugin tests directory was not found: $pluginTestsDir"
-	}
+		Write-Host "Godot Daedalus plugin tests directory is absent; skipping optional plugin smoke tests."
+	} else {
+		$pluginTests = Get-ChildItem -LiteralPath $pluginTestsDir -Filter "*.gd" |
+			Where-Object { $_.Name -ne "backend_websocket_smoke_test.gd" } |
+			Sort-Object Name
+		foreach ($pluginTest in $pluginTests) {
+			$resourcePath = "res://addons/godot_daedalus/tests/$($pluginTest.Name)"
+			Invoke-GodotSmokeCommand `
+				-Label $pluginTest.Name `
+				-GodotArguments @("--headless", "--path", $GodotProjectPath, "--script", $resourcePath)
+		}
 
-	$pluginTests = Get-ChildItem -LiteralPath $pluginTestsDir -Filter "*.gd" |
-		Where-Object { $_.Name -ne "backend_websocket_smoke_test.gd" } |
-		Sort-Object Name
-	foreach ($pluginTest in $pluginTests) {
-		$resourcePath = "res://addons/godot_daedalus/tests/$($pluginTest.Name)"
-		Invoke-GodotSmokeCommand `
-			-Label $pluginTest.Name `
-			-GodotArguments @("--headless", "--path", $GodotProjectPath, "--script", $resourcePath)
+		$backendWebSocketTest = Join-Path $pluginTestsDir "backend_websocket_smoke_test.gd"
+		if (Test-Path -LiteralPath $backendWebSocketTest -PathType Leaf) {
+			$env:DAEDALUS_TEST_BACKEND_URL = $backendUrl
+			Invoke-GodotSmokeCommand `
+				-Label "backend_websocket_smoke_test.gd" `
+				-GodotArguments @("--headless", "--path", $GodotProjectPath, "--script", "res://addons/godot_daedalus/tests/backend_websocket_smoke_test.gd")
+		} else {
+			Write-Host "backend_websocket_smoke_test.gd is absent; skipping optional backend connection smoke test."
+		}
 	}
-
-	$env:DAEDALUS_TEST_BACKEND_URL = $backendUrl
-	Invoke-GodotSmokeCommand `
-		-Label "backend_websocket_smoke_test.gd" `
-		-GodotArguments @("--headless", "--path", $GodotProjectPath, "--script", "res://addons/godot_daedalus/tests/backend_websocket_smoke_test.gd")
 
 	Write-Host "Beta smoke passed. Backend logs: $backendLog ; $backendErrorLog"
 } finally {

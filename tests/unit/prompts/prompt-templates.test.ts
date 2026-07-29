@@ -4,6 +4,8 @@ import path from "node:path";
 import test from "node:test";
 import {
 	composeSystemPrompt,
+	createRuntimeDatePrompt,
+	formatRuntimeDate,
 	internalPromptTemplatePaths,
 	listPromptTemplates,
 	loadCorePrompt,
@@ -114,6 +116,16 @@ test("all user-facing role prompts inherit CORE before mode and custom instructi
 		assert.ok(prompt.indexOf("## 5. 安全与信任边界") < prompt.indexOf("## 当前对话模式"));
 		assert.ok(prompt.indexOf("## 当前对话模式") < prompt.indexOf("## Settings 用户提示词（本轮生效）"));
 	}
+});
+
+test("system prompts include the backend local calendar date as a runtime fact", async (): Promise<void> => {
+	const date: Date = new Date(2026, 6, 19, 12, 0, 0);
+	assert.equal(formatRuntimeDate(date), "2026-7-19");
+	assert.equal(createRuntimeDatePrompt(date), "## Runtime current date\n\nToday's 2026-7-19.");
+
+	const prompt: string = await composeSystemPrompt("godot.assistant", undefined, "", "agent");
+	assert.match(prompt, /## Runtime current date\n\nToday's \d{4}-\d{1,2}-\d{1,2}\./);
+	assert.ok(prompt.indexOf("# CORE") < prompt.indexOf("## Runtime current date"));
 });
 
 test("core prompt keeps context use natural while preserving truthful provenance", async (): Promise<void> => {

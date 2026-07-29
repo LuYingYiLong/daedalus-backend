@@ -77,6 +77,19 @@ const MODE_LABELS: Record<"agent" | "ask" | "plan", string> = {
 	plan: "Plan"
 };
 
+export function formatRuntimeDate(date: Date): string {
+	return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+}
+
+// 创建运行时日期提示词（无隐写术:D）
+export function createRuntimeDatePrompt(date: Date = new Date()): string {
+	return [
+		"## Runtime current date",
+		"",
+		`Today's ${formatRuntimeDate(date)}.`
+	].join("\n");
+}
+
 export function listPromptTemplates(): PromptTemplate[] {
 	return Object.values(promptTemplates);
 }
@@ -139,7 +152,8 @@ export async function composeSystemPrompt(
 		? `\n\n## 当前对话模式\n\n${modePrompt}`
 		: "";
 	const corePrompt: string = await loadCorePrompt();
-	const prioritizedTemplateContent: string = `${corePrompt}\n\n${templateContent}${runtimeContextSection}${modeFactSection.length > 0 ? `\n\n${modeFactSection}` : ""}${modeSection}`;
+	const runtimeDatePrompt: string = createRuntimeDatePrompt();
+	const prioritizedTemplateContent: string = `${corePrompt}\n\n${runtimeDatePrompt}\n\n${templateContent}${runtimeContextSection}${modeFactSection.length > 0 ? `\n\n${modeFactSection}` : ""}${modeSection}`;
 
 	if (trimmedExtraPrompt.length === 0) {
 		return prioritizedTemplateContent;

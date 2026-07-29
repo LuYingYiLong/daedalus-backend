@@ -92,11 +92,14 @@ jobs:
           if ($manifest.authenticode -ne "unsigned") {
             throw "Unsigned release workflow produced an unexpected Authenticode status."
           }
+          $expectedBinary = (Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).daedalusBinary
           if (
-            $manifest.minPluginProtocolVersion -ne 1 `
-            -or $manifest.maxPluginProtocolVersion -ne 1
+            $manifest.protocolVersion -ne $expectedBinary.protocolVersion `
+            -or $manifest.minPluginProtocolVersion -ne $expectedBinary.minPluginProtocolVersion `
+            -or $manifest.maxPluginProtocolVersion -ne $expectedBinary.maxPluginProtocolVersion `
+            -or $manifest.minStudioVersion -ne $expectedBinary.minStudioVersion
           ) {
-            throw "Backend manifest does not declare the expected Godot plugin protocol range."
+            throw "Backend manifest compatibility metadata does not match package.json daedalusBinary."
           }
           Get-ChildItem -LiteralPath $releaseDir -File | Format-Table Name, Length
 

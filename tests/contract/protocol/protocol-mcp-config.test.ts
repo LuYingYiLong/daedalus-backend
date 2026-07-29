@@ -222,6 +222,79 @@ test("provider customization schemas accept valid fields and reject invalid capa
 	}).success, false);
 });
 
+test("provider model discovery and import schemas validate transient credentials and model metadata", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "models-discover",
+		method: "provider.models.discover",
+		params: {
+			provider: "deepseek",
+			apiKey: "test-key",
+			baseUrl: "https://api.example/v1"
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "models-import",
+		method: "provider.models.import",
+		params: {
+			provider: "deepseek",
+			models: [{
+				id: "model-1",
+				displayName: "Model 1",
+				contextWindowTokens: 128_000,
+				maxOutputTokens: 8_192,
+				capabilities: {
+					vision: true,
+					reasoning: true,
+					tools: true
+				}
+			}]
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "models-import-invalid",
+		method: "provider.models.import",
+		params: {
+			provider: "deepseek",
+			models: [{
+				id: "model-1",
+				displayName: "Model 1",
+				contextWindowTokens: 0,
+				maxOutputTokens: 8_192,
+				capabilities: {}
+			}]
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "models-sync",
+		method: "provider.models.sync",
+		params: {
+			provider: "deepseek",
+			upsertModels: [],
+			enableModelIds: ["deepseek-v4-flash"],
+			removeModelIds: ["legacy-model"]
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "models-sync-invalid",
+		method: "provider.models.sync",
+		params: {
+			provider: "deepseek",
+			upsertModels: [],
+			enableModelIds: [""],
+			removeModelIds: []
+		}
+	}).success, false);
+});
+
 test("session create and save schema accept frontend session metadata", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",

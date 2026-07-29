@@ -276,6 +276,21 @@ function mergeModelRouting(existing: ProviderModelRouting | undefined, input: Pr
 	return next;
 }
 
+function validateModelRouting(routing: ProviderModelRouting, stored: StoredProviderConfig): void {
+	for (const [key, value] of Object.entries(routing) as [keyof ProviderModelRouting, ProviderTaskModelRef | null][]) {
+		if (value === null) {
+			continue;
+		}
+		const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(
+			value.provider,
+			stored.providers[value.provider]?.modelsCache?.models ?? []
+		);
+		if (!models.some((model: ProviderModelInfo): boolean => model.id === value.model)) {
+			throw new Error(`provider_model_not_found: Model ${value.model} is not enabled for ${key}.`);
+		}
+	}
+}
+
 function parseModelInfo(value: unknown): ProviderModelInfo | null {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		return null;
@@ -467,10 +482,22 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 		updatedAt: new Date().toISOString()
 	};
 
-	const model: string | undefined = normalizeOptionalString(input.model)
-		?? existing?.model
-		?? getProviderDefaultModelOrNull(input.provider)
-		?? undefined;
+	const effectiveModels: ProviderModelInfo[] = mergeProviderModelsWithCatalog(
+		input.provider,
+		existing?.modelsCache?.models ?? []
+	);
+	const effectiveModelIds: Set<string> = new Set(
+		effectiveModels.map((candidate: ProviderModelInfo): string => candidate.id)
+	);
+	const requestedModel: string | undefined = normalizeOptionalString(input.model);
+	if (requestedModel !== undefined && !effectiveModelIds.has(requestedModel)) {
+		throw new Error(`provider_model_not_found: Model ${requestedModel} does not exist for provider ${input.provider}.`);
+	}
+	const defaultModel: string | null = getProviderDefaultModelOrNull(input.provider);
+	const model: string | undefined = requestedModel
+		?? (existing?.model !== undefined && effectiveModelIds.has(existing.model) ? existing.model : undefined)
+		?? (defaultModel !== null && effectiveModelIds.has(defaultModel) ? defaultModel : undefined)
+		?? effectiveModels[0]?.id;
 	const baseUrl: string | undefined = input.baseUrl === null
 		? undefined
 		: (normalizeOptionalString(input.baseUrl) ?? existing?.baseUrl ?? normalizeOptionalString(getProviderDefaultBaseUrl(input.provider)));
@@ -486,18 +513,13 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 
 	stored.providers[input.provider] = entry;
 	stored.modelRouting = mergeModelRouting(stored.modelRouting, input.modelRouting);
+	validateModelRouting(stored.modelRouting, stored);
 	if (input.activate !== false) {
 		if (model === undefined) {
 			throw new Error(`provider_not_ready: Provider ${input.provider} has no models.`);
 		}
 		if (isCustomProvider(input.provider) && baseUrl === undefined) {
 			throw new Error(`provider_base_url_required: Provider ${input.provider} requires a Base URL before activation.`);
-		}
-		const effectiveModels: ProviderModelInfo[] = existing?.modelsCache === undefined
-			? getProviderFallbackModels(input.provider)
-			: mergeProviderModelsWithCatalog(input.provider, existing.modelsCache.models);
-		if (isCustomProvider(input.provider) && !effectiveModels.some((candidate: ProviderModelInfo): boolean => candidate.id === model)) {
-			throw new Error(`provider_model_not_found: Model ${model} does not exist for provider ${input.provider}.`);
 		}
 		stored.activeModel = createModelRef(input.provider, model);
 	}
@@ -537,10 +559,8 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 	for (const provider of getProviderIds()) {
 		const entry: StoredProviderEntry | undefined = stored.providers[provider];
 		const apiKey: string | null = await readKeytarPassword(provider);
-		const fallbackModels: ProviderModelInfo[] = getProviderFallbackModels(provider);
-		const models: ProviderModelInfo[] = entry?.modelsCache === undefined
-			? fallbackModels
-			: mergeProviderModelsWithCatalog(provider, entry.modelsCache.models);
+		const fallbackModels: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, []);
+		const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, entry?.modelsCache?.models ?? []);
 		const defaultBaseUrl: string = getProviderDefaultBaseUrl(provider);
 		const resolvedBaseUrl: string = entry?.baseUrl ?? defaultBaseUrl;
 		const custom: boolean = isCustomProvider(provider);
@@ -554,7 +574,7 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 			defaultBaseUrl,
 			custom,
 			providerType: getCustomProviderType(provider),
-			ready: !custom || (models.length > 0 && resolvedBaseUrl.trim().length > 0),
+			ready: models.length > 0 && (!custom || resolvedBaseUrl.trim().length > 0),
 			modelsCache: entry?.modelsCache?.models ?? [],
 			fallbackModels,
 			apiKeyMasked: maskApiKey(apiKey),
@@ -566,9 +586,10 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 
 	const activeStatus: ProviderConfigProviderStatus = providers.find((item: ProviderConfigProviderStatus): boolean => item.provider === stored.activeModel.providerId)
 		?? providers[0]!;
-	const activeModels: ProviderModelInfo[] = activeStatus.modelsCache.length > 0
-		? mergeProviderModelsWithCatalog(activeStatus.provider, activeStatus.modelsCache)
-		: [...activeStatus.fallbackModels];
+	const activeModels: ProviderModelInfo[] = mergeProviderModelsWithCatalog(
+		activeStatus.provider,
+		activeStatus.modelsCache
+	);
 	const current: CurrentProviderConfigStatus = {
 		provider: activeStatus.provider,
 		displayName: activeStatus.displayName,
@@ -607,9 +628,10 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 		current: status.current,
 		providers: status.providers.map((providerStatus: ProviderConfigProviderStatus): ProviderModelSelectionProviderStatus => {
 			const modelsSource: "cache" | "fallback" = providerStatus.modelsCache.length > 0 ? "cache" : "fallback";
-			const models: ProviderModelInfo[] = modelsSource === "cache"
-				? mergeProviderModelsWithCatalog(providerStatus.provider, providerStatus.modelsCache)
-				: [...providerStatus.fallbackModels];
+			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(
+				providerStatus.provider,
+				providerStatus.modelsCache
+			);
 			const selected: boolean = providerStatus.provider === status.activeModel.providerId;
 			const selectedModel: string | null = selected
 				? status.activeModel.modelId

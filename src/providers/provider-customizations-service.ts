@@ -5,6 +5,7 @@ import {
 } from "./provider-config-store.js";
 import {
 	getCustomProviderRecord,
+	getExcludedModelIds,
 	getModelCustomizationRecords,
 	initializeProviderCustomizations,
 	updateProviderCustomizations,
@@ -15,9 +16,7 @@ import {
 } from "./provider-customizations-store.js";
 import {
 	getProviderDisplayName,
-	getProviderFallbackModels,
 	getProviderIds,
-	isCustomProvider,
 	isProviderId,
 	mergeProviderModelsWithCatalog,
 	type ProviderModelInfo
@@ -48,6 +47,13 @@ export type UpdateModelCustomizationInput = AddCustomModelInput & {
 	capabilities: EditableModelCapabilities;
 };
 
+export type UpdateProviderModelSelectionInput = {
+	provider: ProviderId;
+	enableModelIds: readonly string[];
+	removeModelIds: readonly string[];
+	nextDefaultModel: string | null;
+};
+
 function normalizeRequiredString(value: string, fieldName: string, maxLength: number): string {
 	const normalized: string = value.trim();
 	if (normalized.length === 0 || normalized.length > maxLength) {
@@ -65,9 +71,7 @@ function createCustomProviderId(): ProviderId {
 
 async function getEffectiveProviderModels(provider: ProviderId): Promise<ProviderModelInfo[]> {
 	const cache = await getProviderModelsCache(provider);
-	return cache === undefined
-		? getProviderFallbackModels(provider)
-		: mergeProviderModelsWithCatalog(provider, cache.models);
+	return mergeProviderModelsWithCatalog(provider, cache?.models ?? []);
 }
 
 export async function addCustomProvider(input: AddCustomProviderInput): Promise<ProviderId> {
@@ -198,6 +202,56 @@ export async function ensureCustomProviderDefaultModel(provider: ProviderId, mod
 	});
 }
 
+export async function updateProviderModelSelection(input: UpdateProviderModelSelectionInput): Promise<void> {
+	await initializeProviderCustomizations();
+	if (!isProviderId(input.provider)) {
+		throw new ProviderCustomizationError("provider_not_found", `Unknown provider: ${input.provider}`);
+	}
+	const enableModelIds: Set<string> = new Set(
+		input.enableModelIds.map((modelId: string): string => normalizeRequiredString(modelId, "Model ID", 200))
+	);
+	const removeModelIds: Set<string> = new Set(
+		input.removeModelIds.map((modelId: string): string => normalizeRequiredString(modelId, "Model ID", 200))
+	);
+	for (const modelId of enableModelIds) {
+		if (removeModelIds.has(modelId)) {
+			throw new ProviderCustomizationError(
+				"provider_model_selection_conflict",
+				`Model ${modelId} cannot be enabled and removed in the same operation.`
+			);
+		}
+	}
+	const nextDefaultModel: string | null = input.nextDefaultModel === null
+		? null
+		: normalizeRequiredString(input.nextDefaultModel, "Default model ID", 200);
+	const now: string = new Date().toISOString();
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		const excluded: Set<string> = new Set(draft.excludedModelIds[input.provider] ?? []);
+		for (const modelId of enableModelIds) {
+			excluded.delete(modelId);
+		}
+		for (const modelId of removeModelIds) {
+			excluded.add(modelId);
+		}
+		const sortedExcluded: string[] = [...excluded].sort((left: string, right: string): number => left.localeCompare(right));
+		if (sortedExcluded.length === 0) {
+			delete draft.excludedModelIds[input.provider];
+		} else {
+			draft.excludedModelIds[input.provider] = sortedExcluded;
+		}
+
+		const customProvider = draft.providers[input.provider];
+		if (customProvider !== undefined && customProvider.defaultModel !== nextDefaultModel) {
+			customProvider.defaultModel = nextDefaultModel;
+			customProvider.updatedAt = now;
+		}
+	});
+}
+
+export function isProviderModelExcluded(provider: ProviderId, modelId: string): boolean {
+	return getExcludedModelIds(provider).includes(modelId);
+}
+
 export function getProviderReadiness(provider: ProviderId, models: readonly ProviderModelInfo[]): boolean {
-	return !isCustomProvider(provider) || models.length > 0;
+	return isProviderId(provider) && models.length > 0;
 }

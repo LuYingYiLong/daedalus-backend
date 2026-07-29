@@ -2,11 +2,10 @@ import { getWebSearchSettingsConfigPath } from "./app-paths.js";
 import { readJsonFile, writeJsonFileAtomic } from "./json-file-store.js";
 import type { ProviderId } from "./protocol/types.js";
 import {
-	getCatalogModel,
 	getProviderDefaultBaseUrl,
 	getProviderDisplayName,
-	getProviderFallbackModels,
 	isProviderId,
+	mergeProviderModelsWithCatalog,
 	type ProviderModelInfo
 } from "./providers/provider-registry.js";
 import { loadProviderConfigWithSecret } from "./providers/provider-config-store.js";
@@ -100,12 +99,13 @@ export function isProviderNativeWebSearchModel(provider: ProviderId, model: stri
 	if (!isProviderNativeWebSearchProvider(provider)) {
 		return false;
 	}
-	const catalogModel: ProviderModelInfo | undefined = getCatalogModel(provider, model);
+	const catalogModel: ProviderModelInfo | undefined = mergeProviderModelsWithCatalog(provider, [])
+		.find((item: ProviderModelInfo): boolean => item.id === model);
 	return catalogModel?.capabilities.webSearch === true;
 }
 
 function getDefaultSearchModel(provider: ProviderId): string {
-	const model: ProviderModelInfo | undefined = getProviderFallbackModels(provider)
+	const model: ProviderModelInfo | undefined = mergeProviderModelsWithCatalog(provider, [])
 		.find((item: ProviderModelInfo): boolean => item.capabilities.webSearch === true);
 	return model?.id ?? (provider === FALLBACK_PROVIDER ? FALLBACK_MODEL : DEFAULT_WEB_SEARCH_SETTINGS.model);
 }
@@ -210,7 +210,7 @@ export async function getWebSearchSettingsStatus(): Promise<WebSearchSettingsSta
 		const config = await loadProviderConfigWithSecret(provider);
 		const providerConfigured: boolean = config?.apiKey !== undefined;
 		const searchOptions: WebSearchProviderOptions | undefined = getWebSearchProviderAdapter(provider)?.options;
-		for (const model of getProviderFallbackModels(provider)) {
+		for (const model of mergeProviderModelsWithCatalog(provider, [])) {
 			if (model.capabilities.webSearch !== true) {
 				continue;
 			}

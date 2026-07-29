@@ -8,6 +8,7 @@ import {
 	addCustomProvider,
 	ensureCustomProviderDefaultModel,
 	ProviderCustomizationError,
+	updateProviderModelSelection,
 	updateModelCustomization
 } from "../../../src/providers/provider-customizations-service.js";
 import {
@@ -49,9 +50,10 @@ async function withTempAppData(run: (root: string) => Promise<void>): Promise<vo
 test("provider customization store falls back for missing and corrupt files", async (): Promise<void> => {
 	await withTempAppData(async (root: string): Promise<void> => {
 		assert.deepEqual(getProviderCustomizationsSnapshot(), {
-			schemaVersion: 1,
+			schemaVersion: 2,
 			providers: {},
-			models: {}
+			models: {},
+			excludedModelIds: {}
 		});
 
 		const configDir: string = join(root, ".daedalus", "config");
@@ -60,10 +62,48 @@ test("provider customization store falls back for missing and corrupt files", as
 		await initializeProviderCustomizations(true);
 
 		assert.deepEqual(getProviderCustomizationsSnapshot(), {
+			schemaVersion: 2,
+			providers: {},
+			models: {},
+			excludedModelIds: {}
+		});
+	});
+});
+
+test("provider customization store replaces v1 instead of migrating it and normalizes v2 exclusions", async (): Promise<void> => {
+	await withTempAppData(async (root: string): Promise<void> => {
+		const configDir: string = join(root, ".daedalus", "config");
+		await mkdir(configDir, { recursive: true });
+		const filePath: string = join(configDir, "provider-customizations.json");
+		await writeFile(filePath, JSON.stringify({
 			schemaVersion: 1,
 			providers: {},
 			models: {}
+		}), "utf8");
+		await initializeProviderCustomizations(true);
+		assert.deepEqual(getProviderCustomizationsSnapshot(), {
+			schemaVersion: 2,
+			providers: {},
+			models: {},
+			excludedModelIds: {}
 		});
+		assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
+			schemaVersion: 2,
+			providers: {},
+			models: {},
+			excludedModelIds: {}
+		});
+
+		await writeFile(filePath, JSON.stringify({
+			schemaVersion: 2,
+			providers: {},
+			models: {},
+			excludedModelIds: {
+				deepseek: [" deepseek-v4-flash ", "", "deepseek-v4-flash", 42]
+			}
+		}), "utf8");
+		await initializeProviderCustomizations(true);
+		assert.deepEqual(getProviderCustomizationsSnapshot().excludedModelIds.deepseek, ["deepseek-v4-flash"]);
 	});
 });
 
@@ -171,6 +211,70 @@ test("model overrides survive reload and preserve capabilities outside the edita
 			.find((candidate): boolean => candidate.id === "api-special");
 		assert.equal(model?.displayName, "My Special");
 		assert.equal(model?.capabilities.imageGeneration, true);
+	});
+});
+
+test("excluded catalog models disappear and restore their local overrides when re-enabled", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		await updateModelCustomization({
+			provider: "deepseek",
+			id: "deepseek-v4-flash",
+			displayName: "My Flash",
+			capabilities: {
+				vision: false,
+				webSearch: false,
+				reasoning: true,
+				tools: true
+			}
+		});
+		await updateProviderModelSelection({
+			provider: "deepseek",
+			enableModelIds: [],
+			removeModelIds: ["deepseek-v4-flash"],
+			nextDefaultModel: null
+		});
+		assert.equal(
+			mergeProviderModelsWithCatalog("deepseek", []).some((model): boolean => model.id === "deepseek-v4-flash"),
+			false
+		);
+		assert.equal(
+			mergeProviderModelsWithCatalog("deepseek", [], { includeExcluded: true })
+				.find((model): boolean => model.id === "deepseek-v4-flash")?.displayName,
+			"My Flash"
+		);
+
+		await initializeProviderCustomizations(true);
+		await updateProviderModelSelection({
+			provider: "deepseek",
+			enableModelIds: ["deepseek-v4-flash"],
+			removeModelIds: [],
+			nextDefaultModel: null
+		});
+		const restored = mergeProviderModelsWithCatalog("deepseek", [])
+			.find((model): boolean => model.id === "deepseek-v4-flash");
+		assert.equal(restored?.displayName, "My Flash");
+		assert.equal(restored?.capabilities.tools, true);
+	});
+});
+
+test("saving an inactive provider does not restore its excluded catalog default", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		installMemorySecretStore();
+		await updateProviderModelSelection({
+			provider: "moonshot",
+			enableModelIds: [],
+			removeModelIds: ["kimi-k3"],
+			nextDefaultModel: null
+		});
+		await saveProviderConfig({
+			provider: "moonshot",
+			apiKey: "test-key",
+			activate: false
+		});
+		const provider = (await getProviderModelSelectionStatus()).providers
+			.find((candidate): boolean => candidate.provider === "moonshot");
+		assert.notEqual(provider?.selectedModel, "kimi-k3");
+		assert.equal(provider?.models.some((model): boolean => model.id === "kimi-k3"), false);
 	});
 });
 

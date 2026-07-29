@@ -61,6 +61,30 @@ const providerModelRoutingSchema = z.object({
 	commandReview: providerTaskModelRefSchema.nullable().optional()
 });
 
+const providerModelCapabilitiesSchema = z.object({
+	imageInput: z.boolean().optional(),
+	videoInput: z.boolean().optional(),
+	reasoning: z.boolean().optional(),
+	reasoningEfforts: z.array(z.object({
+		id: z.string().trim().min(1).max(32),
+		fallback: z.enum(["low", "medium", "high", "max"])
+	}).strict()).max(16).optional(),
+	tools: z.boolean().optional(),
+	webSearch: z.boolean().optional(),
+	vision: z.boolean().optional(),
+	imageGeneration: z.boolean().optional(),
+	imageEdit: z.boolean().optional()
+}).strict();
+
+const discoveredProviderModelSchema = z.object({
+	id: z.string().trim().min(1).max(200),
+	displayName: z.string().trim().min(1).max(120),
+	contextWindowTokens: z.number().int().positive().max(2_000_000_000),
+	maxOutputTokens: z.number().int().positive().max(2_000_000_000),
+	capabilities: providerModelCapabilitiesSchema,
+	ownedBy: z.string().trim().min(1).max(200).optional()
+}).strict();
+
 const sessionUiMetadataParamsSchema = z.object({
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
@@ -410,6 +434,36 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			provider: providerIdSchema.optional(),
 			refresh: z.boolean().optional(),
 		}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.models.discover"),
+		params: z.object({
+			provider: providerIdSchema,
+			apiKey: z.string().trim().min(1).max(20_000).optional(),
+			baseUrl: z.string().trim().min(1).max(1000).nullable().optional()
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.models.import"),
+		params: z.object({
+			provider: providerIdSchema,
+			models: z.array(discoveredProviderModelSchema).max(2000)
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.models.sync"),
+		params: z.object({
+			provider: providerIdSchema,
+			upsertModels: z.array(discoveredProviderModelSchema).max(2000),
+			enableModelIds: z.array(z.string().trim().min(1).max(200)).max(2000),
+			removeModelIds: z.array(z.string().trim().min(1).max(200)).max(2000)
+		}).strict()
 	}),
 	z.object({
 		type: z.literal("request"),

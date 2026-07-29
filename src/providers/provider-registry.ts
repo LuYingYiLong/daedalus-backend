@@ -2,6 +2,7 @@ import type { ProviderId } from "../protocol/types.js";
 import { readRuntimeAssetTextSync } from "../runtime/runtime-assets.js";
 import {
 	getCustomProviderRecord,
+	getExcludedModelIds,
 	getModelCustomizationRecords,
 	getProviderCustomizationsSnapshot,
 	type CustomProviderRecord,
@@ -535,36 +536,52 @@ export function getProviderFallbackModels(provider: ProviderId): ProviderModelIn
 	}));
 }
 
-export function mergeProviderModelsWithCatalog(provider: ProviderId, models: ProviderModelInfo[]): ProviderModelInfo[] {
+export type MergeProviderModelsOptions = {
+	includeExcluded?: boolean | undefined;
+};
+
+export function mergeProviderModelsWithCatalog(
+	provider: ProviderId,
+	models: ProviderModelInfo[],
+	options: MergeProviderModelsOptions = {}
+): ProviderModelInfo[] {
 	const definition: ProviderDefinition = getProviderDefinition(provider);
 	const fallbackModels: ProviderModelInfo[] = getProviderFallbackModels(provider);
+	let mergedModels: ProviderModelInfo[];
 	if (definition.modelListMode === "catalog-recommended" || definition.modelListMode === "catalog-only") {
-		return fallbackModels;
-	}
+		mergedModels = fallbackModels;
+	} else {
+		const fallbackById: Map<string, ProviderModelInfo> = new Map(
+			fallbackModels.map((model: ProviderModelInfo): [string, ProviderModelInfo] => [model.id, model])
+		);
+		const seenModelIds: Set<string> = new Set();
+		mergedModels = models.map((model: ProviderModelInfo): ProviderModelInfo => {
+			seenModelIds.add(model.id);
+			const fallback: ProviderModelInfo | undefined = fallbackById.get(model.id);
+			return {
+				...model,
+				capabilities: normalizeProviderModelCapabilities({
+					...(fallback?.capabilities ?? {}),
+					...model.capabilities
+				})
+			};
+		});
 
-	const fallbackById: Map<string, ProviderModelInfo> = new Map(
-		fallbackModels.map((model: ProviderModelInfo): [string, ProviderModelInfo] => [model.id, model])
-	);
-	const seenModelIds: Set<string> = new Set();
-	const mergedModels: ProviderModelInfo[] = models.map((model: ProviderModelInfo): ProviderModelInfo => {
-		seenModelIds.add(model.id);
-		const fallback: ProviderModelInfo | undefined = fallbackById.get(model.id);
-		return {
-			...model,
-			capabilities: normalizeProviderModelCapabilities({
-				...(fallback?.capabilities ?? {}),
-				...model.capabilities
-			})
-		};
-	});
-
-	for (const fallbackModel of fallbackModels) {
-		if (!seenModelIds.has(fallbackModel.id)) {
-			mergedModels.push(fallbackModel);
+		for (const fallbackModel of fallbackModels) {
+			if (!seenModelIds.has(fallbackModel.id)) {
+				mergedModels.push(fallbackModel);
+			}
 		}
 	}
 
-	return applyModelCustomizations(provider, mergedModels, definition.defaultEndpointType);
+	const customizedModels: ProviderModelInfo[] = applyModelCustomizations(provider, mergedModels, definition.defaultEndpointType);
+	if (options.includeExcluded === true) {
+		return customizedModels;
+	}
+	const excludedModelIds: Set<string> = new Set(getExcludedModelIds(provider));
+	return excludedModelIds.size === 0
+		? customizedModels
+		: customizedModels.filter((model: ProviderModelInfo): boolean => !excludedModelIds.has(model.id));
 }
 
 export function getCatalogModel(provider: ProviderId, modelId: string): ProviderModelInfo | undefined {

@@ -29,9 +29,10 @@ export type ModelCustomizationRecord = {
 };
 
 export type ProviderCustomizations = {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	providers: Record<ProviderId, CustomProviderRecord>;
 	models: Record<ProviderId, Record<string, ModelCustomizationRecord>>;
+	excludedModelIds: Record<ProviderId, string[]>;
 };
 
 const EMPTY_CAPABILITIES: EditableModelCapabilities = {
@@ -47,9 +48,10 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 function createEmptyProviderCustomizations(): ProviderCustomizations {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		providers: {},
-		models: {}
+		models: {},
+		excludedModelIds: {}
 	};
 }
 
@@ -134,7 +136,7 @@ function normalizeModelRecord(value: unknown): ModelCustomizationRecord | null {
 }
 
 function normalizeProviderCustomizations(value: unknown): ProviderCustomizations {
-	if (!isRecord(value) || value.schemaVersion !== 1) {
+	if (!isRecord(value) || value.schemaVersion !== 2) {
 		return createEmptyProviderCustomizations();
 	}
 
@@ -168,6 +170,21 @@ function normalizeProviderCustomizations(value: unknown): ProviderCustomizations
 			}
 		}
 	}
+	if (isRecord(value.excludedModelIds)) {
+		for (const [providerId, excludedValue] of Object.entries(value.excludedModelIds)) {
+			if (!isProviderId(providerId) || !Array.isArray(excludedValue)) {
+				continue;
+			}
+			const excludedIds: string[] = [...new Set(
+				excludedValue
+					.map((modelId: unknown): string | null => readTrimmedString(modelId, 200))
+					.filter((modelId: string | null): modelId is string => modelId !== null)
+			)].sort((left: string, right: string): number => left.localeCompare(right));
+			if (excludedIds.length > 0) {
+				normalized.excludedModelIds[providerId] = excludedIds;
+			}
+		}
+	}
 	return normalized;
 }
 
@@ -175,11 +192,24 @@ function cloneSnapshot(value: ProviderCustomizations): ProviderCustomizations {
 	return structuredClone(value);
 }
 
-async function readSnapshot(filePath: string): Promise<ProviderCustomizations> {
+type ReadSnapshotResult = {
+	value: ProviderCustomizations;
+	replaceFile: boolean;
+};
+
+async function readSnapshot(filePath: string): Promise<ReadSnapshotResult> {
 	try {
-		return normalizeProviderCustomizations(JSON.parse(await readFile(filePath, "utf8")) as unknown);
+		const raw: unknown = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+		const validSchema: boolean = isRecord(raw) && raw.schemaVersion === 2;
+		return {
+			value: normalizeProviderCustomizations(raw),
+			replaceFile: !validSchema
+		};
 	} catch {
-		return createEmptyProviderCustomizations();
+		return {
+			value: createEmptyProviderCustomizations(),
+			replaceFile: false
+		};
 	}
 }
 
@@ -188,9 +218,13 @@ export async function initializeProviderCustomizations(force: boolean = false): 
 	if (!force && initializedPath === filePath) {
 		return;
 	}
-	snapshot = await readSnapshot(filePath);
+	const result: ReadSnapshotResult = await readSnapshot(filePath);
+	snapshot = result.value;
 	initializedPath = filePath;
 	writeQueue = Promise.resolve();
+	if (result.replaceFile) {
+		await writeJsonFileAtomic(filePath, snapshot);
+	}
 }
 
 export function getProviderCustomizationsSnapshot(): ProviderCustomizations {
@@ -203,6 +237,10 @@ export function getCustomProviderRecord(provider: ProviderId): CustomProviderRec
 
 export function getModelCustomizationRecords(provider: ProviderId): Record<string, ModelCustomizationRecord> {
 	return snapshot.models[provider] ?? {};
+}
+
+export function getExcludedModelIds(provider: ProviderId): readonly string[] {
+	return snapshot.excludedModelIds[provider] ?? [];
 }
 
 export async function updateProviderCustomizations(

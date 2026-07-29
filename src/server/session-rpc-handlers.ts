@@ -49,6 +49,7 @@ import {
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
+	getProviderModelsCache,
 	loadProviderConfigWithSecret,
 	saveProviderConfig,
 	type ProviderConfigWithSecret
@@ -62,7 +63,16 @@ import {
 	modelSupportsImageInput,
 	ProviderImageInputError
 } from "../providers/provider-image-content.js";
-import { getProviderAdapterFamily, getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, getProviderEndpointTypeForModel, isProviderId } from "../providers/provider-registry.js";
+import {
+	getProviderAdapterFamily,
+	getProviderDefaultBaseUrl,
+	getProviderDefaultModel,
+	getProviderDisplayName,
+	getProviderEndpointTypeForModel,
+	isProviderId,
+	mergeProviderModelsWithCatalog,
+	type ProviderModelInfo
+} from "../providers/provider-registry.js";
 import { resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent } from "../providers/provider-error.js";
 import { generateSessionTitle, shouldApplyGeneratedSessionTitle } from "./session-title.js";
@@ -993,6 +1003,18 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					id: request.id,
 					ok: false,
 					error: { code: "invalid_model", message: "Invalid provider or model." }
+				});
+				break;
+			}
+			const modelsCache = await getProviderModelsCache(provider);
+			const modelEnabled: boolean = mergeProviderModelsWithCatalog(provider, modelsCache?.models ?? [])
+				.some((candidate: ProviderModelInfo): boolean => candidate.id === model);
+			if (!modelEnabled) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "invalid_model", message: `Model ${model} is not enabled for provider ${provider}.` }
 				});
 				break;
 			}

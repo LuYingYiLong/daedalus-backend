@@ -2,6 +2,7 @@ import type { AiChatParams } from "../protocol/types.js";
 import { getDefaultWorkflowToolNames } from "../tools/tool-catalog.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../tools/tool-sentinels.js";
 import type { WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } from "./types.js";
+import { createVisibleWorkflowTodos } from "./todos.js";
 
 type FixedWorkflowPhaseId = "inspect" | "implement" | "review" | "verify" | "summarize";
 
@@ -105,12 +106,7 @@ function createPhase(phaseId: FixedWorkflowPhaseId): WorkflowPhase {
 }
 
 function createTodos(phases: WorkflowPhase[]): WorkflowTodoItem[] {
-	return phases.map((phase: WorkflowPhase): WorkflowTodoItem => ({
-		id: `${phase.id}-todo`,
-		phaseId: phase.id,
-		text: phase.title,
-		status: "pending"
-	}));
+	return createVisibleWorkflowTodos(phases);
 }
 
 function createPlan(title: string, phaseIds: FixedWorkflowPhaseId[]): WorkflowPlan {

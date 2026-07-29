@@ -90,6 +90,21 @@ export function createFinalSummaryVerificationContext(plan: WorkflowPlan, output
 	].join("\n");
 }
 
+export function shouldReviseLlmWorkflowPlan(
+	latestOutcome: WorkflowPhaseOutput | undefined,
+	guidePromptSection: string
+): boolean {
+	if (guidePromptSection.trim().length > 0) {
+		return true;
+	}
+	if (latestOutcome === undefined) {
+		return false;
+	}
+	return latestOutcome.status !== "completed"
+		|| latestOutcome.failedChecks.length > 0
+		|| latestOutcome.requiredFixes.length > 0;
+}
+
 function stringifyWorkflowFailedChecks(value: unknown): string[] {
 	if (!Array.isArray(value)) {
 		return [];
@@ -662,6 +677,12 @@ export async function continueWorkflowExecution(
 		if (plan.source === "llm") {
 			try {
 				const revisionGuidePromptSection: string = consumePendingGuideSection(socket, requestId, session, persistRequestId);
+				const latestOutcome: WorkflowPhaseOutput | undefined = phaseOutputs.find((
+					output: WorkflowPhaseOutput
+				): boolean => output.phaseId === phase.id);
+				if (!shouldReviseLlmWorkflowPlan(latestOutcome, revisionGuidePromptSection)) {
+					continue;
+				}
 				const revisionPlanningContext: string = [
 					planningContext,
 					revisionGuidePromptSection

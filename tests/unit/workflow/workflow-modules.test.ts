@@ -313,6 +313,25 @@ test("fixed workflow planner routes explicit approval test requests to a write a
 	assert.match(plan?.phases[0]?.instruction ?? "", /approvalReason/u);
 });
 
+test("workflow todos omit the internal summary phase", (): void => {
+	const plan = planWorkflow({
+		message: "重构多个脚本并运行验证",
+		mode: "agent",
+		options: {
+			workflow: "multi_phase"
+		}
+	});
+
+	assert.notEqual(plan, null);
+	assert.equal(plan?.phases.some((phase: WorkflowPhase): boolean => phase.toolGroup === "summarize"), true);
+	assert.equal(plan?.todos.some((todo): boolean => (
+		plan.phases.find((phase: WorkflowPhase): boolean => phase.id === todo.phaseId)?.toolGroup === "summarize"
+	)), false);
+	assert.equal(plan?.todos.some((todo): boolean => (
+		plan.phases.find((phase: WorkflowPhase): boolean => phase.id === todo.phaseId)?.toolGroup === "read"
+	)), false);
+});
+
 test("Ask current project fact requests use a read-only fact plan with required first tool call", (): void => {
 	const plan = createReadOnlyFactWorkflowPlan({
 		message: "项目里多少脚本并列出路径",
@@ -325,6 +344,7 @@ test("Ask current project fact requests use a read-only fact plan with required 
 		"summarize"
 	]);
 	assert.equal(plan.phases[0]?.requireToolCallOnFirstStep, true);
+	assert.equal(plan.todos.some((todo): boolean => todo.phaseId === plan.phases[0]?.id), true);
 	assert.equal(plan.phases.some((phase: WorkflowPhase): boolean => phase.toolGroup === "write"), false);
 	assert.equal(plan.phases.flatMap((phase: WorkflowPhase): string[] => phase.allowedTools).some((toolName: string): boolean => toolName.includes("create") || toolName.includes("overwrite") || toolName.includes("replace")), false);
 });

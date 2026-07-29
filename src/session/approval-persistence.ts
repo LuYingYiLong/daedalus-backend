@@ -5,6 +5,7 @@ import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointT
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 import type { PendingAiContinuation } from "./pending-continuation.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
+import { cloneLightweightActionState, type LightweightActionState } from "../workflow/lightweight-action.js";
 import type { WorkflowRunState } from "../workflow/types.js";
 import type { StoredApprovalEvent } from "./session-store.js";
 
@@ -23,6 +24,7 @@ export type PersistedPendingAiContinuation = {
 	requestId: string;
 	userCreatedAt: string;
 	stream: boolean;
+	lightweightActionState?: LightweightActionState | undefined;
 	agentRunState?: WorkflowRunState | undefined;
 	workflowState?: WorkflowRunState | undefined;
 };
@@ -98,6 +100,9 @@ export function createRuntimePendingContinuation(
 
 	if (persisted.allowedToolNames !== undefined) {
 		continuation.allowedToolNames = [...persisted.allowedToolNames];
+	}
+	if (persisted.lightweightActionState !== undefined) {
+		continuation.lightweightActionState = cloneLightweightActionState(persisted.lightweightActionState);
 	}
 	const persistedRunState: WorkflowRunState | undefined = persisted.agentRunState ?? persisted.workflowState;
 	if (persistedRunState !== undefined) {
@@ -236,6 +241,9 @@ function createPersistedPendingContinuation(continuation: PendingAiContinuation)
 
 	if (continuation.allowedToolNames !== undefined) {
 		persisted.allowedToolNames = [...continuation.allowedToolNames];
+	}
+	if (continuation.lightweightActionState !== undefined) {
+		persisted.lightweightActionState = cloneLightweightActionState(continuation.lightweightActionState);
 	}
 	const runState: WorkflowRunState | undefined = continuation.agentRunState ?? continuation.workflowState;
 	if (runState !== undefined) {

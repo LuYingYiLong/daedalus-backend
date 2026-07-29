@@ -14,6 +14,7 @@ import type {
 	WorkflowTodoItem,
 	WorkflowToolGroup
 } from "./types.js";
+import { createVisibleWorkflowTodos } from "./todos.js";
 
 const MAX_LLM_WORKFLOW_STEPS: number = 8;
 const MAX_LLM_WORKFLOW_REVISIONS: number = 3;
@@ -289,6 +290,7 @@ function mergeRevisedPendingSteps(plan: WorkflowPlan, firstPendingIndex: number,
 		}));
 	const phases: WorkflowPhase[] = [...completedPhases, ...revisedPendingPhases];
 	const completedTodos: WorkflowTodoItem[] = plan.todos.filter((todo: WorkflowTodoItem): boolean => completedPhaseIds.has(todo.phaseId));
+	const revisedPendingPhaseIds: Set<string> = new Set(revisedPendingPhases.map((phase: WorkflowPhase): string => phase.id));
 
 	return {
 		...plan,
@@ -296,7 +298,9 @@ function mergeRevisedPendingSteps(plan: WorkflowPlan, firstPendingIndex: number,
 		phases,
 		todos: [
 			...completedTodos,
-			...createTodos(revisedPendingPhases)
+			...createVisibleWorkflowTodos(phases).filter((
+				todo: WorkflowTodoItem
+			): boolean => revisedPendingPhaseIds.has(todo.phaseId))
 		],
 		revision: (plan.revision ?? 0) + 1
 	};
@@ -321,12 +325,7 @@ function doesStepRepeatCompletedPhase(
 }
 
 function createTodos(phases: WorkflowPhase[]): WorkflowTodoItem[] {
-	return phases.map((phase: WorkflowPhase): WorkflowTodoItem => ({
-		id: `${phase.id}-todo`,
-		phaseId: phase.id,
-		text: phase.title,
-		status: "pending"
-	}));
+	return createVisibleWorkflowTodos(phases);
 }
 
 function createUniqueStepId(value: string, index: number, usedIds: Set<string>): string {

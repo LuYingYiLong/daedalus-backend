@@ -5,6 +5,12 @@ import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendApprovalEvent, readApprovalEvents } from "../session/session-store.js";
 import { createPersistedApprovalRequestedData, createRuntimePendingContinuation, foldPendingApprovalStates, mergeHydratedPendingApprovalStates, type PendingApprovalState } from "../session/approval-persistence.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
+import {
+	cloneLightweightActionState,
+	collectLightweightActionCompletionStatus,
+	LightweightActionVerificationError,
+	type LightweightActionState
+} from "../workflow/lightweight-action.js";
 import { evaluateToolCall, getToolPolicy } from "../tools/tool-policy.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
@@ -26,7 +32,8 @@ export function createPendingAiContinuation(
 	requestId: string,
 	userCreatedAt: string,
 	stream: boolean,
-	workflowState?: WorkflowRunState | undefined
+	workflowState?: WorkflowRunState | undefined,
+	lightweightActionState?: LightweightActionState | undefined
 ): PendingAiContinuation {
 	const pendingContinuation: PendingAiContinuation = {
 		params,
@@ -40,6 +47,9 @@ export function createPendingAiContinuation(
 
 	if (allowedToolNames !== undefined) {
 		pendingContinuation.allowedToolNames = allowedToolNames;
+	}
+	if (lightweightActionState !== undefined) {
+		pendingContinuation.lightweightActionState = cloneLightweightActionState(lightweightActionState);
 	}
 
 	if (workflowState !== undefined) {
@@ -311,7 +321,8 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.requestId,
 			pendingContinuation.userCreatedAt,
 			pendingContinuation.stream,
-			pendingContinuation.workflowState
+			pendingContinuation.workflowState,
+			pendingContinuation.lightweightActionState
 		);
 		await registerPendingApprovalContinuation(session, mcpHost, agentResult.approvalId, nextPendingContinuation);
 		sendAgentPaused(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, agentResult, pendingContinuation.requestId);
@@ -327,16 +338,32 @@ export async function sendContinuedAgentResult(
 			requestId: pendingContinuation.requestId,
 			userCreatedAt: pendingContinuation.userCreatedAt,
 			stream: pendingContinuation.stream,
-			workflowState: pendingContinuation.workflowState
+			workflowState: pendingContinuation.workflowState,
+			lightweightActionState: pendingContinuation.lightweightActionState
 		});
 		registerPendingToolBudget(session, pendingBudget);
 		sendToolBudgetRequired(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, pendingBudget, pendingContinuation.requestId);
 		return;
 	}
 
+	if (agentResult.status === "protocol_violation") {
+		throw new Error(agentResult.reason);
+	}
+
 	const text: string = agentResult.text;
 	const runId: string = pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId;
 	const stepRunId: string = pendingContinuation.workflowState?.activePhaseRunId ?? pendingContinuation.requestId;
+	const completionStatus = pendingContinuation.lightweightActionState === undefined
+		? {
+			resultStatus: "completed" as const,
+			verificationStatus: undefined,
+			warnings: [] as string[],
+			failureMessage: undefined
+		}
+		: collectLightweightActionCompletionStatus(pendingContinuation.lightweightActionState);
+	if (completionStatus.failureMessage !== undefined) {
+		throw new LightweightActionVerificationError(completionStatus.failureMessage);
+	}
 
 	if (!pendingContinuation.stream) {
 		for (let index: number = 0; index < text.length; index += 1) {
@@ -372,8 +399,9 @@ export async function sendContinuedAgentResult(
 		runId,
 		requestId: pendingContinuation.requestId,
 		status: "done",
-		resultStatus: "completed",
-		warnings: [],
+		resultStatus: completionStatus.resultStatus,
+		verificationStatus: completionStatus.verificationStatus,
+		warnings: completionStatus.warnings,
 		sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 	}, pendingContinuation.requestId);
 	sendJson(socket, {

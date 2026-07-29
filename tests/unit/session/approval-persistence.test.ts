@@ -71,7 +71,17 @@ function createPendingContinuation(): PendingAiContinuation {
 		userMessage: "创建一个审批测试文件",
 		requestId: "request-test",
 		userCreatedAt: "2026-07-03T00:00:00.000Z",
-		stream: true
+		stream: true,
+		lightweightActionState: {
+			observations: [{
+				toolCallId: "call-test",
+				toolName: "mcp_godot_create_text_file",
+				risk: "write",
+				status: "approval_required",
+				argsSummary: { relativePath: "test_approval.md" },
+				artifactRefs: []
+			}]
+		}
 	};
 }
 
@@ -124,6 +134,7 @@ test("approval persistence folds pending, interrupted, and executed states", ():
 	assert.equal(runtimeContinuation.options.apiKey, "new-api-key");
 	assert.equal(runtimeContinuation.options.provider, "deepseek");
 	assert.equal(runtimeContinuation.options.model, "deepseek-v4-flash");
+	assert.equal(runtimeContinuation.lightweightActionState?.observations[0]?.toolCallId, "call-test");
 });
 
 test("hydrated approval states keep in-memory approvals created during continuation races", (): void => {

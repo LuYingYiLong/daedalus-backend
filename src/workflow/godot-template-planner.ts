@@ -1,6 +1,7 @@
 import type { AiChatParams } from "../protocol/types.js";
-import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPlan, WorkflowTodoItem } from "./types.js";
+import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPlan } from "./types.js";
 import { createWorkflowId, createWorkflowTitle, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
+import { createVisibleWorkflowTodos } from "./todos.js";
 
 export type GodotTaskType = "script_create_or_edit" | "scene_create" | "scene_attach_script" | "project_setting_change" | "local_game_create" | "general_edit";
 
@@ -492,12 +493,7 @@ function createPlan(params: AiChatParams, fallbackTitle: string, phases: Workflo
 		id: createWorkflowId(),
 		title: createWorkflowTitle(params.message) || fallbackTitle,
 		phases,
-		todos: phases.map((phase: WorkflowPhase): WorkflowTodoItem => ({
-			id: `${phase.id}-todo`,
-			phaseId: phase.id,
-			text: phase.title,
-			status: "pending"
-		})),
+		todos: createVisibleWorkflowTodos(phases),
 		source: "godot_template",
 		revision: 0
 	};

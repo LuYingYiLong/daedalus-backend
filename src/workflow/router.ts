@@ -40,11 +40,12 @@ export function resolveForcedWorkflowRoute(params: AiChatParams): WorkflowRouteD
 	}
 
 	if (workflowMode === "single") {
+		const requiresWrite: boolean = hasWriteIntent(params.message);
 		return applyWorkflowRouteSafety({
 			execution: "tool_answer",
 			reason: "Explicit workflow=single forces hidden single-turn execution.",
 			requiresTools: true,
-			requiresWrite: false,
+			requiresWrite,
 			planningHint: "",
 			forcedByOption: workflowMode
 		}, params);
@@ -84,18 +85,23 @@ export async function routeWorkflowExecution(
 
 export function createFallbackWorkflowRoute(params: AiChatParams, reason: string = "Workflow router failed."): WorkflowRouteDecision {
 	const requiresWrite: boolean = hasWriteIntent(params.message);
+	const requiresWorkflow: boolean = requiresWrite && hasComplexWriteIntent(params.message);
 	return applyWorkflowRouteSafety({
-		execution: requiresWrite ? "workflow" : "tool_answer",
+		execution: requiresWorkflow ? "workflow" : "tool_answer",
 		reason,
 		requiresTools: true,
 		requiresWrite,
-		planningHint: requiresWrite ? "Router failed, but the user appears to request a project change. Create a minimal write and verify workflow." : "",
+		planningHint: requiresWorkflow
+			? "Router failed and the request appears complex or destructive. Create a focused implementation and verification workflow."
+			: "",
 		safetyOverride: "router_fallback"
 	}, params);
 }
 
 export function normalizeWorkflowRouteDecision(raw: RawWorkflowRouteDecision, params: AiChatParams): WorkflowRouteDecision {
-	const execution: WorkflowRouteExecution = raw.execution;
+	const execution: WorkflowRouteExecution = raw.execution === "direct_answer" && raw.requiresWrite === true
+		? "tool_answer"
+		: raw.execution;
 	const requiresWrite: boolean = raw.requiresWrite === true || execution === "workflow";
 	const decision: WorkflowRouteDecision = {
 		execution,
@@ -154,7 +160,7 @@ function parseWorkflowRouteDecision(text: string): RawWorkflowRouteDecision {
 	return workflowRouteSchema.parse(parseJsonObjectFromLlm(text, "Workflow router did not return valid JSON"));
 }
 
-function hasWriteIntent(message: string): boolean {
+export function hasWriteIntent(message: string): boolean {
 	const normalized: string = message.toLowerCase();
 	if (isExplicitReadOnlyRequest(normalized)) {
 		return false;
@@ -173,6 +179,11 @@ function hasWriteIntent(message: string): boolean {
 		"删除",
 		"替换",
 		"更新",
+		"重构",
+		"迁移",
+		"批量",
+		"清空",
+		"卸载",
 		"apply",
 		"change",
 		"modify",
@@ -182,7 +193,56 @@ function hasWriteIntent(message: string): boolean {
 		"add",
 		"delete",
 		"replace",
-		"update"
+		"update",
+		"refactor",
+		"migrate",
+		"migration",
+		"batch",
+		"clear"
+	].some((keyword: string): boolean => normalized.includes(keyword));
+}
+
+export function hasComplexWriteIntent(message: string): boolean {
+	const normalized: string = message.toLowerCase();
+	return [
+		"多文件",
+		"多个文件",
+		"跨文件",
+		"全部文件",
+		"整个项目",
+		"整个仓库",
+		"批量",
+		"迁移",
+		"重构",
+		"架构",
+		"完整实现",
+		"全面",
+		"立个计划",
+		"制定计划",
+		"先计划",
+		"执行计划",
+		"删除",
+		"卸载",
+		"清空",
+		"覆盖全部",
+		"替换全部",
+		"multi-file",
+		"multiple files",
+		"across files",
+		"whole project",
+		"entire project",
+		"batch",
+		"migrate",
+		"migration",
+		"refactor",
+		"architecture",
+		"make a plan",
+		"plan first",
+		"execute the plan",
+		"delete",
+		"remove all",
+		"clear",
+		"rewrite"
 	].some((keyword: string): boolean => normalized.includes(keyword));
 }
 
@@ -207,8 +267,8 @@ function createRouteSystemPrompt(): string {
 		"你是 Godot Daedalus 的执行路由器，只输出 JSON，不调用工具，不解释。",
 		"判断本轮请求应该使用哪种执行形态：",
 		"- direct_answer：普通问答、解释、建议、无需读取实时项目事实。",
-		"- tool_answer：需要读取/验证当前事实，但不需要拆成多阶段 Todo，也不需要写入。",
-		"- workflow：需要写入、审批、验证闭环、复杂排查、多文件实现或明确要求执行计划。",
+		"- tool_answer：隐藏的轻量执行。可用于读取/验证，也可用于目标明确、低风险、最多两个逻辑写入的单点修改；不创建多阶段 Todo。",
+		"- workflow：复杂、多步骤、破坏性或范围不明确的执行，需要多文件联动、迁移、批量修改、长流程或明确要求执行计划。",
 		"输出格式：",
 		"{\"execution\":\"direct_answer|tool_answer|workflow\",\"reason\":\"简短原因\",\"requiresTools\":true,\"requiresWrite\":false,\"planningHint\":\"给后续 planner 的简短提示\"}",
 		"规则：",
@@ -216,7 +276,9 @@ function createRouteSystemPrompt(): string {
 		"- 代码解释、概念说明、方案讨论，选 direct_answer，除非必须读取当前文件。",
 		"- 涉及当前项目、仓库、工作区、已有 UI、组件、文件、代码结构或实现细节的问题，选 tool_answer，即使用户只是要建议或明确先不修改文件。",
 		"- “先不动文件/不要修改”只禁止写入，不禁止读取；不能因此选 direct_answer。",
-		"- 创建、修改、修复、生成项目内容，选 workflow。",
+		"- 创建、修改、修复、生成项目内容本身不等于 workflow。单文件、单一目标、预计一至两个写操作的普通修改选 tool_answer，并设置 requiresWrite=true。",
+		"- 跨文件联动、重构、迁移、批量变更、删除/清空等破坏性操作、需要多轮决策或用户明确要求计划时，选 workflow。",
+		"- 如果修改范围暂不确定但可通过一次最小读取确认，优先选 tool_answer；轻量执行发现超出边界后会升级。",
 		"- 用户明确只读/不要修改时 requiresWrite 必须为 false。",
 		"- 不要因为存在 workspace/editor 上下文就自动选 workflow。"
 	].join("\n");

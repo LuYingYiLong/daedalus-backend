@@ -135,6 +135,26 @@ test("scheduler blocks a repairable outcome after the repair budget is exhausted
 	}
 });
 
+test("scheduler stops when auto repair repeats the same failure without progress", (): void => {
+	const phase = createPhase("auto-verify-1", "verify");
+	phase.repairRound = 1;
+	const previousPhase = createPhase("verify", "verify");
+	const previousOutcome = createOutcome(previousPhase, "needs_fix");
+	const state = createState([phase], [previousOutcome]);
+
+	const command = scheduleWorkflowPhaseOutcome(
+		state,
+		phase,
+		createOutcome(phase, "needs_fix"),
+		2
+	);
+
+	assert.equal(command.type, "failed");
+	if (command.type === "failed") {
+		assert.match(command.outcome.summary, /重复出现相同失败/);
+	}
+});
+
 test("scheduler completes a successful phase without executing effects", (): void => {
 	const phase = createPhase("inspect");
 	const command = scheduleWorkflowPhaseOutcome(createState([phase]), phase, createOutcome(phase, "completed"), 2);

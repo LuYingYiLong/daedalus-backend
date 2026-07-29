@@ -97,6 +97,14 @@ import {
 import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../workflow/repair.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
+	applyToolEventToLightweightActionState,
+	collectLightweightActionCompletionStatus,
+	createLightweightActionState,
+	LightweightActionScopeExceededError,
+	LightweightActionVerificationError,
+	type LightweightActionState
+} from "../workflow/lightweight-action.js";
+import {
 	clearActiveSession,
 	type ClientSession,
 	type PendingAiContinuation,
@@ -409,6 +417,7 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	};
 	if (routeDecision.requiresWrite) {
 		options.requireToolCallOnFirstStep = true;
+		options.toolBudget = "simple";
 		return {
 			...params,
 			options
@@ -425,8 +434,24 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 }
 
 function createHiddenAnswerSystemPrompt(fullSystemPrompt: string, routeDecision: WorkflowRouteDecision): string {
-	if (routeDecision.execution !== "tool_answer" || routeDecision.requiresWrite) {
+	if (routeDecision.execution !== "tool_answer") {
 		return fullSystemPrompt;
+	}
+
+	if (routeDecision.requiresWrite) {
+		return [
+			fullSystemPrompt,
+			[
+				"## 隐藏轻量操作约束",
+				"- 当前执行形态是轻量操作，不创建 Todo，也不是多阶段 Workflow。",
+				"- 只处理用户明确要求的单一目标：读取最少必要上下文，最多执行两个逻辑写入，不得顺手重构或扩大修改范围。",
+				"- 如果发现必须跨多个文件联动、需要迁移/批量/破坏性修改，或无法在两个写入内安全完成，请停止写入并明确说明需要升级为完整 Workflow。",
+				"- 最后一次写入后必须运行与修改对象匹配的最小验证；普通文本或配置可读取目标内容确认，代码使用对应 typecheck、check-only、LSP 或定向测试。",
+				"- 不得对无关文件运行验证器，例如不能用 Godot check-only 或 Godot LSP 验证 .gitignore、Markdown 或普通 JSON。",
+				"- 若适用验证首次失败，只允许基于失败证据修复一次，然后重新验证；不要反复试错。",
+				"- 完成后直接简洁说明修改内容、验证结果和未覆盖风险。"
+			].join("\n")
+		].join("\n\n");
 	}
 
 	return [
@@ -538,7 +563,7 @@ async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Prom
 	}
 }
 
-async function runHiddenAnswerExecution(params: {
+type HiddenAnswerExecutionParams = {
 	socket: WebSocket;
 	requestId: string;
 	session: ClientSession;
@@ -552,12 +577,17 @@ async function runHiddenAnswerExecution(params: {
 	allowedToolNames: readonly string[];
 	userCreatedAt: string;
 	abortSignal?: AbortSignal | undefined;
-}): Promise<void> {
+};
+
+async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Promise<void> {
 	throwIfAborted(params.abortSignal);
 	const runId: string = params.requestId;
 	const stepRunId: string = `${params.requestId}:answer`;
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
 	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision);
+	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.requiresWrite
+		? createLightweightActionState()
+		: undefined;
 	const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
 		params.socket,
 		params.requestId,
@@ -567,6 +597,12 @@ async function runHiddenAnswerExecution(params: {
 		params.requestId,
 		params.mcpHost
 	);
+	const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
+		if (lightweightActionState !== undefined) {
+			applyToolEventToLightweightActionState(lightweightActionState, event, true);
+		}
+		forwardToolEvent(event);
+	};
 	const agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
 		chatParams,
 		withProviderUsageContext(params.options, {
@@ -577,7 +613,7 @@ async function runHiddenAnswerExecution(params: {
 		params.mcpHost,
 		params.session.approvalGateway,
 		params.allowedToolNames,
-		forwardToolEvent,
+		onToolEvent,
 		params.abortSignal,
 		undefined,
 		{
@@ -590,7 +626,34 @@ async function runHiddenAnswerExecution(params: {
 	throwIfAborted(params.abortSignal);
 
 	if (agentResult.status === "approval_required") {
-		throw new Error("Hidden answer execution unexpectedly requested approval.");
+		const pendingContinuation: PendingAiContinuation = createPendingAiContinuation(
+			chatParams,
+			withProviderUsageContext(params.options, {
+				operation: "tool_answer"
+			}),
+			agentResult.continuation,
+			params.allowedToolNames,
+			chatParams.message,
+			params.requestId,
+			params.userCreatedAt,
+			true,
+			undefined,
+			lightweightActionState
+		);
+		await registerPendingApprovalContinuation(
+			params.session,
+			params.mcpHost,
+			agentResult.approvalId,
+			pendingContinuation
+		);
+		sendAgentPaused(
+			params.socket,
+			params.requestId,
+			params.session,
+			runId,
+			agentResult
+		);
+		return;
 	}
 	if (agentResult.status === "tool_budget_required") {
 		const pendingBudget = createPendingToolBudget({
@@ -603,7 +666,8 @@ async function runHiddenAnswerExecution(params: {
 			userMessage: chatParams.message,
 			requestId: params.requestId,
 			userCreatedAt: params.userCreatedAt,
-			stream: true
+			stream: true,
+			lightweightActionState
 		});
 		registerPendingToolBudget(params.session, pendingBudget);
 		sendToolBudgetRequired(params.socket, params.requestId, params.session, runId, pendingBudget);
@@ -611,6 +675,17 @@ async function runHiddenAnswerExecution(params: {
 	}
 	if (agentResult.status === "protocol_violation") {
 		throw new Error(agentResult.reason);
+	}
+	const completionStatus = lightweightActionState === undefined
+		? {
+			resultStatus: "completed" as const,
+			verificationStatus: undefined,
+			warnings: [] as string[],
+			failureMessage: undefined
+		}
+		: collectLightweightActionCompletionStatus(lightweightActionState);
+	if (completionStatus.failureMessage !== undefined) {
+		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}
 
 	await appendChatTurnToSession(
@@ -637,8 +712,9 @@ async function runHiddenAnswerExecution(params: {
 		runId,
 		requestId: params.requestId,
 		status: "done",
-		resultStatus: "completed",
-		warnings: [],
+		resultStatus: completionStatus.resultStatus,
+		verificationStatus: completionStatus.verificationStatus,
+		warnings: completionStatus.warnings,
 		sequence: params.session.workbenchActiveRun.sequence ?? params.session.workbenchActiveRunSequence
 	});
 	sendJson(params.socket, {
@@ -654,6 +730,72 @@ async function runHiddenAnswerExecution(params: {
 			}
 		}
 	});
+}
+
+async function runHiddenAnswerExecutionWithEscalation(
+	params: HiddenAnswerExecutionParams & {
+		planningContext: string;
+		guidePromptSection: string;
+		webSearchEnabled: boolean;
+	}
+): Promise<void> {
+	try {
+		await runHiddenAnswerExecution(params);
+		return;
+	} catch (error: unknown) {
+		if (!(error instanceof LightweightActionScopeExceededError)) {
+			throw error;
+		}
+	}
+
+	logger.info("ai", "lightweight_action_escalated", {
+		requestId: params.requestId,
+		sessionId: params.session.sessionId,
+		reason: "write_scope_exceeded"
+	});
+	const workflowParams: AiChatParams = {
+		...params.chatParams,
+		options: {
+			...(params.chatParams.options ?? {}),
+			workflow: "multi_phase"
+		}
+	};
+	const escalationContext: string = [
+		params.planningContext,
+		"轻量操作已经完成了部分必要修改，但下一步会超过两个逻辑写入。先检查当前工作区状态，不要重复已成功的写入，然后完成剩余工作和验证。"
+	].filter((section: string): boolean => section.length > 0).join("\n\n");
+	let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
+		workflowParams,
+		params.options,
+		params.history,
+		escalationContext,
+		params.abortSignal,
+		{ activeWorkspace: params.session.activeWorkspace }
+	);
+	if (workflowPlan === null) {
+		workflowPlan = planWorkflow(workflowParams);
+	}
+	if (workflowPlan === null) {
+		throw new Error("轻量操作超出范围，但无法创建升级后的 Workflow。");
+	}
+	if (!params.webSearchEnabled) {
+		workflowPlan = filterWebSearchFromWorkflowPlan(workflowPlan);
+	}
+	await startWorkflowExecution(
+		params.socket,
+		params.requestId,
+		params.session,
+		params.mcpHost,
+		params.options,
+		workflowPlan,
+		workflowParams,
+		params.history,
+		params.historyBudgetTokens,
+		params.userCreatedAt,
+		escalationContext,
+		params.guidePromptSection,
+		params.abortSignal
+	);
 }
 
 class ContextTooLargeError extends Error {
@@ -1081,6 +1223,12 @@ async function runToolBudgetDecisionContinuation(params: {
 				updateWorkflowPhaseToolStats(toolStats, event);
 				toolObservations = applyToolEventToWorkflowObservations(toolObservations, event);
 			}
+			if (pendingContinuation.lightweightActionState !== undefined) {
+				applyToolEventToLightweightActionState(
+					pendingContinuation.lightweightActionState,
+					event
+				);
+			}
 			forwardToolEvent(event);
 		};
 
@@ -1208,6 +1356,27 @@ async function runToolBudgetDecisionContinuation(params: {
 		}
 		setWorkbenchActiveRun(session, { status: "idle" });
 		await finishQueueItemForRun(socket, pending.requestId, session, queueItemId, "failed");
+		if (error instanceof LightweightActionVerificationError) {
+			sendSessionEvent(socket, pending.requestId, session, "agent.run.error", {
+				runId,
+				requestId: pending.requestId,
+				status: "error",
+				code: error.code,
+				message: error.message,
+				sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+			}, pending.requestId);
+			emitWorkbenchUpdated(socket, pending.requestId, session);
+			sendJson(socket, {
+				type: "response",
+				id: pending.requestId,
+				ok: false,
+				error: {
+					code: error.code,
+					message: error.message
+				}
+			});
+			return;
+		}
 		if (error instanceof WorkflowExecutionError) {
 			const workflowErrorMessage: string = error.message.length > 0
 				? error.message
@@ -1722,25 +1891,58 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						} else {
 							routeDecision = createFallbackWorkflowRoute(effectiveParams, "Workflow planner returned no executable plan.");
 							throwIfAborted(abortController.signal);
-							await awaitWithAbort(runHiddenAnswerExecution({
-								socket,
-								requestId: request.id,
-								session,
-								mcpHost,
-								options,
-								chatParams: effectiveParams,
-								routeDecision,
-								history,
-								historyBudgetTokens,
-								fullSystemPrompt,
-								allowedToolNames: resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session),
-								userCreatedAt: turnStartedAt,
-								abortSignal: abortController.signal
-							}), abortController.signal);
+							const fallbackParams: AiChatParams = routeDecision.execution === "workflow"
+								? {
+									...effectiveParams,
+									options: {
+										...(effectiveParams.options ?? {}),
+										workflow: "multi_phase"
+									}
+								}
+								: effectiveParams;
+							const fallbackPlan: WorkflowPlan | null = routeDecision.execution === "workflow"
+								? planWorkflow(fallbackParams)
+								: null;
+							if (fallbackPlan !== null) {
+								await awaitWithAbort(startWorkflowExecution(
+									socket,
+									request.id,
+									session,
+									mcpHost,
+									options,
+									fallbackPlan,
+									fallbackParams,
+									history,
+									historyBudgetTokens,
+									turnStartedAt,
+									planningContext,
+									guidePromptSection,
+									abortController.signal
+								), abortController.signal);
+							} else {
+								await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
+									socket,
+									requestId: request.id,
+									session,
+									mcpHost,
+									options,
+									chatParams: effectiveParams,
+									routeDecision,
+									history,
+									historyBudgetTokens,
+									fullSystemPrompt,
+									allowedToolNames: resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session),
+									userCreatedAt: turnStartedAt,
+									abortSignal: abortController.signal,
+									planningContext,
+									guidePromptSection,
+									webSearchEnabled
+								}), abortController.signal);
+							}
 						}
 					} else {
 						throwIfAborted(abortController.signal);
-						await awaitWithAbort(runHiddenAnswerExecution({
+						await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
 							socket,
 							requestId: request.id,
 							session,
@@ -1753,7 +1955,10 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							fullSystemPrompt,
 							allowedToolNames: hiddenAnswerToolNames,
 							userCreatedAt: turnStartedAt,
-							abortSignal: abortController.signal
+							abortSignal: abortController.signal,
+							planningContext,
+							guidePromptSection,
+							webSearchEnabled
 						}), abortController.signal);
 					}
 				} finally {
@@ -1805,6 +2010,46 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						message: error.message,
 						sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 					});
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: {
+							code: error.code,
+							message: error.message
+						}
+					});
+					break;
+				}
+				if (error instanceof LightweightActionVerificationError) {
+					queuedRunForcedStatus = "failed";
+					logger.warn("ai", "lightweight_action_validation_failed", {
+						requestId: request.id,
+						sessionId: runSessionId,
+						workspaceId: session.activeWorkspace?.id,
+						message: error.message
+					});
+					sendSessionEvent(socket, request.id, session, "agent.run.error", {
+						runId: request.id,
+						requestId: request.id,
+						status: "error",
+						code: error.code,
+						message: error.message,
+						sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+					});
+					await waitForSessionEventPersistence(session);
+					await appendFailedChatTurnToSession(
+						session,
+						persistedParams.message,
+						{
+							code: error.code,
+							message: error.message
+						},
+						request.id,
+						turnStartedAt,
+						undefined,
+						persistedParams.additionalContext
+					);
 					sendJson(socket, {
 						type: "response",
 						id: request.id,

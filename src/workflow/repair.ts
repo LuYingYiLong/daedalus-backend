@@ -8,6 +8,7 @@ import type {
 	WorkflowPlan,
 	WorkflowTodoItem
 } from "./types.js";
+import { createVisibleWorkflowTodos } from "./todos.js";
 
 const AUTO_REPAIR_ID_PREFIX: string = "auto-repair-";
 const AUTO_VERIFY_ID_PREFIX: string = "auto-verify-";
@@ -81,21 +82,13 @@ function createUniquePhaseId(plan: WorkflowPlan, prefix: string, round: number):
 	return phaseId;
 }
 
-function createTodoForPhase(phase: WorkflowPhase): WorkflowTodoItem {
-	return {
-		id: `${phase.id}-todo`,
-		phaseId: phase.id,
-		text: phase.title,
-		status: "pending"
-	};
-}
-
 function rebuildTodosForPhases(plan: WorkflowPlan, phases: WorkflowPhase[]): WorkflowTodoItem[] {
 	const existingTodos: Map<string, WorkflowTodoItem> = new Map(
 		plan.todos.map((todo: WorkflowTodoItem): [string, WorkflowTodoItem] => [todo.phaseId, todo])
 	);
 
-	return phases.map((phase: WorkflowPhase): WorkflowTodoItem => existingTodos.get(phase.id) ?? createTodoForPhase(phase));
+	return createVisibleWorkflowTodos(phases)
+		.map((todo: WorkflowTodoItem): WorkflowTodoItem => existingTodos.get(todo.phaseId) ?? todo);
 }
 
 function shouldUseVerifyOnlyRepair(failedChecks: WorkflowFailedCheck[]): boolean {
@@ -170,6 +163,21 @@ function inferRepairWriteTools(
 ): string[] {
 	const evidence: string = collectRepairEvidence(failedPhase, verifyFailureReason, failedChecks);
 	const tools: string[] = [];
+
+	if (hasAny(evidence, [
+		".gitignore",
+		".md",
+		".json",
+		".jsonc",
+		".yaml",
+		".yml",
+		".toml",
+		".env",
+		"markdown",
+		"gitignore"
+	])) {
+		tools.push(...WORKSPACE_REPAIR_WRITE_TOOLS);
+	}
 
 	if (hasAny(evidence, [
 		".ts",

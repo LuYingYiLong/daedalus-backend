@@ -50,6 +50,13 @@ export function createAllowedWorkingRoots(context?: TerminalPresetContext | unde
 
 export const ALLOWED_WORKING_ROOTS: string[] = createAllowedWorkingRoots();
 
+const WORKSPACE_PRESET_NAMES: ReadonlySet<string> = new Set([
+	"workspace.typecheck",
+	"git.status",
+	"git.diff",
+	"git.init"
+]);
+
 export const COMMAND_PRESETS: CommandPreset[] = [
 	{
 		name: "backend.typecheck",
@@ -125,7 +132,7 @@ export function findPreset(name: string): CommandPreset {
 
 export function materializePreset(preset: CommandPreset, context?: TerminalPresetContext | undefined): CommandPreset {
 	const resolvedContext = resolveContext(context);
-	if (preset.name === "workspace.typecheck") {
+	if (WORKSPACE_PRESET_NAMES.has(preset.name)) {
 		return {
 			...preset,
 			workingDirectory: resolvedContext.workspaceRoot || resolvedContext.backendDir

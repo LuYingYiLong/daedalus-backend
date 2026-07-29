@@ -3,6 +3,7 @@ import type { ProviderAgentResult } from "../providers/agent-types.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
 import type { PendingToolBudget, PendingToolBudgetPhaseStats } from "../session/pending-tool-budget.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
+import type { LightweightActionState } from "../workflow/lightweight-action.js";
 import type { ClientSession, PendingAiContinuation } from "./client-session.js";
 import { createPendingAiContinuation } from "./approval-continuation.js";
 import { sendSessionEvent } from "./session-events.js";
@@ -19,6 +20,7 @@ export function createPendingToolBudget(
 		userCreatedAt: string;
 		stream: boolean;
 		workflowState?: WorkflowRunState | undefined;
+		lightweightActionState?: LightweightActionState | undefined;
 		workflowPhaseToolStats?: PendingToolBudgetPhaseStats | undefined;
 		workflowToolObservations?: WorkflowToolObservation[] | undefined;
 	}
@@ -32,7 +34,8 @@ export function createPendingToolBudget(
 		params.requestId,
 		params.userCreatedAt,
 		params.stream,
-		params.workflowState
+		params.workflowState,
+		params.lightweightActionState
 	);
 	return {
 		budgetId: params.agentResult.budgetId,

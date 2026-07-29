@@ -87,6 +87,11 @@ import {
 import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../../workflow/repair.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../../workflow/types.js";
 import {
+	addLightweightActionObservation,
+	applyToolEventToLightweightActionState,
+	LightweightActionVerificationError
+} from "../../workflow/lightweight-action.js";
+import {
 	clearActiveSession,
 	type ClientSession,
 	type PendingAiContinuation,
@@ -442,7 +447,13 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			}
 
 			session.pendingAiContinuations.delete(request.params.approvalId);
-			const onToolEvent: OnToolEvent = createAgentToolEventForwarder(
+			if (pendingContinuation.lightweightActionState !== undefined) {
+				addLightweightActionObservation(
+					pendingContinuation.lightweightActionState,
+					approvedToolObservation
+				);
+			}
+			const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
 				socket,
 				pendingContinuation.requestId,
 				session,
@@ -451,6 +462,15 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				pendingContinuation.requestId,
 				mcpHost
 			);
+			const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
+				if (pendingContinuation.lightweightActionState !== undefined) {
+					applyToolEventToLightweightActionState(
+						pendingContinuation.lightweightActionState,
+						event
+					);
+				}
+				forwardToolEvent(event);
+			};
 			const continuationParams: AiChatParams = await awaitWithAbort(
 				hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
 				abortController.signal
@@ -559,6 +579,15 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					message: workflowErrorMessage,
 					sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 				}, continuationRequestId);
+			} else if (error instanceof LightweightActionVerificationError) {
+				sendSessionEvent(socket, continuationRequestId, session, "agent.run.error", {
+					runId: continuationRequestId,
+					requestId: continuationRequestId,
+					status: "error",
+					code: error.code,
+					message: error.message,
+					sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+				}, continuationRequestId);
 			} else {
 				const approvalErrorStatus = classifyProviderError(error);
 				sendSessionEvent(socket, continuationRequestId, session, "agent.run.error", {
@@ -581,7 +610,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				id: request.id,
 				ok: false,
 				error: {
-					code: "approval_error",
+					code: error instanceof LightweightActionVerificationError
+						? error.code
+						: "approval_error",
 					message: errorMessage
 				}
 			});

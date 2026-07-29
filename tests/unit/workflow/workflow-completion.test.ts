@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectWorkflowCompletionStatus, createFinalSummaryVerificationContext } from "../../../src/server/workflow/continuation.js";
+import {
+	collectWorkflowCompletionStatus,
+	createFinalSummaryVerificationContext,
+	shouldReviseLlmWorkflowPlan
+} from "../../../src/server/workflow/continuation.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowToolObservation } from "../../../src/workflow/types.js";
 
 function phase(id: string, toolGroup: WorkflowPhase["toolGroup"]): WorkflowPhase {
@@ -105,4 +109,18 @@ test("final summary receives unverified completion constraints as prompt context
 
 	assert.match(context, /最后一次写入后没有成功的验证阶段/u);
 	assert.match(context, /不要声称验证已经通过/u);
+});
+
+test("LLM workflow revision only runs for material outcomes or user guidance", (): void => {
+	const completed = output("inspect", []);
+	const needsFix: WorkflowPhaseOutput = {
+		...completed,
+		status: "needs_fix",
+		failedChecks: [{ code: "check", message: "changed scope" }],
+		requiredFixes: ["fix changed scope"]
+	};
+
+	assert.equal(shouldReviseLlmWorkflowPlan(completed, ""), false);
+	assert.equal(shouldReviseLlmWorkflowPlan(completed, "用户补充了新约束"), true);
+	assert.equal(shouldReviseLlmWorkflowPlan(needsFix, ""), true);
 });

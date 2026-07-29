@@ -5,6 +5,7 @@ import {
 	applyProjectContextRouteOverride,
 	applyWorkflowRouteSafety,
 	createFallbackWorkflowRoute,
+	hasComplexWriteIntent,
 	normalizeWorkflowRouteDecision,
 	resolveForcedWorkflowRoute
 } from "../../../src/workflow/router.js";
@@ -21,6 +22,19 @@ test("workflow router forces single mode to hidden tool answer", (): void => {
 	assert.equal(decision?.execution, "tool_answer");
 	assert.equal(decision?.requiresWrite, false);
 	assert.equal(decision?.forcedByOption, "single");
+});
+
+test("workflow router keeps write intent in explicit single mode", (): void => {
+	const decision = resolveForcedWorkflowRoute({
+		message: "在 .gitignore 添加 /build/",
+		mode: "agent",
+		options: {
+			workflow: "single"
+		}
+	});
+
+	assert.equal(decision?.execution, "tool_answer");
+	assert.equal(decision?.requiresWrite, true);
 });
 
 test("workflow router forces explicit multi-phase mode to workflow", (): void => {
@@ -124,15 +138,35 @@ test("workflow router respects explicit requests to avoid reading project files"
 	assert.equal(decision.requiresTools, false);
 });
 
-test("workflow router fallback treats short edit confirmations as workflow", (): void => {
+test("workflow router fallback treats bounded edits as lightweight writes", (): void => {
 	const decision = createFallbackWorkflowRoute({
 		message: "帮我改一下",
 		mode: "agent"
 	});
 
-	assert.equal(decision.execution, "workflow");
+	assert.equal(decision.execution, "tool_answer");
 	assert.equal(decision.requiresWrite, true);
 	assert.equal(decision.safetyOverride, "router_fallback");
+});
+
+test("workflow router fallback keeps complex and destructive edits in workflow", (): void => {
+	const multiFile = createFallbackWorkflowRoute({
+		message: "重构多个文件并迁移配置",
+		mode: "agent"
+	});
+	const destructive = createFallbackWorkflowRoute({
+		message: "删除所有生成文件",
+		mode: "agent"
+	});
+	const explicitPlan = createFallbackWorkflowRoute({
+		message: "先制定计划再修改登录流程",
+		mode: "agent"
+	});
+
+	assert.equal(hasComplexWriteIntent("在 .gitignore 添加 /build/"), false);
+	assert.equal(multiFile.execution, "workflow");
+	assert.equal(destructive.execution, "workflow");
+	assert.equal(explicitPlan.execution, "workflow");
 });
 
 test("chat orchestrator has a hidden answer path that does not emit workflow todo snapshots", async (): Promise<void> => {
@@ -225,6 +259,16 @@ test("chat orchestrator cancel requests abort and leaves finalization to the act
 	const finishRun: number = cancelBlock.indexOf("finishSessionRun(session.sessionId, targetRequestId);");
 	assert.ok(pendingCancellationGuard >= 0);
 	assert.ok(finishRun > pendingCancellationGuard);
+});
+
+test("chat orchestrator constrains lightweight writes and supports approval continuation", async (): Promise<void> => {
+	const source: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
+
+	assert.equal(source.includes("## 隐藏轻量操作约束"), true);
+	assert.equal(source.includes("最多执行两个逻辑写入"), true);
+	assert.equal(source.includes('options.toolBudget = "simple"'), true);
+	assert.equal(source.includes("registerPendingApprovalContinuation("), true);
+	assert.equal(source.includes("LightweightActionScopeExceededError"), true);
 });
 
 test("workflow cancellation cannot fall through to fallback planning or a later phase", async (): Promise<void> => {

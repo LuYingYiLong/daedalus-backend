@@ -131,10 +131,10 @@ test("fallback probes uncertain mutations and workflows complex changes", (): vo
 });
 
 test("hidden probe exposes tool progress without creating workflow todos", async (): Promise<void> => {
-	const source: string = await readFile(
+	const source: string = (await readFile(
 		new URL("../../../src/server/chat-orchestrator.ts", import.meta.url),
 		"utf8"
-	);
+	)).replaceAll(/\r\n?/g, "\n");
 	const hiddenStart: number = source.indexOf("async function runHiddenAnswerExecution");
 	const escalationStart: number = source.indexOf("async function runHiddenAnswerExecutionWithEscalation");
 

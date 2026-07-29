@@ -8,6 +8,7 @@ import type { McpHost } from "../mcp/mcp-host.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
+import { ExecutionDecisionSignal } from "../tools/execution-control.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import type { ApprovedToolResult, AnthropicMessagesAgentContinuation, ProviderAgentResult } from "./agent-types.js";
 import { createToolResultLimitFallback, createToolResultLimitReason, fitToolResultContent } from "./tool-result-budget.js";
@@ -229,6 +230,12 @@ async function runAgentLoop(
 		try {
 			toolResults = await dispatchToolCalls(mcpHost, toolCalls, step, gateway, onEvent, toolResultEnricher, toolContext, abortSignal);
 		} catch (error: unknown) {
+			if (error instanceof ExecutionDecisionSignal) {
+				return {
+					status: "execution_decision",
+					decision: error.decision
+				};
+			}
 			if (error instanceof ToolApprovalRequiredError) {
 				const pendingBlock: AnthropicToolUseBlock | undefined = assistant.toolUseBlocks.find(
 					(block: AnthropicToolUseBlock): boolean => block.id === error.pendingApproval.toolCallId

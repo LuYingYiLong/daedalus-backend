@@ -44,7 +44,7 @@ test("Godot client hello replaces the persisted default with the project workspa
 			id: "hello-project",
 			method: "client.hello",
 			params: {
-				protocolVersion: 2,
+				protocolVersion: 3,
 				clientType: "godot_plugin",
 				workspaceRoot: "D:/GodotProjects/example"
 			}
@@ -83,7 +83,7 @@ test("Godot client hello replies only after its workspace MCP initialization com
 			id: "hello-awaits-workspace",
 			method: "client.hello",
 			params: {
-				protocolVersion: 2,
+				protocolVersion: 3,
 				clientType: "godot_plugin",
 				workspaceRoot: "D:/GodotProjects/example"
 			}
@@ -316,8 +316,17 @@ test("session terminal errors are emitted once per request and message", (): voi
 		message: "oldText not found in file"
 	});
 
-	assert.equal(originSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.error").length, 1);
-	assert.equal(studioSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.error").length, 1);
+	assert.equal(originSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.state").length, 1);
+	assert.equal(studioSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.state").length, 1);
+	assert.equal(originSocket.sent.some((message: Record<string, unknown>): boolean => message.event === "agent.run.error"), false);
+	assert.equal(
+		originSocket.sent.find((message: Record<string, unknown>): boolean => message.event === "agent.run.state")?.protocolVersion,
+		3
+	);
+	assert.equal(
+		(originSocket.sent.find((message: Record<string, unknown>): boolean => message.event === "agent.run.state")?.data as { stage?: string }).stage,
+		"failed"
+	);
 });
 
 test("session terminal cancellations are emitted once per request", (): void => {
@@ -343,8 +352,17 @@ test("session terminal cancellations are emitted once per request", (): void => 
 		reason: "cancelled"
 	});
 
-	assert.equal(originSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.cancelled").length, 1);
-	assert.equal(studioSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.cancelled").length, 1);
+	assert.equal(originSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.state").length, 1);
+	assert.equal(studioSocket.sent.filter((message: Record<string, unknown>): boolean => message.event === "agent.run.state").length, 1);
+	assert.equal(originSocket.sent.some((message: Record<string, unknown>): boolean => message.event === "agent.run.cancelled"), false);
+	assert.equal(
+		originSocket.sent.find((message: Record<string, unknown>): boolean => message.event === "agent.run.state")?.protocolVersion,
+		3
+	);
+	assert.equal(
+		(originSocket.sent.find((message: Record<string, unknown>): boolean => message.event === "agent.run.state")?.data as { stage?: string }).stage,
+		"cancelled"
+	);
 });
 
 test("opening the same session binds frontend connections to one runtime", (): void => {

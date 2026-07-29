@@ -211,9 +211,7 @@ export function getSessionSubscriberInfos(sessionId: string): ClientConnectionIn
 export function broadcastSessionEvent(
 	originSocket: WebSocket,
 	sessionId: string,
-	requestId: string,
-	eventName: ServerEvent["event"],
-	data: unknown
+	envelope: ServerEvent
 ): void {
 	const subscribers: Set<WebSocket> | undefined = sessionSubscribers.get(sessionId);
 	if (subscribers === undefined) {
@@ -224,12 +222,7 @@ export function broadcastSessionEvent(
 		if (socket === originSocket || socket.readyState !== WebSocket.OPEN) {
 			continue;
 		}
-		sendJson(socket, {
-			type: "event",
-			id: requestId,
-			event: eventName,
-			data
-		});
+		sendJson(socket, envelope);
 	}
 }
 
@@ -239,9 +232,15 @@ export function broadcastGlobalEvent(requestId: string, eventName: ServerEvent["
 			continue;
 		}
 		sendJson(record.socket, {
+			protocolVersion: 3,
 			type: "event",
-			id: requestId,
+			eventId: `global-${requestId}-${Date.now().toString(36)}`,
 			event: eventName,
+			sessionId: "",
+			requestId,
+			runId: requestId,
+			sequence: Date.now() * 1000,
+			createdAt: new Date().toISOString(),
 			data
 		});
 	}

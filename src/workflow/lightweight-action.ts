@@ -18,10 +18,19 @@ export type LightweightActionCompletionStatus = {
 	failureMessage?: string | undefined;
 };
 
+export type LightweightActionEscalationReason =
+	| "write_scope_exceeded"
+	| "write_intent_not_completed";
+
 export class LightweightActionScopeExceededError extends Error {
-	constructor() {
-		super("轻量操作需要超过两个写入步骤，已升级为完整 Workflow。");
+	readonly reason: LightweightActionEscalationReason;
+
+	constructor(reason: LightweightActionEscalationReason = "write_scope_exceeded") {
+		super(reason === "write_scope_exceeded"
+			? "轻量操作需要超过两个写入步骤，已升级为完整 Workflow。"
+			: "轻量操作只完成了读取，没有完成用户要求的修改，已升级为完整 Workflow。");
 		this.name = "LightweightActionScopeExceededError";
+		this.reason = reason;
 	}
 }
 

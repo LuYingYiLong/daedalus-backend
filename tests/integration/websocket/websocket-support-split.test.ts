@@ -37,7 +37,7 @@ test("request lifecycle deduplicates in-flight and completed requests", (): void
 	assert.equal(beginRequestExecution(socket, request, session), true);
 	assert.equal(beginRequestExecution(socket, request, session), false);
 	assert.deepEqual(socket.sent.at(-1), {
-		protocolVersion: 2,
+		protocolVersion: 3,
 		type: "response",
 		id: "request-1",
 		ok: true,

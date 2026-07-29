@@ -137,9 +137,28 @@ test("chat turn persistence reuses pre-saved user message", async (): Promise<vo
 		);
 		assert.equal(duplicateSaved, false);
 
+		const retrySaved = await tokenBudget.appendChatTurnToSession(
+			session,
+			[],
+			"生成一张科幻战机图",
+			"从安全检查点完成重试。",
+			"request-retry",
+			"2026-07-16T00:00:04.000Z",
+			"2026-07-16T00:00:05.000Z",
+			undefined,
+			false
+		);
+		assert.equal(retrySaved, true);
+		assert.equal(
+			session.messages.some((message: ChatMessage): boolean => (
+				message.requestId === "request-retry" && message.role === "user"
+			)),
+			false
+		);
+
 		const opened = await store.openSession(metadata.id);
-		assert.equal(opened.messages.length, 2);
-		assert.deepEqual(opened.messages.map((message: ChatMessage): string => message.role), ["user", "assistant"]);
+		assert.equal(opened.messages.length, 3);
+		assert.deepEqual(opened.messages.map((message: ChatMessage): string => message.role), ["user", "assistant", "assistant"]);
 	} finally {
 		const { resetSessionDatabaseForTests } = await import("../../../src/session/session-database.js");
 		await resetSessionDatabaseForTests();

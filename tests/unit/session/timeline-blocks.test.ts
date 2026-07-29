@@ -949,3 +949,103 @@ test("canonical timeline compacts many deltas into a bounded markdown part", ():
 	assert.equal(assistant.bodyParts[0]?.text.length, 2600);
 	assert.equal(result.eventCount, 2600);
 });
+
+test("canonical timeline restores v3 todo state until it is dismissed", (): void => {
+	const todo = {
+		runId: "run-v3-todo",
+		workflowId: "workflow-v3",
+		todos: [
+			{ id: "implement", title: "Implement the change", status: "completed" }
+		]
+	};
+	const state = {
+		schemaVersion: 1,
+		runId: "run-v3-todo",
+		requestId: "request-v3-todo",
+		rootRequestId: "request-v3-todo",
+		revision: 5,
+		intent: "mutate",
+		scope: "complex",
+		lane: "workflow",
+		stage: "completed",
+		title: "Implement the change",
+		planId: "workflow-v3",
+		todo,
+		pause: null,
+		verificationStatus: "verified",
+		warnings: [],
+		terminal: { resultStatus: "completed", message: "Completed.", completedAt: "2026-07-09T01:00:05.000Z" },
+		createdAt: "2026-07-09T01:00:00.000Z",
+		updatedAt: "2026-07-09T01:00:05.000Z"
+	};
+
+	const completed = buildCanonicalTimelineBlocks(session([], [
+		event("event-run-state", "request-v3-todo", "agent.run.state", "2026-07-09T01:00:05.000Z", state)
+	]));
+	assert.deepEqual(completed.latestAgentSnapshot, todo);
+
+	const dismissed = buildCanonicalTimelineBlocks(session([], [
+		event("event-run-state", "request-v3-todo", "agent.run.state", "2026-07-09T01:00:05.000Z", state),
+		event("event-todo-dismissed", "request-v3-todo", "agent.todo.dismissed", "2026-07-09T01:00:06.000Z", {
+			runId: "run-v3-todo"
+		})
+	]));
+	assert.equal(dismissed.latestAgentSnapshot, null);
+});
+
+test("canonical timeline restores v3 failed and interrupted run states", (): void => {
+	const failedResult = buildCanonicalTimelineBlocks(session(
+		[
+			{
+				role: "user",
+				requestId: "request-v3-failed",
+				content: "Apply the change",
+				createdAt: "2026-07-09T02:00:00.000Z"
+			}
+		],
+		[
+			event("event-v3-failed", "request-v3-failed", "agent.run.state", "2026-07-09T02:00:03.000Z", {
+				runId: "run-v3-failed",
+				requestId: "request-v3-failed",
+				stage: "failed",
+				terminal: {
+					resultStatus: "failed",
+					message: "The targeted verification failed.",
+					completedAt: "2026-07-09T02:00:03.000Z"
+				}
+			})
+		]
+	));
+	const failedAssistant = assistantBlock(failedResult.blocks[1]);
+	assert.equal(failedAssistant.status, "failed");
+	const failedStatus = failedAssistant.bodyParts.find((part) => part.type === "status");
+	assert.equal(failedStatus?.type, "status");
+	assert.equal(failedStatus?.code, "agent_run_error");
+	assert.equal(failedStatus?.details, "The targeted verification failed.");
+
+	const interruptedResult = buildCanonicalTimelineBlocks(session(
+		[
+			{
+				role: "user",
+				requestId: "request-v3-interrupted",
+				content: "Continue the refactor",
+				createdAt: "2026-07-09T03:00:00.000Z"
+			}
+		],
+		[
+			event("event-v3-interrupted", "request-v3-interrupted", "agent.run.state", "2026-07-09T03:00:03.000Z", {
+				runId: "run-v3-interrupted",
+				requestId: "request-v3-interrupted",
+				stage: "interrupted",
+				terminal: null
+			})
+		]
+	));
+	const interruptedAssistant = assistantBlock(interruptedResult.blocks[1]);
+	const interruptedStatus = interruptedAssistant.bodyParts.find((part) => {
+		return part.type === "status" && part.code === "agent_run_interrupted";
+	});
+	assert.equal(interruptedStatus?.type, "status");
+	assert.equal(interruptedStatus?.actionId, "retry_agent_run:run-v3-interrupted");
+	assert.equal(interruptedStatus?.actionLabel, "Retry from checkpoint");
+});

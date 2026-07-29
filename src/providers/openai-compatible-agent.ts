@@ -21,6 +21,7 @@ import type { McpHost } from "../mcp/mcp-host.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
+import { ExecutionDecisionSignal } from "../tools/execution-control.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { containsDsmlToolCalls } from "./deepseek-dsml-tools.js";
 import { containsLooseToolCalls, isKnownLooseToolTagName, isPotentialLooseToolTagName, normalizeKnownToolName } from "./deepseek-loose-tools.js";
@@ -1347,6 +1348,12 @@ async function runAgentLoop(
 			}
 			toolResults = await dispatchToolCalls(mcpHost, toolCalls, step, gateway, onEvent, toolResultEnricher, toolContext, abortSignal);
 		} catch (error: unknown) {
+			if (error instanceof ExecutionDecisionSignal) {
+				return {
+					status: "execution_decision",
+					decision: error.decision
+				};
+			}
 			if (error instanceof ToolApprovalRequiredError) {
 				const pendingToolCall: ChatCompletionMessageToolCall | undefined = toolCalls.find(
 					(toolCall: ChatCompletionMessageToolCall): boolean => toolCall.id === error.pendingApproval.toolCallId

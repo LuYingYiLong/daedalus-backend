@@ -1,15 +1,19 @@
 import WebSocket from "ws";
-import type { ServerEvent } from "../../protocol/types.js";
+import type {
+	CanonicalServerEventName,
+	InternalLegacyServerEventName
+} from "../../protocol/types.js";
 import type { ClientSession } from "../client-session.js";
 import { createWorkflowTodoSnapshot } from "../../workflow/runner.js";
 import type { WorkflowPhaseOutput, WorkflowPlan } from "../../workflow/types.js";
-import { sendSessionEvent } from "../session-events.js";
+import { canonicalizeServerEventName, sendSessionEvent } from "../session-events.js";
+import { getAgentRun, updateAgentRun } from "../agent-run-controller.js";
 
 export function sendWorkflowEvent(
 	socket: WebSocket,
 	requestId: string,
 	session: ClientSession,
-	eventName: ServerEvent["event"],
+	eventName: InternalLegacyServerEventName,
 	data: unknown,
 	persistRequestId: string = requestId
 ): void {
@@ -20,7 +24,10 @@ export function sendWorkflowEvent(
 	sendSessionEvent(socket, requestId, session, agentEvent.eventName, agentEvent.data, persistRequestId);
 }
 
-export function mapWorkflowEventToAgentEvent(eventName: ServerEvent["event"], data: unknown): { eventName: ServerEvent["event"]; data: unknown } | null {
+export function mapWorkflowEventToAgentEvent(
+	eventName: InternalLegacyServerEventName,
+	data: unknown
+): { eventName: CanonicalServerEventName; data: unknown } | null {
 	if (typeof data !== "object" || data === null || Array.isArray(data)) {
 		return null;
 	}
@@ -31,10 +38,7 @@ export function mapWorkflowEventToAgentEvent(eventName: ServerEvent["event"], da
 		return null;
 	}
 	if (eventName === "workflow.todo.updated") {
-		return {
-			eventName: "agent.run.snapshot",
-			data: convertWorkflowSnapshotToAgentSnapshot(record)
-		};
+		return null;
 	}
 	if (eventName === "workflow.phase.started") {
 		return {
@@ -97,23 +101,8 @@ export function mapWorkflowEventToAgentEvent(eventName: ServerEvent["event"], da
 	}
 
 	return {
-		eventName,
+		eventName: canonicalizeServerEventName(eventName),
 		data
-	};
-}
-
-export function convertWorkflowSnapshotToAgentSnapshot(record: Record<string, unknown>): Record<string, unknown> {
-	return {
-		runId: record.workflowId ?? record.runId,
-		title: record.title,
-		source: record.source,
-		revision: record.revision,
-		steps: record.phases,
-		todos: record.todos,
-		outcomes: record.phaseOutcomes ?? record.outcomes ?? [],
-		activeStepRunId: record.activePhaseRunId ?? record.activeStepRunId,
-		repairRound: record.repairRound,
-		blockedReason: record.blockedReason
 	};
 }
 
@@ -126,12 +115,16 @@ export function sendWorkflowTodoSnapshot(
 	phaseOutputs: WorkflowPhaseOutput[] = [],
 	activePhaseRunId?: string | undefined
 ): void {
-	sendWorkflowEvent(
-		socket,
-		requestId,
-		session,
-		"workflow.todo.updated",
-		createWorkflowTodoSnapshot(plan, phaseOutputs, activePhaseRunId),
-		persistRequestId
-	);
+	const currentRun = getAgentRun(session, persistRequestId) ?? getAgentRun(session, requestId);
+	if (currentRun !== undefined && currentRun.terminal === null) {
+		updateAgentRun(socket, session, currentRun.runId, currentRun.stage, {
+			intent: "mutate",
+			scope: "complex",
+			lane: "workflow",
+			title: plan.title,
+			planId: plan.id,
+			todo: createWorkflowTodoSnapshot(plan, phaseOutputs, activePhaseRunId)
+		});
+		return;
+	}
 }

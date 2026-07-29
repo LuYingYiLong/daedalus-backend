@@ -11,12 +11,18 @@ import { BUILTIN_TOOL_MAPPINGS, type ToolMapping } from "./tool-mapping.js";
 import { TOOL_POLICIES } from "./tool-policy-table.js";
 import type { ToolPolicy, ToolRisk } from "./tool-policy.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "./tool-sentinels.js";
+import {
+	EXECUTION_CONTROL_TOOL_DEFINITION,
+	EXECUTION_CONTROL_TOOL_NAME,
+	type ExecutionControlContext
+} from "./execution-control.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
 	editorInstanceId?: string | undefined;
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
+	executionControl?: ExecutionControlContext | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -240,6 +246,16 @@ function createDynamicEntry(definition: ChatCompletionTool, workspaceId?: string
 	};
 }
 
+function createExecutionControlEntry(): ToolCatalogEntry {
+	return {
+		id: EXECUTION_CONTROL_TOOL_NAME,
+		definition: EXECUTION_CONTROL_TOOL_DEFINITION,
+		mapping: { serverId: "internal", toolName: "execution_decision" },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -259,7 +275,10 @@ export class WorkspaceToolCatalog {
 		const staticEntries: ToolCatalogEntry[] = BUILTIN_TOOL_DEFINITIONS.map(createStaticEntry);
 		const dynamicEntries: ToolCatalogEntry[] = getDynamicMcpToolDefinitions(this.context.workspaceId)
 			.map((definition: ChatCompletionTool): ToolCatalogEntry => createDynamicEntry(withApprovalReasonSchema(definition), this.context.workspaceId));
-		return [...staticEntries, ...dynamicEntries];
+		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined
+			? []
+			: [createExecutionControlEntry()];
+		return [...staticEntries, ...dynamicEntries, ...executionControlEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -268,6 +287,9 @@ export class WorkspaceToolCatalog {
 
 	getDefinitionsForNames(toolNames: readonly string[]): ChatCompletionTool[] {
 		const allowedNames: Set<string> = new Set(toolNames);
+		if (this.context.executionControl !== undefined) {
+			allowedNames.add(EXECUTION_CONTROL_TOOL_NAME);
+		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()
 			.filter((entry: ToolCatalogEntry): boolean => allowedNames.has(entry.id) || (includeDynamicTools && isDynamicMcpToolName(entry.id)))

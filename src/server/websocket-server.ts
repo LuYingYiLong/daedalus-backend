@@ -21,6 +21,7 @@ import { getClientConnection, getConnectionSession, hasOtherConnectionsForSessio
 import { withMcpRequestContext } from "../mcp/request-context.js";
 import { logger } from "../logger.js";
 import { timingSafeEqual } from "node:crypto";
+import { BACKEND_PROTOCOL_VERSION } from "../runtime/build-metadata.js";
 
 export type WebSocketServerRuntimeOptions = {
 	host?: string | undefined;
@@ -49,7 +50,7 @@ export function isUnsupportedProtocolEnvelope(value: unknown): value is { id?: u
 		return false;
 	}
 
-	return record.protocolVersion !== 2;
+	return record.protocolVersion !== BACKEND_PROTOCOL_VERSION;
 }
 
 function parseClientRequest(socket: WebSocket, data: WebSocket.RawData, isBinary: boolean): ClientRequest | null {
@@ -70,7 +71,7 @@ function parseClientRequest(socket: WebSocket, data: WebSocket.RawData, isBinary
 		sendProtocolError(
 			socket,
 			"protocol_version_unsupported",
-			"Daedalus backend requires protocolVersion: 2 on every request envelope.",
+			`Daedalus backend requires protocolVersion: ${BACKEND_PROTOCOL_VERSION}. Upgrade Daedalus Studio or the Godot plugin before reconnecting.`,
 			typeof parsedMessage.id === "string" ? parsedMessage.id : ""
 		);
 		return null;

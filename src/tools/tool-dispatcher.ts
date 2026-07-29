@@ -12,6 +12,11 @@ import type { ToolExecutionContext } from "./tool-catalog.js";
 import { logger } from "../logger.js";
 import { getApprovalReasonFromArgs, stripApprovalReasonArg } from "./approval-reason.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import {
+	EXECUTION_CONTROL_TOOL_NAME,
+	ExecutionDecisionSignal,
+	parseExecutionDecision
+} from "./execution-control.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -418,6 +423,29 @@ export async function dispatchToolCalls(
 	toolContext?: ToolExecutionContext | undefined,
 	abortSignal?: AbortSignal | undefined
 ): Promise<ChatCompletionToolMessageParam[]> {
+	const controlCalls: ChatCompletionMessageToolCall[] = toolCalls.filter((
+		toolCall: ChatCompletionMessageToolCall
+	): boolean => toolCall.type === "function" && toolCall.function.name === EXECUTION_CONTROL_TOOL_NAME);
+	if (controlCalls.length > 0) {
+		if (controlCalls.length !== 1 || toolCalls.length !== 1) {
+			throw new Error("Execution control cannot be mixed with workspace tool calls in one assistant batch.");
+		}
+		if (toolContext?.executionControl === undefined) {
+			throw new Error("Execution control is not available in the current agent lane.");
+		}
+		const controlCall: ChatCompletionMessageToolCall = controlCalls[0] as ChatCompletionMessageToolCall;
+		if (controlCall.type !== "function") {
+			throw new Error("Execution control must be a function tool call.");
+		}
+		let rawDecision: unknown;
+		try {
+			rawDecision = JSON.parse(controlCall.function.arguments);
+		} catch {
+			throw new Error("Execution control arguments must be valid JSON.");
+		}
+		throw new ExecutionDecisionSignal(parseExecutionDecision(rawDecision, toolContext.executionControl));
+	}
+
 	const results: ChatCompletionToolMessageParam[] = [];
 
 	for (const toolCall of toolCalls) {

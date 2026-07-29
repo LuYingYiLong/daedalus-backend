@@ -513,6 +513,10 @@ export async function continueWorkflowExecution(
 			sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs, phaseRunId);
 			throw new WorkflowExecutionError(agentResult.reason, plan, new Error(agentResult.reason), phaseOutputs);
 		}
+		if (agentResult.status === "execution_decision") {
+			const message: string = "Execution control is not available inside a planned workflow phase.";
+			throw new WorkflowExecutionError(message, plan, new Error(message), phaseOutputs);
+		}
 
 		if (shouldRequireWorkflowWriteTool(phase) && !didWorkflowWritePhaseExecute(phase, phaseToolStats)) {
 			const guardMessage: string = `写入阶段「${phase.title}」没有实际调用写入工具或触发审批，已阻止将该 Todo 标记为完成。`;
@@ -609,7 +613,8 @@ export async function continueWorkflowExecution(
 				[
 					...(state.originalParams.additionalContext ?? []),
 					...(state.capturedAttachments ?? [])
-				]
+				],
+				state.originalParams.retryOfRunId === undefined
 			), abortSignal);
 			throwIfAborted(abortSignal);
 			sendWorkflowEvent(socket, requestId, session, "workflow.done", {

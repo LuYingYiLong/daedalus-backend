@@ -78,7 +78,7 @@
   },
   "daedalusBinary": {
     "minStudioVersion": "1.0.1",
-    "protocolVersion": 2,
+    "protocolVersion": 3,
     "minPluginProtocolVersion": 1,
     "maxPluginProtocolVersion": 2
   },

@@ -3,11 +3,16 @@ import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult } from "../providers/agent-types.js";
 import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendApprovalEvent, readApprovalEvents } from "../session/session-store.js";
+import {
+	removeAgentRunContinuation,
+	saveAgentRunContinuation
+} from "../session/agent-run-store.js";
 import { createPersistedApprovalRequestedData, createRuntimePendingContinuation, foldPendingApprovalStates, mergeHydratedPendingApprovalStates, type PendingApprovalState } from "../session/approval-persistence.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
 	cloneLightweightActionState,
 	collectLightweightActionCompletionStatus,
+	LightweightActionScopeExceededError,
 	LightweightActionVerificationError,
 	type LightweightActionState
 } from "../workflow/lightweight-action.js";
@@ -19,9 +24,11 @@ import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { McpHost } from "../mcp/mcp-host.js";
 import type { ClientSession, PendingAiContinuation } from "./client-session.js";
 import { appendChatTurnToSession } from "./token-budget.js";
-import { sendSessionEvent } from "./session-events.js";
+import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
 import { sendJson } from "./send-json.js";
 import { createPendingToolBudget, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
+import { getAgentRun, updateAgentRun } from "./agent-run-controller.js";
+import { validateExecutionDecisionEvidence, type AgentRunState } from "../workflow/agent-run-state.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -33,7 +40,8 @@ export function createPendingAiContinuation(
 	userCreatedAt: string,
 	stream: boolean,
 	workflowState?: WorkflowRunState | undefined,
-	lightweightActionState?: LightweightActionState | undefined
+	lightweightActionState?: LightweightActionState | undefined,
+	executionControl?: PendingAiContinuation["executionControl"]
 ): PendingAiContinuation {
 	const pendingContinuation: PendingAiContinuation = {
 		params,
@@ -50,6 +58,9 @@ export function createPendingAiContinuation(
 	}
 	if (lightweightActionState !== undefined) {
 		pendingContinuation.lightweightActionState = cloneLightweightActionState(lightweightActionState);
+	}
+	if (executionControl !== undefined) {
+		pendingContinuation.executionControl = { ...executionControl };
 	}
 
 	if (workflowState !== undefined) {
@@ -117,6 +128,7 @@ export async function cancelPendingApprovalsForRequest(session: ClientSession, r
 		const pendingApproval: PendingApproval | undefined = session.approvalGateway.removePending(approvalId);
 		session.pendingAiContinuations.delete(approvalId);
 		cancelledApprovalIds.push(approvalId);
+		await removeAgentRunContinuation(requestId);
 		if (session.sessionId !== undefined) {
 			await appendApprovalEvent(session.sessionId, approvalId, requestId, "cancelled", {
 				approvalId,
@@ -300,6 +312,18 @@ export function sendAgentPaused(socket: WebSocket, requestId: string, session: C
 		toolName: agentResult.toolName,
 		message: `工具 ${agentResult.toolName} 需要审批：${agentResult.approvalId}`
 	}, persistRequestId);
+	const pausedRun: AgentRunState | undefined = getAgentRun(session, persistRequestId);
+	const continuation: PendingAiContinuation | undefined = session.pendingAiContinuations.get(agentResult.approvalId);
+	if (pausedRun !== undefined && continuation !== undefined) {
+		enqueueSessionEventWrite(session, async (): Promise<void> => {
+			await saveAgentRunContinuation(pausedRun, {
+				kind: "approval",
+				pauseId: agentResult.approvalId,
+				revision: pausedRun.revision,
+				continuation
+			});
+		});
+	}
 }
 
 export async function sendContinuedAgentResult(
@@ -322,7 +346,8 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.userCreatedAt,
 			pendingContinuation.stream,
 			pendingContinuation.workflowState,
-			pendingContinuation.lightweightActionState
+			pendingContinuation.lightweightActionState,
+			pendingContinuation.executionControl
 		);
 		await registerPendingApprovalContinuation(session, mcpHost, agentResult.approvalId, nextPendingContinuation);
 		sendAgentPaused(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, agentResult, pendingContinuation.requestId);
@@ -339,7 +364,8 @@ export async function sendContinuedAgentResult(
 			userCreatedAt: pendingContinuation.userCreatedAt,
 			stream: pendingContinuation.stream,
 			workflowState: pendingContinuation.workflowState,
-			lightweightActionState: pendingContinuation.lightweightActionState
+			lightweightActionState: pendingContinuation.lightweightActionState,
+			executionControl: pendingContinuation.executionControl
 		});
 		registerPendingToolBudget(session, pendingBudget);
 		sendToolBudgetRequired(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, pendingBudget, pendingContinuation.requestId);
@@ -350,9 +376,31 @@ export async function sendContinuedAgentResult(
 		throw new Error(agentResult.reason);
 	}
 
-	const text: string = agentResult.text;
 	const runId: string = pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId;
 	const stepRunId: string = pendingContinuation.workflowState?.activePhaseRunId ?? pendingContinuation.requestId;
+	let text: string;
+	if (agentResult.status === "execution_decision") {
+		const latestRun: AgentRunState | undefined = getAgentRun(session, pendingContinuation.requestId);
+		if (latestRun === undefined) {
+			throw new Error(`Execution decision received for unknown run ${pendingContinuation.requestId}.`);
+		}
+		validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		if (agentResult.decision.disposition === "blocked") {
+			throw new LightweightActionVerificationError(agentResult.decision.summary);
+		}
+		if (agentResult.decision.disposition === "use_workflow" || agentResult.decision.disposition === "use_lightweight") {
+			throw new LightweightActionScopeExceededError("write_scope_exceeded");
+		}
+		text = agentResult.decision.summary;
+	} else {
+		text = agentResult.text;
+		if (
+			pendingContinuation.executionControl !== undefined
+			&& (getAgentRun(session, pendingContinuation.requestId)?.checkpoint.successfulWriteFingerprints.length ?? 0) === 0
+		) {
+			throw new LightweightActionScopeExceededError("write_intent_not_completed");
+		}
+	}
 	const completionStatus = pendingContinuation.lightweightActionState === undefined
 		? {
 			resultStatus: "completed" as const,
@@ -363,6 +411,12 @@ export async function sendContinuedAgentResult(
 		: collectLightweightActionCompletionStatus(pendingContinuation.lightweightActionState);
 	if (completionStatus.failureMessage !== undefined) {
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
+	}
+	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {
+		updateAgentRun(socket, session, pendingContinuation.requestId, "finalizing", {
+			verificationStatus: completionStatus.verificationStatus ?? null,
+			warnings: completionStatus.warnings
+		});
 	}
 
 	if (!pendingContinuation.stream) {
@@ -383,7 +437,8 @@ export async function sendContinuedAgentResult(
 		pendingContinuation.requestId,
 		pendingContinuation.userCreatedAt,
 		undefined,
-		pendingContinuation.params.additionalContext
+		pendingContinuation.params.additionalContext,
+		pendingContinuation.params.retryOfRunId === undefined
 	);
 	sendSessionEvent(socket, requestId, session, "agent.message.done", {
 		runId,
@@ -395,15 +450,17 @@ export async function sendContinuedAgentResult(
 			mcpServers: mcpHost.getConnectedServerIds()
 		}
 	}, pendingContinuation.requestId);
-	sendSessionEvent(socket, requestId, session, "agent.run.done", {
-		runId,
-		requestId: pendingContinuation.requestId,
-		status: "done",
-		resultStatus: completionStatus.resultStatus,
-		verificationStatus: completionStatus.verificationStatus,
-		warnings: completionStatus.warnings,
-		sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
-	}, pendingContinuation.requestId);
+	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {
+		updateAgentRun(socket, session, pendingContinuation.requestId, "completed", {
+			terminal: {
+				resultStatus: completionStatus.resultStatus,
+				completedAt: new Date().toISOString()
+			},
+			verificationStatus: completionStatus.verificationStatus ?? null,
+			warnings: completionStatus.warnings
+		});
+	}
+	await removeAgentRunContinuation(pendingContinuation.requestId);
 	sendJson(socket, {
 		type: "response",
 		id: pendingContinuation.requestId,

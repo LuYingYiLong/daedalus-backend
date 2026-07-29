@@ -209,11 +209,13 @@ test("automation RPC client sends hello, waits for events and times out predicta
 	const address = server.address() as AddressInfo;
 	const backendUrl = `ws://127.0.0.1:${address.port}`;
 	const receivedMethods: string[] = [];
+	const receivedProtocolVersions: number[] = [];
 
 	server.on("connection", (socket: WebSocket): void => {
 		socket.on("message", (raw: Buffer): void => {
-			const request = JSON.parse(raw.toString()) as { id: string; method: string; params?: unknown };
+			const request = JSON.parse(raw.toString()) as { protocolVersion: number; id: string; method: string; params?: unknown };
 			receivedMethods.push(request.method);
+			receivedProtocolVersions.push(request.protocolVersion);
 			if (request.method === "ai.chat") {
 				socket.send(JSON.stringify({ type: "response", id: request.id, ok: true, result: { accepted: true } }));
 				setTimeout((): void => {
@@ -248,6 +250,8 @@ test("automation RPC client sends hello, waits for events and times out predicta
 		assert.equal(event.raw.event, "plan.generated");
 		assert.ok(receivedMethods.includes("client.hello"));
 		assert.ok(receivedMethods.includes("ai.chat"));
+		assert.ok(receivedProtocolVersions.length > 0);
+		assert.ok(receivedProtocolVersions.every((version: number): boolean => version === 3));
 
 		await assert.rejects(
 			client.waitForEvent({ eventName: "never.happens", timeoutMs: 20 }),

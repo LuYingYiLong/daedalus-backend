@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 2;
+const DB_SCHEMA_VERSION: number = 3;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -106,6 +106,37 @@ function migrateSchema(db: DatabaseSync): void {
 			created_at TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_file_edits_session ON file_edit_batches (session_id, created_at);
+		CREATE TABLE IF NOT EXISTS agent_runs (
+			run_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			request_id TEXT NOT NULL,
+			root_request_id TEXT NOT NULL,
+			retry_of_run_id TEXT,
+			revision INTEGER NOT NULL,
+			stage TEXT NOT NULL,
+			state_json TEXT NOT NULL,
+			checkpoint_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_session_updated
+			ON agent_runs (session_id, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_request
+			ON agent_runs (session_id, request_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_runs_stage
+			ON agent_runs (stage, updated_at);
+		CREATE TABLE IF NOT EXISTS agent_run_continuations (
+			run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			revision INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			pause_id TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_run_continuations_session
+			ON agent_run_continuations (session_id, updated_at DESC);
 		DROP TABLE IF EXISTS event_aliases;
 		DROP TABLE IF EXISTS legacy_imports;
 		DROP TABLE IF EXISTS migration_issues;

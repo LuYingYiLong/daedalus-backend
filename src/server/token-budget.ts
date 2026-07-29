@@ -137,7 +137,8 @@ export async function appendChatTurnToSession(
 	requestId: string,
 	userCreatedAt: string = new Date().toISOString(),
 	assistantCreatedAt: string = new Date().toISOString(),
-	additionalContext?: readonly AdditionalContextItem[] | undefined
+	additionalContext?: readonly AdditionalContextItem[] | undefined,
+	persistUserMessage: boolean = true
 ): Promise<boolean> {
 	if (!session.sessionId) {
 		return false;
@@ -151,14 +152,19 @@ export async function appendChatTurnToSession(
 		const existingAssistantIndex: number = nextMessages.findIndex((message: ChatMessage): boolean => message.requestId === requestId && message.role === "assistant");
 		let changed: boolean = false;
 
-		if (existingUserIndex < 0) {
+		if (persistUserMessage && existingUserIndex < 0) {
 			const userChatMessage: ChatMessage = { role: "user", content: userMessage, requestId, createdAt: userCreatedAt };
 			if (clonedAdditionalContext !== undefined) {
 				userChatMessage.additionalContext = clonedAdditionalContext;
 			}
 			nextMessages.push(userChatMessage);
 			changed = true;
-		} else if (clonedAdditionalContext !== undefined && nextMessages[existingUserIndex]?.additionalContext === undefined) {
+		} else if (
+			persistUserMessage
+			&& existingUserIndex >= 0
+			&& clonedAdditionalContext !== undefined
+			&& nextMessages[existingUserIndex]?.additionalContext === undefined
+		) {
 			nextMessages[existingUserIndex] = {
 				...nextMessages[existingUserIndex]!,
 				additionalContext: clonedAdditionalContext

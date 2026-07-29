@@ -1,5 +1,11 @@
 import WebSocket from "ws";
-import type { AiChatParams, ServerEvent } from "../protocol/types.js";
+import { randomUUID } from "node:crypto";
+import type {
+	AiChatParams,
+	CanonicalServerEventName,
+	ServerEvent,
+	ServerEventNameInput
+} from "../protocol/types.js";
 import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendAgentEvent, appendSessionEvent, appendWorkflowEvent, openSession, renameSession, type SessionMetadata } from "../session/session-store.js";
 import { createFallbackSessionTitle, generateSessionTitle, shouldApplyGeneratedSessionTitle } from "./session-title.js";
@@ -9,9 +15,68 @@ import { sendJson } from "./send-json.js";
 import { broadcastSessionEvent } from "./client-connections.js";
 import { logger } from "../logger.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
+import { saveAgentRunState } from "../session/agent-run-store.js";
+import {
+	createAgentRunState,
+	transitionAgentRunState,
+	type AgentRunResultStatus,
+	type AgentRunState
+} from "../workflow/agent-run-state.js";
 
 const PERSISTED_DELTA_FLUSH_CHARS = 8192;
+const LIVE_DELTA_FLUSH_MS = 32;
 const MAX_TERMINAL_EVENT_FINGERPRINTS = 512;
+const lastEventSequenceBySessionId: Map<string, number> = new Map();
+
+type LiveDeltaBuffer = {
+	socket: WebSocket;
+	session: ClientSession;
+	sessionId: string;
+	requestId: string;
+	persistRequestId: string;
+	eventName: Extract<CanonicalServerEventName, "agent.message.delta" | "agent.thinking.delta">;
+	data: Record<string, unknown>;
+	text: string;
+	timer: NodeJS.Timeout;
+};
+
+const liveDeltaBuffers: Map<string, LiveDeltaBuffer> = new Map();
+
+const LEGACY_EVENT_NAMES: Readonly<Record<string, CanonicalServerEventName>> = {
+	"ai.delta": "agent.message.delta",
+	"ai.done": "agent.message.done",
+	"ai.status": "agent.status",
+	"ai.paused": "agent.status",
+	"ai.thinking.delta": "agent.thinking.delta",
+	"ai.thinking.done": "agent.thinking.done",
+	"tool.call": "agent.tool.call",
+	"tool.progress": "agent.tool.progress",
+	"tool.result": "agent.tool.result",
+	"tool.error": "agent.tool.error",
+	"tool.approval_required": "agent.tool.approval_required",
+	"tool.approved": "agent.tool.approved",
+	"tool.rejected": "agent.tool.rejected",
+	"workflow.started": "agent.status",
+	"workflow.phase.started": "agent.step.started",
+	"workflow.todo.updated": "agent.run.snapshot",
+	"workflow.todo.dismissed": "agent.todo.dismissed",
+	"workflow.phase.outcome": "agent.step.outcome",
+	"workflow.phase.done": "agent.step.outcome",
+	"workflow.done": "agent.run.done",
+	"workflow.error": "agent.run.error"
+};
+
+export function canonicalizeServerEventName(eventName: ServerEventNameInput): CanonicalServerEventName {
+	return LEGACY_EVENT_NAMES[eventName] ?? eventName as CanonicalServerEventName;
+}
+
+function nextEventSequence(sessionId: string): number {
+	const wallClockFloor: number = Date.now() * 1000;
+	const previous: number = lastEventSequenceBySessionId.get(sessionId) ?? 0;
+	const next: number = Math.max(wallClockFloor, previous + 1);
+	lastEventSequenceBySessionId.set(sessionId, next);
+	return next;
+}
 
 function withSessionId(data: unknown, sessionId: string | undefined): unknown {
 	if (sessionId === undefined || typeof data !== "object" || data === null || Array.isArray(data)) {
@@ -42,8 +107,8 @@ function getRecordString(data: unknown, key: string): string {
 	return typeof value === "string" ? value.trim() : "";
 }
 
-function createTerminalEventFingerprint(eventName: ServerEvent["event"], data: unknown, sessionId: string | undefined, persistRequestId: string): string | null {
-	if (eventName !== "agent.run.error" && eventName !== "workflow.error" && eventName !== "agent.run.cancelled") {
+function createTerminalEventFingerprint(eventName: CanonicalServerEventName, data: unknown, sessionId: string | undefined, persistRequestId: string): string | null {
+	if (eventName !== "agent.run.error" && eventName !== "agent.run.cancelled") {
 		return null;
 	}
 	if (sessionId === undefined) {
@@ -61,7 +126,7 @@ function createTerminalEventFingerprint(eventName: ServerEvent["event"], data: u
 	return `${sessionId}\n${persistRequestId}\n${terminalKind}\n${message}`;
 }
 
-function shouldSuppressDuplicateTerminalEvent(session: ClientSession, eventName: ServerEvent["event"], data: unknown, sessionId: string | undefined, persistRequestId: string): boolean {
+function shouldSuppressDuplicateTerminalEvent(session: ClientSession, eventName: CanonicalServerEventName, data: unknown, sessionId: string | undefined, persistRequestId: string): boolean {
 	const fingerprint: string | null = createTerminalEventFingerprint(eventName, data, sessionId, persistRequestId);
 	if (fingerprint === null) {
 		return false;
@@ -83,14 +148,10 @@ function shouldSuppressDuplicateTerminalEvent(session: ClientSession, eventName:
 	return false;
 }
 
-export function shouldPersistSessionEvent(eventName: ServerEvent["event"]): boolean {
-	return eventName.startsWith("agent.")
-		|| eventName.startsWith("tool.")
+export function shouldPersistSessionEvent(eventName: ServerEventNameInput): boolean {
+	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
+	return canonicalEventName.startsWith("agent.")
 		|| eventName.startsWith("terminal.")
-		|| eventName === "ai.delta"
-		|| eventName.startsWith("ai.thinking.")
-		|| eventName === "ai.status"
-		|| eventName.startsWith("workflow.")
 		|| eventName.startsWith("guide.")
 		|| eventName.startsWith("skill.")
 		|| eventName.startsWith("plan.");
@@ -199,6 +260,7 @@ export function flushAllAiDeltaEventBuffers(session: ClientSession): void {
 }
 
 export async function waitForSessionEventPersistence(session: ClientSession): Promise<void> {
+	flushLiveDeltaBuffersForSession(session);
 	flushAllAiDeltaEventBuffers(session);
 	flushAllThinkingEventBuffers(session);
 	await session.eventPersistQueue;
@@ -206,29 +268,41 @@ export async function waitForSessionEventPersistence(session: ClientSession): Pr
 
 export function persistSessionEvent(
 	session: ClientSession,
-	eventName: ServerEvent["event"],
+	eventName: ServerEventNameInput,
 	data: unknown,
 	persistRequestId: string,
-	sessionIdOverride?: string | undefined
+	sessionIdOverride?: string | undefined,
+	identity?: {
+		eventId: string;
+		sequence: number;
+		createdAt: string;
+	} | undefined
 ): void {
+	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
 	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
-	if (sessionId === undefined || !shouldPersistSessionEvent(eventName)) {
+	if (sessionId === undefined || !shouldPersistSessionEvent(canonicalEventName)) {
+		return;
+	}
+	if (identity !== undefined) {
+		enqueueSessionEventWrite(session, async (): Promise<void> => {
+			await appendSessionEvent(sessionId, persistRequestId, canonicalEventName, data, identity);
+		});
 		return;
 	}
 
-	if (eventName === "ai.delta" || eventName === "agent.message.delta") {
+	if (canonicalEventName === "agent.message.delta") {
 		flushAllThinkingEventBuffers(session);
 		const text: string = getThinkingDeltaText(data);
 		if (text.length === 0) {
 			return;
 		}
 
-		const key: string = getPersistedDeltaBufferKey(sessionId, persistRequestId, eventName, data);
+		const key: string = getPersistedDeltaBufferKey(sessionId, persistRequestId, canonicalEventName, data);
 		const existingBuffer: ThinkingEventBuffer | undefined = session.aiDeltaEventBuffers.get(key);
 		const buffer: ThinkingEventBuffer = existingBuffer ?? {
 			sessionId,
 			requestId: persistRequestId,
-			eventName,
+			eventName: canonicalEventName,
 			data: getEventDataWithoutText(data),
 			text: ""
 		};
@@ -243,18 +317,18 @@ export function persistSessionEvent(
 
 	flushAllAiDeltaEventBuffers(session);
 
-	if (eventName === "ai.thinking.delta" || eventName === "agent.thinking.delta") {
+	if (canonicalEventName === "agent.thinking.delta") {
 		const text: string = getThinkingDeltaText(data);
 		if (text.length === 0) {
 			return;
 		}
 
-		const key: string = getPersistedDeltaBufferKey(sessionId, persistRequestId, eventName, data);
+		const key: string = getPersistedDeltaBufferKey(sessionId, persistRequestId, canonicalEventName, data);
 		const existingBuffer: ThinkingEventBuffer | undefined = session.thinkingEventBuffers.get(key);
 		const buffer: ThinkingEventBuffer = existingBuffer ?? {
 			sessionId,
 			requestId: persistRequestId,
-			eventName,
+			eventName: canonicalEventName,
 			data: getEventDataWithoutText(data),
 			text: ""
 		};
@@ -267,7 +341,7 @@ export function persistSessionEvent(
 		return;
 	}
 
-	if (eventName === "ai.thinking.done" || eventName === "agent.thinking.done") {
+	if (canonicalEventName === "agent.thinking.done") {
 		flushAllThinkingEventBuffers(session);
 		session.thinkingEventBuffers.clear();
 	} else {
@@ -275,62 +349,348 @@ export function persistSessionEvent(
 	}
 
 	enqueueSessionEventWrite(session, async (): Promise<void> => {
-		await appendSessionEvent(sessionId, persistRequestId, eventName, data);
-		if (eventName.startsWith("workflow.")) {
-			const workflowId: string | null = getWorkflowIdFromEventData(data);
-			if (workflowId !== null) {
-				await appendWorkflowEvent(sessionId, workflowId, persistRequestId, eventName, data);
-			}
-		}
-		if (eventName.startsWith("agent.")) {
+		await appendSessionEvent(sessionId, persistRequestId, canonicalEventName, data);
+		if (canonicalEventName.startsWith("agent.")) {
 			const runId: string | null = getAgentRunIdFromEventData(data);
 			if (runId !== null) {
-				await appendAgentEvent(sessionId, runId, persistRequestId, eventName, data);
+				await appendAgentEvent(sessionId, runId, persistRequestId, canonicalEventName, data);
 			}
 		}
 	});
+}
+
+function createEventEnvelope(
+	eventName: CanonicalServerEventName,
+	eventData: unknown,
+	requestId: string,
+	sessionId?: string | undefined
+): ServerEvent {
+	const runId: string = getRecordString(eventData, "runId");
+	const createdAt: string = new Date().toISOString();
+	return {
+		protocolVersion: 3,
+		type: "event",
+		eventId: `event-${randomUUID()}`,
+		event: eventName,
+		sessionId: sessionId ?? "",
+		requestId,
+		runId: runId.length > 0 ? runId : requestId,
+		sequence: nextEventSequence(sessionId ?? "__global__"),
+		createdAt,
+		data: eventData
+	};
+}
+
+function emitCanonicalSessionEvent(
+	socket: WebSocket,
+	session: ClientSession,
+	envelope: ServerEvent,
+	persistRequestId: string
+): void {
+	sendJson(socket, envelope);
+	if (envelope.sessionId.length > 0) {
+		broadcastSessionEvent(socket, envelope.sessionId, envelope);
+		persistSessionEvent(
+			session,
+			envelope.event,
+			envelope.data,
+			persistRequestId,
+			envelope.sessionId,
+			{
+				eventId: envelope.eventId,
+				sequence: envelope.sequence,
+				createdAt: envelope.createdAt
+			}
+		);
+	}
+}
+
+function getLiveDeltaBufferKey(
+	sessionId: string,
+	requestId: string,
+	eventName: CanonicalServerEventName,
+	data: unknown
+): string {
+	return [
+		sessionId,
+		requestId,
+		eventName,
+		getRecordString(data, "runId"),
+		getRecordString(data, "stepRunId")
+	].join("\n");
+}
+
+function flushLiveDeltaBuffer(key: string): void {
+	const buffer: LiveDeltaBuffer | undefined = liveDeltaBuffers.get(key);
+	if (buffer === undefined) {
+		return;
+	}
+	liveDeltaBuffers.delete(key);
+	clearTimeout(buffer.timer);
+	if (buffer.text.length === 0) {
+		return;
+	}
+	const eventData: Record<string, unknown> = {
+		...buffer.data,
+		text: buffer.text,
+		sessionId: buffer.sessionId
+	};
+	emitCanonicalSessionEvent(
+		buffer.socket,
+		buffer.session,
+		createEventEnvelope(buffer.eventName, eventData, buffer.requestId, buffer.sessionId),
+		buffer.persistRequestId
+	);
+}
+
+function flushLiveDeltaBuffersForSession(session: ClientSession): void {
+	for (const [key, buffer] of liveDeltaBuffers) {
+		if (buffer.session === session) {
+			flushLiveDeltaBuffer(key);
+		}
+	}
+}
+
+function enqueueLiveDelta(
+	socket: WebSocket,
+	session: ClientSession,
+	sessionId: string,
+	requestId: string,
+	persistRequestId: string,
+	eventName: Extract<CanonicalServerEventName, "agent.message.delta" | "agent.thinking.delta">,
+	data: unknown
+): void {
+	const text: string = getThinkingDeltaText(data);
+	if (text.length === 0) {
+		return;
+	}
+	const key: string = getLiveDeltaBufferKey(sessionId, requestId, eventName, data);
+	const existing: LiveDeltaBuffer | undefined = liveDeltaBuffers.get(key);
+	if (existing !== undefined) {
+		existing.text += text;
+		existing.data = getEventDataWithoutText(data);
+		if (existing.text.length >= PERSISTED_DELTA_FLUSH_CHARS) {
+			flushLiveDeltaBuffer(key);
+		}
+		return;
+	}
+	const timer: NodeJS.Timeout = setTimeout((): void => {
+		flushLiveDeltaBuffer(key);
+	}, LIVE_DELTA_FLUSH_MS);
+	timer.unref();
+	liveDeltaBuffers.set(key, {
+		socket,
+		session,
+		sessionId,
+		requestId,
+		persistRequestId,
+		eventName,
+		data: getEventDataWithoutText(data),
+		text,
+		timer
+	});
+}
+
+function asAgentRunResultStatus(value: unknown): AgentRunResultStatus {
+	return value === "completed_with_warnings"
+		|| value === "failed"
+		|| value === "cancelled"
+		? value
+		: "completed";
+}
+
+function findLifecycleAgentRun(
+	session: ClientSession,
+	requestId: string,
+	persistRequestId: string,
+	data: unknown
+): AgentRunState | undefined {
+	const runId: string = getRecordString(data, "runId");
+	return (runId.length > 0 ? session.agentRuns.get(runId) : undefined)
+		?? session.agentRuns.get(persistRequestId)
+		?? session.agentRuns.get(requestId);
+}
+
+function emitLegacyLifecycleAsRunState(params: {
+	socket: WebSocket;
+	session: ClientSession;
+	sessionId: string;
+	requestId: string;
+	persistRequestId: string;
+	eventName: CanonicalServerEventName;
+	data: unknown;
+}): boolean {
+	if (
+		params.eventName !== "agent.run.started"
+		&& params.eventName !== "agent.run.paused"
+		&& params.eventName !== "agent.run.tool_budget_required"
+		&& params.eventName !== "agent.run.tool_budget.resolved"
+		&& params.eventName !== "agent.run.done"
+		&& params.eventName !== "agent.run.error"
+		&& params.eventName !== "agent.run.cancelled"
+	) {
+		return false;
+	}
+
+	let current: AgentRunState | undefined = findLifecycleAgentRun(
+		params.session,
+		params.requestId,
+		params.persistRequestId,
+		params.data
+	);
+	if (current === undefined) {
+		current = createAgentRunState({
+			sessionId: params.sessionId,
+			requestId: params.persistRequestId,
+			runId: params.persistRequestId,
+			title: getRecordString(params.data, "title") || "Daedalus task"
+		});
+		params.session.agentRuns.set(current.runId, current);
+		params.session.agentRunToolCalls.set(current.runId, new Map());
+	}
+
+	let next: AgentRunState = current;
+	if (params.eventName === "agent.run.started") {
+		if (current.stage === "routing") {
+			next = transitionAgentRunState(current, "executing");
+		}
+	} else if (params.eventName === "agent.run.paused") {
+		next = transitionAgentRunState(current, "awaiting_approval", {
+			pause: {
+				kind: "approval",
+				id: getRecordString(params.data, "approvalId"),
+				toolName: getRecordString(params.data, "toolName"),
+				reason: getRecordString(params.data, "reason") || "approval_required"
+			}
+		});
+	} else if (params.eventName === "agent.run.tool_budget_required") {
+		next = transitionAgentRunState(current, "awaiting_tool_budget", {
+			pause: {
+				kind: "tool_budget",
+				id: getRecordString(params.data, "budgetId"),
+				reason: getRecordString(params.data, "reason") || "tool_budget"
+			}
+		});
+	} else if (params.eventName === "agent.run.tool_budget.resolved") {
+		next = transitionAgentRunState(current, "executing", { pause: null });
+	} else if (params.eventName === "agent.run.done") {
+		const finalizing: AgentRunState = current.stage === "finalizing"
+			? current
+			: transitionAgentRunState(current, "finalizing", {
+				pause: null,
+				verificationStatus: getRecordString(params.data, "verificationStatus") === "verified"
+					? "verified"
+					: getRecordString(params.data, "verificationStatus") === "failed"
+						? "failed"
+						: "unverified"
+			});
+		next = transitionAgentRunState(finalizing, "completed", {
+			terminal: {
+				resultStatus: asAgentRunResultStatus(
+					typeof params.data === "object" && params.data !== null
+						? (params.data as Record<string, unknown>).resultStatus
+						: undefined
+				),
+				completedAt: new Date().toISOString()
+			}
+		});
+	} else if (params.eventName === "agent.run.error") {
+		next = transitionAgentRunState(current, "failed", {
+			pause: null,
+			verificationStatus: "failed",
+			terminal: {
+				resultStatus: "failed",
+				message: getRecordString(params.data, "message") || "Agent run failed.",
+				completedAt: new Date().toISOString()
+			}
+		});
+	} else if (params.eventName === "agent.run.cancelled") {
+		next = transitionAgentRunState(current, "cancelled", {
+			pause: null,
+			terminal: {
+				resultStatus: "cancelled",
+				message: getRecordString(params.data, "reason") || "cancelled",
+				completedAt: new Date().toISOString()
+			}
+		});
+	}
+
+	params.session.agentRuns.set(next.runId, next);
+	if (params.sessionId.length > 0) {
+		const snapshot: AgentRunState = structuredClone(next);
+		enqueueSessionEventWrite(params.session, async (): Promise<void> => {
+			await saveAgentRunState(snapshot);
+		});
+	}
+	emitCanonicalSessionEvent(
+		params.socket,
+		params.session,
+		createEventEnvelope("agent.run.state", structuredClone(next), next.requestId, params.sessionId),
+		next.requestId
+	);
+	return true;
 }
 
 export function sendSessionEvent(
 	socket: WebSocket,
 	requestId: string,
 	session: ClientSession,
-	eventName: ServerEvent["event"],
+	eventName: ServerEventNameInput,
 	data: unknown,
 	persistRequestId: string = requestId,
 	sessionIdOverride?: string | undefined
 ): void {
+	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
 	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
 	const eventData: unknown = withSessionId(data, sessionId);
-	if (shouldSuppressDuplicateTerminalEvent(session, eventName, eventData, sessionId, persistRequestId)) {
+	if (shouldSuppressDuplicateTerminalEvent(session, canonicalEventName, eventData, sessionId, persistRequestId)) {
 		return;
 	}
-
-	sendJson(socket, {
-		type: "event",
-		id: requestId,
-		event: eventName,
-		data: eventData
-	});
-
-	if (sessionId !== undefined) {
-		broadcastSessionEvent(socket, sessionId, requestId, eventName, eventData);
+	if (
+		emitLegacyLifecycleAsRunState({
+			socket,
+			session,
+			sessionId: sessionId ?? "",
+			requestId,
+			persistRequestId,
+			eventName: canonicalEventName,
+			data: eventData
+		})
+	) {
+		return;
 	}
-
-	persistSessionEvent(session, eventName, eventData, persistRequestId, sessionId);
+	if (
+		sessionId !== undefined
+		&& (canonicalEventName === "agent.message.delta" || canonicalEventName === "agent.thinking.delta")
+	) {
+		enqueueLiveDelta(
+			socket,
+			session,
+			sessionId,
+			requestId,
+			persistRequestId,
+			canonicalEventName,
+			eventData
+		);
+		return;
+	}
+	if (canonicalEventName === "agent.message.done" || canonicalEventName === "agent.thinking.done") {
+		flushLiveDeltaBuffersForSession(session);
+	}
+	emitCanonicalSessionEvent(
+		socket,
+		session,
+		createEventEnvelope(canonicalEventName, eventData, requestId, sessionId),
+		persistRequestId
+	);
 }
 
-export function sendGlobalEvent(socket: WebSocket, requestId: string, eventName: ServerEvent["event"], data: unknown): void {
+export function sendGlobalEvent(socket: WebSocket, requestId: string, eventName: ServerEventNameInput, data: unknown): void {
 	if (socket.readyState !== WebSocket.OPEN) {
 		return;
 	}
 
-	sendJson(socket, {
-		type: "event",
-		id: requestId,
-		event: eventName,
-		data
-	});
+	sendJson(socket, createEventEnvelope(canonicalizeServerEventName(eventName), data, requestId));
 }
 
 export function maybeScheduleSessionTitleGeneration(

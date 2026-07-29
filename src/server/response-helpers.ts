@@ -25,9 +25,15 @@ export function sendError(socket: WebSocket, id: string, code: string, message: 
 
 export function sendEvent(socket: WebSocket, id: string, event: ServerEvent["event"], data: unknown): void {
 	sendJson(socket, {
+		protocolVersion: 3,
 		type: "event",
-		id,
+		eventId: `event-${id}-${Date.now().toString(36)}`,
 		event,
+		sessionId: "",
+		requestId: id,
+		runId: id,
+		sequence: Date.now() * 1000,
+		createdAt: new Date().toISOString(),
 		data
 	});
 }

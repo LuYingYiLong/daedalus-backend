@@ -3,15 +3,15 @@ import type { AiChatParams, ChatMessage } from "../protocol/types.js";
 import { chatWithDeepSeek, type ProviderChatOptions } from "../providers/deepseek-client.js";
 import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
 import { isExplicitReadOnlyRequest } from "./planner.js";
+import type { AgentRunIntent, AgentRunLane, AgentRunScope } from "./agent-run-state.js";
 
-export type WorkflowRouteExecution = "direct_answer" | "tool_answer" | "workflow";
 export type WorkflowOption = NonNullable<NonNullable<AiChatParams["options"]>["workflow"]>;
 
 export type WorkflowRouteDecision = {
-	execution: WorkflowRouteExecution;
+	intent: AgentRunIntent;
+	scope: AgentRunScope;
+	lane: AgentRunLane;
 	reason: string;
-	requiresTools: boolean;
-	requiresWrite: boolean;
 	planningHint: string;
 	forcedByOption?: WorkflowOption | undefined;
 	safetyOverride?: string | undefined;
@@ -24,10 +24,10 @@ export type WorkflowRouteContext = {
 };
 
 const workflowRouteSchema = z.object({
-	execution: z.enum(["direct_answer", "tool_answer", "workflow"]),
+	intent: z.enum(["answer", "inspect", "mutate"]),
+	scope: z.enum(["bounded", "unknown", "complex"]),
+	lane: z.enum(["direct", "read", "probe", "lightweight", "workflow"]),
 	reason: z.string().min(1).max(500).optional(),
-	requiresTools: z.boolean().optional(),
-	requiresWrite: z.boolean().optional(),
 	planningHint: z.string().max(1000).optional()
 }).strict();
 
@@ -40,22 +40,22 @@ export function resolveForcedWorkflowRoute(params: AiChatParams): WorkflowRouteD
 	}
 
 	if (workflowMode === "single") {
-		const requiresWrite: boolean = hasWriteIntent(params.message);
+		const mutate: boolean = hasWriteIntent(params.message);
 		return applyWorkflowRouteSafety({
-			execution: "tool_answer",
+			intent: mutate ? "mutate" : "inspect",
+			scope: "bounded",
+			lane: mutate ? "lightweight" : "read",
 			reason: "Explicit workflow=single forces hidden single-turn execution.",
-			requiresTools: true,
-			requiresWrite,
 			planningHint: "",
 			forcedByOption: workflowMode
 		}, params);
 	}
 
 	return applyWorkflowRouteSafety({
-		execution: "workflow",
+		intent: "mutate",
+		scope: "complex",
+		lane: "workflow",
 		reason: `Explicit workflow=${workflowMode} forces workflow execution.`,
-		requiresTools: true,
-		requiresWrite: workflowMode === "multi_phase" || workflowMode === "llm_planned",
 		planningHint: "",
 		forcedByOption: workflowMode
 	}, params);
@@ -77,21 +77,21 @@ export async function routeWorkflowExecution(
 		createRouterParams(createRouteUserMessage(params, context)),
 		options,
 		limitRoutingHistory(history),
-		createRouteSystemPrompt(),
+		createRouteSystemPromptV3(),
 		abortSignal
 	);
 	return applyProjectContextRouteOverride(normalizeWorkflowRouteDecision(parseWorkflowRouteDecision(text), params), params, context);
 }
 
 export function createFallbackWorkflowRoute(params: AiChatParams, reason: string = "Workflow router failed."): WorkflowRouteDecision {
-	const requiresWrite: boolean = hasWriteIntent(params.message);
-	const requiresWorkflow: boolean = requiresWrite && hasComplexWriteIntent(params.message);
+	const mutate: boolean = hasWriteIntent(params.message);
+	const complex: boolean = mutate && hasComplexWriteIntent(params.message);
 	return applyWorkflowRouteSafety({
-		execution: requiresWorkflow ? "workflow" : "tool_answer",
+		intent: mutate ? "mutate" : "inspect",
+		scope: complex ? "complex" : mutate ? "unknown" : "bounded",
+		lane: complex ? "workflow" : mutate ? "probe" : "read",
 		reason,
-		requiresTools: true,
-		requiresWrite,
-		planningHint: requiresWorkflow
+		planningHint: complex
 			? "Router failed and the request appears complex or destructive. Create a focused implementation and verification workflow."
 			: "",
 		safetyOverride: "router_fallback"
@@ -99,15 +99,25 @@ export function createFallbackWorkflowRoute(params: AiChatParams, reason: string
 }
 
 export function normalizeWorkflowRouteDecision(raw: RawWorkflowRouteDecision, params: AiChatParams): WorkflowRouteDecision {
-	const execution: WorkflowRouteExecution = raw.execution === "direct_answer" && raw.requiresWrite === true
-		? "tool_answer"
-		: raw.execution;
-	const requiresWrite: boolean = raw.requiresWrite === true || execution === "workflow";
+	const explicitMutationIntent: boolean = hasWriteIntent(params.message);
+	const complexMutation: boolean = explicitMutationIntent && hasComplexWriteIntent(params.message);
+	const intent: AgentRunIntent = explicitMutationIntent ? "mutate" : raw.intent;
+	const scope: AgentRunScope = complexMutation
+		? "complex"
+		: intent === "mutate" && raw.scope === "bounded" && raw.lane === "direct"
+			? "unknown"
+			: raw.scope;
+	const lane: AgentRunLane = normalizeLane(intent, scope, raw.lane);
 	const decision: WorkflowRouteDecision = {
-		execution,
-		reason: raw.reason?.trim() || "Routed by workflow router.",
-		requiresTools: raw.requiresTools ?? execution !== "direct_answer",
-		requiresWrite,
+		intent,
+		scope,
+		lane,
+		reason: [
+			raw.reason?.trim() || "Routed by workflow router.",
+			explicitMutationIntent && raw.intent !== "mutate"
+				? "Deterministic safety guard preserved the user's mutation intent."
+				: ""
+		].filter((part: string): boolean => part.length > 0).join(" "),
 		planningHint: raw.planningHint?.trim() ?? ""
 	};
 	return applyWorkflowRouteSafety(decision, params);
@@ -118,7 +128,7 @@ export function applyProjectContextRouteOverride(
 	params: AiChatParams,
 	context: WorkflowRouteContext
 ): WorkflowRouteDecision {
-	if (decision.execution !== "direct_answer" || decision.requiresWrite || explicitlyAvoidsProjectReads(params.message)) {
+	if (decision.lane !== "direct" || decision.intent === "mutate" || explicitlyAvoidsProjectReads(params.message)) {
 		return decision;
 	}
 	if (!requiresCurrentProjectRead(params.message, context)) {
@@ -127,9 +137,9 @@ export function applyProjectContextRouteOverride(
 
 	return {
 		...decision,
-		execution: "tool_answer",
-		requiresTools: true,
-		requiresWrite: false,
+		intent: "inspect",
+		scope: "bounded",
+		lane: "read",
 		safetyOverride: "project_context_read",
 		reason: `${decision.reason} Current project context requires read-only tools.`
 	};
@@ -141,19 +151,35 @@ export function applyWorkflowRouteSafety(decision: WorkflowRouteDecision, params
 		return decision;
 	}
 
-	if (!decision.requiresWrite) {
+	if (decision.intent !== "mutate") {
 		return decision;
 	}
 
 	return {
 		...decision,
-		execution: "tool_answer",
-		requiresTools: true,
-		requiresWrite: false,
+		intent: "inspect",
+		scope: "bounded",
+		lane: "read",
 		planningHint: "",
 		safetyOverride: explicitReadOnly ? "explicit_read_only" : "ask_mode_read_only",
 		reason: `${decision.reason} Safety override forced read-only tool answer.`
 	};
+}
+
+function normalizeLane(intent: AgentRunIntent, scope: AgentRunScope, requestedLane: AgentRunLane): AgentRunLane {
+	if (intent === "answer") {
+		return "direct";
+	}
+	if (intent === "inspect") {
+		return "read";
+	}
+	if (scope === "complex") {
+		return "workflow";
+	}
+	if (scope === "unknown") {
+		return "probe";
+	}
+	return requestedLane === "workflow" ? "workflow" : "lightweight";
 }
 
 function parseWorkflowRouteDecision(text: string): RawWorkflowRouteDecision {
@@ -172,10 +198,14 @@ export function hasWriteIntent(message: string): boolean {
 		"修改",
 		"修复",
 		"实现",
+		"完善",
 		"新增",
 		"添加",
 		"创建",
 		"生成",
+		"编写",
+		"搭建",
+		"帮我做",
 		"删除",
 		"替换",
 		"更新",
@@ -281,6 +311,24 @@ function createRouteSystemPrompt(): string {
 		"- 如果修改范围暂不确定但可通过一次最小读取确认，优先选 tool_answer；轻量执行发现超出边界后会升级。",
 		"- 用户明确只读/不要修改时 requiresWrite 必须为 false。",
 		"- 不要因为存在 workspace/editor 上下文就自动选 workflow。"
+	].join("\n");
+}
+
+function createRouteSystemPromptV3(): string {
+	return [
+		"You are the Daedalus execution router. Return JSON only. Do not call tools.",
+		"Separate the user's intent, the known scope, and the execution lane.",
+		"- intent=answer: explanation or advice that does not require current project facts.",
+		"- intent=inspect: read or verify current project facts without mutation.",
+		"- intent=mutate: the user expects files, resources, settings, or project state to change.",
+		"- scope=bounded: one clear target and no more than two logical writes.",
+		"- scope=unknown: a small read-only probe is needed before the write scope is known.",
+		"- scope=complex: multi-file coordination, migration, destructive work, a long operation, or explicit planning.",
+		"- lane=direct for answer, read for inspect, probe for unknown mutation, lightweight for bounded mutation, workflow for complex mutation.",
+		"Creating, modifying, fixing, or generating something does not by itself require workflow.",
+		"Ask mode and explicit read-only requests must never use a mutation lane.",
+		"Output exactly:",
+		"{\"intent\":\"answer|inspect|mutate\",\"scope\":\"bounded|unknown|complex\",\"lane\":\"direct|read|probe|lightweight|workflow\",\"reason\":\"short reason\",\"planningHint\":\"short planner hint\"}"
 	].join("\n");
 }
 

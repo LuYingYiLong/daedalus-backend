@@ -177,11 +177,15 @@ import {
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
-import { sendWorkflowEvent, mapWorkflowEventToAgentEvent, convertWorkflowSnapshotToAgentSnapshot, sendWorkflowTodoSnapshot } from "./workflow/events.js";
+import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
 import { startWorkflowExecution } from "./workflow/executor.js";
 import { ensureProviderConfigured } from "../application/provider-session-service.js";
+import {
+	hydrateAgentRunRuntime,
+	serializeAgentRunRuntime
+} from "./agent-run-recovery.js";
 import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
 import { logger } from "../logger.js";
@@ -481,6 +485,7 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 		defaultOutputReserveTokens: session.modelProfile.defaultOutputReserveTokens,
 		safetyMarginTokens: session.modelProfile.safetyMarginTokens,
 		approvalMode: session.approvalGateway.getMode(),
+		...serializeAgentRunRuntime(session),
 		pendingApprovals: session.approvalGateway.listPending().length,
 		pendingGuides: session.pendingGuides.length,
 		messageQueue: serializeMessageQueue(session),
@@ -540,11 +545,13 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 		case "session.info":
 			await waitForFullSessionLoad(session);
-			await ensureProviderConfigured(session);
+			{
+				const apiKey: string | undefined = await ensureProviderConfigured(session);
+				await loadHydratedPendingApprovalStates(session, apiKey);
+			}
 			if (session.sessionId === undefined) {
 				await applySessionApprovalMode(session);
 			}
-			await loadHydratedPendingApprovalStates(session);
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -732,6 +739,11 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				}
 				applySessionMetadata(session, timeline.metadata);
 				await applySessionApprovalMode(session, timeline.metadata);
+				const apiKey: string | undefined = await ensureProviderConfigured(session);
+				if (!reusingRuntime) {
+					await hydrateAgentRunRuntime(session, apiKey);
+					await loadHydratedPendingApprovalStates(session, apiKey);
+				}
 				subscribeSocketToSession(socket, timeline.metadata.id);
 
 				sendJson(socket, {
@@ -752,6 +764,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						pendingGuides: session.pendingGuides.map(serializePendingGuide),
 						messageQueue: serializeMessageQueue(session),
 						workbench: serializeWorkbench(session),
+						...serializeAgentRunRuntime(session),
 						workspaceWarning: workspaceWarning ?? null
 					}
 				});

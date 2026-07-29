@@ -160,6 +160,7 @@ export const aiChatParamsSchema = z.object({
 	skillRefs: z.array(skillRefSchema).max(4).optional(),
 	systemPrompt: z.string().optional(),
 	retryFromRequestId: z.string().min(1).optional(),
+	retryOfRunId: z.string().min(1).optional(),
 	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
 	options: z.object({
 		temperature: z.number().min(0).max(2).optional(),
@@ -357,7 +358,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("client.hello"),
 		params: z.object({
-			protocolVersion: z.literal(2),
+			protocolVersion: z.literal(3),
 			clientType: z.enum(["godot_plugin", "studio", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
@@ -505,6 +506,14 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("ai.chat"),
 		params: aiChatParamsSchema,
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.run.retry"),
+		params: z.object({
+			runId: z.string().min(1)
+		}).strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1357,7 +1366,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 // WebSocket 边界使用该 envelope；内部 handler 继续接收不含传输字段的 ClientRequest。
 export const clientRequestEnvelopeSchema = z.intersection(
 	z.object({
-		protocolVersion: z.literal(2)
+		protocolVersion: z.literal(3)
 	}),
 	clientRequestSchema
 );

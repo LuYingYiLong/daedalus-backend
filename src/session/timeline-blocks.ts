@@ -741,21 +741,32 @@ function createFailedMessageStatus(message: StoredMessage): Partial<TimelineStat
 	};
 }
 
-function eventCompletesAssistantBlock(eventName: string): boolean {
-	return eventName === "agent.message.done"
-		|| eventName === "agent.run.done"
-		|| eventName === "workflow.done"
-		|| eventName === "ai.done"
-		|| eventName === "agent.run.error"
-		|| eventName === "workflow.error"
-		|| eventName === "agent.run.cancelled";
+function getAgentRunStateStage(event: StoredSessionEvent): string {
+	return event.event === "agent.run.state" && isRecord(event.data)
+		? asString(event.data.stage)
+		: "";
+}
+
+function eventCompletesAssistantBlock(event: StoredSessionEvent): boolean {
+	const runStage: string = getAgentRunStateStage(event);
+	return event.event === "agent.message.done"
+		|| event.event === "agent.run.done"
+		|| event.event === "workflow.done"
+		|| event.event === "ai.done"
+		|| event.event === "agent.run.error"
+		|| event.event === "workflow.error"
+		|| event.event === "agent.run.cancelled"
+		|| runStage === "completed"
+		|| runStage === "failed"
+		|| runStage === "cancelled"
+		|| runStage === "interrupted";
 }
 
 function shouldAppendInlineDiff(events: StoredSessionEvent[], assistantMessage?: StoredMessage | undefined): boolean {
 	if (assistantMessage !== undefined) {
 		return true;
 	}
-	return events.some((event: StoredSessionEvent): boolean => eventCompletesAssistantBlock(event.event));
+	return events.some(eventCompletesAssistantBlock);
 }
 
 function buildAssistantBodyParts(
@@ -824,6 +835,38 @@ function buildAssistantBodyParts(
 				details: reason,
 				code: "agent_run_cancelled"
 			});
+		} else if (event.event === "agent.run.state") {
+			const stage: string = asString(eventData.stage);
+			const terminal: Record<string, unknown> = isRecord(eventData.terminal) ? eventData.terminal : {};
+			if (stage === "failed") {
+				const message: string = asString(terminal.message) || "The run failed.";
+				markRunningImageGenerationFailed(parts, message);
+				appendStatusPart(parts, createRunErrorStatus({
+					code: "agent_run_error",
+					message
+				}));
+				hasErrorStatus = true;
+			} else if (stage === "cancelled") {
+				const reason: string = asString(terminal.message) || "The request was cancelled.";
+				markRunningImageGenerationFailed(parts, reason);
+				appendStatusPart(parts, {
+					status: "message",
+					title: "Stopped",
+					details: reason,
+					code: "agent_run_cancelled"
+				});
+			} else if (stage === "interrupted") {
+				const reason: string = "The backend stopped before this run reached a terminal state.";
+				markRunningImageGenerationFailed(parts, reason);
+				appendStatusPart(parts, {
+					status: "warning",
+					title: "Run interrupted",
+					details: `${reason} Retry it from its safe checkpoint.`,
+					code: "agent_run_interrupted",
+					actionLabel: "Retry from checkpoint",
+					actionId: `retry_agent_run:${asString(eventData.runId)}`
+				});
+			}
 		} else if (event.event === "plan.generated" || event.event === "plan.revised") {
 			const planPart: TimelinePlanPart | null = createPlanPart(eventData);
 			if (planPart !== null) {
@@ -892,7 +935,10 @@ function createAssistantBlock(
 		content,
 		startedAtUtc,
 		completedAtUtc,
-		status: assistantMessage?.status === "failed" ? "failed" : undefined,
+		status: assistantMessage?.status === "failed"
+			|| events.some((event: StoredSessionEvent): boolean => getAgentRunStateStage(event) === "failed")
+			? "failed"
+			: undefined,
 		bodyParts: buildAssistantBodyParts(sessionId, events, content, requestId, assistantMessage)
 	};
 }
@@ -1016,36 +1062,34 @@ function createTimelineBuildEntries(messages: StoredMessage[], groupedEvents: Ma
 	return entries.sort(compareTimelineBuildEntries);
 }
 
-function getSnapshotTodoIdentity(snapshot: unknown): string | null {
+function getTodoIdentities(snapshot: unknown): string[] {
 	if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
-		return null;
+		return [];
 	}
 
 	const record = snapshot as { workflowId?: unknown; runId?: unknown };
+	const identities: string[] = [];
 	if (typeof record.workflowId === "string" && record.workflowId.length > 0) {
-		return record.workflowId;
+		identities.push(record.workflowId);
 	}
 	if (typeof record.runId === "string" && record.runId.length > 0) {
-		return record.runId;
+		identities.push(record.runId);
 	}
 
-	return null;
+	return identities;
 }
 
-function getDismissedTodoIdentity(data: unknown): string | null {
-	return getSnapshotTodoIdentity(data);
-}
-
-function shouldClearDismissedSnapshot(snapshot: unknown | null, dismissedIdentity: string | null): boolean {
+function shouldClearDismissedSnapshot(snapshot: unknown | null, dismissedIdentities: string[]): boolean {
 	if (snapshot === null) {
 		return false;
 	}
-	if (dismissedIdentity === null) {
+	if (dismissedIdentities.length === 0) {
 		return true;
 	}
 
-	const snapshotIdentity: string | null = getSnapshotTodoIdentity(snapshot);
-	return snapshotIdentity === null || snapshotIdentity === dismissedIdentity;
+	const snapshotIdentities: string[] = getTodoIdentities(snapshot);
+	return snapshotIdentities.length === 0
+		|| dismissedIdentities.some((identity: string): boolean => snapshotIdentities.includes(identity));
 }
 
 function shouldClearPlanClarificationForEvent(event: StoredSessionEvent, clarification: TimelinePlanClarification | null): boolean {
@@ -1063,6 +1107,13 @@ function shouldClearPlanClarificationForEvent(event: StoredSessionEvent, clarifi
 		const requestId: string = asString(event.data.requestId);
 		return planId === clarification.planId || requestId === clarification.requestId;
 	}
+	if (event.event === "agent.run.state") {
+		const stage: string = asString(event.data.stage);
+		const planId: string = asString(event.data.planId);
+		const requestId: string = asString(event.data.requestId);
+		return (stage === "failed" || stage === "cancelled")
+			&& (planId === clarification.planId || requestId === clarification.requestId);
+	}
 
 	return false;
 }
@@ -1078,6 +1129,13 @@ function findLatestSnapshots(events: StoredSessionEvent[]): { latestWorkflowSnap
 		}
 		if (event.event === "agent.run.snapshot") {
 			latestAgentSnapshot = event.data;
+		}
+		if (event.event === "agent.run.state" && isRecord(event.data)) {
+			if (isRecord(event.data.todo)) {
+				latestAgentSnapshot = event.data.todo;
+			} else if (event.data.todo === null) {
+				latestAgentSnapshot = null;
+			}
 		}
 		if (event.event === "plan.clarification.required" && isRecord(event.data)) {
 			latestPlanClarification = createPlanClarificationSnapshot(event.data);
@@ -1095,12 +1153,12 @@ function findLatestSnapshots(events: StoredSessionEvent[]): { latestWorkflowSnap
 				latestPlanApproval = null;
 			}
 		}
-		if (event.event === "workflow.todo.dismissed") {
-			const dismissedIdentity: string | null = getDismissedTodoIdentity(event.data);
-			if (shouldClearDismissedSnapshot(latestWorkflowSnapshot, dismissedIdentity)) {
+		if (event.event === "workflow.todo.dismissed" || event.event === "agent.todo.dismissed") {
+			const dismissedIdentities: string[] = getTodoIdentities(event.data);
+			if (shouldClearDismissedSnapshot(latestWorkflowSnapshot, dismissedIdentities)) {
 				latestWorkflowSnapshot = null;
 			}
-			if (shouldClearDismissedSnapshot(latestAgentSnapshot, dismissedIdentity)) {
+			if (shouldClearDismissedSnapshot(latestAgentSnapshot, dismissedIdentities)) {
 				latestAgentSnapshot = null;
 			}
 		}

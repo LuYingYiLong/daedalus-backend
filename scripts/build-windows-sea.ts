@@ -279,7 +279,7 @@ async function requestBackend(
 		}, 15_000);
 		socket.once("open", (): void => {
 			socket.send(JSON.stringify({
-				protocolVersion: 2,
+		protocolVersion: 3,
 				type: "request",
 				id: `sea-smoke-${method}`,
 				method,

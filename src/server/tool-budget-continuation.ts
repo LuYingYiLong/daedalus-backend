@@ -2,12 +2,14 @@ import WebSocket from "ws";
 import type { ProviderAgentResult } from "../providers/agent-types.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
 import type { PendingToolBudget, PendingToolBudgetPhaseStats } from "../session/pending-tool-budget.js";
+import { saveAgentRunContinuation } from "../session/agent-run-store.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import type { LightweightActionState } from "../workflow/lightweight-action.js";
 import type { ClientSession, PendingAiContinuation } from "./client-session.js";
 import { createPendingAiContinuation } from "./approval-continuation.js";
-import { sendSessionEvent } from "./session-events.js";
+import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
 import { setWorkbenchActiveRun } from "./workbench.js";
+import { getAgentRun } from "./agent-run-controller.js";
 
 export function createPendingToolBudget(
 	params: {
@@ -23,6 +25,7 @@ export function createPendingToolBudget(
 		lightweightActionState?: LightweightActionState | undefined;
 		workflowPhaseToolStats?: PendingToolBudgetPhaseStats | undefined;
 		workflowToolObservations?: WorkflowToolObservation[] | undefined;
+		executionControl?: PendingAiContinuation["executionControl"];
 	}
 ): PendingToolBudget {
 	const continuation: PendingAiContinuation = createPendingAiContinuation(
@@ -35,7 +38,8 @@ export function createPendingToolBudget(
 		params.userCreatedAt,
 		params.stream,
 		params.workflowState,
-		params.lightweightActionState
+		params.lightweightActionState,
+		params.executionControl
 	);
 	return {
 		budgetId: params.agentResult.budgetId,
@@ -80,6 +84,17 @@ export function sendToolBudgetRequired(socket: WebSocket, requestId: string, ses
 		additionalSteps: pending.additionalSteps,
 		message: "工具调用预算已达到上限，等待用户决定是否继续。"
 	}, persistRequestId);
+	const pausedRun = getAgentRun(session, persistRequestId);
+	if (pausedRun !== undefined) {
+		enqueueSessionEventWrite(session, async (): Promise<void> => {
+			await saveAgentRunContinuation(pausedRun, {
+				kind: "tool_budget",
+				pauseId: pending.budgetId,
+				revision: pausedRun.revision,
+				pending
+			});
+		});
+	}
 }
 
 export function cancelPendingToolBudgetsForRequest(session: ClientSession, requestId: string): string[] {

@@ -12,6 +12,8 @@ import { enqueueMessage, emitMessageQueueUpdated, persistMessageQueueEvent, seri
 import { bumpWorkbenchRevision, emitWorkbenchUpdated } from "./workbench.js";
 import { sendSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
 import { createGlobalSkillWorkspace } from "../skills/runtime.js";
+import { beginAgentRun, updateAgentRun } from "./agent-run-controller.js";
+import type { WorkflowTodoSnapshot } from "../workflow/types.js";
 
 export type SlashCommandDefinition = {
 	command: string;
@@ -250,45 +252,65 @@ async function createTestMessageQueue(socket: WebSocket, request: ClientRequest,
 }
 
 async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<void> {
+	if (session.sessionId === undefined) {
+		return;
+	}
 	const runId: string = `slash-test-todo-${Date.now().toString(36)}`;
-	sendSessionEvent(socket, request.id, session, "agent.run.snapshot", {
+	beginAgentRun({
+		socket,
+		session,
+		sessionId: session.sessionId,
+		requestId: request.id,
 		runId,
+		title: "Todo UI test",
+		intent: "mutate",
+		scope: "complex",
+		lane: "workflow"
+	});
+	const todo: WorkflowTodoSnapshot = {
+		workflowId: runId,
 		title: "Todo UI test",
 		source: "slash",
 		revision: 1,
-		activeStepRunId: `${runId}-write`,
-		steps: [
+		activePhaseRunId: `${runId}-write`,
+		phases: [
 			{
 				id: "inspect",
 				title: "读取上下文",
-				status: "done",
-				text: "模拟已完成的只读阶段。"
+				status: "done"
 			},
 			{
 				id: "write",
 				title: "实现修改",
-				status: "running",
-				text: "模拟正在进行的写入阶段。"
+				status: "running"
 			},
 			{
 				id: "verify",
 				title: "验证结果",
-				status: "pending",
-				text: "模拟等待执行的验证阶段。"
+				status: "pending"
 			},
 			{
 				id: "summarize",
 				title: "总结交付",
-				status: "pending",
-				text: "模拟最终总结阶段。"
+				status: "pending"
 			}
 		],
 		todos: [
-			{ id: "todo-inspect", phaseId: "inspect", title: "读取上下文", status: "done", text: "读取上下文" },
-			{ id: "todo-write", phaseId: "write", title: "实现修改", status: "running", text: "实现修改" },
-			{ id: "todo-verify", phaseId: "verify", title: "验证结果", status: "pending", text: "验证结果" },
-			{ id: "todo-summarize", phaseId: "summarize", title: "总结交付", status: "pending", text: "总结交付" }
+			{ id: "todo-inspect", phaseId: "inspect", status: "done", text: "读取上下文" },
+			{ id: "todo-write", phaseId: "write", status: "running", text: "实现修改" },
+			{ id: "todo-verify", phaseId: "verify", status: "pending", text: "验证结果" },
+			{ id: "todo-summarize", phaseId: "summarize", status: "pending", text: "总结交付" }
 		]
+	};
+	updateAgentRun(socket, session, runId, "finalizing", {
+		todo
+	});
+	updateAgentRun(socket, session, runId, "completed", {
+		todo,
+		terminal: {
+			resultStatus: "completed",
+			completedAt: new Date().toISOString()
+		}
 	});
 	await waitForSessionEventPersistence(session);
 }

@@ -3,7 +3,7 @@ import type { ExternalMcpConfig } from "./config.js";
 import { redactExternalMcpResult } from "./redaction.js";
 
 type RpcRequest = {
-	protocolVersion: 2;
+	protocolVersion: 3;
 	type: "request";
 	id: string;
 	method: string;
@@ -114,7 +114,7 @@ export class ExternalMcpRpcClient {
 				this.helloSent = true;
 				try {
 					await this.sendConnectedRequest("client.hello", {
-						protocolVersion: 2,
+						protocolVersion: 3,
 						clientType: "external_mcp",
 						clientName: this.config.clientName,
 						capabilities: {
@@ -177,7 +177,7 @@ export class ExternalMcpRpcClient {
 
 	private async sendConnectedRequest(method: string, params?: unknown, timeoutMs: number = this.config.requestTimeoutMs): Promise<unknown> {
 		const id: string = createRequestId(method.replaceAll(".", "_"));
-		const request: RpcRequest = { protocolVersion: 2, type: "request", id, method, params };
+		const request: RpcRequest = { protocolVersion: 3, type: "request", id, method, params };
 		return new Promise<unknown>((resolve, reject): void => {
 			const timer: NodeJS.Timeout = setTimeout((): void => {
 				this.pending.delete(id);
@@ -198,7 +198,7 @@ export class ExternalMcpRpcClient {
 	async sendRequestNoWait(method: string, params?: unknown): Promise<string> {
 		await this.ensureConnected();
 		const id: string = createRequestId(method.replaceAll(".", "_"));
-		const request: RpcRequest = { protocolVersion: 2, type: "request", id, method, params };
+		const request: RpcRequest = { protocolVersion: 3, type: "request", id, method, params };
 		await new Promise<void>((resolve, reject): void => {
 			this.socket?.send(JSON.stringify(request), (error?: Error | null): void => {
 				if (error != null) {

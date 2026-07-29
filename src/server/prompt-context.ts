@@ -155,7 +155,7 @@ import {
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
-import { sendWorkflowEvent, mapWorkflowEventToAgentEvent, convertWorkflowSnapshotToAgentSnapshot, sendWorkflowTodoSnapshot } from "./workflow/events.js";
+import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
 import { startWorkflowExecution } from "./workflow/executor.js";
@@ -233,25 +233,15 @@ function refreshCustomMcpServersAndNotify(socket: WebSocket, mcpHost: McpHost): 
 		try {
 			await mcpHost.refreshCustomServersForActiveWorkspace();
 			const workspaceId: string | undefined = mcpHost.getActiveWorkspaceId();
-			sendJson(socket, {
-				type: "event",
-				id: "mcp-config",
-				event: "mcp.config.updated",
-				data: await createMcpConfigListResult(mcpHost, workspaceId)
-			});
+			sendGlobalEvent(socket, "mcp-config", "mcp.config.updated", await createMcpConfigListResult(mcpHost, workspaceId));
 		} catch (error: unknown) {
 			logger.error("mcp_config", "refresh_failed", error, {
 				workspaceId: mcpHost.getActiveWorkspaceId()
 			});
 			const workspaceId: string | undefined = mcpHost.getActiveWorkspaceId();
-			sendJson(socket, {
-				type: "event",
-				id: "mcp-config",
-				event: "mcp.config.updated",
-				data: {
+			sendGlobalEvent(socket, "mcp-config", "mcp.config.updated", {
 					...await createMcpConfigListResult(mcpHost, workspaceId),
 					error: error instanceof Error ? error.message : "Failed to refresh custom MCP servers"
-				}
 			});
 		}
 	})();

@@ -63,12 +63,14 @@ test("external MCP RPC client sends hello, waits for events and times out predic
 	const address = server.address() as AddressInfo;
 	const backendUrl = `ws://127.0.0.1:${address.port}`;
 	const receivedMethods: string[] = [];
+	const receivedProtocolVersions: number[] = [];
 	let helloCapabilities: Record<string, unknown> | undefined;
 
 	server.on("connection", (socket: WebSocket): void => {
 		socket.on("message", (raw: Buffer): void => {
-			const request = JSON.parse(raw.toString()) as { id: string; method: string; params?: Record<string, unknown> };
+			const request = JSON.parse(raw.toString()) as { protocolVersion: number; id: string; method: string; params?: Record<string, unknown> };
 			receivedMethods.push(request.method);
+			receivedProtocolVersions.push(request.protocolVersion);
 			if (request.method === "client.hello") {
 				helloCapabilities = request.params?.capabilities as Record<string, unknown> | undefined;
 			}
@@ -103,6 +105,8 @@ test("external MCP RPC client sends hello, waits for events and times out predic
 		assert.ok(receivedMethods.includes("client.hello"));
 		assert.ok(receivedMethods.includes("ai.chat"));
 		assert.deepEqual(helloCapabilities, { externalMcp: true });
+		assert.ok(receivedProtocolVersions.length > 0);
+		assert.ok(receivedProtocolVersions.every((version: number): boolean => version === 3));
 
 		await assert.rejects(
 			client.waitForEvent({ eventName: "never.happens", timeoutMs: 20 }),

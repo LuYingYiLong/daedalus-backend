@@ -38,7 +38,8 @@ export async function appendFailedChatTurnToSession(
 	userCreatedAt: string = new Date().toISOString(),
 	assistantCreatedAt: string = new Date().toISOString(),
 	additionalContext?: readonly AdditionalContextItem[] | undefined,
-	assistantMessage: string = ""
+	assistantMessage: string = "",
+	persistUserMessage: boolean = true
 ): Promise<boolean> {
 	if (!session.sessionId) {
 		return false;
@@ -64,7 +65,7 @@ export async function appendFailedChatTurnToSession(
 		const existingAssistantIndex: number = nextMessages.findIndex((message: ChatMessage): boolean => message.requestId === requestId && message.role === "assistant");
 		let changed: boolean = false;
 
-		if (existingUserIndex < 0) {
+		if (persistUserMessage && existingUserIndex < 0) {
 			const userChatMessage: ChatMessage = {
 				role: "user",
 				content: userMessage,
@@ -77,7 +78,7 @@ export async function appendFailedChatTurnToSession(
 			}
 			nextMessages.push(userChatMessage);
 			changed = true;
-		} else {
+		} else if (persistUserMessage && existingUserIndex >= 0) {
 			nextMessages[existingUserIndex] = {
 				...nextMessages[existingUserIndex]!,
 				excludeFromLlmContext: true,

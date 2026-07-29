@@ -110,7 +110,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 					workspace: workspace ?? null,
 					multiClient: {
 						enabled: true,
-						protocolVersion: 2
+						protocolVersion: 3
 					},
 					pluginCompatibility: {
 						minProtocolVersion: MIN_PLUGIN_PROTOCOL_VERSION,

@@ -8,7 +8,7 @@ const socket: WebSocket = new WebSocket(url, {
 
 socket.on("open", (): void => {
 	socket.send(JSON.stringify({
-		protocolVersion: 2,
+		protocolVersion: 3,
 		type: "request",
 		id: "test-1",
 		method: "ping",

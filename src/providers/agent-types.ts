@@ -1,6 +1,7 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { AnthropicMessageParam } from "./anthropic-compatible-client.js";
+import type { ExecutionDecision } from "../workflow/agent-run-state.js";
 
 export type ChatCompletionsAgentContinuation = {
 	kind?: "chat_completions";
@@ -38,6 +39,7 @@ export type ToolBudgetLimitKind = "steps" | "tool_result_chars";
 export type ProviderAgentResult =
 	| { status: "completed"; text: string }
 	| { status: "protocol_violation"; text: string; reason: string }
+	| { status: "execution_decision"; decision: ExecutionDecision }
 	| {
 		status: "approval_required";
 		approvalId: string;

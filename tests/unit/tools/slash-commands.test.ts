@@ -154,9 +154,15 @@ test("/skill streams and responds even without an active workspace", async (): P
 		});
 
 		assert.deepEqual(result, { type: "handled" });
-		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.started"), true);
+		assert.equal(socket.sent.some((message): boolean => (
+			(message as { event?: string; data?: { stage?: string } }).event === "agent.run.state"
+			&& (message as { data?: { stage?: string } }).data?.stage === "executing"
+		)), true);
 		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.message.done"), true);
-		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.done"), true);
+		assert.equal(socket.sent.some((message): boolean => (
+			(message as { event?: string; data?: { stage?: string } }).event === "agent.run.state"
+			&& (message as { data?: { stage?: string } }).data?.stage === "completed"
+		)), true);
 		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { ok?: boolean; result?: { text?: string } } | undefined;
 		assert.equal(response?.ok, true);
 		assert.match(response?.result?.text ?? "", /Skill 现在按消息激活/u);
@@ -228,6 +234,7 @@ test("/test-todo-list sends a harmless workflow todo snapshot in development mod
 	await withBackendMode("development", async (): Promise<void> => {
 		const socket = createSocketMock();
 		const session: ClientSession = createClientSession(undefined);
+		session.sessionId = "session-test-todo-list";
 		const request: ClientRequest = {
 			type: "request",
 			id: "slash-test-todo-list",
@@ -247,8 +254,13 @@ test("/test-todo-list sends a harmless workflow todo snapshot in development mod
 		});
 
 		assert.deepEqual(result, { type: "handled" });
-		const snapshotEvent = socket.sent.find((message): boolean => (message as { event?: string }).event === "agent.run.snapshot") as { data?: { steps?: unknown[] } } | undefined;
-		assert.equal(Array.isArray(snapshotEvent?.data?.steps), true);
-		assert.equal(snapshotEvent?.data?.steps?.length, 4);
+		const stateEvent = [...socket.sent].reverse().find((message): boolean => {
+			const event = message as { event?: string; data?: { todo?: unknown } };
+			return event.event === "agent.run.state" && event.data?.todo !== null;
+		}) as { protocolVersion?: number; data?: { todo?: { phases?: unknown[] } } } | undefined;
+		assert.equal(stateEvent?.protocolVersion, 3);
+		assert.equal(Array.isArray(stateEvent?.data?.todo?.phases), true);
+		assert.equal(stateEvent?.data?.todo?.phases?.length, 4);
+		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.snapshot"), false);
 	});
 });

@@ -14,6 +14,7 @@ import type { AiChatParams, ChatMessage } from "../protocol/types.js";
 import type { McpHost } from "../mcp/mcp-host.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
+import { ExecutionDecisionSignal } from "../tools/execution-control.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import type { ApprovedToolResult, ProviderAgentResult, ResponsesAgentContinuation } from "./agent-types.js";
@@ -484,6 +485,12 @@ async function runResponsesAgentLoop(
 				return { status: "completed", text: finalText };
 			}
 		} catch (error: unknown) {
+			if (error instanceof ExecutionDecisionSignal) {
+				return {
+					status: "execution_decision",
+					decision: error.decision
+				};
+			}
 			if (error instanceof ToolApprovalRequiredError) {
 				const continuationInputItems: ResponseInputItem[] = [...inputItems];
 				return {

@@ -883,13 +883,20 @@ async function appendEventRecord(params: {
 	approvalId?: string | undefined;
 	workflowId?: string | undefined;
 	runId?: string | undefined;
-}): Promise<void> {
+	eventId?: string | undefined;
+	sequence?: number | undefined;
+	createdAt?: string | undefined;
+}): Promise<StoredSessionEvent> {
 	const db: DatabaseSync = await getSessionDatabase();
-	const row = db.prepare(`
-		SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM session_events
-		WHERE session_id = ? AND channel = ?
-	`).get(params.sessionId, params.channel) as Record<string, unknown>;
-	const eventId: string = `${params.idPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+	const row = params.sequence === undefined
+		? db.prepare(`
+			SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM session_events
+			WHERE session_id = ? AND channel = ?
+		`).get(params.sessionId, params.channel) as Record<string, unknown>
+		: undefined;
+	const eventId: string = params.eventId ?? `${params.idPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+	const sequence: number = params.sequence ?? Number(row?.value ?? 1);
+	const createdAt: string = params.createdAt ?? new Date().toISOString();
 	db.prepare(`
 		INSERT INTO session_events(
 			event_id, session_id, sequence, channel, request_id, event_name, data_json,
@@ -898,7 +905,7 @@ async function appendEventRecord(params: {
 	`).run(
 		eventId,
 		params.sessionId,
-		Number(row.value),
+		sequence,
 		params.channel,
 		params.requestId,
 		params.event,
@@ -906,13 +913,38 @@ async function appendEventRecord(params: {
 		params.approvalId ?? dataString(params.data, "approvalId"),
 		params.workflowId ?? dataString(params.data, "workflowId"),
 		params.runId ?? dataString(params.data, "runId"),
-		new Date().toISOString()
+		createdAt
 	);
 	invalidateTimelineCache(params.sessionId);
+	return {
+		id: eventId,
+		requestId: params.requestId,
+		event: params.event,
+		data: params.data,
+		createdAt
+	};
 }
 
-export async function appendSessionEvent(sessionId: string, requestId: string, event: string, data: unknown): Promise<void> {
-	await appendEventRecord({ sessionId, requestId, event, data, channel: "timeline", idPrefix: "event" });
+export async function appendSessionEvent(
+	sessionId: string,
+	requestId: string,
+	event: string,
+	data: unknown,
+	identity?: {
+		eventId: string;
+		sequence: number;
+		createdAt: string;
+	} | undefined
+): Promise<StoredSessionEvent> {
+	return appendEventRecord({
+		sessionId,
+		requestId,
+		event,
+		data,
+		channel: "timeline",
+		idPrefix: "event",
+		...identity
+	});
 }
 
 export async function appendApprovalEvent(sessionId: string, approvalId: string, requestId: string, event: string, data: unknown): Promise<void> {

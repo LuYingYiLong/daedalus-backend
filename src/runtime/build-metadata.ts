@@ -7,7 +7,7 @@ declare const __DAEDALUS_BUILD_ID__: string | undefined;
 declare const __DAEDALUS_BUILD_NODE_VERSION__: string | undefined;
 declare const __DAEDALUS_SEA_BUILD__: boolean | undefined;
 
-export const BACKEND_PROTOCOL_VERSION: number = 2;
+export const BACKEND_PROTOCOL_VERSION: number = 3;
 
 export type BackendDistribution = "sea" | "source";
 

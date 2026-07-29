@@ -13,6 +13,10 @@ import {
 	runProviderAgentStreaming
 } from "../providers/provider-agent.js";
 import type { PendingToolBudget, PendingToolBudgetPhaseStats } from "../session/pending-tool-budget.js";
+import {
+	readAgentRunState,
+	removeAgentRunContinuation
+} from "../session/agent-run-store.js";
 import { McpHost } from "../mcp/mcp-host.js";
 import type { CustomMcpServerRuntimeStatus } from "../mcp/mcp-host.js";
 import {
@@ -77,7 +81,7 @@ import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
 import { createGodotTemplateWorkflowPlan } from "../workflow/godot-template-planner.js";
-import { createFallbackWorkflowRoute, resolveForcedWorkflowRoute, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
+import { createFallbackWorkflowRoute, hasWriteIntent, resolveForcedWorkflowRoute, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
 import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
@@ -192,7 +196,7 @@ import {
 } from "./approval-continuation.js";
 import { cancelPendingToolBudgetsForRequest, createPendingToolBudget, createToolBudgetStopReason, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
-import { sendWorkflowEvent, mapWorkflowEventToAgentEvent, convertWorkflowSnapshotToAgentSnapshot, sendWorkflowTodoSnapshot } from "./workflow/events.js";
+import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
 import { startWorkflowExecution } from "./workflow/executor.js";
@@ -206,6 +210,16 @@ import { getUserPrompt } from "../user-prompt-store.js";
 import { compressSessionHistory } from "./session-compression.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
+import {
+	beginAgentRun,
+	getAgentRun,
+	recordAgentRunToolEvent,
+	updateAgentRun
+} from "./agent-run-controller.js";
+import {
+	validateExecutionDecisionEvidence,
+	type AgentRunState
+} from "../workflow/agent-run-state.js";
 
 const WEB_SEARCH_TOOL_NAME: string = "mcp_web_search";
 
@@ -357,18 +371,7 @@ function toolNamesIncludeWriteRisk(toolNames: readonly string[], workspaceId?: s
 }
 
 function messageLooksLikeWriteIntent(message: string): boolean {
-	const normalized: string = message.toLowerCase();
-	return [
-		"创建",
-		"新增",
-		"添加",
-		"修改",
-		"生成",
-		"create",
-		"add",
-		"modify",
-		"generate"
-	].some((keyword: string): boolean => normalized.includes(keyword));
+	return hasWriteIntent(message);
 }
 
 function applyExplicitSkillWriteRequirement(
@@ -377,7 +380,7 @@ function applyExplicitSkillWriteRequirement(
 	builtinToolRestriction: readonly string[] | undefined,
 	workspaceId?: string | undefined
 ): WorkflowRouteDecision {
-	if (params.mode === "ask" || builtinToolRestriction === undefined || decision.execution !== "tool_answer" || decision.requiresWrite) {
+	if (params.mode === "ask" || builtinToolRestriction === undefined || decision.lane === "workflow" || decision.intent === "mutate") {
 		return decision;
 	}
 	if (!messageLooksLikeWriteIntent(params.message) || !toolNamesIncludeWriteRisk(builtinToolRestriction, workspaceId)) {
@@ -385,7 +388,9 @@ function applyExplicitSkillWriteRequirement(
 	}
 	return {
 		...decision,
-		requiresWrite: true,
+		intent: "mutate",
+		scope: "bounded",
+		lane: "lightweight",
 		reason: `${decision.reason} Explicit write-capable skill requires write tool access.`
 	};
 }
@@ -395,12 +400,12 @@ function resolveHiddenAnswerToolNames(
 	allowedToolNames: readonly string[] | undefined,
 	session: ClientSession
 ): readonly string[] {
-	if (routeDecision.execution === "direct_answer") {
+	if (routeDecision.lane === "direct") {
 		return [];
 	}
 
 	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-	if (routeDecision.requiresWrite) {
+	if (routeDecision.intent === "mutate") {
 		return sourceToolNames;
 	}
 
@@ -408,14 +413,14 @@ function resolveHiddenAnswerToolNames(
 }
 
 function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: WorkflowRouteDecision): AiChatParams {
-	if (routeDecision.execution !== "tool_answer") {
+	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return params;
 	}
 
 	const options: AiChatParams["options"] & Record<string, unknown> = {
 		...(params.options ?? {})
 	};
-	if (routeDecision.requiresWrite) {
+	if (routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
 		options.requireToolCallOnFirstStep = true;
 		options.toolBudget = "simple";
 		return {
@@ -434,13 +439,36 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 }
 
 function createHiddenAnswerSystemPrompt(fullSystemPrompt: string, routeDecision: WorkflowRouteDecision): string {
-	if (routeDecision.execution !== "tool_answer") {
+	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return fullSystemPrompt;
 	}
 
-	if (routeDecision.requiresWrite) {
+	if (routeDecision.lane === "probe") {
 		return [
 			fullSystemPrompt,
+			[
+				"## Daedalus bounded probe",
+				"- The user expects a mutation, but its safe scope is not known yet.",
+				"- Use only the minimum read or verify tools needed to identify the affected artifacts and scope.",
+				"- Do not write, propose a patch, or present a user-facing final answer during this probe.",
+				"- Finish by calling daedalus_report_execution_decision exactly once.",
+				"- Choose no_change only when successful read/verify evidence proves the requested state already exists.",
+				"- Choose use_lightweight only for one clear target and at most two logical writes.",
+				"- Choose use_workflow for multi-file, destructive, migratory, long-running, or still-uncertain work."
+			].join("\n")
+		].join("\n\n");
+	}
+
+	if (routeDecision.intent === "mutate") {
+		return [
+			fullSystemPrompt,
+			[
+				"## Daedalus lightweight execution control",
+				"- Complete the bounded mutation with at most two logical writes and a matching post-write verification.",
+				"- If inspection proves no change is needed, call daedalus_report_execution_decision with disposition=no_change and successful evidence ids.",
+				"- If the scope exceeds this lane, stop before expanding it and call daedalus_report_execution_decision with disposition=use_workflow.",
+				"- Natural-language promises or future plans never count as completion."
+			].join("\n"),
 			[
 				"## 隐藏轻量操作约束",
 				"- 当前执行形态是轻量操作，不创建 Todo，也不是多阶段 Workflow。",
@@ -585,7 +613,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const stepRunId: string = `${params.requestId}:answer`;
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
 	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision);
-	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.requiresWrite
+	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.intent === "mutate"
 		? createLightweightActionState()
 		: undefined;
 	const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
@@ -601,12 +629,13 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		if (lightweightActionState !== undefined) {
 			applyToolEventToLightweightActionState(lightweightActionState, event, true);
 		}
+		recordAgentRunToolEvent(params.socket, params.session, runId, event);
 		forwardToolEvent(event);
 	};
 	const agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
 		chatParams,
 		withProviderUsageContext(params.options, {
-			operation: params.routeDecision.execution === "direct_answer" ? "direct_answer" : "tool_answer"
+			operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
 		}),
 		params.history,
 		fullSystemPrompt,
@@ -620,7 +649,10 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			workspaceId: params.session.activeWorkspace?.id,
 			editorInstanceId: params.session.editorInstanceId,
 			sessionId: params.session.sessionId,
-			requestId: params.requestId
+			requestId: params.requestId,
+			executionControl: params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
+				? { lane: params.routeDecision.lane }
+				: undefined
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -638,7 +670,10 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			params.userCreatedAt,
 			true,
 			undefined,
-			lightweightActionState
+			lightweightActionState,
+			params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
+				? { lane: params.routeDecision.lane }
+				: undefined
 		);
 		await registerPendingApprovalContinuation(
 			params.session,
@@ -660,21 +695,82 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			agentResult,
 			chatParams,
 			options: withProviderUsageContext(params.options, {
-				operation: params.routeDecision.execution === "direct_answer" ? "direct_answer" : "tool_answer"
+				operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
 			}),
 			allowedToolNames: params.allowedToolNames,
 			userMessage: chatParams.message,
 			requestId: params.requestId,
 			userCreatedAt: params.userCreatedAt,
 			stream: true,
-			lightweightActionState
+			lightweightActionState,
+			executionControl: params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
+				? { lane: params.routeDecision.lane }
+				: undefined
 		});
 		registerPendingToolBudget(params.session, pendingBudget);
 		sendToolBudgetRequired(params.socket, params.requestId, params.session, runId, pendingBudget);
 		return;
 	}
+	if (agentResult.status === "execution_decision") {
+		const latestRun: AgentRunState | undefined = getAgentRun(params.session, runId);
+		if (latestRun === undefined) {
+			throw new Error(`Execution decision received for unknown run ${runId}.`);
+		}
+		validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		if (agentResult.decision.disposition === "use_lightweight") {
+			updateAgentRun(params.socket, params.session, runId, "executing", {
+				scope: "bounded",
+				lane: "lightweight"
+			});
+			await runHiddenAnswerExecution({
+				...params,
+				routeDecision: {
+					...params.routeDecision,
+					intent: "mutate",
+					scope: "bounded",
+					lane: "lightweight",
+					reason: agentResult.decision.summary
+				}
+			});
+			return;
+		}
+		if (agentResult.decision.disposition === "use_workflow") {
+			throw new LightweightActionScopeExceededError("write_scope_exceeded");
+		}
+		if (agentResult.decision.disposition === "blocked") {
+			throw new LightweightActionVerificationError(agentResult.decision.summary);
+		}
+
+		await completeHiddenAnswerExecution(
+			params,
+			chatParams,
+			agentResult.decision.summary,
+			{
+				resultStatus: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+					? "completed"
+					: "completed_with_warnings",
+				verificationStatus: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+					? "verified"
+					: "unverified",
+				warnings: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+					? []
+					: ["The no-change decision was supported by read evidence but no dedicated verifier was run."],
+				failureMessage: undefined
+			}
+		);
+		return;
+	}
 	if (agentResult.status === "protocol_violation") {
 		throw new Error(agentResult.reason);
+	}
+	if (params.routeDecision.lane === "probe") {
+		throw new LightweightActionScopeExceededError("write_intent_not_completed");
+	}
+	if (
+		params.routeDecision.intent === "mutate"
+		&& (getAgentRun(params.session, runId)?.checkpoint.successfulWriteFingerprints.length ?? 0) === 0
+	) {
+		throw new LightweightActionScopeExceededError("write_intent_not_completed");
 	}
 	const completionStatus = lightweightActionState === undefined
 		? {
@@ -688,41 +784,65 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}
 
+	await completeHiddenAnswerExecution(params, chatParams, agentResult.text, completionStatus);
+}
+
+async function completeHiddenAnswerExecution(
+	params: HiddenAnswerExecutionParams,
+	chatParams: AiChatParams,
+	text: string,
+	completionStatus: {
+		resultStatus: "completed" | "completed_with_warnings";
+		verificationStatus?: "verified" | "unverified" | undefined;
+		warnings: string[];
+		failureMessage?: string | undefined;
+	}
+): Promise<void> {
+	const runId: string = params.requestId;
+	const stepRunId: string = `${params.requestId}:answer`;
+	if (getAgentRun(params.session, runId) !== undefined) {
+		updateAgentRun(params.socket, params.session, runId, "finalizing", {
+			verificationStatus: completionStatus.verificationStatus ?? null,
+			warnings: completionStatus.warnings
+		});
+	}
 	await appendChatTurnToSession(
 		params.session,
 		params.history,
 		chatParams.message,
-		agentResult.text,
+		text,
 		params.requestId,
 		params.userCreatedAt,
 		undefined,
-		chatParams.additionalContext
+		chatParams.additionalContext,
+		chatParams.retryOfRunId === undefined
 	);
 	sendSessionEvent(params.socket, params.requestId, params.session, "agent.message.done", {
 		runId,
 		stepRunId,
-		text: agentResult.text,
+		text,
 		context: {
 			historyMessagesStored: params.session.messages.length,
 			historyBudgetTokens: params.historyBudgetTokens,
 			mcpServers: params.mcpHost.getConnectedServerIds()
 		}
 	});
-	sendSessionEvent(params.socket, params.requestId, params.session, "agent.run.done", {
-		runId,
-		requestId: params.requestId,
-		status: "done",
-		resultStatus: completionStatus.resultStatus,
-		verificationStatus: completionStatus.verificationStatus,
-		warnings: completionStatus.warnings,
-		sequence: params.session.workbenchActiveRun.sequence ?? params.session.workbenchActiveRunSequence
-	});
+	if (getAgentRun(params.session, runId) !== undefined) {
+		updateAgentRun(params.socket, params.session, runId, "completed", {
+			terminal: {
+				resultStatus: completionStatus.resultStatus,
+				completedAt: new Date().toISOString()
+			},
+			verificationStatus: completionStatus.verificationStatus ?? null,
+			warnings: completionStatus.warnings
+		});
+	}
 	sendJson(params.socket, {
 		type: "response",
 		id: params.requestId,
 		ok: true,
 		result: {
-			text: agentResult.text,
+			text,
 			context: {
 				historyMessagesStored: params.session.messages.length,
 				historyBudgetTokens: params.historyBudgetTokens,
@@ -739,6 +859,7 @@ async function runHiddenAnswerExecutionWithEscalation(
 		webSearchEnabled: boolean;
 	}
 ): Promise<void> {
+	let escalationError: LightweightActionScopeExceededError | null = null;
 	try {
 		await runHiddenAnswerExecution(params);
 		return;
@@ -746,12 +867,13 @@ async function runHiddenAnswerExecutionWithEscalation(
 		if (!(error instanceof LightweightActionScopeExceededError)) {
 			throw error;
 		}
+		escalationError = error;
 	}
 
 	logger.info("ai", "lightweight_action_escalated", {
 		requestId: params.requestId,
 		sessionId: params.session.sessionId,
-		reason: "write_scope_exceeded"
+		reason: escalationError.reason
 	});
 	const workflowParams: AiChatParams = {
 		...params.chatParams,
@@ -760,9 +882,12 @@ async function runHiddenAnswerExecutionWithEscalation(
 			workflow: "multi_phase"
 		}
 	};
+	const escalationInstruction: string = escalationError.reason === "write_intent_not_completed"
+		? "轻量操作只完成了读取，没有执行用户要求的写入。先复核当前工作区状态，再完成实现和验证；不要把未来计划或下一步描述当成完成结果。"
+		: "轻量操作已经完成了部分必要修改，但下一步会超过两个逻辑写入。先检查当前工作区状态，不要重复已成功的写入，然后完成剩余工作和验证。";
 	const escalationContext: string = [
 		params.planningContext,
-		"轻量操作已经完成了部分必要修改，但下一步会超过两个逻辑写入。先检查当前工作区状态，不要重复已成功的写入，然后完成剩余工作和验证。"
+		escalationInstruction
 	].filter((section: string): boolean => section.length > 0).join("\n\n");
 	let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
 		workflowParams,
@@ -794,6 +919,73 @@ async function runHiddenAnswerExecutionWithEscalation(
 		params.userCreatedAt,
 		escalationContext,
 		params.guidePromptSection,
+		params.abortSignal
+	);
+}
+
+export async function escalatePendingContinuationToWorkflow(params: {
+	socket: WebSocket;
+	session: ClientSession;
+	mcpHost: McpHost;
+	pendingContinuation: PendingAiContinuation;
+	abortSignal: AbortSignal;
+	reason: string;
+}): Promise<void> {
+	const requestId: string = params.pendingContinuation.requestId;
+	const workflowParams: AiChatParams = {
+		...params.pendingContinuation.params,
+		options: {
+			...(params.pendingContinuation.params.options ?? {}),
+			workflow: "multi_phase"
+		}
+	};
+	const checkpoint = getAgentRun(params.session, requestId)?.checkpoint;
+	const planningContext: string = [
+		"Continue this mutation as a full Workflow in the same run.",
+		"Inspect the current workspace state before writing. Do not replay writes that already succeeded.",
+		`Escalation reason: ${params.reason}`,
+		checkpoint === undefined
+			? ""
+			: `Successful write fingerprints: ${checkpoint.successfulWriteFingerprints.join(", ") || "none"}.`
+	].filter((item: string): boolean => item.length > 0).join("\n");
+	const history: ChatMessage[] = filterLlmContextMessages(params.session.messages)
+		.filter((message: ChatMessage): boolean => message.requestId !== requestId);
+	let plan: WorkflowPlan | null = await createWorkflowPlanForRoute(
+		workflowParams,
+		params.pendingContinuation.options,
+		history,
+		planningContext,
+		params.abortSignal,
+		{ activeWorkspace: params.session.activeWorkspace }
+	);
+	if (plan === null) {
+		plan = planWorkflow(workflowParams);
+	}
+	if (plan === null) {
+		throw new Error("The lightweight run exceeded its safe scope, but no executable Workflow could be created.");
+	}
+	const currentRun: AgentRunState | undefined = getAgentRun(params.session, requestId);
+	if (currentRun !== undefined) {
+		updateAgentRun(params.socket, params.session, requestId, "executing", {
+			intent: "mutate",
+			scope: "complex",
+			lane: "workflow",
+			pause: null
+		});
+	}
+	await startWorkflowExecution(
+		params.socket,
+		requestId,
+		params.session,
+		params.mcpHost,
+		params.pendingContinuation.options,
+		plan,
+		workflowParams,
+		history,
+		Math.max(0, params.session.modelProfile.contextWindowTokens - params.session.modelProfile.defaultOutputReserveTokens),
+		params.pendingContinuation.userCreatedAt,
+		planningContext,
+		"",
 		params.abortSignal
 	);
 }
@@ -1133,6 +1325,7 @@ async function handleToolBudgetDecision(
 	session.activeAbortControllers.set(pending.requestId, abortController);
 	session.activeRunRequestId = pending.requestId;
 	session.pendingToolBudgets.delete(budgetId);
+	await removeAgentRunContinuation(pending.requestId);
 	registerSessionRunController(session.sessionId, pending.requestId, abortController);
 	setWorkbenchActiveRun(session, {
 		status: "streaming",
@@ -1229,6 +1422,7 @@ async function runToolBudgetDecisionContinuation(params: {
 					event
 				);
 			}
+			recordAgentRunToolEvent(socket, session, pending.requestId, event);
 			forwardToolEvent(event);
 		};
 
@@ -1236,7 +1430,8 @@ async function runToolBudgetDecisionContinuation(params: {
 			workspaceId: session.activeWorkspace?.id,
 			editorInstanceId: session.editorInstanceId,
 			sessionId: session.sessionId,
-			requestId: pending.requestId
+			requestId: pending.requestId,
+			executionControl: pendingContinuation.executionControl
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -1337,6 +1532,21 @@ async function runToolBudgetDecisionContinuation(params: {
 		shouldDrainQueueAfterRun = findQueuedMessage(session, queueItemId ?? 0) === undefined;
 		emitWorkbenchUpdated(socket, pending.requestId, session);
 	} catch (error: unknown) {
+		if (error instanceof LightweightActionScopeExceededError) {
+			await escalatePendingContinuationToWorkflow({
+				socket,
+				session,
+				mcpHost,
+				pendingContinuation: pending.continuation,
+				abortSignal: abortController.signal,
+				reason: error.reason
+			});
+			setWorkbenchActiveRun(session, { status: "idle" });
+			await finishQueueItemForRun(socket, pending.requestId, session, queueItemId);
+			shouldDrainQueueAfterRun = true;
+			emitWorkbenchUpdated(socket, pending.requestId, session);
+			return;
+		}
 		if (isCancellationError(error, abortController.signal)) {
 			setWorkbenchActiveRun(session, { status: "idle" });
 			await finishQueueItemForRun(socket, pending.requestId, session, queueItemId, "cancelled");
@@ -1508,6 +1718,63 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			break;
 		}
 
+		case "agent.run.retry": {
+			await waitForFullSessionLoad(session);
+			const interruptedRun: AgentRunState | null =
+				getAgentRun(session, request.params.runId)
+				?? await readAgentRunState(request.params.runId);
+			if (
+				interruptedRun === null
+				|| interruptedRun.sessionId !== session.sessionId
+				|| interruptedRun.stage !== "interrupted"
+			) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "agent_run_not_retryable",
+						message: "Only an interrupted run in the active session can be retried from a safe checkpoint."
+					}
+				});
+				break;
+			}
+			const sourceMessage: ChatMessage | undefined = [...session.messages]
+				.reverse()
+				.find((message: ChatMessage): boolean => (
+					message.role === "user"
+					&& (
+						message.requestId === interruptedRun.rootRequestId
+						|| message.requestId === interruptedRun.requestId
+					)
+				));
+			if (sourceMessage === undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "agent_run_retry_source_missing",
+						message: "The original user request for this run is no longer available."
+					}
+				});
+				break;
+			}
+			const retryRequest: ClientRequest = {
+				type: "request",
+				id: request.id,
+				method: "ai.chat",
+				params: {
+					message: sourceMessage.content,
+					mode: session.workbenchComposer.chatMode,
+					additionalContext: sourceMessage.additionalContext,
+					retryOfRunId: interruptedRun.runId
+				}
+			};
+			await handleChatRequest(socket, retryRequest, session, mcpHost);
+			break;
+		}
+
 		case "ai.chat": {
 			await waitForFullSessionLoad(session);
 			const slashCommandResult: SlashCommandResult = await handleSlashCommand({
@@ -1613,18 +1880,33 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			let persistedParams: AiChatParams = params;
 			let queuedRunForcedStatus: "failed" | "cancelled" | undefined;
 			await setQueueStatusForRun(socket, request.id, session, queueItemId, "sending");
-			const startedActiveRun = setWorkbenchActiveRun(session, {
+			setWorkbenchActiveRun(session, {
 				status: "streaming",
 				requestId: request.id,
 				startedAt: turnStartedAt,
 				queueItemId
 			});
-			sendSessionEvent(socket, request.id, session, "agent.run.started", {
-				runId: request.id,
-				requestId: request.id,
-				status: "streaming",
-				sequence: startedActiveRun.sequence
-			});
+			if (runSessionId !== undefined) {
+				const retrySourceRun: AgentRunState | undefined = params.retryOfRunId === undefined
+					? undefined
+					: getAgentRun(session, params.retryOfRunId);
+				beginAgentRun({
+					socket,
+					session,
+					sessionId: runSessionId,
+					requestId: request.id,
+					runId: request.id,
+					rootRequestId: retrySourceRun?.rootRequestId,
+					retryOfRunId: retrySourceRun?.runId,
+					title: params.message.trim().slice(0, 120) || "Daedalus task"
+				});
+				if (retrySourceRun !== undefined) {
+					updateAgentRun(socket, session, request.id, "routing", {
+						checkpoint: structuredClone(retrySourceRun.checkpoint),
+						warnings: [...retrySourceRun.warnings]
+					});
+				}
+			}
 			emitWorkbenchUpdated(socket, request.id, session);
 
 			try {
@@ -1671,6 +1953,13 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				});
 				const requestHasImages: boolean = hasImageAttachments(effectiveParams);
 				if (effectiveParams.mode === "plan") {
+					if (getAgentRun(session, request.id) !== undefined) {
+						updateAgentRun(socket, session, request.id, "executing", {
+							intent: "mutate",
+							scope: "complex",
+							lane: "workflow"
+						});
+					}
 					const plan: StoredPlan = await createInitialPlan(
 						socket,
 						request.id,
@@ -1720,12 +2009,23 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				const mcpSystemContext: string = await createMcpSystemContext(mcpHost, session);
 				const additionalContextSection: string = createAdditionalContextPromptSection(effectiveParams.additionalContext);
 				const guidePromptSection: string = consumePendingGuideSection(socket, request.id, session);
+				const safeRetryPromptSection: string = effectiveParams.retryOfRunId === undefined
+					? ""
+					: [
+						"## Safe checkpoint retry",
+						"This is a new Run linked to an interrupted Run.",
+						"Inspect current state before mutating. Do not replay an already successful equivalent write.",
+						`Prior successful write fingerprints: ${
+							getAgentRun(session, request.id)?.checkpoint.successfulWriteFingerprints.join(", ") || "none"
+						}.`
+					].join("\n");
 				const fullSystemPrompt: string = systemPrompt
 					+ (skillPrompt.length > 0 ? `\n\n${skillPrompt}` : "")
 					+ (skillCatalogPrompt.length > 0 ? `\n\n${skillCatalogPrompt}` : "")
 					+ mcpSystemContext
 					+ (additionalContextSection.length > 0 ? `\n\n${additionalContextSection}` : "")
-					+ (guidePromptSection.length > 0 ? `\n\n${guidePromptSection}` : "");
+					+ (guidePromptSection.length > 0 ? `\n\n${guidePromptSection}` : "")
+					+ (safeRetryPromptSection.length > 0 ? `\n\n${safeRetryPromptSection}` : "");
 				logPromptTrace({
 					requestId: request.id,
 					promptId,
@@ -1746,13 +2046,15 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					session.summaryMessage = undefined;
 					session.summaryCoveredMessageCount = undefined;
 				}
-				await appendUserMessageToSession(
-					session,
-					effectiveParams.message,
-					request.id,
-					turnStartedAt,
-					effectiveParams.additionalContext
-				);
+				if (effectiveParams.retryOfRunId === undefined) {
+					await appendUserMessageToSession(
+						session,
+						effectiveParams.message,
+						request.id,
+						turnStartedAt,
+						effectiveParams.additionalContext
+					);
+				}
 				await maybeAutoCompressContextBeforeRun(
 					socket,
 					request.id,
@@ -1773,7 +2075,14 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					abortController.signal
 				);
 				const history: ChatMessage[] = await selectHistoryForModel(session, historyBudgetTokens, request.id);
-				const planningContext: string = skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection;
+				const planningContext: string = [
+					skillPrompt,
+					skillCatalogPrompt,
+					mcpSystemContext,
+					additionalContextSection,
+					guidePromptSection,
+					safeRetryPromptSection
+				].filter((section: string): boolean => section.length > 0).join("\n");
 				let routeDecision: WorkflowRouteDecision;
 				const forcedRoute: WorkflowRouteDecision | null = resolveForcedWorkflowRoute(effectiveParams);
 				if (forcedRoute !== null) {
@@ -1782,18 +2091,18 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					const skillRestrictionRequiresWrite: boolean = effectiveParams.mode !== "ask"
 						&& toolNamesIncludeWriteRisk(builtinToolRestriction, session.activeWorkspace?.id);
 					routeDecision = {
-						execution: "tool_answer",
+						intent: skillRestrictionRequiresWrite ? "mutate" : "inspect",
+						scope: "bounded",
+						lane: skillRestrictionRequiresWrite ? "lightweight" : "read",
 						reason: "Explicit skill tool restriction uses hidden single-turn tool execution.",
-						requiresTools: true,
-						requiresWrite: skillRestrictionRequiresWrite,
 						planningHint: ""
 					};
 				} else if (requestHasImages) {
 					routeDecision = {
-						execution: "direct_answer",
+						intent: "answer",
+						scope: "bounded",
+						lane: "direct",
 						reason: "Image attachments were preprocessed before routing; answer without workflow todos.",
-						requiresTools: false,
-						requiresWrite: false,
 						planningHint: ""
 					};
 				} else {
@@ -1833,23 +2142,36 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				logger.info("ai", "workflow_route_decided", {
 					requestId: request.id,
 					sessionId: session.sessionId,
-					execution: routeDecision.execution,
+					intent: routeDecision.intent,
+					scope: routeDecision.scope,
+					lane: routeDecision.lane,
 					reason: routeDecision.reason,
-					requiresTools: routeDecision.requiresTools,
-					requiresWrite: routeDecision.requiresWrite,
 					forcedByOption: routeDecision.forcedByOption ?? null,
 					safetyOverride: routeDecision.safetyOverride ?? null
 				});
+				if (getAgentRun(session, request.id) !== undefined) {
+					updateAgentRun(
+						socket,
+						session,
+						request.id,
+						routeDecision.lane === "probe" ? "probing" : "executing",
+						{
+							intent: routeDecision.intent,
+							scope: routeDecision.scope,
+							lane: routeDecision.lane
+						}
+					);
+				}
 
 				const originalApprovalGateway: ApprovalGateway = session.approvalGateway;
 				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session);
-				if (routeDecision.execution !== "workflow" && !routeDecision.requiresWrite) {
+				if (routeDecision.intent !== "mutate") {
 					session.approvalGateway = new ReadOnlyToolApprovalGateway(hiddenAnswerToolNames);
 				} else if (effectiveParams.mode === "ask" && !imageGenerationOnly) {
 					session.approvalGateway = new ReadOnlyToolApprovalGateway(allowedToolNames ?? []);
 				}
 				try {
-					if (routeDecision.execution === "workflow") {
+					if (routeDecision.lane === "workflow") {
 						let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
 							effectiveParams,
 							options,
@@ -1891,7 +2213,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						} else {
 							routeDecision = createFallbackWorkflowRoute(effectiveParams, "Workflow planner returned no executable plan.");
 							throwIfAborted(abortController.signal);
-							const fallbackParams: AiChatParams = routeDecision.execution === "workflow"
+							const fallbackParams: AiChatParams = routeDecision.lane === "workflow"
 								? {
 									...effectiveParams,
 									options: {
@@ -1900,7 +2222,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 									}
 								}
 								: effectiveParams;
-							const fallbackPlan: WorkflowPlan | null = routeDecision.execution === "workflow"
+							const fallbackPlan: WorkflowPlan | null = routeDecision.lane === "workflow"
 								? planWorkflow(fallbackParams)
 								: null;
 							if (fallbackPlan !== null) {
@@ -2048,7 +2370,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						request.id,
 						turnStartedAt,
 						undefined,
-						persistedParams.additionalContext
+						persistedParams.additionalContext,
+						"",
+						persistedParams.retryOfRunId === undefined
 					);
 					sendJson(socket, {
 						type: "response",
@@ -2088,7 +2412,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						request.id,
 						turnStartedAt,
 						undefined,
-						persistedParams.additionalContext
+						persistedParams.additionalContext,
+						"",
+						persistedParams.retryOfRunId === undefined
 					);
 					sendJson(socket, {
 						type: "response",
@@ -2135,7 +2461,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						turnStartedAt,
 						undefined,
 						persistedParams.additionalContext,
-						workflowErrorMessage
+						workflowErrorMessage,
+						persistedParams.retryOfRunId === undefined
 					);
 					sendJson(socket, {
 						type: "response",
@@ -2176,7 +2503,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					request.id,
 					turnStartedAt,
 					undefined,
-					persistedParams.additionalContext
+					persistedParams.additionalContext,
+					"",
+					persistedParams.retryOfRunId === undefined
 				);
 				sendJson(socket, {
 					type: "response",

@@ -19,7 +19,6 @@ import {
 	updateWorkflowPhaseToolStats
 } from "../../../src/server/workflow/tool-events.js";
 import {
-	convertWorkflowSnapshotToAgentSnapshot,
 	mapWorkflowEventToAgentEvent
 } from "../../../src/server/workflow/events.js";
 import { isEmptyProviderResponseError } from "../../../src/server/workflow/provider-errors.js";
@@ -556,28 +555,4 @@ test("workflow events map to agent event compatibility surface", (): void => {
 	assert.equal(mapWorkflowEventToAgentEvent("workflow.phase.done", {
 		workflowId: "workflow-1"
 	}), null);
-});
-
-test("workflow snapshot conversion preserves agent snapshot fields", (): void => {
-	assert.deepEqual(convertWorkflowSnapshotToAgentSnapshot({
-		workflowId: "workflow-1",
-		title: "公开 Beta",
-		source: "llm",
-		revision: 2,
-		phases: [{ id: "phase-1" }],
-		todos: [{ title: "测试" }],
-		phaseOutcomes: [{ status: "completed" }],
-		activePhaseRunId: "run-1"
-	}), {
-		runId: "workflow-1",
-		title: "公开 Beta",
-		source: "llm",
-		revision: 2,
-		steps: [{ id: "phase-1" }],
-		todos: [{ title: "测试" }],
-		outcomes: [{ status: "completed" }],
-		activeStepRunId: "run-1",
-		repairRound: undefined,
-		blockedReason: undefined
-	});
 });

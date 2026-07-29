@@ -3,6 +3,7 @@ import { composeSystemPrompt, listPromptTemplates } from "../../prompts/registry
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../../protocol/types.js";
 import type { ProviderAgentResult } from "../../providers/agent-types.js";
 import { continueProviderAgent, continueProviderAgentStreaming } from "../../providers/provider-agent.js";
+import { removeAgentRunContinuation } from "../../session/agent-run-store.js";
 import type { OnToolEvent, ToolEvent } from "../../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../../tools/tool-result-parser.js";
 import { chatWithDeepSeek, createDeepSeekClient, resolveChatModel, type ProviderChatOptions } from "../../providers/deepseek-client.js";
@@ -89,6 +90,7 @@ import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState
 import {
 	addLightweightActionObservation,
 	applyToolEventToLightweightActionState,
+	LightweightActionScopeExceededError,
 	LightweightActionVerificationError
 } from "../../workflow/lightweight-action.js";
 import {
@@ -164,13 +166,17 @@ import {
 } from "../approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "../workflow/tool-events.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
-import { sendWorkflowEvent, mapWorkflowEventToAgentEvent, convertWorkflowSnapshotToAgentSnapshot, sendWorkflowTodoSnapshot } from "../workflow/events.js";
+import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "../workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "../workflow/phase-runner.js";
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "../workflow/continuation.js";
 import { startWorkflowExecution } from "../workflow/executor.js";
 import { ensureProviderConfigured } from "../../application/provider-session-service.js";
 import { findSessionWithPendingApproval } from "../client-connections.js";
 import { withMcpRequestContext } from "../../mcp/request-context.js";
+import {
+	recordAgentRunApprovedToolResult,
+	recordAgentRunToolEvent
+} from "../agent-run-controller.js";
 
 function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, historyTokensStored: number | null = null): Record<string, unknown> {
 	return {
@@ -288,6 +294,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 		session.activeAbortControllers.set(request.id, abortController);
 		let continuationRequestId: string = request.id;
 		let queueItemId: number | undefined;
+		let pendingContinuationForRun: PendingAiContinuation | undefined;
 		try {
 			await synchronizeSessionApprovalMode(session);
 			const apiKey: string | undefined = await ensureProviderConfigured(session);
@@ -344,6 +351,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				pendingContinuation = await waitForPendingApprovalContinuationRegistration(session, request.params.approvalId);
 			}
 			continuationRequestId = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
+			pendingContinuationForRun = pendingContinuation;
 			queueItemId = pendingContinuation?.params.options?.queueItemId;
 			// A continuation keeps the original AI request id. Register the same controller
 			// under that id so ai.cancel can abort it instead of only the approval RPC.
@@ -446,7 +454,21 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				break;
 			}
 
+			recordAgentRunApprovedToolResult(
+				socket,
+				session,
+				pendingContinuation.requestId,
+				{
+					toolCallId: pending.toolCallId,
+					toolName: pending.llmToolName,
+					args: pending.args,
+					succeeded: true,
+					summary: result.content.slice(0, 2000),
+					artifactRefs: approvedToolObservation.artifactRefs
+				}
+			);
 			session.pendingAiContinuations.delete(request.params.approvalId);
+			await removeAgentRunContinuation(pendingContinuation.requestId);
 			if (pendingContinuation.lightweightActionState !== undefined) {
 				addLightweightActionObservation(
 					pendingContinuation.lightweightActionState,
@@ -469,6 +491,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						event
 					);
 				}
+				recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, event);
 				forwardToolEvent(event);
 			};
 			const continuationParams: AiChatParams = await awaitWithAbort(
@@ -496,7 +519,13 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pendingContinuation.allowedToolNames,
 					onToolEvent,
 					abortController.signal,
-					{ workspaceId: pending.workspaceId ?? session.activeWorkspace?.id, editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId, sessionId: pending.sessionId ?? session.sessionId }
+					{
+						workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
+						sessionId: pending.sessionId ?? session.sessionId,
+						requestId: pendingContinuation.requestId,
+						executionControl: pendingContinuation.executionControl
+					}
 				)
 				: continueProviderAgent(
 					continuationParams,
@@ -511,7 +540,13 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pendingContinuation.allowedToolNames,
 					onToolEvent,
 					abortController.signal,
-					{ workspaceId: pending.workspaceId ?? session.activeWorkspace?.id, editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId, sessionId: pending.sessionId ?? session.sessionId }
+					{
+						workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
+						sessionId: pending.sessionId ?? session.sessionId,
+						requestId: pendingContinuation.requestId,
+						executionControl: pendingContinuation.executionControl
+					}
 				);
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
 			throwIfAborted(abortController.signal);
@@ -553,6 +588,30 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			void queueHelpers.drainMessageQueue(socket, request.id, session, mcpHost);
 			emitWorkbenchUpdated(socket, request.id, session);
 		} catch (error: unknown) {
+			if (
+				error instanceof LightweightActionScopeExceededError
+				&& pendingContinuationForRun !== undefined
+			) {
+				const queueHelpers = await import("../chat-orchestrator.js");
+				await queueHelpers.escalatePendingContinuationToWorkflow({
+					socket,
+					session,
+					mcpHost,
+					pendingContinuation: pendingContinuationForRun,
+					abortSignal: abortController.signal,
+					reason: error.reason
+				});
+				setWorkbenchActiveRun(session, { status: "idle" });
+				await queueHelpers.finishQueueItemForRun(
+					socket,
+					pendingContinuationForRun.requestId,
+					session,
+					queueItemId
+				);
+				void queueHelpers.drainMessageQueue(socket, request.id, session, mcpHost);
+				emitWorkbenchUpdated(socket, request.id, session);
+				break;
+			}
 			if (isCancellationError(error, abortController.signal)) {
 				setWorkbenchActiveRun(session, { status: "idle" });
 				const queueHelpers = await import("../chat-orchestrator.js");
@@ -644,6 +703,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const queueItemId: number | undefined = pendingContinuation?.params.options?.queueItemId;
 			const rejected = session.approvalGateway.reject(request.params.approvalId);
 			session.pendingAiContinuations.delete(request.params.approvalId);
+			await removeAgentRunContinuation(continuationRequestId);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, request.params.approvalId, pendingState?.requestId ?? request.id, "rejected", {
 					rejectedAt: new Date().toISOString()

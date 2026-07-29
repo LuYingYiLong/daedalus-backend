@@ -3,6 +3,7 @@ import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost, CustomMcpServerRuntimeStatus } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
+import { sendGlobalEvent } from "../session-events.js";
 import {
 	addCustomMcpServerConfig,
 	listCustomMcpServerSummaries,
@@ -64,24 +65,14 @@ function refreshCustomMcpServersAndNotify(socket: WebSocket, mcpHost: McpHost, w
 			} else {
 				await mcpHost.refreshCustomServersForActiveWorkspace();
 			}
-			sendJson(socket, {
-				type: "event",
-				id: "mcp-config",
-				event: "mcp.config.updated",
-				data: await createMcpConfigListResult(mcpHost, workspaceId)
-			});
+			sendGlobalEvent(socket, "mcp-config", "mcp.config.updated", await createMcpConfigListResult(mcpHost, workspaceId));
 		} catch (error: unknown) {
 			logger.error("mcp_config", "refresh_failed", error, {
 				workspaceId
 			});
-			sendJson(socket, {
-				type: "event",
-				id: "mcp-config",
-				event: "mcp.config.updated",
-				data: {
+			sendGlobalEvent(socket, "mcp-config", "mcp.config.updated", {
 					...await createMcpConfigListResult(mcpHost, workspaceId),
 					error: error instanceof Error ? error.message : "Failed to refresh custom MCP servers"
-				}
 			});
 		}
 	})();

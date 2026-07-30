@@ -25,9 +25,66 @@ import { checkoutWorkspaceGitBranch, createWorkspaceGitBranch, listWorkspaceGitB
 import { commitOrPushWorkspaceGit, generateWorkspaceGitCommitMessage } from "../workspace-git-commit.js";
 import { readWorkspaceGitDiff, readWorkspaceGitDiffFile, readWorkspaceGitDiffSummary } from "../workspace-git-diff.js";
 import { evaluateWorkspaceSelectionForSession, type WorkspaceSelectionDecision } from "../workspace-selection-guard.js";
+import {
+	getWorkspaceTreeOrder,
+	updateWorkspaceTreeOrder,
+	type WorkspaceTreeOrderInventory
+} from "../../workspace/tree-order-store.js";
+
+async function loadWorkspaceTreeOrderInventory(): Promise<WorkspaceTreeOrderInventory> {
+	const [sessions, archivedSessions] = await Promise.all([
+		listSessions(),
+		listArchivedSessions()
+	]);
+	hydrateWorkspacesFromSessionMetadata([...sessions, ...archivedSessions]);
+	return {
+		workspaces: loadWorkspaces(),
+		sessions
+	};
+}
 
 export async function handleWorkspaceRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
+	case "workspace.tree.order.get":
+	case "workspace.tree.order.update": {
+		if (getClientConnection(socket)?.clientType !== "studio") {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: "studio_only",
+					message: `${request.method} is only available to Daedalus Studio.`
+				}
+			});
+			break;
+		}
+		try {
+			const inventory: WorkspaceTreeOrderInventory = await loadWorkspaceTreeOrderInventory();
+			const result = request.method === "workspace.tree.order.get"
+				? await getWorkspaceTreeOrder(inventory)
+				: await updateWorkspaceTreeOrder(request.params, inventory);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result
+			});
+		} catch (error: unknown) {
+			const message: string = error instanceof Error ? error.message : "Failed to save workspace tree order.";
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: message.startsWith("workspace_tree_order_") ? message : "workspace_tree_order_failed",
+					message
+				}
+			});
+		}
+		break;
+	}
+
 	case "workspace.list":
 		hydrateWorkspacesFromSessionMetadata([
 			...await listSessions(),

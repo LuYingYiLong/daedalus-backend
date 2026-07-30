@@ -248,6 +248,38 @@ const usageMetricsLogsParamsSchema = usageMetricsFiltersSchema.extend({
 const usageMetricsTrendsParamsSchema = usageMetricsFiltersSchema.extend({
 	bucket: z.enum(["hour", "day"]).optional()
 }).strict();
+const workspaceTreeOrderIdSchema = z.string().trim().min(1).max(240);
+const workspaceTreeOrderUpdateParamsSchema = z.object({
+	workspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000),
+	sessionIdsByWorkspace: z.record(
+		workspaceTreeOrderIdSchema,
+		z.array(workspaceTreeOrderIdSchema).max(100_000)
+	)
+}).strict().superRefine((value, context): void => {
+	if (new Set(value.workspaceIds).size !== value.workspaceIds.length) {
+		context.addIssue({
+			code: "custom",
+			path: ["workspaceIds"],
+			message: "Workspace ids must be unique."
+		});
+	}
+	const seenSessionIds: Set<string> = new Set();
+	for (const [workspaceId, sessionIds] of Object.entries(value.sessionIdsByWorkspace)) {
+		const localIds: Set<string> = new Set();
+		for (const sessionId of sessionIds) {
+			if (localIds.has(sessionId) || seenSessionIds.has(sessionId)) {
+				context.addIssue({
+					code: "custom",
+					path: ["sessionIdsByWorkspace", workspaceId],
+					message: "Session ids must be unique across all workspaces."
+				});
+				return;
+			}
+			localIds.add(sessionId);
+			seenSessionIds.add(sessionId);
+		}
+	}
+});
 const customMcpSecretRecordSchema = z.record(z.string().min(1).max(160), z.string().max(20000))
 	.refine((value: Record<string, string>): boolean => Object.keys(value).length <= 64, "Too many secret entries");
 const customMcpSecretUpdateRecordSchema = z.record(z.string().min(1).max(160), z.union([z.string().max(20000), z.null()]))
@@ -1264,6 +1296,18 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("workspace.list"),
 		params: z.object({}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.tree.order.get"),
+		params: z.object({}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.tree.order.update"),
+		params: workspaceTreeOrderUpdateParamsSchema,
 	}),
 	z.object({
 		type: z.literal("request"),

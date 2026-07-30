@@ -22,7 +22,8 @@ import {
 	getToolExecutionLedgerPath,
 	getUsageMetricsDbPath,
 	getUserPromptConfigPath,
-	getWebSearchSettingsConfigPath
+	getWebSearchSettingsConfigPath,
+	getWorkspaceTreeOrderConfigPath
 } from "../../../src/app-paths.js";
 
 test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): void => {
@@ -37,6 +38,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 
 		assert.equal(getDaedalusDir(), root);
 		assert.equal(getDefaultWorkspaceConfigPath(), join(configRoot, "workspaces.json"));
+		assert.equal(getWorkspaceTreeOrderConfigPath(), join(configRoot, "workspace-tree-order.json"));
 		assert.equal(getProviderConfigPath(), join(configRoot, "provider.json"));
 		assert.equal(getProviderCustomizationsPath(), join(configRoot, "provider-customizations.json"));
 		assert.equal(getMcpServersConfigPath(), join(configRoot, "mcp-servers.json"));
@@ -57,6 +59,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getGodotDocumentationRoot(), join(root, "godot-docs"));
 
 		assert.equal(getDaedalusPath("config.workspaces"), getDefaultWorkspaceConfigPath());
+		assert.equal(getDaedalusPath("config.workspaceTreeOrder"), getWorkspaceTreeOrderConfigPath());
 		assert.equal(getDaedalusPath("config.provider"), getProviderConfigPath());
 		assert.equal(getDaedalusPath("config.providerCustomizations"), getProviderCustomizationsPath());
 		assert.equal(getDaedalusPath("config.mcpServers"), getMcpServersConfigPath());

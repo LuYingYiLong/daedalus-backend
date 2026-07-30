@@ -46,6 +46,8 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"usage.metrics.trends.get",
 	"workspace.delete",
 	"workspace.update",
+	"workspace.tree.order.get",
+	"workspace.tree.order.update",
 	"workspace.git.diff.get",
 	"workspace.git.diff.summary.get",
 	"workspace.git.diff.file.get",
@@ -143,6 +145,36 @@ test("workspace.delete accepts workspace id", (): void => {
 			workspaceId: "workspace-a"
 		}
 	}).success, true);
+});
+
+test("workspace tree order accepts a complete unique order snapshot", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-tree-order",
+		method: "workspace.tree.order.update",
+		params: {
+			workspaceIds: ["workspace-b", "workspace-a"],
+			sessionIdsByWorkspace: {
+				"workspace-a": ["session-a-2", "session-a-1"],
+				"workspace-b": ["session-b-1"]
+			}
+		}
+	}).success, true);
+});
+
+test("workspace tree order rejects duplicate session ids across workspaces", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-tree-order-duplicate",
+		method: "workspace.tree.order.update",
+		params: {
+			workspaceIds: ["workspace-a", "workspace-b"],
+			sessionIdsByWorkspace: {
+				"workspace-a": ["session-shared"],
+				"workspace-b": ["session-shared"]
+			}
+		}
+	}).success, false);
 });
 
 test("session.timeline.index accepts a session id", (): void => {

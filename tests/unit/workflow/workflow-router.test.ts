@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+	applyGodotDocumentationRouteOverride,
 	applyProjectContextRouteOverride,
 	applyWorkflowRouteSafety,
 	createFallbackWorkflowRoute,
 	hasComplexWriteIntent,
 	hasWriteIntent,
 	normalizeWorkflowRouteDecision,
+	requiresGodotDocumentationRead,
 	resolveForcedWorkflowRoute
 } from "../../../src/workflow/router.js";
 
@@ -109,6 +111,71 @@ test("project-specific advice is upgraded from direct to read", (): void => {
 	assert.equal(decision.intent, "inspect");
 	assert.equal(decision.lane, "read");
 	assert.equal(decision.safetyOverride, "project_context_read");
+});
+
+test("installed Godot documentation lookup is upgraded from direct to a read lane", (): void => {
+	const params = {
+		message: "帮我查一下 Godot 的 PackedScene 类型详解，不用 Context7 和联网搜索。",
+		mode: "agent" as const
+	};
+	const decision = applyProjectContextRouteOverride({
+		intent: "answer",
+		scope: "bounded",
+		lane: "direct",
+		reason: "Conceptual explanation.",
+		planningHint: ""
+	}, params, {
+		workspaceSummary: "id=test\nname=Test\nrootPath=D:\\test",
+		editorSummary: "editorInstanceId=none",
+		additionalContextSummary: "No additional context.",
+		godotDocumentationAvailable: true
+	});
+
+	assert.equal(requiresGodotDocumentationRead(params.message), true);
+	assert.equal(decision.intent, "inspect");
+	assert.equal(decision.scope, "bounded");
+	assert.equal(decision.lane, "read");
+	assert.equal(decision.safetyOverride, "godot_documentation_read");
+});
+
+test("Godot documentation wording does not force a read lane when local docs are unavailable", (): void => {
+	const decision = applyProjectContextRouteOverride({
+		intent: "answer",
+		scope: "bounded",
+		lane: "direct",
+		reason: "Conceptual explanation.",
+		planningHint: ""
+	}, {
+		message: "Explain the Godot PackedScene class details.",
+		mode: "agent"
+	}, {
+		workspaceSummary: "No active workspace.",
+		editorSummary: "editorInstanceId=none",
+		additionalContextSummary: "No additional context.",
+		godotDocumentationAvailable: false
+	});
+
+	assert.equal(decision.lane, "direct");
+	assert.equal(decision.safetyOverride, undefined);
+});
+
+test("Godot documentation override also hardens a router fallback read lane", (): void => {
+	const fallback = createFallbackWorkflowRoute({
+		message: "Search the local Godot documentation for PackedScene.",
+		mode: "agent"
+	});
+	const decision = applyGodotDocumentationRouteOverride(
+		fallback,
+		{
+			message: "Search the local Godot documentation for PackedScene.",
+			mode: "agent"
+		},
+		true
+	);
+
+	assert.equal(fallback.lane, "read");
+	assert.equal(decision.lane, "read");
+	assert.equal(decision.safetyOverride, "godot_documentation_read");
 });
 
 test("fallback probes uncertain mutations and workflows complex changes", (): void => {

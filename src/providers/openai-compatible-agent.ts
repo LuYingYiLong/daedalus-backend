@@ -365,7 +365,8 @@ function filterToolCallsForAllowedTools(
 export function createToolProtocolCorrectionMessage(allowedToolNames: readonly string[]): string {
 	const lines: string[] = [
 		"上一条 assistant 输出包含 XML/DSML/裸工具标签，但后端不会解析正文里的工具协议。",
-		"不要再输出 <Tool>、<parameter>、DSML、JSON 工具结构或任何工具调用预告。"
+		"不要再输出 <tool>、<tools>、<tool_call>、<tool_calls>、<parameter>、DSML、JSON 工具结构或任何工具调用预告。",
+		"没有成功的工具结果时，不得声称已经查询、读取、检查或验证。"
 	];
 	if (allowedToolNames.length > 0) {
 		lines.push("如果需要使用工具，下一步必须通过 Chat Completions API 的 tool_calls 字段调用真实工具。");
@@ -385,7 +386,9 @@ export function createMissingRequiredToolCallCorrectionMessage(allowedToolNames:
 		hadVisibleText
 			? "上一条 assistant 响应输出了正文，但没有通过 API tool_calls 调用工具。"
 			: "上一条 assistant 响应没有返回用户可见正文，也没有通过 API tool_calls 调用工具。",
-		"当前阶段要求先调用工具；不要只在正文、thinking/reasoning_content 中说明准备调用工具。"
+		"当前阶段要求先调用工具；不要只在正文、thinking/reasoning_content 中说明准备调用工具。",
+		"不要输出 <tool>、<tools>、<tool_call>、<tool_calls>、DSML 或 JSON 工具协议。",
+		"在收到成功的工具结果前，不得声称已经查询、读取、检查或验证。"
 	];
 	if (allowedToolNames.length > 0) {
 		lines.push("下一步必须通过 Chat Completions API 的 tool_calls 字段调用真实工具。");
@@ -423,7 +426,7 @@ function containsKnownToolSyntax(text: string | null | undefined): boolean {
 function containsGenericToolCallMarkup(text: string | null | undefined): boolean {
 	return text !== null
 		&& text !== undefined
-		&& /<\s*\/?\s*tool_calls(?:\s|>)|<\s*\/?\s*tool_call(?:\s|>)/iu.test(text);
+		&& /<\s*\/?\s*tool(?:s|_calls?)?(?:\s|>)/iu.test(text);
 }
 
 function createToolCallPreludeDelta(
@@ -480,16 +483,17 @@ function isDsmlToolCallsOpeningTag(openingTag: string): boolean {
 }
 
 function isGenericToolCallsOpeningTag(openingTag: string): boolean {
-	return /^<\s*tool_calls(?:\s+[^<>]*?)?\s*>$/iu.test(openingTag);
+	return /^<\s*tool(?:s|_calls?)?(?:\s+[^<>]*?)?\s*>$/iu.test(openingTag);
 }
 
 function isGenericToolCallTagName(tagName: string): boolean {
-	return tagName.toLowerCase() === "tool_call";
+	return /^(?:tool|tools|tool_call|tool_calls)$/u.test(tagName.toLowerCase());
 }
 
 function isPotentialGenericToolTagName(tagName: string): boolean {
 	const normalizedTagName: string = tagName.toLowerCase();
-	return "tool_calls".startsWith(normalizedTagName) || "tool_call".startsWith(normalizedTagName);
+	return ["tool", "tools", "tool_call", "tool_calls"]
+		.some((tagNameCandidate: string): boolean => tagNameCandidate.startsWith(normalizedTagName));
 }
 
 function isPotentialToolOpeningFragment(text: string): boolean {
@@ -515,7 +519,7 @@ function findDsmlClosingTagEnd(text: string): number {
 }
 
 function findGenericToolCallsClosingTagEnd(text: string): number {
-	const match: RegExpExecArray | null = /<\/\s*tool_calls\s*>/iu.exec(text);
+	const match: RegExpExecArray | null = /<\/\s*tool(?:s|_calls?)?\s*>/iu.exec(text);
 	return match === null ? -1 : match.index + match[0].length;
 }
 
@@ -1328,7 +1332,7 @@ async function runAgentLoop(
 				return {
 					status: "protocol_violation",
 					text: "",
-					reason: "模型在文本内容中输出了 XML/DSML/裸工具标签；AgentRun v2 只接受 API tool_calls。"
+					reason: "模型在文本内容中输出了 XML/DSML/裸工具标签；Daedalus 只接受 API tool_calls。"
 				};
 			}
 

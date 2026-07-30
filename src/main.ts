@@ -21,6 +21,7 @@ import {
 	hasActiveSessionRuns
 } from "./server/client-connections.js";
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
+import { initializeGodotDocumentationManager } from "./godot-documentation/manager.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
@@ -57,6 +58,13 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 	});
 	await initializeProviderCustomizations();
 	await initializeUsageMetricsStore();
+	try {
+		await initializeGodotDocumentationManager();
+	} catch (error: unknown) {
+		logger.warn("godot_documentation", "startup_initialization_failed", {
+			error: error instanceof Error ? error.message : String(error)
+		}, "Server will start with local Godot documentation disabled");
+	}
 	try {
 		const temporarySessions = await listTemporarySessions();
 		for (const temporarySession of temporarySessions) {

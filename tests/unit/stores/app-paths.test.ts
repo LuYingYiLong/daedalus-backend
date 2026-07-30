@@ -10,6 +10,8 @@ import {
 	getDefaultWorkspaceConfigPath,
 	getDefaultSessionsDir,
 	getGeneralSettingsConfigPath,
+	getGodotDocumentationConfigPath,
+	getGodotDocumentationRoot,
 	getLogsDir,
 	getMcpServersConfigPath,
 	getPersonalSkillsDir,
@@ -41,6 +43,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getSkillSettingsPath(), join(configRoot, "skill-settings.json"));
 		assert.equal(getUserPromptConfigPath(), join(configRoot, "user-prompt.json"));
 		assert.equal(getGeneralSettingsConfigPath(), join(configRoot, "general-settings.json"));
+		assert.equal(getGodotDocumentationConfigPath(), join(configRoot, "godot-documentation.json"));
 		assert.equal(getWebSearchSettingsConfigPath(), join(configRoot, "web-search-settings.json"));
 		assert.equal(getApprovalConfigPath(), join(configRoot, "approval.json"));
 		assert.equal(getPersonalSkillsDir(), join(root, "skills"));
@@ -51,6 +54,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getTerminalJobsDir(), join(root, "terminal-jobs"));
 		assert.equal(getToolExecutionLedgerPath(), join(root, "tool-executions.jsonl"));
 		assert.equal(getUsageMetricsDbPath(), join(root, "metrics", "usage.sqlite"));
+		assert.equal(getGodotDocumentationRoot(), join(root, "godot-docs"));
 
 		assert.equal(getDaedalusPath("config.workspaces"), getDefaultWorkspaceConfigPath());
 		assert.equal(getDaedalusPath("config.provider"), getProviderConfigPath());
@@ -59,6 +63,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("config.skillSettings"), getSkillSettingsPath());
 		assert.equal(getDaedalusPath("config.userPrompt"), getUserPromptConfigPath());
 		assert.equal(getDaedalusPath("config.generalSettings"), getGeneralSettingsConfigPath());
+		assert.equal(getDaedalusPath("config.godotDocumentation"), getGodotDocumentationConfigPath());
 		assert.equal(getDaedalusPath("config.webSearchSettings"), getWebSearchSettingsConfigPath());
 		assert.equal(getDaedalusPath("config.approval"), getApprovalConfigPath());
 		assert.equal(getDaedalusPath("skills.root"), getPersonalSkillsDir());
@@ -70,6 +75,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("terminalJobs.root"), getTerminalJobsDir());
 		assert.equal(getDaedalusPath("toolExecution.ledger"), getToolExecutionLedgerPath());
 		assert.equal(getDaedalusPath("metrics.usageDb"), getUsageMetricsDbPath());
+		assert.equal(getDaedalusPath("godotDocumentation.root"), getGodotDocumentationRoot());
 	} finally {
 		if (previousUserProfile === undefined) {
 			delete process.env.USERPROFILE;

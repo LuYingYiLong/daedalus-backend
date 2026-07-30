@@ -216,6 +216,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const autoloadName: string | undefined = getStringArg(args, "name");
 		const scriptPath: string | undefined = getStringArg(args, "scriptPath");
 
+		if (toolName.includes("search_documentation")) {
+			const query: string = getStringArg(args, "query") ?? "Godot documentation";
+			return createDisplay("godot", "Godot Documentation", "docs", "Search Godot documentation", `Search local docs: ${query}`, {
+				kind: "query",
+				label: query
+			});
+		}
+
 		if (toolName.includes("lsp_get_status")) {
 			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "检查 LSP 状态", "探测 Godot GDScript LSP", {
 				kind: "unknown",

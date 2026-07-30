@@ -8,9 +8,11 @@ import { registerProjectSettingsTools } from "./tools/project-settings.js";
 import { registerHeadlessOperationTools } from "./tools/headless-operations.js";
 import { registerRuntimeTools } from "./tools/runtime-tools.js";
 import { registerSceneTools } from "./tools/scene-tools.js";
+import { registerDocumentationTools } from "./tools/documentation-tools.js";
 
 export function registerGodotToolsAndResources(server: McpServer): void {
 	registerRuntimeTools(server);
+	registerDocumentationTools(server);
 	registerProjectFileTools(server);
 	registerProjectLogTools(server);
 	registerProjectSettingsTools(server);

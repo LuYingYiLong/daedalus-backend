@@ -93,6 +93,10 @@ const handleWorkspaceRequest: RequestHandler = createLazyHandler(async (): Promi
 	return (await import("./handlers/workspace-handlers.js")).handleWorkspaceRequest;
 });
 
+const handleGodotDocumentationRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/godot-documentation-handlers.js")).handleGodotDocumentationRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -129,6 +133,14 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"userPrompt.set",
 	"generalSettings.get",
 	"generalSettings.update",
+	"godotDocumentation.get",
+	"godotDocumentation.branches.list",
+	"godotDocumentation.install",
+	"godotDocumentation.update",
+	"godotDocumentation.remove",
+	"godotDocumentation.setEnabled",
+	"godotDocumentation.job.get",
+	"godotDocumentation.job.cancel",
 	"webSearchSettings.get",
 	"webSearchSettings.update",
 	"skill.list",
@@ -239,6 +251,14 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["userPrompt.set", handleCoreRequest],
 	["generalSettings.get", handleCoreRequest],
 	["generalSettings.update", handleCoreRequest],
+	["godotDocumentation.get", handleGodotDocumentationRequest],
+	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
+	["godotDocumentation.install", handleGodotDocumentationRequest],
+	["godotDocumentation.update", handleGodotDocumentationRequest],
+	["godotDocumentation.remove", handleGodotDocumentationRequest],
+	["godotDocumentation.setEnabled", handleGodotDocumentationRequest],
+	["godotDocumentation.job.get", handleGodotDocumentationRequest],
+	["godotDocumentation.job.cancel", handleGodotDocumentationRequest],
 	["webSearchSettings.get", handleCoreRequest],
 	["webSearchSettings.update", handleCoreRequest],
 	["skill.list", handleCoreRequest],

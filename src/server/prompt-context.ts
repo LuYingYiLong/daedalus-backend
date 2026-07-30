@@ -92,6 +92,8 @@ import {
 	type ThinkingEventBuffer
 } from "./client-session.js";
 import { getToolPolicy } from "../tools/tool-policy.js";
+import { getGodotDocumentationSnapshot } from "../godot-documentation/store.js";
+import { createGodotDocumentationPromptSection } from "../prompts/godot-documentation.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
@@ -393,6 +395,13 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	}
 	sections.push("如果 LSP/DAP 返回 no active workspace 或不可用，先依据以上运行时状态判断是 workspace 绑定、editor 在线状态、端口探测还是诊断服务问题；不要笼统归因成用户环境问题。");
 	sections.push("");
+
+	const documentationSettings = getGodotDocumentationSnapshot();
+	const documentationPrompt: string = createGodotDocumentationPromptSection(documentationSettings);
+	if (documentationPrompt.length > 0) {
+		sections.push(documentationPrompt);
+		sections.push("");
+	}
 
 	// Project instruction files (AGENTS.md / CLAUDE.md)
 	const godotProjectServerIds: string[] = serverIds.filter((id: string): boolean => id === "godot");

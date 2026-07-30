@@ -27,6 +27,8 @@ const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
 	workspace_delete_file: "mcp_workspace_delete_file",
 	get_runtime_status: "mcp_godot_get_runtime_status",
 	get_godot_version: "mcp_godot_get_godot_version",
+	search_documentation: "mcp_godot_search_documentation",
+	search_godot_documentation: "mcp_godot_search_documentation",
 	launch_editor: "mcp_godot_launch_editor",
 	run_project: "mcp_godot_run_project",
 	stop_project: "mcp_godot_stop_project",

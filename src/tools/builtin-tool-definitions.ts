@@ -318,6 +318,17 @@ const GODOT_RUNTIME_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		[]
 	),
 	createSceneToolDefinition(
+		"mcp_godot_search_documentation",
+		"Search the user-imported offline Godot Class Reference and manuals. Use this before guessing an uncertain Godot API, method, property, or engine behavior.",
+		{
+			query: { type: "string", description: "Godot class, member, concept, or natural-language documentation query." },
+			branch: { type: "string", description: "Optional installed godot-docs branch. Omit to match the current project version." },
+			scope: { type: "string", enum: ["all", "class_reference", "manual"], description: "Defaults to all." },
+			limit: { type: "integer", minimum: 1, maximum: 8, description: "Maximum results, defaults to 5." }
+		},
+		["query"]
+	),
+	createSceneToolDefinition(
 		"mcp_godot_launch_editor",
 		"启动当前项目的 Godot 编辑器，会创建可查询/可取消的 runtime job，需要审批。",
 		{

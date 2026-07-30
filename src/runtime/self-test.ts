@@ -51,6 +51,14 @@ function verifySqlite(): string {
 		if (integrity?.integrity_check !== "ok") {
 			throw new Error(`SQLite integrity check failed: ${String(integrity?.integrity_check)}`);
 		}
+		database.exec("CREATE VIRTUAL TABLE self_test_fts USING fts5(value, tokenize = 'unicode61')");
+		database.prepare("INSERT INTO self_test_fts (value) VALUES (?)").run("Godot documentation");
+		const ftsRow = database.prepare("SELECT value FROM self_test_fts WHERE self_test_fts MATCH ?").get("Godot") as
+			| { value?: unknown }
+			| undefined;
+		if (ftsRow?.value !== "Godot documentation") {
+			throw new Error("SQLite FTS5 round trip failed.");
+		}
 		return process.versions.sqlite ?? "available";
 	} finally {
 		database.close();
@@ -89,4 +97,3 @@ export async function runBackendSelfTest(options: {
 		checks
 	};
 }
-

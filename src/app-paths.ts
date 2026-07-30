@@ -11,7 +11,9 @@ export type DaedalusPathKey =
 	| "config.userPrompt"
 	| "config.generalSettings"
 	| "config.webSearchSettings"
+	| "config.godotDocumentation"
 	| "config.approval"
+	| "godotDocumentation.root"
 	| "skills.root"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
@@ -48,7 +50,9 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"config.userPrompt": join(configRoot, "user-prompt.json"),
 		"config.generalSettings": join(configRoot, "general-settings.json"),
 		"config.webSearchSettings": join(configRoot, "web-search-settings.json"),
+		"config.godotDocumentation": join(configRoot, "godot-documentation.json"),
 		"config.approval": join(configRoot, "approval.json"),
+		"godotDocumentation.root": join(root, "godot-docs"),
 		"skills.root": join(root, "skills"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
@@ -102,6 +106,14 @@ export function getGeneralSettingsConfigPath(): string {
 
 export function getWebSearchSettingsConfigPath(): string {
 	return getDaedalusPath("config.webSearchSettings");
+}
+
+export function getGodotDocumentationConfigPath(): string {
+	return getDaedalusPath("config.godotDocumentation");
+}
+
+export function getGodotDocumentationRoot(): string {
+	return getDaedalusPath("godotDocumentation.root");
 }
 
 export function getApprovalConfigPath(): string {

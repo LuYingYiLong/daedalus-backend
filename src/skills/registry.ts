@@ -28,6 +28,7 @@ const READ_TOOLS: string[] = [
 	"mcp_skills_load",
 	"mcp_godot_get_runtime_status",
 	"mcp_godot_get_godot_version",
+	"mcp_godot_search_documentation",
 	"mcp_godot_get_debug_output",
 	"mcp_godot_list_projects",
 	"mcp_godot_get_project_summary",

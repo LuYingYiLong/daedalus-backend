@@ -20,12 +20,14 @@ export type GodotTemplateWorkflowContext = {
 
 const TEXT_FILE_READ_TOOLS: string[] = [
 	"mcp_godot_get_project_summary",
+	"mcp_godot_search_documentation",
 	"mcp_godot_list_project_files",
 	"mcp_godot_read_text_file",
 	"mcp_godot_search_text"
 ];
 
 const SCENE_READ_TOOLS: string[] = [
+	"mcp_godot_search_documentation",
 	"mcp_godot_list_scenes",
 	"mcp_godot_read_text_file",
 	"mcp_godot_inspect_scene_tree",

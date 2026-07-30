@@ -81,7 +81,7 @@ import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
 import { createGodotTemplateWorkflowPlan } from "../workflow/godot-template-planner.js";
-import { createFallbackWorkflowRoute, hasWriteIntent, resolveForcedWorkflowRoute, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
+import { applyGodotDocumentationRouteOverride, createFallbackWorkflowRoute, hasWriteIntent, resolveForcedWorkflowRoute, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
 import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
@@ -155,6 +155,7 @@ import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, cre
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
+import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "./additional-context.js";
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "./next-step-hints.js";
@@ -336,7 +337,8 @@ function createWorkflowRouteContext(session: ClientSession, mcpHost: McpHost, ad
 	return {
 		workspaceSummary,
 		editorSummary,
-		additionalContextSummary
+		additionalContextSummary,
+		godotDocumentationAvailable: isGodotDocumentationEnabled()
 	};
 }
 
@@ -405,6 +407,11 @@ function resolveHiddenAnswerToolNames(
 	}
 
 	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
+	if (routeDecision.safetyOverride === "godot_documentation_read") {
+		return sourceToolNames.includes("mcp_godot_search_documentation")
+			? ["mcp_godot_search_documentation"]
+			: [];
+	}
 	if (routeDecision.intent === "mutate") {
 		return sourceToolNames;
 	}
@@ -420,6 +427,14 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	const options: AiChatParams["options"] & Record<string, unknown> = {
 		...(params.options ?? {})
 	};
+	if (routeDecision.safetyOverride === "godot_documentation_read") {
+		options.requireToolCallOnFirstStep = true;
+		options.toolBudget = "simple";
+		return {
+			...params,
+			options
+		};
+	}
 	if (routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
 		options.requireToolCallOnFirstStep = true;
 		options.toolBudget = "simple";
@@ -2133,6 +2148,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					}
 				}
 				throwIfAborted(abortController.signal);
+				routeDecision = applyGodotDocumentationRouteOverride(
+					routeDecision,
+					effectiveParams,
+					isGodotDocumentationEnabled()
+				);
 				routeDecision = applyExplicitSkillWriteRequirement(
 					routeDecision,
 					effectiveParams,

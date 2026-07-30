@@ -494,7 +494,8 @@ test("tool protocol correction prompt distinguishes tool and no-tool phases", ()
 	const toolPrompt: string = createToolProtocolCorrectionMessage(["mcp_godot_read_text_file"]);
 	assert.match(toolPrompt, /tool_calls/);
 	assert.match(toolPrompt, /mcp_godot_read_text_file/);
-	assert.match(toolPrompt, /不要再输出 <Tool>/);
+	assert.match(toolPrompt, /不要再输出 <tool>、<tools>/);
+	assert.match(toolPrompt, /没有成功的工具结果时，不得声称已经查询/);
 
 	const noToolPrompt: string = createToolProtocolCorrectionMessage([]);
 	assert.match(noToolPrompt, /当前阶段没有可用工具/);
@@ -504,6 +505,8 @@ test("tool protocol correction prompt distinguishes tool and no-tool phases", ()
 	assert.match(missingToolCallPrompt, /没有通过 API tool_calls 调用工具/);
 	assert.match(missingToolCallPrompt, /thinking\/reasoning_content/);
 	assert.match(missingToolCallPrompt, /mcp_godot_read_text_file/);
+	assert.match(missingToolCallPrompt, /不要输出 <tool>、<tools>/);
+	assert.match(missingToolCallPrompt, /在收到成功的工具结果前/);
 
 	const visibleTextMissingToolCallPrompt: string = createMissingRequiredToolCallCorrectionMessage(["mcp_godot_read_text_file"], true);
 	assert.match(visibleTextMissingToolCallPrompt, /输出了正文/);
@@ -768,7 +771,7 @@ test("streaming agent retries when required first tool call returns only prelude
 	});
 });
 
-test("streaming agent suppresses generic textual tool-call markup and retries with API tool calls", async (): Promise<void> => {
+test("streaming agent suppresses DeepSeek tools wrappers and retries with API tool calls", async (): Promise<void> => {
 	await withMissingToolCallRetryMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
 		const events: string[] = [];
 		const result = await runOpenAICompatibleAgentStreaming(
@@ -793,9 +796,17 @@ test("streaming agent suppresses generic textual tool-call markup and retries wi
 		assert.equal(result.text, "读取完成。");
 		assert.equal(requests.length, 3);
 		assert.match(JSON.stringify(requests[1]?.body.messages), /tool_calls/);
-		assert.doesNotMatch(events.join(""), /<\/?tool_calls|<\/?tool_call/);
+		assert.doesNotMatch(events.join(""), /<\/?tool(?:s|_calls?)?(?:\s|>)/);
 	}, {
-		content: "I will inspect the available tools.\n\n<tool_calls>\n<tool_call name=\"mcp_godot_read_text_file\">\n</tool_call>\n</tool_calls>"
+		content: [
+			"I will inspect the available tools.",
+			"",
+			"<tools>",
+			"<mcp_godot_read_text_file>",
+			"<relativePath>tic_tac_toe_game.gd</relativePath>",
+			"</mcp_godot_read_text_file>",
+			"</tools>"
+		].join("\n")
 	});
 });
 

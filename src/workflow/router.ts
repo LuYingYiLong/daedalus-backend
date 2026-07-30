@@ -21,6 +21,7 @@ export type WorkflowRouteContext = {
 	workspaceSummary: string;
 	editorSummary: string;
 	additionalContextSummary: string;
+	godotDocumentationAvailable?: boolean | undefined;
 };
 
 const workflowRouteSchema = z.object({
@@ -128,7 +129,18 @@ export function applyProjectContextRouteOverride(
 	params: AiChatParams,
 	context: WorkflowRouteContext
 ): WorkflowRouteDecision {
-	if (decision.lane !== "direct" || decision.intent === "mutate" || explicitlyAvoidsProjectReads(params.message)) {
+	const documentationDecision: WorkflowRouteDecision = applyGodotDocumentationRouteOverride(
+		decision,
+		params,
+		context.godotDocumentationAvailable === true
+	);
+	if (documentationDecision !== decision) {
+		return documentationDecision;
+	}
+	if (decision.lane !== "direct" || decision.intent === "mutate") {
+		return decision;
+	}
+	if (explicitlyAvoidsProjectReads(params.message)) {
 		return decision;
 	}
 	if (!requiresCurrentProjectRead(params.message, context)) {
@@ -163,6 +175,30 @@ export function applyWorkflowRouteSafety(decision: WorkflowRouteDecision, params
 		planningHint: "",
 		safetyOverride: explicitReadOnly ? "explicit_read_only" : "ask_mode_read_only",
 		reason: `${decision.reason} Safety override forced read-only tool answer.`
+	};
+}
+
+export function applyGodotDocumentationRouteOverride(
+	decision: WorkflowRouteDecision,
+	params: AiChatParams,
+	documentationAvailable: boolean
+): WorkflowRouteDecision {
+	if (
+		!documentationAvailable
+		|| decision.intent === "mutate"
+		|| (decision.lane !== "direct" && decision.lane !== "read")
+		|| !requiresGodotDocumentationRead(params.message)
+	) {
+		return decision;
+	}
+
+	return {
+		...decision,
+		intent: "inspect",
+		scope: "bounded",
+		lane: "read",
+		safetyOverride: "godot_documentation_read",
+		reason: `${decision.reason} The request requires evidence from installed Godot documentation.`
 	};
 }
 
@@ -325,6 +361,7 @@ function createRouteSystemPromptV3(): string {
 		"- scope=unknown: a small read-only probe is needed before the write scope is known.",
 		"- scope=complex: multi-file coordination, migration, destructive work, a long operation, or explicit planning.",
 		"- lane=direct for answer, read for inspect, probe for unknown mutation, lightweight for bounded mutation, workflow for complex mutation.",
+		"Requests to look up installed local Godot documentation, verify a Godot API, or inspect an exact Godot class/member use intent=inspect and lane=read.",
 		"Creating, modifying, fixing, or generating something does not by itself require workflow.",
 		"Ask mode and explicit read-only requests must never use a mutation lane.",
 		"Output exactly:",
@@ -347,7 +384,10 @@ function createRouteUserMessage(params: AiChatParams, context: WorkflowRouteCont
 		context.editorSummary,
 		"",
 		"## Additional Context",
-		context.additionalContextSummary
+		context.additionalContextSummary,
+		"",
+		"## Local Godot Documentation",
+		context.godotDocumentationAvailable === true ? "Available." : "Unavailable."
 	].join("\n");
 }
 
@@ -405,6 +445,50 @@ function requiresCurrentProjectRead(message: string, context: WorkflowRouteConte
 		"electron",
 		"react",
 		"antd"
+	]);
+}
+
+export function requiresGodotDocumentationRead(message: string): boolean {
+	const normalized: string = message.normalize("NFKC").toLowerCase();
+	if (!normalized.includes("godot")) {
+		return false;
+	}
+
+	if (includesAny(normalized, [
+		"查一下",
+		"查找",
+		"查询",
+		"搜索",
+		"检索",
+		"查文档",
+		"离线文档",
+		"本地文档",
+		"官方文档",
+		"类参考",
+		"look up",
+		"lookup",
+		"search",
+		"documentation",
+		"docs",
+		"class reference",
+		"api reference"
+	])) {
+		return true;
+	}
+
+	return includesAny(normalized, [
+		"api",
+		"类型详解",
+		"类详解",
+		"方法详解",
+		"属性详解",
+		"信号详解",
+		"枚举详解",
+		"class details",
+		"method details",
+		"property details",
+		"signal details",
+		"enum details"
 	]);
 }
 

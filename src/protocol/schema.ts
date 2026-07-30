@@ -590,6 +590,68 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("godotDocumentation.get"),
+		params: z.object({}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.branches.list"),
+		params: z.object({
+			refresh: z.boolean().optional(),
+		}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.install"),
+		params: z.object({
+			branch: z.string().min(1).max(120),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.update"),
+		params: z.object({
+			documentId: z.string().min(1).max(80),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.remove"),
+		params: z.object({
+			documentId: z.string().min(1).max(80),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.setEnabled"),
+		params: z.object({
+			enabled: z.boolean(),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.job.get"),
+		params: z.object({
+			jobId: z.string().min(1).max(100),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.job.cancel"),
+		params: z.object({
+			jobId: z.string().min(1).max(100),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("webSearchSettings.get"),
 		params: z.object({}).optional(),
 	}),

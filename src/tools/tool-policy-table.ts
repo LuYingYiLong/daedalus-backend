@@ -23,6 +23,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_workspace_delete_file": { risk: "destructive" },
 	"mcp_godot_get_runtime_status": { risk: "read" },
 	"mcp_godot_get_godot_version": { risk: "read" },
+	"mcp_godot_search_documentation": { risk: "read" },
 	"mcp_godot_launch_editor": { risk: "write" },
 	"mcp_godot_run_project": { risk: "write" },
 	"mcp_godot_stop_project": { risk: "write" },

@@ -16,6 +16,7 @@ import {
 	EXECUTION_CONTROL_TOOL_NAME,
 	type ExecutionControlContext
 } from "./execution-control.js";
+import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -39,6 +40,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_search_text",
 		"mcp_godot_get_runtime_status",
 		"mcp_godot_get_godot_version",
+		"mcp_godot_search_documentation",
 		"mcp_godot_get_debug_output",
 		"mcp_godot_list_projects",
 		"mcp_godot_get_project_summary",
@@ -272,7 +274,11 @@ export class WorkspaceToolCatalog {
 	}
 
 	getEntries(): ToolCatalogEntry[] {
-		const staticEntries: ToolCatalogEntry[] = BUILTIN_TOOL_DEFINITIONS.map(createStaticEntry);
+		const staticEntries: ToolCatalogEntry[] = BUILTIN_TOOL_DEFINITIONS
+			.filter((definition: ChatCompletionTool): boolean => {
+				return getToolName(definition) !== "mcp_godot_search_documentation" || isGodotDocumentationEnabled();
+			})
+			.map(createStaticEntry);
 		const dynamicEntries: ToolCatalogEntry[] = getDynamicMcpToolDefinitions(this.context.workspaceId)
 			.map((definition: ChatCompletionTool): ToolCatalogEntry => createDynamicEntry(withApprovalReasonSchema(definition), this.context.workspaceId));
 		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined

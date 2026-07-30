@@ -2,18 +2,28 @@ import { readFile } from "node:fs/promises";
 import { getWorkspaceTreeOrderConfigPath } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 
-const SCHEMA_VERSION: 1 = 1;
+const SCHEMA_VERSION: 2 = 2;
+
+export const WORKSPACE_TREE_SECTION_KEYS = ["pinned", "projects", "recent"] as const;
+export type WorkspaceTreeSectionKey = typeof WORKSPACE_TREE_SECTION_KEYS[number];
 
 export type WorkspaceTreeOrderPreferences = {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	workspaceIds: string[];
 	sessionIdsByWorkspace: Record<string, string[]>;
+	pinnedSessionIds: string[];
+	recentSessionIds: string[];
+	expandedSectionKeys: WorkspaceTreeSectionKey[];
 	updatedAt: string;
 };
 
 export type WorkspaceTreeOrderUpdate = Pick<
 	WorkspaceTreeOrderPreferences,
-	"workspaceIds" | "sessionIdsByWorkspace"
+	"workspaceIds"
+	| "sessionIdsByWorkspace"
+	| "pinnedSessionIds"
+	| "recentSessionIds"
+	| "expandedSectionKeys"
 >;
 
 export type WorkspaceTreeOrderInventory = {
@@ -31,6 +41,9 @@ function createEmptyPreferences(): WorkspaceTreeOrderPreferences {
 		schemaVersion: SCHEMA_VERSION,
 		workspaceIds: [],
 		sessionIdsByWorkspace: {},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		expandedSectionKeys: [...WORKSPACE_TREE_SECTION_KEYS],
 		updatedAt: new Date(0).toISOString()
 	};
 }
@@ -47,21 +60,40 @@ function hasDuplicates(values: readonly string[]): boolean {
 	return new Set(values).size !== values.length;
 }
 
+function isWorkspaceTreeSectionKey(value: unknown): value is WorkspaceTreeSectionKey {
+	return typeof value === "string" && WORKSPACE_TREE_SECTION_KEYS.includes(value as WorkspaceTreeSectionKey);
+}
+
 function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences | null {
 	if (
 		!isRecord(value)
 		|| value.schemaVersion !== SCHEMA_VERSION
 		|| !Array.isArray(value.workspaceIds)
 		|| !isRecord(value.sessionIdsByWorkspace)
+		|| !Array.isArray(value.pinnedSessionIds)
+		|| !Array.isArray(value.recentSessionIds)
+		|| !Array.isArray(value.expandedSectionKeys)
 		|| typeof value.updatedAt !== "string"
 		|| !value.workspaceIds.every(isId)
+		|| !value.pinnedSessionIds.every(isId)
+		|| !value.recentSessionIds.every(isId)
+		|| !value.expandedSectionKeys.every(isWorkspaceTreeSectionKey)
 		|| hasDuplicates(value.workspaceIds)
+		|| hasDuplicates(value.pinnedSessionIds)
+		|| hasDuplicates(value.recentSessionIds)
+		|| hasDuplicates(value.expandedSectionKeys)
 	) {
 		return null;
 	}
 
 	const sessionIdsByWorkspace: Record<string, string[]> = {};
-	const allSessionIds: Set<string> = new Set();
+	const allSessionIds: Set<string> = new Set([
+		...value.pinnedSessionIds,
+		...value.recentSessionIds
+	]);
+	if (allSessionIds.size !== value.pinnedSessionIds.length + value.recentSessionIds.length) {
+		return null;
+	}
 	for (const [workspaceId, candidateIds] of Object.entries(value.sessionIdsByWorkspace)) {
 		if (!isId(workspaceId) || !Array.isArray(candidateIds) || !candidateIds.every(isId) || hasDuplicates(candidateIds)) {
 			return null;
@@ -79,6 +111,9 @@ function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences |
 		schemaVersion: SCHEMA_VERSION,
 		workspaceIds: [...value.workspaceIds],
 		sessionIdsByWorkspace,
+		pinnedSessionIds: [...value.pinnedSessionIds],
+		recentSessionIds: [...value.recentSessionIds],
+		expandedSectionKeys: [...value.expandedSectionKeys],
 		updatedAt: value.updatedAt
 	};
 }
@@ -114,6 +149,25 @@ function createVisibleSessionIdsByWorkspace(
 	return result;
 }
 
+function createVisiblePinnedSessionIds(inventory: WorkspaceTreeOrderInventory): string[] {
+	return inventory.sessions
+		.filter((session): boolean => session.temporary !== true && session.pinned === true)
+		.map((session): string => session.id);
+}
+
+function createVisibleRecentSessionIds(inventory: WorkspaceTreeOrderInventory): string[] {
+	const workspaceIdSet: ReadonlySet<string> = new Set(
+		inventory.workspaces.map((workspace): string => workspace.id)
+	);
+	return inventory.sessions
+		.filter((session): boolean => {
+			return session.temporary !== true
+				&& session.pinned !== true
+				&& (session.workspaceId === undefined || !workspaceIdSet.has(session.workspaceId));
+		})
+		.map((session): string => session.id);
+}
+
 export function reconcileWorkspaceTreeOrder(
 	preferences: WorkspaceTreeOrderUpdate,
 	inventory: WorkspaceTreeOrderInventory,
@@ -123,6 +177,14 @@ export function reconcileWorkspaceTreeOrder(
 	const visibleSessionIdsByWorkspace: Record<string, string[]> = createVisibleSessionIdsByWorkspace(inventory);
 	const workspaceIds: string[] = mergeSavedOrder(currentWorkspaceIds, preferences.workspaceIds);
 	const sessionIdsByWorkspace: Record<string, string[]> = {};
+	const pinnedSessionIds: string[] = mergeSavedOrder(
+		createVisiblePinnedSessionIds(inventory),
+		preferences.pinnedSessionIds
+	);
+	const recentSessionIds: string[] = mergeSavedOrder(
+		createVisibleRecentSessionIds(inventory),
+		preferences.recentSessionIds
+	);
 
 	for (const workspaceId of workspaceIds) {
 		sessionIdsByWorkspace[workspaceId] = mergeSavedOrder(
@@ -135,6 +197,9 @@ export function reconcileWorkspaceTreeOrder(
 		schemaVersion: SCHEMA_VERSION,
 		workspaceIds,
 		sessionIdsByWorkspace,
+		pinnedSessionIds,
+		recentSessionIds,
+		expandedSectionKeys: preferences.expandedSectionKeys.filter(isWorkspaceTreeSectionKey),
 		updatedAt
 	};
 }
@@ -150,21 +215,67 @@ export function validateWorkspaceTreeOrderUpdate(
 	const knownSessionWorkspaceById: ReadonlyMap<string, string | undefined> = new Map(
 		inventory.sessions.map((session): [string, string | undefined] => [session.id, session.workspaceId])
 	);
+	const knownSessionById: ReadonlyMap<string, WorkspaceTreeOrderInventory["sessions"][number]> = new Map(
+		inventory.sessions.map((session): [string, WorkspaceTreeOrderInventory["sessions"][number]] => [session.id, session])
+	);
+	const knownWorkspaceIds: ReadonlySet<string> = new Set(
+		inventory.workspaces.map((workspace): string => workspace.id)
+	);
 	const seenSessionIds: Set<string> = new Set();
+	const addSessionId = (sessionId: string): void => {
+		if (seenSessionIds.has(sessionId)) {
+			throw new Error("workspace_tree_order_duplicate_session");
+		}
+		seenSessionIds.add(sessionId);
+	};
+
+	if (hasDuplicates(update.pinnedSessionIds) || hasDuplicates(update.recentSessionIds)) {
+		throw new Error("workspace_tree_order_duplicate_session");
+	}
+	for (const sessionId of update.pinnedSessionIds) {
+		addSessionId(sessionId);
+		const knownSession = knownSessionById.get(sessionId);
+		if (knownSession !== undefined && knownSession.pinned !== true) {
+			throw new Error("workspace_tree_order_session_section_mismatch");
+		}
+	}
+	for (const sessionId of update.recentSessionIds) {
+		addSessionId(sessionId);
+		const knownSession = knownSessionById.get(sessionId);
+		if (
+			knownSession !== undefined
+			&& (
+				knownSession.pinned === true
+				|| (
+					knownSession.workspaceId !== undefined
+					&& knownWorkspaceIds.has(knownSession.workspaceId)
+				)
+			)
+		) {
+			throw new Error("workspace_tree_order_session_section_mismatch");
+		}
+	}
 	for (const [workspaceId, sessionIds] of Object.entries(update.sessionIdsByWorkspace)) {
 		if (hasDuplicates(sessionIds)) {
 			throw new Error("workspace_tree_order_duplicate_session");
 		}
 		for (const sessionId of sessionIds) {
-			if (seenSessionIds.has(sessionId)) {
-				throw new Error("workspace_tree_order_duplicate_session");
-			}
-			seenSessionIds.add(sessionId);
+			addSessionId(sessionId);
+			const knownSession = knownSessionById.get(sessionId);
 			const actualWorkspaceId: string | undefined = knownSessionWorkspaceById.get(sessionId);
-			if (actualWorkspaceId !== undefined && actualWorkspaceId !== workspaceId) {
+			if (knownSession !== undefined && actualWorkspaceId !== workspaceId) {
 				throw new Error("workspace_tree_order_session_workspace_mismatch");
 			}
+			if (knownSession?.pinned === true) {
+				throw new Error("workspace_tree_order_session_section_mismatch");
+			}
 		}
+	}
+	if (
+		hasDuplicates(update.expandedSectionKeys)
+		|| !update.expandedSectionKeys.every(isWorkspaceTreeSectionKey)
+	) {
+		throw new Error("workspace_tree_order_invalid_section");
 	}
 }
 
@@ -174,10 +285,16 @@ function hasSameOrder(
 ): boolean {
 	return JSON.stringify({
 		workspaceIds: left.workspaceIds,
-		sessionIdsByWorkspace: left.sessionIdsByWorkspace
+		sessionIdsByWorkspace: left.sessionIdsByWorkspace,
+		pinnedSessionIds: left.pinnedSessionIds,
+		recentSessionIds: left.recentSessionIds,
+		expandedSectionKeys: left.expandedSectionKeys
 	}) === JSON.stringify({
 		workspaceIds: right.workspaceIds,
-		sessionIdsByWorkspace: right.sessionIdsByWorkspace
+		sessionIdsByWorkspace: right.sessionIdsByWorkspace,
+		pinnedSessionIds: right.pinnedSessionIds,
+		recentSessionIds: right.recentSessionIds,
+		expandedSectionKeys: right.expandedSectionKeys
 	});
 }
 

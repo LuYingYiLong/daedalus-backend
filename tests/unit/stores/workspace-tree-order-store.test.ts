@@ -29,7 +29,10 @@ test("workspace tree order reconciles visible ids and puts new entries first", (
 			"workspace-a": ["session-a-old", "session-deleted"],
 			"workspace-b": ["session-b"],
 			"workspace-deleted": ["session-gone"]
-		}
+		},
+		pinnedSessionIds: ["session-pinned", "session-pinned-deleted"],
+		recentSessionIds: ["session-recent", "session-recent-deleted"],
+		expandedSectionKeys: ["projects", "recent"]
 	}, {
 		workspaces: [...BASE_INVENTORY.workspaces, { id: "workspace-c" }],
 		sessions: BASE_INVENTORY.sessions
@@ -41,20 +44,29 @@ test("workspace tree order reconciles visible ids and puts new entries first", (
 		"workspace-b": ["session-b"],
 		"workspace-a": ["session-a-new", "session-a-old"]
 	});
+	assert.deepEqual(initial.pinnedSessionIds, ["session-pinned"]);
+	assert.deepEqual(initial.recentSessionIds, ["session-recent"]);
+	assert.deepEqual(initial.expandedSectionKeys, ["projects", "recent"]);
 	assert.equal(initial.updatedAt, "2026-07-30T00:00:00.000Z");
 });
 
 test("workspace tree order rejects duplicates and cross-workspace known sessions", (): void => {
 	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
 		workspaceIds: ["workspace-a", "workspace-a"],
-		sessionIdsByWorkspace: {}
+		sessionIdsByWorkspace: {},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		expandedSectionKeys: ["pinned", "projects", "recent"]
 	}, BASE_INVENTORY), /duplicate_workspace/u);
 
 	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
 		workspaceIds: ["workspace-a", "workspace-b"],
 		sessionIdsByWorkspace: {
 			"workspace-a": ["session-b"]
-		}
+		},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		expandedSectionKeys: ["pinned", "projects", "recent"]
 	}, BASE_INVENTORY), /session_workspace_mismatch/u);
 
 	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
@@ -62,8 +74,30 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		sessionIdsByWorkspace: {
 			"workspace-a": ["session-a-old"],
 			"workspace-b": ["session-a-old"]
-		}
+		},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		expandedSectionKeys: ["pinned", "projects", "recent"]
 	}, BASE_INVENTORY), /duplicate_session/u);
+
+	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
+		workspaceIds: ["workspace-a", "workspace-b"],
+		sessionIdsByWorkspace: {
+			"workspace-a": ["session-a-new", "session-a-old"],
+			"workspace-b": ["session-b"]
+		},
+		pinnedSessionIds: ["session-recent"],
+		recentSessionIds: ["session-pinned"],
+		expandedSectionKeys: ["pinned", "projects", "recent"]
+	}, BASE_INVENTORY), /session_section_mismatch/u);
+
+	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
+		workspaceIds: ["workspace-a", "workspace-b"],
+		sessionIdsByWorkspace: {},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		expandedSectionKeys: ["projects", "projects"]
+	}, BASE_INVENTORY), /invalid_section/u);
 });
 
 test("workspace tree order store persists updates and serializes concurrent writes", async (): Promise<void> => {
@@ -74,26 +108,38 @@ test("workspace tree order store persists updates and serializes concurrent writ
 		const first = await store.get(BASE_INVENTORY);
 		assert.deepEqual(first.workspaceIds, ["workspace-a", "workspace-b"]);
 		assert.deepEqual(first.sessionIdsByWorkspace["workspace-a"], ["session-a-new", "session-a-old"]);
+		assert.deepEqual(first.pinnedSessionIds, ["session-pinned"]);
+		assert.deepEqual(first.recentSessionIds, ["session-recent"]);
+		assert.deepEqual(first.expandedSectionKeys, ["pinned", "projects", "recent"]);
 
 		const firstWrite = store.update({
 			workspaceIds: ["workspace-b", "workspace-a"],
 			sessionIdsByWorkspace: {
 				"workspace-a": ["session-a-old", "session-a-new"],
 				"workspace-b": ["session-b"]
-			}
+			},
+			pinnedSessionIds: ["session-pinned"],
+			recentSessionIds: ["session-recent"],
+			expandedSectionKeys: ["pinned", "projects"]
 		}, BASE_INVENTORY);
 		const secondWrite = store.update({
 			workspaceIds: ["workspace-a", "workspace-b"],
 			sessionIdsByWorkspace: {
 				"workspace-a": ["session-a-new", "session-a-old"],
 				"workspace-b": ["session-b"]
-			}
+			},
+			pinnedSessionIds: ["session-pinned"],
+			recentSessionIds: ["session-recent"],
+			expandedSectionKeys: ["projects"]
 		}, BASE_INVENTORY);
 		await Promise.all([firstWrite, secondWrite]);
 
 		const reloaded = await new WorkspaceTreeOrderStore(filePath).get(BASE_INVENTORY);
 		assert.deepEqual(reloaded.workspaceIds, ["workspace-a", "workspace-b"]);
 		assert.deepEqual(reloaded.sessionIdsByWorkspace["workspace-a"], ["session-a-new", "session-a-old"]);
+		assert.deepEqual(reloaded.pinnedSessionIds, ["session-pinned"]);
+		assert.deepEqual(reloaded.recentSessionIds, ["session-recent"]);
+		assert.deepEqual(reloaded.expandedSectionKeys, ["projects"]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}
@@ -104,7 +150,7 @@ test("workspace tree order store replaces invalid schema instead of migrating it
 	const filePath: string = join(directory, "workspace-tree-order.json");
 	try {
 		await writeFile(filePath, JSON.stringify({
-			schemaVersion: 2,
+			schemaVersion: 1,
 			workspaceIds: ["legacy"],
 			sessionIdsByWorkspace: {},
 			updatedAt: "legacy"
@@ -114,7 +160,7 @@ test("workspace tree order store replaces invalid schema instead of migrating it
 		const result = await store.get(BASE_INVENTORY);
 		assert.deepEqual(result.workspaceIds, ["workspace-a", "workspace-b"]);
 		const stored = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number; workspaceIds: string[] };
-		assert.equal(stored.schemaVersion, 1);
+		assert.equal(stored.schemaVersion, 2);
 		assert.deepEqual(stored.workspaceIds, ["workspace-a", "workspace-b"]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });

@@ -157,7 +157,10 @@ test("workspace tree order accepts a complete unique order snapshot", (): void =
 			sessionIdsByWorkspace: {
 				"workspace-a": ["session-a-2", "session-a-1"],
 				"workspace-b": ["session-b-1"]
-			}
+			},
+			pinnedSessionIds: ["session-pinned"],
+			recentSessionIds: ["session-recent"],
+			expandedSectionKeys: ["pinned", "projects"]
 		}
 	}).success, true);
 });
@@ -172,7 +175,10 @@ test("workspace tree order rejects duplicate session ids across workspaces", ():
 			sessionIdsByWorkspace: {
 				"workspace-a": ["session-shared"],
 				"workspace-b": ["session-shared"]
-			}
+			},
+			pinnedSessionIds: [],
+			recentSessionIds: [],
+			expandedSectionKeys: ["pinned", "projects", "recent"]
 		}
 	}).success, false);
 });

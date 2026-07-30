@@ -249,12 +249,16 @@ const usageMetricsTrendsParamsSchema = usageMetricsFiltersSchema.extend({
 	bucket: z.enum(["hour", "day"]).optional()
 }).strict();
 const workspaceTreeOrderIdSchema = z.string().trim().min(1).max(240);
+const workspaceTreeSectionKeySchema = z.enum(["pinned", "projects", "recent"]);
 const workspaceTreeOrderUpdateParamsSchema = z.object({
 	workspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000),
 	sessionIdsByWorkspace: z.record(
 		workspaceTreeOrderIdSchema,
 		z.array(workspaceTreeOrderIdSchema).max(100_000)
-	)
+	),
+	pinnedSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
+	recentSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
+	expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3)
 }).strict().superRefine((value, context): void => {
 	if (new Set(value.workspaceIds).size !== value.workspaceIds.length) {
 		context.addIssue({
@@ -263,15 +267,30 @@ const workspaceTreeOrderUpdateParamsSchema = z.object({
 			message: "Workspace ids must be unique."
 		});
 	}
+	if (new Set(value.expandedSectionKeys).size !== value.expandedSectionKeys.length) {
+		context.addIssue({
+			code: "custom",
+			path: ["expandedSectionKeys"],
+			message: "Expanded section keys must be unique."
+		});
+	}
 	const seenSessionIds: Set<string> = new Set();
-	for (const [workspaceId, sessionIds] of Object.entries(value.sessionIdsByWorkspace)) {
+	const sessionOrderGroups: Array<{ path: Array<string>; sessionIds: string[] }> = [
+		{ path: ["pinnedSessionIds"], sessionIds: value.pinnedSessionIds },
+		{ path: ["recentSessionIds"], sessionIds: value.recentSessionIds },
+		...Object.entries(value.sessionIdsByWorkspace).map(([workspaceId, sessionIds]) => ({
+			path: ["sessionIdsByWorkspace", workspaceId],
+			sessionIds
+		}))
+	];
+	for (const { path, sessionIds } of sessionOrderGroups) {
 		const localIds: Set<string> = new Set();
 		for (const sessionId of sessionIds) {
 			if (localIds.has(sessionId) || seenSessionIds.has(sessionId)) {
 				context.addIssue({
 					code: "custom",
-					path: ["sessionIdsByWorkspace", workspaceId],
-					message: "Session ids must be unique across all workspaces."
+					path,
+					message: "Session ids must be unique across all workspace tree sections."
 				});
 				return;
 			}

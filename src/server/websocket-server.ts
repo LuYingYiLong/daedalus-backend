@@ -53,6 +53,16 @@ export function isUnsupportedProtocolEnvelope(value: unknown): value is { id?: u
 	return record.protocolVersion !== BACKEND_PROTOCOL_VERSION;
 }
 
+export function getProtocolErrorRequestId(value: unknown): string {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) {
+		return "";
+	}
+	const record: Record<string, unknown> = value as Record<string, unknown>;
+	return record.type === "request" && typeof record.id === "string"
+		? record.id
+		: "";
+}
+
 function parseClientRequest(socket: WebSocket, data: WebSocket.RawData, isBinary: boolean): ClientRequest | null {
 	let parsedMessage: unknown;
 
@@ -84,7 +94,12 @@ function parseClientRequest(socket: WebSocket, data: WebSocket.RawData, isBinary
 			issueCount: validationResult.error.issues.length,
 			firstIssueCode: validationResult.error.issues[0]?.code ?? "unknown"
 		});
-		sendProtocolError(socket, "invalid_request", validationResult.error.message);
+		sendProtocolError(
+			socket,
+			"invalid_request",
+			validationResult.error.message,
+			getProtocolErrorRequestId(parsedMessage)
+		);
 		return null;
 	}
 

@@ -173,7 +173,16 @@ test("editor tool requests use explicit workspace and editor binding without req
 	const requested = socketB.sent.find((message: Record<string, unknown>): boolean => message.event === "editor.tool.requested");
 	assert.ok(requested);
 	assert.equal(socketA.sent.some((message: Record<string, unknown>): boolean => message.event === "editor.tool.requested"), false);
+	assert.equal(requested.protocolVersion, 3);
+	assert.equal(requested.type, "event");
+	assert.match(String(requested.eventId), /^event-/u);
+	assert.equal(requested.sessionId, "");
+	assert.equal(typeof requested.sequence, "number");
+	assert.equal(Number.isSafeInteger(requested.sequence), true);
+	assert.equal(typeof requested.createdAt, "string");
 	const data = requested.data as Record<string, unknown>;
+	assert.equal(requested.requestId, data.callId);
+	assert.equal(requested.runId, data.callId);
 	assert.equal(data.workspaceId, "workspace-b");
 	assert.equal(data.editorInstanceId, "editor-b");
 	assert.equal(bridge.handleToolResult(String(data.callId), true, { ok: true }, undefined), true);

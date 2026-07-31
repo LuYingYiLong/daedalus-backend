@@ -180,6 +180,7 @@ import {
 	sendGlobalEvent,
 	maybeScheduleSessionTitleGeneration
 } from "./session-events.js";
+import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
 
 import {
 	createPendingAiContinuation,
@@ -219,7 +220,8 @@ import {
 } from "./agent-run-controller.js";
 import {
 	validateExecutionDecisionEvidence,
-	type AgentRunState
+	type AgentRunState,
+	type ExecutionDecision
 } from "../workflow/agent-run-state.js";
 
 const WEB_SEARCH_TOOL_NAME: string = "mcp_web_search";
@@ -647,11 +649,18 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		recordAgentRunToolEvent(params.socket, params.session, runId, event);
 		forwardToolEvent(event);
 	};
+	const executionOptions: ProviderChatOptions = withProviderUsageContext(params.options, {
+		operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
+	});
+	const sceneViewEnricher = createSceneViewToolResultEnricher({
+		session: params.session,
+		options: executionOptions,
+		phaseInstruction: chatParams.message,
+		abortSignal: params.abortSignal
+	});
 	const agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
 		chatParams,
-		withProviderUsageContext(params.options, {
-			operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
-		}),
+		executionOptions,
 		params.history,
 		fullSystemPrompt,
 		params.mcpHost,
@@ -659,7 +668,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		params.allowedToolNames,
 		onToolEvent,
 		params.abortSignal,
-		undefined,
+		sceneViewEnricher.enricher,
 		{
 			workspaceId: params.session.activeWorkspace?.id,
 			editorInstanceId: params.session.editorInstanceId,
@@ -671,10 +680,20 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
+	const capturedAttachments: AdditionalContextItem[] = sceneViewEnricher.getCapturedAttachments();
+	const persistedChatParams: AiChatParams = capturedAttachments.length === 0
+		? chatParams
+		: {
+			...chatParams,
+			additionalContext: [
+				...(chatParams.additionalContext ?? []),
+				...capturedAttachments
+			]
+		};
 
 	if (agentResult.status === "approval_required") {
 		const pendingContinuation: PendingAiContinuation = createPendingAiContinuation(
-			chatParams,
+			persistedChatParams,
 			withProviderUsageContext(params.options, {
 				operation: "tool_answer"
 			}),
@@ -708,7 +727,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	if (agentResult.status === "tool_budget_required") {
 		const pendingBudget = createPendingToolBudget({
 			agentResult,
-			chatParams,
+			chatParams: persistedChatParams,
 			options: withProviderUsageContext(params.options, {
 				operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
 			}),
@@ -731,35 +750,36 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		if (latestRun === undefined) {
 			throw new Error(`Execution decision received for unknown run ${runId}.`);
 		}
-		validateExecutionDecisionEvidence(latestRun, agentResult.decision);
-		if (agentResult.decision.disposition === "use_lightweight") {
+		const executionDecision: ExecutionDecision = validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		if (executionDecision.disposition === "use_lightweight") {
 			updateAgentRun(params.socket, params.session, runId, "executing", {
 				scope: "bounded",
 				lane: "lightweight"
 			});
 			await runHiddenAnswerExecution({
 				...params,
+				chatParams: persistedChatParams,
 				routeDecision: {
 					...params.routeDecision,
 					intent: "mutate",
 					scope: "bounded",
 					lane: "lightweight",
-					reason: agentResult.decision.summary
+					reason: executionDecision.summary
 				}
 			});
 			return;
 		}
-		if (agentResult.decision.disposition === "use_workflow") {
+		if (executionDecision.disposition === "use_workflow") {
 			throw new LightweightActionScopeExceededError("write_scope_exceeded");
 		}
-		if (agentResult.decision.disposition === "blocked") {
-			throw new LightweightActionVerificationError(agentResult.decision.summary);
+		if (executionDecision.disposition === "blocked") {
+			throw new LightweightActionVerificationError(executionDecision.summary);
 		}
 
 		await completeHiddenAnswerExecution(
 			params,
-			chatParams,
-			agentResult.decision.summary,
+			persistedChatParams,
+			executionDecision.summary,
 			{
 				resultStatus: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
 					? "completed"
@@ -799,7 +819,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}
 
-	await completeHiddenAnswerExecution(params, chatParams, agentResult.text, completionStatus);
+	await completeHiddenAnswerExecution(params, persistedChatParams, agentResult.text, completionStatus);
 }
 
 async function completeHiddenAnswerExecution(

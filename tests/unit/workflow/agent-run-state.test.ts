@@ -105,9 +105,53 @@ test("no-change decisions require successful read or verify evidence", (): void 
 		}
 	});
 
-	assert.doesNotThrow((): void => validateExecutionDecisionEvidence(probing, decision));
-	assert.throws((): void => validateExecutionDecisionEvidence(probing, {
-		...decision,
-		evidenceToolCallIds: ["missing"]
-	}), /unknown evidence/u);
+	assert.deepEqual(validateExecutionDecisionEvidence(probing, decision).evidenceToolCallIds, ["read-1"]);
+	assert.throws((): void => {
+		validateExecutionDecisionEvidence(probing, {
+			...decision,
+			evidenceToolCallIds: ["missing"]
+		});
+	}, /no usable evidence/u);
+});
+
+test("execution decisions safely normalize semantic evidence references", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-test"
+	});
+	const probing = transitionAgentRunState(initial, "probing", {
+		intent: "mutate",
+		scope: "unknown",
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: [],
+			evidence: [{
+				toolCallId: "call-scene-tree",
+				toolName: "mcp_godot_inspect_scene_tree",
+				risk: "read",
+				status: "succeeded",
+				artifactRefs: ["scenes/Main.tscn"],
+				observedAt: "2026-07-31T00:00:00.000Z"
+			}]
+		}
+	});
+
+	const noChange = executionDecisionSchema.parse({
+		disposition: "no_change",
+		summary: "The requested scene state already exists.",
+		evidenceToolCallIds: ["mcp_godot_inspect_scene_tree:scenes/Main.tscn"],
+		expectedArtifacts: ["scenes/Main.tscn"]
+	});
+	assert.deepEqual(
+		validateExecutionDecisionEvidence(probing, noChange).evidenceToolCallIds,
+		["call-scene-tree"]
+	);
+
+	const workflow = executionDecisionSchema.parse({
+		disposition: "use_workflow",
+		summary: "The change spans multiple scene artifacts.",
+		evidenceToolCallIds: ["fabricated-reference"],
+		expectedArtifacts: ["scenes/Main.tscn"]
+	});
+	assert.deepEqual(validateExecutionDecisionEvidence(probing, workflow).evidenceToolCallIds, []);
 });

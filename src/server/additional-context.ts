@@ -203,7 +203,7 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 	const lines: string[] = [
 		"## 用户附加上下文",
 		"以下是用户本轮显式附加的紧凑上下文。不要把这些条目当成长期记忆；它们只对本轮任务生效。大文件和文件夹只提供引用，不内联全文；如需内容，使用可用 MCP 读取工具按需读取。",
-		"编辑器上下文规则：如果 Godot 编辑器在线，并且任务目标明显指向当前打开场景、选中节点、当前脚本/这几行或 FileSystem Dock 选中项，优先使用 godot_editor 读取/检查/patch；如果返回 editor_unavailable、上下文 stale，或目标不在当前编辑器上下文中，回退到离线 .tscn/text/headless 工具。"
+		"编辑器上下文规则：如果 Godot 编辑器在线，并且任务目标明显指向当前打开场景、选中节点、当前脚本/这几行或 FileSystem Dock 选中项，优先使用 godot_editor 读取/检查/patch；同一轮中 editor patch 成功后不要再用离线 .tscn 文本写入覆盖同一场景。如果返回 editor_unavailable、上下文 stale、patch 无法表达目标，或目标不在当前编辑器上下文中，重新读取目标后再回退到离线工具。"
 	];
 
 	for (const item of items.slice(0, 20)) {

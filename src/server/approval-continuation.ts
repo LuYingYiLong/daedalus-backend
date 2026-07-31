@@ -28,7 +28,7 @@ import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js"
 import { sendJson } from "./send-json.js";
 import { createPendingToolBudget, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
 import { getAgentRun, updateAgentRun } from "./agent-run-controller.js";
-import { validateExecutionDecisionEvidence, type AgentRunState } from "../workflow/agent-run-state.js";
+import { validateExecutionDecisionEvidence, type AgentRunState, type ExecutionDecision } from "../workflow/agent-run-state.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -384,14 +384,14 @@ export async function sendContinuedAgentResult(
 		if (latestRun === undefined) {
 			throw new Error(`Execution decision received for unknown run ${pendingContinuation.requestId}.`);
 		}
-		validateExecutionDecisionEvidence(latestRun, agentResult.decision);
-		if (agentResult.decision.disposition === "blocked") {
-			throw new LightweightActionVerificationError(agentResult.decision.summary);
+		const executionDecision: ExecutionDecision = validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		if (executionDecision.disposition === "blocked") {
+			throw new LightweightActionVerificationError(executionDecision.summary);
 		}
-		if (agentResult.decision.disposition === "use_workflow" || agentResult.decision.disposition === "use_lightweight") {
+		if (executionDecision.disposition === "use_workflow" || executionDecision.disposition === "use_lightweight") {
 			throw new LightweightActionScopeExceededError("write_scope_exceeded");
 		}
-		text = agentResult.decision.summary;
+		text = executionDecision.summary;
 	} else {
 		text = agentResult.text;
 		if (

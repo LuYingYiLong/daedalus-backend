@@ -31,6 +31,10 @@ export type ToolEvent =
 
 export type OnToolEvent = (event: ToolEvent) => void;
 
+const FULL_RESULT_ENRICHMENT_TOOLS: ReadonlySet<string> = new Set([
+	"mcp_godot_editor_capture_scene_view"
+]);
+
 export type ToolProgressUpdate = {
 	status: "message" | "success" | "error";
 	title: string;
@@ -318,7 +322,8 @@ async function executeSingleToolCall(
 			toolContext?.editorInstanceId,
 			toolContext?.sessionId,
 			abortSignal,
-			commandAuthorization
+			commandAuthorization,
+			enricher !== undefined && FULL_RESULT_ENRICHMENT_TOOLS.has(functionName)
 		);
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");

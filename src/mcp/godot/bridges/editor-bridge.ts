@@ -1,4 +1,6 @@
 import WebSocket from "ws";
+import { randomUUID } from "node:crypto";
+import type { ServerEvent } from "../../../protocol/types.js";
 import { getCurrentMcpEditorInstanceId, getCurrentMcpWorkspaceId } from "../../request-context.js";
 
 export const GODOT_EDITOR_SERVER_ID: string = "godot_editor";
@@ -69,6 +71,7 @@ function isSocketOpen(socket: WebSocket | undefined): socket is WebSocket {
 export class GodotEditorBridge {
 	private connectionsByInstanceId: Map<string, EditorConnection> = new Map();
 	private pendingToolCalls: Map<string, PendingEditorToolCall> = new Map();
+	private lastEditorEventSequence: number = 0;
 
 	attachSocket(_socket: WebSocket): void {
 		// 连接不再自动成为 Godot editor。只有 editor.context.update 会注册 editor instance。
@@ -462,7 +465,11 @@ export class GodotEditorBridge {
 		return new Promise<unknown>((resolve, reject): void => {
 			const timeout: NodeJS.Timeout = setTimeout((): void => {
 				this.pendingToolCalls.delete(callId);
-				reject(new Error(`editor_tool_timeout: ${toolName}`));
+				const connectionStillOnline: boolean = this.connectionsByInstanceId.get(connection.editorInstanceId) === connection
+					&& this.isConnectionOnline(connection);
+				reject(new Error(connectionStillOnline
+					? `editor_tool_timeout: ${toolName}; Godot editor remains connected but did not return a result within ${EDITOR_TOOL_TIMEOUT_MS}ms`
+					: `editor_unavailable: editor disconnected while waiting for ${toolName}`));
 			}, EDITOR_TOOL_TIMEOUT_MS);
 
 			this.pendingToolCalls.set(callId, {
@@ -473,10 +480,18 @@ export class GodotEditorBridge {
 			});
 
 			try {
-				connection.socket.send(JSON.stringify({
+				const wallClockFloor: number = Date.now() * 1000;
+				this.lastEditorEventSequence = Math.max(wallClockFloor, this.lastEditorEventSequence + 1);
+				const envelope: ServerEvent = {
+					protocolVersion: 3,
 					type: "event",
-					id: callId,
+					eventId: `event-${randomUUID()}`,
 					event: "editor.tool.requested",
+					sessionId: "",
+					requestId: callId,
+					runId: callId,
+					sequence: this.lastEditorEventSequence,
+					createdAt: new Date().toISOString(),
 					data: {
 						callId,
 						toolName,
@@ -484,7 +499,8 @@ export class GodotEditorBridge {
 						workspaceId: connection.workspaceId,
 						editorInstanceId: connection.editorInstanceId
 					}
-				}));
+				};
+				connection.socket.send(JSON.stringify(envelope));
 			} catch (error: unknown) {
 				this.pendingToolCalls.delete(callId);
 				clearTimeout(timeout);

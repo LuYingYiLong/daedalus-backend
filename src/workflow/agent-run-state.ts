@@ -242,19 +242,48 @@ export function interruptRecoverableAgentRun(
 export function validateExecutionDecisionEvidence(
 	run: AgentRunState,
 	decision: ExecutionDecision
-): void {
+): ExecutionDecision {
 	const evidenceById: Map<string, ExecutionEvidence> = new Map(
 		run.checkpoint.evidence.map((item: ExecutionEvidence): [string, ExecutionEvidence] => [item.toolCallId, item])
 	);
-	for (const toolCallId of decision.evidenceToolCallIds) {
-		const evidence: ExecutionEvidence | undefined = evidenceById.get(toolCallId);
-		if (evidence === undefined) {
-			throw new Error(`Execution decision references unknown evidence tool call: ${toolCallId}.`);
-		}
-		if (evidence.status !== "succeeded" || (evidence.risk !== "read" && evidence.risk !== "verify")) {
-			throw new Error(`Execution decision evidence must be a successful read or verify call: ${toolCallId}.`);
+	const usableEvidence: ExecutionEvidence[] = run.checkpoint.evidence.filter((evidence: ExecutionEvidence): boolean => (
+		evidence.status === "succeeded"
+		&& (evidence.risk === "read" || evidence.risk === "verify")
+	));
+	const resolvedIds: string[] = [];
+	for (const evidenceReference of decision.evidenceToolCallIds) {
+		const exactEvidence: ExecutionEvidence | undefined = evidenceById.get(evidenceReference);
+		const semanticMatches: ExecutionEvidence[] = exactEvidence === undefined
+			? usableEvidence.filter((evidence: ExecutionEvidence): boolean => (
+				evidence.toolName === evidenceReference
+				|| evidence.artifactRefs.some((artifactRef: string): boolean => (
+					`${evidence.toolName}:${artifactRef}` === evidenceReference
+				))
+			))
+			: [];
+		const evidence: ExecutionEvidence | undefined = exactEvidence ?? (semanticMatches.length === 1 ? semanticMatches[0] : undefined);
+		if (
+			evidence !== undefined
+			&& evidence.status === "succeeded"
+			&& (evidence.risk === "read" || evidence.risk === "verify")
+			&& !resolvedIds.includes(evidence.toolCallId)
+		) {
+			resolvedIds.push(evidence.toolCallId);
 		}
 	}
+
+	if (decision.disposition === "no_change" && resolvedIds.length === 0) {
+		const firstReference: string | undefined = decision.evidenceToolCallIds[0];
+		if (firstReference !== undefined) {
+			throw new Error(`Execution decision references no usable evidence tool call: ${firstReference}.`);
+		}
+		throw new Error("Execution decision requires successful read or verify evidence.");
+	}
+
+	return {
+		...decision,
+		evidenceToolCallIds: resolvedIds
+	};
 }
 
 export function cloneAgentRunState(state: AgentRunState): AgentRunState {

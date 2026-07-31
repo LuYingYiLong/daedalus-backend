@@ -207,7 +207,11 @@ test("hidden probe exposes tool progress without creating workflow todos", async
 
 	assert.ok(hiddenStart >= 0);
 	assert.ok(escalationStart > hiddenStart);
-	assert.equal(source.slice(hiddenStart, escalationStart).includes("sendWorkflowTodoSnapshot"), false);
+	const hiddenExecutionSource: string = source.slice(hiddenStart, escalationStart);
+	assert.equal(hiddenExecutionSource.includes("sendWorkflowTodoSnapshot"), false);
+	assert.equal(hiddenExecutionSource.includes("createSceneViewToolResultEnricher"), true);
+	assert.equal(hiddenExecutionSource.includes("sceneViewEnricher.enricher"), true);
+	assert.equal(hiddenExecutionSource.includes("sceneViewEnricher.getCapturedAttachments()"), true);
 	assert.equal(source.includes("daedalus_report_execution_decision"), true);
 	assert.equal(source.includes('routeDecision.lane === "probe" ? "probing" : "executing"'), true);
 	assert.equal(

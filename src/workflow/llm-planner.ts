@@ -127,6 +127,7 @@ function createPlannerSystemPrompt(): string {
 		"- 复杂修改通常包含 read/write/verify/summarize；简单问答可以只有 summarize。",
 		"- 最后一步必须能给用户最终交付总结，优先使用 toolGroup=summarize。",
 		"- 如果上下文显示 Godot 编辑器在线，且用户目标指向当前打开场景、选中节点、当前脚本/这几行或 FileSystem Dock 选中项，read/write 步骤应让执行模型优先使用 godot_editor 工具；若编辑器离线、stale 或不匹配，则回退到离线 .tscn/text/headless 工具。",
+		"- 当前打开场景由 godot_editor patch 成功修改后，后续步骤不得再用离线 `.tscn` 文本工具覆盖同一场景；如果 patch 能力不足而必须切换路径，应先重新读取并显式要求执行模型协调编辑器内状态与磁盘状态。",
 		"- 如果用户询问运行报错、日志、user://logs/godot.log 或项目设置，read 步骤应收集日志配置/日志内容/当前项目设置；修改项目设置时使用 write 步骤，并要求执行模型先预览再实际写入。",
 		"- 如果用户询问 Godot 编辑器设置、主题、字体、最近项目、当前打开场景/脚本或 .godot/editor 状态，read 步骤应收集编辑器配置摘要；除非用户明确要求原始路径/原文，否则保持脱敏读取。",
 		"- 修改 GDScript 的任务应包含 verify 步骤，让执行模型优先读取 LSP diagnostics，再运行 Godot check-only；运行时报错排查应优先尝试 DAP last error / stack trace，失败后再回退项目日志。",

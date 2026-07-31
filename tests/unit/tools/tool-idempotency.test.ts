@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectGodotRefreshPaths, getLlmToolExecutionIdentity, shouldDedupeLlmToolExecution } from "../../../src/tools/tool-idempotency.js";
+import type { McpHost } from "../../../src/mcp/mcp-host.js";
+import {
+	collectGodotRefreshPaths,
+	executeLlmToolWithIdempotency,
+	getLlmToolExecutionIdentity,
+	refreshEditorFilesystemAfterGodotMutation,
+	shouldDedupeLlmToolExecution
+} from "../../../src/tools/tool-idempotency.js";
 
 test("only write and destructive tools are deduplicated", (): void => {
 	assert.equal(shouldDedupeLlmToolExecution("mcp_godot_read_text_file"), false);
@@ -62,6 +69,46 @@ test("read tools do not produce execution identities", (): void => {
 	assert.equal(getLlmToolExecutionIdentity("mcp_godot_read_text_file", { relativePath: "project.godot" }), undefined);
 });
 
+test("scene view results can remain intact until the visual enricher consumes them", async (): Promise<void> => {
+	const dataUrl: string = `data:image/png;base64,${"a".repeat(16_000)}`;
+	const content: string = JSON.stringify({
+		ok: true,
+		result: {
+			mimeType: "image/png",
+			dataUrl,
+			byteSize: 12_000
+		}
+	});
+	const mcpHost = {
+		getActiveWorkspaceId: (): undefined => undefined,
+		callTool: async (): Promise<{ content: Array<{ type: "text"; text: string }> }> => ({
+			content: [{ type: "text", text: content }]
+		})
+	} as unknown as McpHost;
+
+	const trimmed = await executeLlmToolWithIdempotency(
+		mcpHost,
+		"mcp_godot_editor_capture_scene_view",
+		{}
+	);
+	const preserved = await executeLlmToolWithIdempotency(
+		mcpHost,
+		"mcp_godot_editor_capture_scene_view",
+		{},
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		true
+	);
+
+	assert.equal(trimmed.truncated, true);
+	assert.equal(trimmed.content.includes(dataUrl), false);
+	assert.equal(preserved.truncated, true);
+	assert.equal(preserved.content, content);
+});
+
 test("project setting mutations refresh project.godot", (): void => {
 	assert.deepEqual(
 		collectGodotRefreshPaths("mcp_godot_set_project_setting", {
@@ -108,4 +155,61 @@ test("workspace file mutations collect Godot editor refresh paths", (): void => 
 		}),
 		["scenes/main.tscn"]
 	);
+});
+
+test("Godot mutation refresh waits for an editor acknowledgement", async (): Promise<void> => {
+	let acknowledge: ((value: unknown[]) => void) | undefined;
+	const acknowledgement = new Promise<unknown[]>((resolve): void => {
+		acknowledge = resolve;
+	});
+	const mcpHost = {
+		getEditorBridge: (): { refreshFilesystem: () => Promise<unknown[]> } => ({
+			refreshFilesystem: async (): Promise<unknown[]> => acknowledgement
+		})
+	} as unknown as McpHost;
+
+	let completed: boolean = false;
+	const refresh = refreshEditorFilesystemAfterGodotMutation(
+		mcpHost,
+		"mcp_godot_overwrite_text_file",
+		{ relativePath: "scenes/main.tscn" }
+	).then((outcome) => {
+		completed = true;
+		return outcome;
+	});
+
+	await Promise.resolve();
+	assert.equal(completed, false);
+	acknowledge?.([{ ok: true }]);
+	assert.deepEqual(await refresh, {
+		status: "confirmed",
+		changedPaths: ["scenes/main.tscn"],
+		editorCount: 1
+	});
+});
+
+test("Godot mutation refresh reports unavailable and failed editor notifications", async (): Promise<void> => {
+	const unavailableHost = {
+		getEditorBridge: (): { refreshFilesystem: () => Promise<null> } => ({
+			refreshFilesystem: async (): Promise<null> => null
+		})
+	} as unknown as McpHost;
+	const failedHost = {
+		getEditorBridge: (): { refreshFilesystem: () => Promise<never> } => ({
+			refreshFilesystem: async (): Promise<never> => {
+				throw new Error("editor disconnected");
+			}
+		})
+	} as unknown as McpHost;
+
+	assert.equal((await refreshEditorFilesystemAfterGodotMutation(
+		unavailableHost,
+		"mcp_godot_create_text_file",
+		{ relativePath: "scripts/player.gd" }
+	)).status, "editor_unavailable");
+	assert.equal((await refreshEditorFilesystemAfterGodotMutation(
+		failedHost,
+		"mcp_godot_create_text_file",
+		{ relativePath: "scripts/player.gd" }
+	)).status, "failed");
 });

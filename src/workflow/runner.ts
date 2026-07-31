@@ -146,6 +146,7 @@ function createPhaseToolGroupRules(phase: WorkflowPhase): string[] {
 		return [
 			"- 当前是写入/提案阶段：如果阶段目标是预览、提案或 diff，必须调用对应 propose_* 工具。",
 			"- 如果阶段目标是实际创建、修改、删除或应用补丁，必须调用实际写入工具；写入工具触发审批时按现有流程暂停。",
+			"- Godot 编辑器在线且目标是当前打开场景时，优先通过 editor scene patch 修改；同一 Run 不要在 editor patch 成功后再用原始 `.tscn` 文本覆盖同一场景。只有 patch 无法表达目标或编辑器不可用时才切换到离线场景工具，并在切换前重新读取场景。",
 			"- 只修改当前任务直接相关的目标文件；不要创建占位文件、临时文件或无关文件来满足写入要求。",
 			"- 修改 `.ts`、`.tsx`、`.js`、`.jsx`、Electron 或前端文件时，不要运行 `godot.check_only` 或 `godot.validate_scene`；后续验证应使用 `workspace.typecheck`、`git.diff` 或其它 workspace/TypeScript 验证。",
 			"- 不要只输出计划、意图或“稍后将执行”；后端会把未调用当前阶段所需工具的阶段视为未完成。"

@@ -303,14 +303,20 @@ export function collectGodotRefreshPaths(llmToolName: string, args: Record<strin
 	return [...paths];
 }
 
-function refreshEditorFilesystemAfterGodotMutation(
+export type GodotEditorFilesystemRefreshOutcome = {
+	status: "not_applicable" | "confirmed" | "editor_unavailable" | "failed";
+	changedPaths: string[];
+	editorCount: number;
+};
+
+export async function refreshEditorFilesystemAfterGodotMutation(
 	mcpHost: McpHost,
 	llmToolName: string,
 	args: Record<string, unknown>,
 	workspaceId?: string | undefined
-): void {
+): Promise<GodotEditorFilesystemRefreshOutcome> {
 	if (!GODOT_PROJECT_MUTATION_TOOLS.has(llmToolName)) {
-		return;
+		return { status: "not_applicable", changedPaths: [], editorCount: 0 };
 	}
 
 	const changedPaths: string[] = collectGodotRefreshPaths(llmToolName, args);
@@ -319,13 +325,31 @@ function refreshEditorFilesystemAfterGodotMutation(
 	const editorWorkspaceId: string | undefined = workspace === undefined
 		? workspaceId
 		: createSourceScopedWorkspace(workspace, sourceFolderId).id;
-	void mcpHost.getEditorBridge().refreshFilesystem(changedPaths, editorWorkspaceId).catch((error: unknown): void => {
+	try {
+		const results: unknown[] | null = await mcpHost.getEditorBridge().refreshFilesystem(changedPaths, editorWorkspaceId);
+		if (results === null) {
+			logger.info("godot_editor", "filesystem_refresh_skipped", {
+				llmToolName,
+				changedPaths,
+				reason: "editor_unavailable"
+			});
+			return { status: "editor_unavailable", changedPaths, editorCount: 0 };
+		}
+
+		logger.info("godot_editor", "filesystem_refresh_confirmed", {
+			llmToolName,
+			changedPaths,
+			editorCount: results.length
+		});
+		return { status: "confirmed", changedPaths, editorCount: results.length };
+	} catch (error: unknown) {
 		logger.warn("godot_editor", "filesystem_refresh_failed", {
 			llmToolName,
 			changedPaths,
 			error: error instanceof Error ? error.message : String(error)
 		});
-	});
+		return { status: "failed", changedPaths, editorCount: 0 };
+	}
 }
 
 async function executeMappedTool(
@@ -336,13 +360,14 @@ async function executeMappedTool(
 	fingerprint?: string | undefined,
 	workspaceId?: string | undefined,
 	editorInstanceId?: string | undefined,
-	commandAuthorization?: TerminalCommandAuthorization | undefined
+	commandAuthorization?: TerminalCommandAuthorization | undefined,
+	preserveFullResultForEnrichment: boolean = false
 ): Promise<IdempotentToolExecutionResult> {
 	const result = await mcpHost.callTool(serverId, toolName, args, workspaceId, editorInstanceId, commandAuthorization) as ToolResultContent;
 	const textResult: string = extractTextContent(result);
 	const truncated: boolean = textResult.length > MAX_TOOL_RESULT_CHARS;
 	return {
-		content: trimToolResult(textResult),
+		content: preserveFullResultForEnrichment ? textResult : trimToolResult(textResult),
 		rawContentLength: textResult.length,
 		truncated,
 		reused: false,
@@ -451,7 +476,8 @@ export async function executeLlmToolWithIdempotency(
 	editorInstanceId?: string | undefined,
 	sessionId?: string | undefined,
 	abortSignal?: AbortSignal | undefined,
-	commandAuthorization?: TerminalCommandAuthorization | undefined
+	commandAuthorization?: TerminalCommandAuthorization | undefined,
+	preserveFullResultForEnrichment: boolean = false
 ): Promise<IdempotentToolExecutionResult> {
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
@@ -471,7 +497,7 @@ export async function executeLlmToolWithIdempotency(
 		const result: IdempotentToolExecutionResult = llmToolName === "mcp_image_propose_import_to_workspace"
 			? await executeImport()
 			: await captureFileEditBatchDraft(mcpHost, llmToolName, args, executeImport);
-		refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return result;
 	}
 	if (llmToolName === "mcp_web_search") {
@@ -493,10 +519,11 @@ export async function executeLlmToolWithIdempotency(
 				undefined,
 				workspaceId,
 				editorInstanceId,
-				commandAuthorization
+				commandAuthorization,
+				preserveFullResultForEnrichment
 			)
 		);
-		refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return result;
 	}
 
@@ -505,7 +532,7 @@ export async function executeLlmToolWithIdempotency(
 
 	const existingRecord: ToolExecutionRecord | undefined = completedToolExecutions.get(identity.fingerprint);
 	if (existingRecord !== undefined && !isRecordExpired(existingRecord)) {
-		refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return {
 			content: existingRecord.content,
 			rawContentLength: existingRecord.rawContentLength,
@@ -518,7 +545,6 @@ export async function executeLlmToolWithIdempotency(
 	const existingInFlight: Promise<IdempotentToolExecutionResult> | undefined = inFlightToolExecutions.get(identity.fingerprint);
 	if (existingInFlight !== undefined) {
 		const result: IdempotentToolExecutionResult = await existingInFlight;
-		refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return { ...result, reused: true };
 	}
 
@@ -534,10 +560,12 @@ export async function executeLlmToolWithIdempotency(
 				args,
 				identity.fingerprint,
 				workspaceId,
-				editorInstanceId
+				editorInstanceId,
+				undefined,
+				preserveFullResultForEnrichment
 			)
 		);
-		refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		const createdAt: string = new Date().toISOString();
 		const record: ToolExecutionRecord = {
 			fingerprint: identity.fingerprint,

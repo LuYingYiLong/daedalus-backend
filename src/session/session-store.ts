@@ -124,6 +124,20 @@ export type SessionTimelineNavigationIndex = {
 	entries: SessionTimelineNavigationEntry[];
 };
 
+export type SessionTimelineSearchDocument = {
+	blockOffset: number;
+	requestId: string;
+	role: "user" | "assistant";
+	markdownSegments: string[];
+};
+
+export type SessionTimelineSearchIndexPage = {
+	sessionId: string;
+	blockCount: number;
+	nextOffset: number | null;
+	documents: SessionTimelineSearchDocument[];
+};
+
 type RewindableEvent = {
 	requestId: string;
 	createdAt: string;
@@ -716,6 +730,49 @@ export async function openSessionTimelinePageAfter(sessionId: string, afterOffse
 		return sqlPage;
 	}
 	return createTimelinePage(await openSession(sessionId), Math.max(0, afterOffset), limit);
+}
+
+export async function openSessionTimelineSearchIndexPage(
+	sessionId: string,
+	afterOffset: number,
+	limit: number
+): Promise<SessionTimelineSearchIndexPage> {
+	const page: StoredSessionTimelinePage = await openSessionTimelinePageAfter(
+		sessionId,
+		Math.max(0, afterOffset),
+		Math.max(0, limit)
+	);
+	const documents: SessionTimelineSearchDocument[] = page.timelineBlocks.flatMap(
+		(block: TimelineBlock, index: number): SessionTimelineSearchDocument[] => {
+			const blockOffset: number = page.blockOffset + index;
+			if (block.type === "user") {
+				return block.content.length === 0 ? [] : [{
+					blockOffset,
+					requestId: block.requestId,
+					role: "user",
+					markdownSegments: [block.content]
+				}];
+			}
+
+			const markdownSegments: string[] = block.bodyParts
+				.filter((part): part is Extract<typeof part, { type: "markdown" }> => part.type === "markdown")
+				.map((part): string => part.text)
+				.filter((text: string): boolean => text.length > 0);
+			return markdownSegments.length === 0 ? [] : [{
+				blockOffset,
+				requestId: block.requestId,
+				role: "assistant",
+				markdownSegments
+			}];
+		}
+	);
+	const nextOffsetCandidate: number = page.blockOffset + page.timelineBlocks.length;
+	return {
+		sessionId: page.metadata.id,
+		blockCount: page.blockCount,
+		nextOffset: nextOffsetCandidate < page.blockCount ? nextOffsetCandidate : null,
+		documents
+	};
 }
 
 function replaceMessages(db: DatabaseSync, sessionId: string, messages: ChatMessage[]): void {

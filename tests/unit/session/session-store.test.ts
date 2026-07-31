@@ -118,6 +118,62 @@ test("session store creates, opens, pages, rewinds, archives, restores, and dele
 	});
 });
 
+test("session timeline search index includes only user and assistant markdown while advancing through empty blocks", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Searchable session");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "Find **visible user text**.",
+			requestId: "req-search",
+			createdAt: "2026-07-31T00:00:00.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-search", "agent.thinking.delta", {
+			text: "hidden reasoning"
+		});
+		await store.appendSessionEvent(metadata.id, "req-search", "agent.tool.call", {
+			toolCallId: "tool-search",
+			toolName: "mcp_godot_read_text_file"
+		});
+		await store.appendSessionEvent(metadata.id, "req-search", "agent.message.delta", {
+			text: "Visible **assistant** text."
+		});
+		await store.appendSessionEvent(metadata.id, "req-tool-only", "agent.tool.call", {
+			toolCallId: "tool-only",
+			toolName: "mcp_godot_read_text_file"
+		});
+
+		const completePage = await store.openSessionTimelineSearchIndexPage(metadata.id, 0, 500);
+		assert.deepEqual(completePage.documents.map((document) => ({
+			role: document.role,
+			segments: document.markdownSegments
+		})), [
+			{ role: "user", segments: ["Find **visible user text**."] },
+			{ role: "assistant", segments: ["Visible **assistant** text."] }
+		]);
+		assert.equal(JSON.stringify(completePage.documents).includes("hidden reasoning"), false);
+		assert.equal(JSON.stringify(completePage.documents).includes("tool-search"), false);
+
+		let emptyPage: Awaited<ReturnType<typeof store.openSessionTimelineSearchIndexPage>> | null = null;
+		let emptyPageOffset: number = -1;
+		for (let blockOffset: number = 0; blockOffset < completePage.blockCount; blockOffset += 1) {
+			const candidate = await store.openSessionTimelineSearchIndexPage(metadata.id, blockOffset, 1);
+			if (candidate.documents.length === 0) {
+				emptyPage = candidate;
+				emptyPageOffset = blockOffset;
+				break;
+			}
+		}
+		if (emptyPage === null) {
+			assert.fail("expected a tool-only timeline block");
+		}
+		assert.deepEqual(emptyPage.documents, []);
+		assert.equal(
+			emptyPage.nextOffset,
+			emptyPageOffset + 1 < completePage.blockCount ? emptyPageOffset + 1 : null
+		);
+	});
+});
+
 test("session store persists workspace metadata snapshot", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const metadata = await store.createSession("Workspace session", undefined, undefined, {

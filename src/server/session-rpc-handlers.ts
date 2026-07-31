@@ -39,6 +39,7 @@ import {
 	checkSessionIntegrity,
 	updateSessionMetadata,
 	getSessionTimelineNavigationIndex, openSessionRecentTimeline, openSessionTimelinePage, openSessionTimelinePageAfter,
+	openSessionTimelineSearchIndexPage,
 	type SessionChatMode,
 	type SessionMetadata,
 	type SessionSummary,
@@ -871,6 +872,45 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					id: request.id,
 					ok: false,
 					error: sessionRpcError(error, "session_timeline_error", "Failed to load session timeline")
+				});
+			}
+			break;
+		}
+
+		case "session.timeline.search.index": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "studio_only",
+						message: `${request.method} is only available to Daedalus Studio.`
+					}
+				});
+				break;
+			}
+			try {
+				const page = await openSessionTimelineSearchIndexPage(
+					request.params.sessionId,
+					request.params.afterOffset ?? 0,
+					request.params.limit ?? 120
+				);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: {
+						timelineSearchIndex: true,
+						...page
+					}
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_timeline_search_index_error", "Failed to load session search index")
 				});
 			}
 			break;

@@ -844,6 +844,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.timeline.search.index"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			afterOffset: z.number().int().min(0).optional(),
+			limit: z.number().int().positive().max(500).optional(),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.integrity.check"),
 		params: z.object({
 			sessionId: z.string().min(1),

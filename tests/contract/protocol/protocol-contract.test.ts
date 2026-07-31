@@ -31,6 +31,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"ai.toolBudget.stop",
 	"message.queue.reorder",
 	"session.context.estimate",
+	"session.timeline.search.index",
 	"session.timeline.index",
 	"session.guide.reorder",
 	"session.integrity.check",
@@ -163,6 +164,28 @@ test("workspace tree order accepts a complete unique order snapshot", (): void =
 			expandedSectionKeys: ["pinned", "projects"]
 		}
 	}).success, true);
+});
+
+test("session.timeline.search.index accepts a paged Studio search request", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-index",
+		method: "session.timeline.search.index",
+		params: {
+			sessionId: "session-test",
+			afterOffset: 120,
+			limit: 500
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-index-invalid",
+		method: "session.timeline.search.index",
+		params: {
+			sessionId: "session-test",
+			limit: 501
+		}
+	}).success, false);
 });
 
 test("workspace tree order rejects duplicate session ids across workspaces", (): void => {

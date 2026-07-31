@@ -103,6 +103,18 @@ const COMMIT_MESSAGE_RETRY_MAX_TOKENS: number = 1600;
 const COMMIT_MESSAGE_REPAIR_INPUT_MAX_CHARS: number = 6000;
 const COMMIT_MESSAGE_TRANSIENT_RETRY_DELAY_MS: number = 350;
 const COMMIT_MESSAGE_FALLBACK_WARNING: string = "The configured model could not produce a valid structured commit message. A local fallback was generated.";
+export const GIT_COMMIT_MESSAGE_GENERATION_TIMEOUT_MS: number = 60_000;
+
+export class GitCommitMessageGenerationTimeoutError extends Error {
+	readonly code: "workspace_git_commit_message_generation_timeout" = "workspace_git_commit_message_generation_timeout";
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number = GIT_COMMIT_MESSAGE_GENERATION_TIMEOUT_MS) {
+		super(`AI commit message generation timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
+		this.name = "GitCommitMessageGenerationTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
 
 type GeneratedCommitMessage = {
 	message: string;
@@ -119,6 +131,33 @@ export type GitCommitMessageGenerationDependencies = {
 	waitForRetry?: ((delayMs: number, abortSignal?: AbortSignal | undefined) => Promise<void>) | undefined;
 	logWarning?: typeof logger.warn | undefined;
 };
+
+export async function runGitCommitMessageGenerationWithTimeout<T>(
+	operation: (abortSignal: AbortSignal) => Promise<T>,
+	timeoutMs: number = GIT_COMMIT_MESSAGE_GENERATION_TIMEOUT_MS
+): Promise<T> {
+	const normalizedTimeoutMs: number = Math.max(1, timeoutMs);
+	const abortController = new AbortController();
+	const timeoutError = new GitCommitMessageGenerationTimeoutError(normalizedTimeoutMs);
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_resolve, reject): void => {
+		timeout = setTimeout((): void => {
+			abortController.abort(timeoutError);
+			reject(timeoutError);
+		}, normalizedTimeoutMs);
+	});
+
+	try {
+		return await Promise.race([
+			operation(abortController.signal),
+			timeoutPromise
+		]);
+	} finally {
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+		}
+	}
+}
 
 function splitNullTerminated(text: string): string[] {
 	return text.split("\0").filter((item: string): boolean => item.length > 0);
@@ -958,7 +997,14 @@ export async function generateWorkspaceGitCommitMessage(params: WorkspaceGitComm
 		"",
 		"ask"
 	);
-	const generated: GeneratedCommitMessage = await generateGitCommitMessageFromDiff(diff, options, systemPrompt);
+	const generated: GeneratedCommitMessage = await runGitCommitMessageGenerationWithTimeout(
+		async (abortSignal: AbortSignal): Promise<GeneratedCommitMessage> => await generateGitCommitMessageFromDiff(
+			diff,
+			options,
+			systemPrompt,
+			abortSignal
+		)
+	);
 
 	return {
 		message: generated.message,

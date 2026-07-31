@@ -9,7 +9,10 @@ import {
 	commitOrPushWorkspaceGit,
 	createCommitMessageDiffContext,
 	generateGitCommitMessageFromDiff,
+	GIT_COMMIT_MESSAGE_GENERATION_TIMEOUT_MS,
+	GitCommitMessageGenerationTimeoutError,
 	resolveGitCommitProviderOptions,
+	runGitCommitMessageGenerationWithTimeout,
 	type CandidateDiff
 } from "../../../src/server/workspace-git-commit.js";
 import { ProviderTaskModelError } from "../../../src/providers/task-model-routing.js";
@@ -197,6 +200,29 @@ test("Git commit message generation falls back locally after repeated invalid re
 	assert.equal(result.generationSource, "fallback");
 	assert.equal(result.subject, "docs: update setup.md");
 	assert.match(result.warning ?? "", /local fallback/u);
+});
+
+test("Git commit message generation aborts and fails after its deadline", async (): Promise<void> => {
+	assert.equal(GIT_COMMIT_MESSAGE_GENERATION_TIMEOUT_MS, 60_000);
+	let aborted: boolean = false;
+	await assert.rejects(
+		runGitCommitMessageGenerationWithTimeout(
+			async (abortSignal: AbortSignal): Promise<never> => await new Promise<never>((_resolve, reject): void => {
+				abortSignal.addEventListener("abort", (): void => {
+					aborted = true;
+					reject(abortSignal.reason);
+				}, { once: true });
+			}),
+			10
+		),
+		(error: unknown): boolean => {
+			assert.ok(error instanceof GitCommitMessageGenerationTimeoutError);
+			assert.equal(error.code, "workspace_git_commit_message_generation_timeout");
+			assert.equal(error.timeoutMs, 10);
+			return true;
+		}
+	);
+	assert.equal(aborted, true);
 });
 
 test("Git commit generation uses its configured model before reading an unconfigured current provider", async (): Promise<void> => {

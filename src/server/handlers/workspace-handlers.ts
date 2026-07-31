@@ -22,7 +22,11 @@ import {
 	updateSessionsForWorkspace
 } from "../../session/session-store.js";
 import { checkoutWorkspaceGitBranch, createWorkspaceGitBranch, listWorkspaceGitBranches } from "../workspace-git-branches.js";
-import { commitOrPushWorkspaceGit, generateWorkspaceGitCommitMessage } from "../workspace-git-commit.js";
+import {
+	commitOrPushWorkspaceGit,
+	generateWorkspaceGitCommitMessage,
+	GitCommitMessageGenerationTimeoutError
+} from "../workspace-git-commit.js";
 import { readWorkspaceGitDiff, readWorkspaceGitDiffFile, readWorkspaceGitDiffSummary } from "../workspace-git-diff.js";
 import { evaluateWorkspaceSelectionForSession, type WorkspaceSelectionDecision } from "../workspace-selection-guard.js";
 import {
@@ -439,11 +443,8 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			break;
 		}
 
-		sendJson(socket, {
-			type: "response",
-			id: request.id,
-			ok: true,
-			result: await generateWorkspaceGitCommitMessage({
+		try {
+			const result = await generateWorkspaceGitCommitMessage({
 				workspaceId: workspace.id,
 				workspaceRoot: getWorkspaceSourceFolder(workspace, request.params.sourceFolderId).path,
 				includeUnstagedChanges: request.params.includeUnstagedChanges,
@@ -451,8 +452,26 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				model: request.params.model,
 				session,
 				requestId: request.id
-			})
-		});
+			});
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof GitCommitMessageGenerationTimeoutError
+						? error.code
+						: "workspace_git_commit_message_generation_failed",
+					message: error instanceof Error ? error.message : "Failed to generate an AI commit message."
+				}
+			});
+		}
 		break;
 	}
 	case "workspace.git.commitOrPush": {

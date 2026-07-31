@@ -75,7 +75,7 @@ The current release line is coordinated through checked manifests:
 | Backend RPC | Protocol v3 |
 | Daedalus Studio | 1.0.5 or newer for the current binary line |
 | Godot Daedalus plugin | Plugin protocol v3 |
-| Godot | 4.7 or newer for the current editor plugin |
+| Godot | 4.5 or newer for the current editor plugin |
 | Source runtime | Node.js 24.18.0 or newer |
 | Production binary | Windows x64 SEA |
 
@@ -262,7 +262,7 @@ Daedalus Studio production builds use their own verified binary transaction and 
 
 - Node.js 24.18.0 or newer
 - npm
-- Godot 4.7 for the Windows integration smoke suite
+- Godot 4.5 or newer for the Windows integration smoke suite
 - Windows and the native build toolchain for the SEA release binary
 
 ### Install and run

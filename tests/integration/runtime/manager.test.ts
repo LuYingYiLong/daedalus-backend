@@ -382,7 +382,7 @@ async function writePendingFrontendUpdate(root: string, stagedDir: string, versi
 			tag: `v${version}`,
 			sha256: "a".repeat(64),
 			assetName: "godot_daedalus.zip",
-			minGodotVersion: "4.7"
+			minGodotVersion: "4.5"
 		},
 		createdAt: new Date(0).toISOString()
 	};

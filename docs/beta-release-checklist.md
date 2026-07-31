@@ -1,6 +1,6 @@
 # Godot Daedalus 公开 Beta 发布清单
 
-目标：在公开给普通 Godot 用户前，确认后端、manager、插件、发布包和回滚路径可以稳定工作。Beta 首要支持 Windows + Godot 4.7。
+目标：在公开给普通 Godot 用户前，确认后端、manager、插件、发布包和回滚路径可以稳定工作。Beta 首要支持 Windows + Godot 4.5 或更高版本。
 
 ## 自动门禁
 
@@ -15,7 +15,7 @@ npm run smoke:beta
 `npm run smoke:beta` 会启动本地后端，运行 Godot headless 脚本检查，并执行 `backend.health` WebSocket smoke。可通过环境变量覆盖：
 
 ```powershell
-$env:GODOT_EXECUTABLE_PATH = "D:\Godot_v4.7-stable_win64.exe\Godot_v4.7-stable_win64.exe"
+$env:GODOT_EXECUTABLE_PATH = "D:\Godot_v4.5.1-stable_win64.exe\Godot_v4.5.1-stable_win64.exe"
 $env:GODOT_PROJECT_PATH = "D:\GodotProjects\example"
 $env:GODOT_DAEDALUS_PLUGIN_DIR = "D:\GodotProjects\example\addons\godot_daedalus"
 ```
@@ -68,7 +68,7 @@ npm run dev:llm -- model_id=deepseek-v4-pro
 
 发布 Beta 时在 release notes 中列出：
 
-- 首要验证平台：Windows + Godot 4.7。
+- 首要验证平台：Windows + Godot 4.5（最低兼容版本），并补测当前最新稳定版。
 - macOS/Linux 暂不作为 Beta 阻断平台。
 - 真实 LLM 调用依赖用户自己的 provider API Key 和网络环境。
 - 如果插件更新遇到文件锁，关闭 Godot 后重新执行 pending update。

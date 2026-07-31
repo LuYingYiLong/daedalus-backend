@@ -82,6 +82,11 @@ export type ProviderChatOptions = {
 	endpointType?: EndpointType | undefined;
 	adapterFamily?: AdapterFamily | undefined;
 	modelProfile?: ModelProfile | undefined;
+	/**
+	 * Internal task-level override. Auxiliary structured-generation tasks can
+	 * disable reasoning without changing the user's composer preference.
+	 */
+	reasoningMode?: "auto" | "disabled" | undefined;
 	usageContext?: ProviderUsageContext | undefined;
 };
 

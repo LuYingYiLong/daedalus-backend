@@ -8,6 +8,7 @@ import test from "node:test";
 import {
 	commitOrPushWorkspaceGit,
 	createCommitMessageDiffContext,
+	generateGitCommitMessageFromDiff,
 	resolveGitCommitProviderOptions,
 	type CandidateDiff
 } from "../../../src/server/workspace-git-commit.js";
@@ -70,6 +71,133 @@ function createGitCommitOptions(): ProviderChatOptions {
 		}
 	};
 }
+
+test("Git commit message generation disables reasoning for its short structured request", async (): Promise<void> => {
+	const calls: Array<{ maxTokens: number | undefined; reasoningMode: string | undefined }> = [];
+	const result = await generateGitCommitMessageFromDiff(
+		createCandidateDiff([
+			"diff --git a/src/server/app.ts b/src/server/app.ts",
+			"--- a/src/server/app.ts",
+			"+++ b/src/server/app.ts",
+			"@@ -1 +1 @@",
+			"-const ready = false;",
+			"+const ready = true;"
+		].join("\n"), { additions: 1, deletions: 1 }),
+		createGitCommitOptions(),
+		"Generate JSON.",
+		undefined,
+		{
+			chat: async (params, options): Promise<string> => {
+				calls.push({
+					maxTokens: params.options?.maxTokens,
+					reasoningMode: options.reasoningMode
+				});
+				return '{"subject":"fix(server): update readiness state","body":""}';
+			}
+		}
+	);
+
+	assert.equal(result.generationSource, "llm");
+	assert.equal(result.subject, "fix(server): update readiness state");
+	assert.deepEqual(calls, [{ maxTokens: 800, reasoningMode: "disabled" }]);
+});
+
+test("Git commit message generation retries empty model output once", async (): Promise<void> => {
+	let callCount: number = 0;
+	let retryPrompt: string = "";
+	const result = await generateGitCommitMessageFromDiff(
+		createCandidateDiff([
+			"diff --git a/src/providers/client.ts b/src/providers/client.ts",
+			"--- a/src/providers/client.ts",
+			"+++ b/src/providers/client.ts",
+			"@@ -1 +1 @@",
+			"-const retries = 0;",
+			"+const retries = 1;"
+		].join("\n"), { additions: 1, deletions: 1 }),
+		createGitCommitOptions(),
+		"Generate JSON.",
+		undefined,
+		{
+			chat: async (params): Promise<string> => {
+				callCount += 1;
+				if (callCount === 1) {
+					throw new Error("LLM returned empty response");
+				}
+				retryPrompt = params.message;
+				return '{"subject":"fix(providers): retry empty responses","body":"Recover structured generation once."}';
+			},
+			logWarning: (): void => {}
+		}
+	);
+
+	assert.equal(callCount, 2);
+	assert.equal(result.generationSource, "llm_retry");
+	assert.match(retryPrompt, /previous response contained no visible JSON/iu);
+	assert.equal(result.warning, undefined);
+});
+
+test("Git commit message generation repairs malformed structured output", async (): Promise<void> => {
+	let callCount: number = 0;
+	let retryPrompt: string = "";
+	const result = await generateGitCommitMessageFromDiff(
+		createCandidateDiff([
+			"diff --git a/src/server/git.ts b/src/server/git.ts",
+			"--- a/src/server/git.ts",
+			"+++ b/src/server/git.ts",
+			"@@ -1 +1 @@",
+			"-const stable = false;",
+			"+const stable = true;"
+		].join("\n")),
+		createGitCommitOptions(),
+		"Generate JSON.",
+		undefined,
+		{
+			chat: async (params): Promise<string> => {
+				callCount += 1;
+				if (callCount === 1) {
+					return "fix git commit generation";
+				}
+				retryPrompt = params.message;
+				return '{"subject":"fix(git): stabilize commit generation","body":""}';
+			},
+			logWarning: (): void => {}
+		}
+	);
+
+	assert.equal(callCount, 2);
+	assert.equal(result.generationSource, "llm_retry");
+	assert.match(retryPrompt, /fix git commit generation/u);
+	assert.equal(result.subject, "fix(git): stabilize commit generation");
+});
+
+test("Git commit message generation falls back locally after repeated invalid responses", async (): Promise<void> => {
+	let callCount: number = 0;
+	const result = await generateGitCommitMessageFromDiff(
+		createCandidateDiff([
+			"diff --git a/docs/setup.md b/docs/setup.md",
+			"--- a/docs/setup.md",
+			"+++ b/docs/setup.md",
+			"@@ -1 +1 @@",
+			"-Old setup",
+			"+New setup"
+		].join("\n"), { additions: 1, deletions: 1 }),
+		createGitCommitOptions(),
+		"Generate JSON.",
+		undefined,
+		{
+			chat: async (): Promise<string> => {
+				callCount += 1;
+				throw new Error("LLM returned empty response");
+			},
+			logWarning: (): void => {}
+		}
+	);
+
+	assert.equal(callCount, 2);
+	assert.equal(result.generationSource, "fallback");
+	assert.equal(result.subject, "docs: update setup.md");
+	assert.match(result.warning ?? "", /local fallback/u);
+});
 
 test("Git commit generation uses its configured model before reading an unconfigured current provider", async (): Promise<void> => {
 	const session = createClientSession(undefined);

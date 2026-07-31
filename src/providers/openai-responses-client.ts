@@ -11,6 +11,7 @@ import type {
 import type { AiChatParams, ChatMessage } from "../protocol/types.js";
 import { getProviderDefaultModel } from "./provider-registry.js";
 import { resolveReasoningEffort } from "./reasoning-effort.js";
+import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { getImageAttachments, type ProviderImageAttachment } from "./provider-image-content.js";
 import type { ProviderChatOptions } from "./deepseek-client.js";
 import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
@@ -71,7 +72,11 @@ export function createOpenAIResponseInput(params: AiChatParams, history: ChatMes
 	return input;
 }
 
-export function applyOpenAIResponsesOptions(requestBody: ResponseCreateParamsBase, params: AiChatParams): void {
+export function applyOpenAIResponsesOptions(
+	requestBody: ResponseCreateParamsBase,
+	params: AiChatParams,
+	options?: ProviderChatOptions | undefined
+): void {
 	if (params.options?.temperature !== undefined) {
 		requestBody.temperature = params.options.temperature;
 	}
@@ -86,10 +91,12 @@ export function applyOpenAIResponsesOptions(requestBody: ResponseCreateParamsBas
 			format: { type: "json_object" }
 		};
 	}
-	const model: string = typeof requestBody.model === "string" ? requestBody.model : "";
-	const reasoningEffort: string | undefined = resolveReasoningEffort("openai", model, params.options?.reasoningEffort);
-	if (reasoningEffort !== undefined) {
-		(requestBody as unknown as { reasoning?: { effort: string } }).reasoning = { effort: reasoningEffort };
+	if (options?.reasoningMode !== "disabled") {
+		const model: string = typeof requestBody.model === "string" ? requestBody.model : "";
+		const reasoningEffort: string | undefined = resolveReasoningEffort("openai", model, params.options?.reasoningEffort);
+		if (reasoningEffort !== undefined) {
+			(requestBody as unknown as { reasoning?: { effort: string } }).reasoning = { effort: reasoningEffort };
+		}
 	}
 }
 
@@ -105,7 +112,7 @@ export function createOpenAIResponsesRequestBody(
 		input: createOpenAIResponseInput(params, history),
 		store: false
 	};
-	applyOpenAIResponsesOptions(requestBody, params);
+	applyOpenAIResponsesOptions(requestBody, params, options);
 	return requestBody;
 }
 
@@ -148,7 +155,14 @@ export async function chatWithOpenAIResponses(
 			streaming: false,
 			usage: parseOpenAIResponsesUsage(response)
 		});
-		throw new Error("LLM returned empty response");
+		throw new ProviderEmptyResponseError({
+			responseStatus: response.status,
+			incompleteReason: response.incomplete_details?.reason,
+			refused: response.output.some((item): boolean => (
+				item.type === "message"
+				&& item.content.some((content): boolean => content.type === "refusal")
+			))
+		});
 	}
 	await recordProviderUsage({
 		options,

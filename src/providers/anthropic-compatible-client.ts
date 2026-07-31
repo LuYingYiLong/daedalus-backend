@@ -7,6 +7,7 @@ import { getProviderDefaultModel } from "./provider-registry.js";
 import type { NormalizedLlmUsage } from "../usage/metrics-types.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseAnthropicUsage } from "../usage/usage-parser.js";
+import { ProviderEmptyResponseError } from "./provider-response-error.js";
 
 export type AnthropicTextBlock = {
 	type: "text";
@@ -580,7 +581,9 @@ export async function chatWithAnthropicCompatible(
 	);
 	const text: string = extractAnthropicText(message.content);
 	if (text.length === 0) {
-		throw new Error("LLM returned empty response");
+		throw new ProviderEmptyResponseError({
+			finishReason: message.stop_reason ?? undefined
+		});
 	}
 	return text;
 }

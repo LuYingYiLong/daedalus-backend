@@ -13,6 +13,8 @@ import { resolveModelProfile } from "../tokens/model-profiles.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import { composeSystemPrompt } from "../prompts/registry.js";
 import { getGitCommitPrompt } from "../user-prompt-store.js";
+import { isProviderEmptyResponseError } from "../providers/provider-response-error.js";
+import { logger } from "../logger.js";
 import type { ClientSession } from "./client-session.js";
 import { clipTextByChars } from "./additional-context.js";
 import { isInsideGitWorkTree, readGitBranch, runGit, type GitResult } from "./git-utils.js";
@@ -32,6 +34,8 @@ export type WorkspaceGitCommitMessageResult = {
 	message: string;
 	subject: string;
 	body: string;
+	generationSource: "llm" | "llm_retry" | "fallback";
+	warning?: string | undefined;
 	additions: number;
 	deletions: number;
 	changedFiles: number;
@@ -94,6 +98,27 @@ const GIT_PUSH_TIMEOUT_MS: number = 120_000;
 const MAX_PUBLIC_GIT_OUTPUT_CHARS: number = 4000;
 const COMMIT_SUBJECT_MAX_CHARS: number = 100;
 const COMMIT_BODY_MAX_LINE_CHARS: number = 100;
+const COMMIT_MESSAGE_INITIAL_MAX_TOKENS: number = 800;
+const COMMIT_MESSAGE_RETRY_MAX_TOKENS: number = 1600;
+const COMMIT_MESSAGE_REPAIR_INPUT_MAX_CHARS: number = 6000;
+const COMMIT_MESSAGE_TRANSIENT_RETRY_DELAY_MS: number = 350;
+const COMMIT_MESSAGE_FALLBACK_WARNING: string = "The configured model could not produce a valid structured commit message. A local fallback was generated.";
+
+type GeneratedCommitMessage = {
+	message: string;
+	subject: string;
+	body: string;
+	generationSource: WorkspaceGitCommitMessageResult["generationSource"];
+	warning?: string | undefined;
+};
+
+type GitCommitMessageChat = typeof chatWithDeepSeek;
+
+export type GitCommitMessageGenerationDependencies = {
+	chat?: GitCommitMessageChat | undefined;
+	waitForRetry?: ((delayMs: number, abortSignal?: AbortSignal | undefined) => Promise<void>) | undefined;
+	logWarning?: typeof logger.warn | undefined;
+};
 
 function splitNullTerminated(text: string): string[] {
 	return text.split("\0").filter((item: string): boolean => item.length > 0);
@@ -562,6 +587,294 @@ function normalizeGeneratedCommitMessage(text: string): { subject: string; body:
 	].filter((part: string): boolean => part.length > 0).join("\n\n"));
 }
 
+function listChangedPaths(diff: CandidateDiff): string[] {
+	const paths: Set<string> = new Set();
+	for (const line of diff.patch.replace(/\r\n?/gu, "\n").split("\n")) {
+		if (!line.startsWith("--- ") && !line.startsWith("+++ ")) {
+			continue;
+		}
+		const filePath: string | null = extractDiffPath(line);
+		if (filePath !== null && filePath.length > 0) {
+			paths.add(filePath.replaceAll("\\", "/"));
+		}
+	}
+	return [...paths];
+}
+
+function isDocumentationPath(filePath: string): boolean {
+	const normalized: string = filePath.toLowerCase();
+	return /(?:^|\/)(?:docs?|readme(?:\.[^/]*)?|changelog(?:\.[^/]*)?|license(?:\.[^/]*)?)$/u.test(normalized)
+		|| /\.(?:md|mdx|rst|txt)$/u.test(normalized);
+}
+
+function isTestPath(filePath: string): boolean {
+	const normalized: string = filePath.toLowerCase();
+	return /(?:^|\/)(?:tests?|__tests__)(?:\/|$)/u.test(normalized)
+		|| /\.(?:spec|test)\.[^/]+$/u.test(normalized);
+}
+
+function isCiPath(filePath: string): boolean {
+	const normalized: string = filePath.toLowerCase();
+	return normalized.startsWith(".github/workflows/")
+		|| normalized === ".gitlab-ci.yml"
+		|| normalized.startsWith(".circleci/");
+}
+
+function isBuildPath(filePath: string): boolean {
+	const normalized: string = filePath.toLowerCase();
+	return /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|tsconfig(?:\.[^/]*)?\.json)$/u.test(normalized)
+		|| /(?:^|\/)(?:vite|webpack|rollup|esbuild)\.config\.[^/]+$/u.test(normalized);
+}
+
+function resolveFallbackCommitType(paths: readonly string[]): string {
+	if (paths.length > 0 && paths.every(isDocumentationPath)) {
+		return "docs";
+	}
+	if (paths.length > 0 && paths.every(isTestPath)) {
+		return "test";
+	}
+	if (paths.length > 0 && paths.every(isCiPath)) {
+		return "ci";
+	}
+	if (paths.length > 0 && paths.every(isBuildPath)) {
+		return "build";
+	}
+	return "chore";
+}
+
+function normalizeFallbackScope(value: string): string | null {
+	const normalized: string = value
+		.toLowerCase()
+		.replace(/[^a-z0-9-]+/gu, "-")
+		.replace(/^-+|-+$/gu, "")
+		.slice(0, 32);
+	return normalized.length > 0 ? normalized : null;
+}
+
+function getPathScope(filePath: string): string | null {
+	const parts: string[] = filePath.split("/").filter((part: string): boolean => part.length > 0);
+	if (parts.length <= 1) {
+		return null;
+	}
+	const candidate: string | undefined = parts[0] === "src" && parts.length > 2 ? parts[1] : parts[0];
+	return candidate === undefined ? null : normalizeFallbackScope(candidate);
+}
+
+function resolveFallbackScope(paths: readonly string[]): string | null {
+	const scopes: Array<string | null> = paths.map(getPathScope);
+	const first: string | null | undefined = scopes[0];
+	return first !== undefined && first !== null && scopes.every((scope: string | null): boolean => scope === first)
+		? first
+		: null;
+}
+
+function createFallbackCommitMessage(diff: CandidateDiff): GeneratedCommitMessage {
+	const paths: string[] = listChangedPaths(diff);
+	const type: string = resolveFallbackCommitType(paths);
+	const scope: string | null = resolveFallbackScope(paths);
+	const effectiveScope: string | null = scope === type ? null : scope;
+	const target: string = paths.length === 1
+		? paths[0]!.split("/").at(-1) ?? "workspace files"
+		: diff.changedFiles === 1
+			? "workspace file"
+			: `${diff.changedFiles} workspace files`;
+	const normalized = normalizeCommitMessage(`${type}${effectiveScope === null ? "" : `(${effectiveScope})`}: update ${target}`);
+	return {
+		...normalized,
+		generationSource: "fallback",
+		warning: COMMIT_MESSAGE_FALLBACK_WARNING
+	};
+}
+
+function createCommitMessageParams(message: string, maxTokens: number): AiChatParams {
+	return {
+		message,
+		mode: "ask",
+		options: {
+			temperature: 0,
+			responseFormat: "json",
+			maxTokens
+		}
+	};
+}
+
+function createCommitMessageRepairPrompt(rawText: string): string {
+	return [
+		"Repair the candidate below into the required Git commit message JSON object.",
+		"Return exactly one JSON object with only subject and body. Do not add Markdown or explanations.",
+		'Schema: {"subject":"type(scope): subject","body":"optional details"}',
+		"",
+		"Candidate:",
+		clipTextByChars(rawText, COMMIT_MESSAGE_REPAIR_INPUT_MAX_CHARS)
+	].join("\n");
+}
+
+function createCommitMessageEmptyRetryPrompt(diff: CandidateDiff): string {
+	return [
+		createCommitMessageUserPrompt(diff),
+		"",
+		"The previous response contained no visible JSON. Return the JSON object directly without hidden reasoning."
+	].join("\n");
+}
+
+function isAbortError(error: unknown, abortSignal?: AbortSignal | undefined): boolean {
+	return abortSignal?.aborted === true
+		|| (error instanceof Error && (error.name === "AbortError" || /cancelled|aborted/iu.test(error.message)));
+}
+
+function getErrorStatus(error: unknown): number | undefined {
+	if (typeof error !== "object" || error === null) {
+		return undefined;
+	}
+	const record: Record<string, unknown> = error as Record<string, unknown>;
+	const value: unknown = record.status ?? record.statusCode;
+	return typeof value === "number" ? value : undefined;
+}
+
+function getErrorCode(error: unknown): string | undefined {
+	if (typeof error !== "object" || error === null) {
+		return undefined;
+	}
+	const value: unknown = (error as Record<string, unknown>).code;
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isTransientProviderError(error: unknown): boolean {
+	const status: number | undefined = getErrorStatus(error);
+	if (status !== undefined) {
+		return status === 408 || status === 409 || status === 429 || status >= 500;
+	}
+	const code: string | undefined = getErrorCode(error);
+	if (code !== undefined && /^(?:ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|ETIMEDOUT)$/iu.test(code)) {
+		return true;
+	}
+	return error instanceof TypeError && /fetch|network|socket/iu.test(error.message);
+}
+
+function isGeneratedMessageFormatError(error: unknown): boolean {
+	return error instanceof z.ZodError
+		|| (error instanceof Error && error.message === "Failed to parse generated commit message.");
+}
+
+function createGenerationErrorLogData(error: unknown): Record<string, unknown> {
+	const data: Record<string, unknown> = {
+		name: error instanceof Error ? error.name : typeof error
+	};
+	const code: string | undefined = getErrorCode(error);
+	const status: number | undefined = getErrorStatus(error);
+	if (code !== undefined) {
+		data.code = code;
+	}
+	if (status !== undefined) {
+		data.status = status;
+	}
+	if (typeof error === "object" && error !== null) {
+		const details: unknown = (error as Record<string, unknown>).details;
+		if (typeof details === "object" && details !== null) {
+			data.details = details;
+		}
+	}
+	return data;
+}
+
+async function defaultWaitForRetry(delayMs: number, abortSignal?: AbortSignal | undefined): Promise<void> {
+	if (abortSignal?.aborted === true) {
+		throw abortSignal.reason instanceof Error ? abortSignal.reason : new DOMException("The operation was aborted.", "AbortError");
+	}
+	await new Promise<void>((resolve, reject): void => {
+		const timeout: ReturnType<typeof setTimeout> = setTimeout((): void => {
+			abortSignal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, delayMs);
+		const onAbort = (): void => {
+			clearTimeout(timeout);
+			reject(abortSignal?.reason instanceof Error ? abortSignal.reason : new DOMException("The operation was aborted.", "AbortError"));
+		};
+		abortSignal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+export async function generateGitCommitMessageFromDiff(
+	diff: CandidateDiff,
+	options: ProviderChatOptions,
+	systemPrompt: string,
+	abortSignal?: AbortSignal | undefined,
+	dependencies: GitCommitMessageGenerationDependencies = {}
+): Promise<GeneratedCommitMessage> {
+	const chat: GitCommitMessageChat = dependencies.chat ?? chatWithDeepSeek;
+	const waitForRetry = dependencies.waitForRetry ?? defaultWaitForRetry;
+	const logWarning = dependencies.logWarning ?? logger.warn;
+	const taskOptions: ProviderChatOptions = {
+		...options,
+		reasoningMode: "disabled"
+	};
+	let firstText: string | null = null;
+	let firstError: unknown;
+
+	try {
+		firstText = await chat(
+			createCommitMessageParams(createCommitMessageUserPrompt(diff), COMMIT_MESSAGE_INITIAL_MAX_TOKENS),
+			taskOptions,
+			[] satisfies ChatMessage[],
+			systemPrompt,
+			abortSignal
+		);
+		return {
+			...normalizeGeneratedCommitMessage(firstText),
+			generationSource: "llm"
+		};
+	} catch (error: unknown) {
+		if (isAbortError(error, abortSignal)) {
+			throw error;
+		}
+		firstError = error;
+	}
+
+	const shouldRetry: boolean = isProviderEmptyResponseError(firstError)
+		|| isGeneratedMessageFormatError(firstError)
+		|| isTransientProviderError(firstError);
+	logWarning("git", shouldRetry ? "commit_message_generation_retrying" : "commit_message_generation_fallback", {
+		provider: options.provider,
+		model: options.model,
+		attempt: 1,
+		...createGenerationErrorLogData(firstError)
+	});
+	if (!shouldRetry) {
+		return createFallbackCommitMessage(diff);
+	}
+
+	if (isTransientProviderError(firstError)) {
+		await waitForRetry(COMMIT_MESSAGE_TRANSIENT_RETRY_DELAY_MS, abortSignal);
+	}
+	const retryMessage: string = firstText !== null && firstText.trim().length > 0
+		? createCommitMessageRepairPrompt(firstText)
+		: createCommitMessageEmptyRetryPrompt(diff);
+	try {
+		const retryText: string = await chat(
+			createCommitMessageParams(retryMessage, COMMIT_MESSAGE_RETRY_MAX_TOKENS),
+			taskOptions,
+			[] satisfies ChatMessage[],
+			systemPrompt,
+			abortSignal
+		);
+		return {
+			...normalizeGeneratedCommitMessage(retryText),
+			generationSource: "llm_retry"
+		};
+	} catch (error: unknown) {
+		if (isAbortError(error, abortSignal)) {
+			throw error;
+		}
+		logWarning("git", "commit_message_generation_fallback", {
+			provider: options.provider,
+			model: options.model,
+			attempt: 2,
+			...createGenerationErrorLogData(error)
+		});
+		return createFallbackCommitMessage(diff);
+	}
+}
+
 async function hasStagedChanges(workspaceRoot: string): Promise<boolean> {
 	const result: GitResult = await runGit(workspaceRoot, ["diff", "--cached", "--quiet", "--"], {
 		allowedExitCodes: [0, 1]
@@ -645,22 +958,14 @@ export async function generateWorkspaceGitCommitMessage(params: WorkspaceGitComm
 		"",
 		"ask"
 	);
-	const aiParams: AiChatParams = {
-		message: createCommitMessageUserPrompt(diff),
-		mode: "ask",
-		options: {
-			temperature: 0,
-			responseFormat: "json",
-			maxTokens: 800
-		}
-	};
-	const text: string = await chatWithDeepSeek(aiParams, options, [] satisfies ChatMessage[], systemPrompt);
-	const generated = normalizeGeneratedCommitMessage(text);
+	const generated: GeneratedCommitMessage = await generateGitCommitMessageFromDiff(diff, options, systemPrompt);
 
 	return {
 		message: generated.message,
 		subject: generated.subject,
 		body: generated.body,
+		generationSource: generated.generationSource,
+		...(generated.warning === undefined ? {} : { warning: generated.warning }),
 		additions: diff.additions,
 		deletions: diff.deletions,
 		changedFiles: diff.changedFiles,

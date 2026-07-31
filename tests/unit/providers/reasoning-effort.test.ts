@@ -75,3 +75,36 @@ test("provider request builders forward only supported reasoning parameters", ()
 	applyChatOptions(kimiRequest, params, { provider: "moonshot", apiKey: "test", model: "kimi-k3" });
 	assert.equal("reasoning_effort" in (kimiRequest as unknown as Record<string, unknown>), false);
 });
+
+test("auxiliary provider requests can disable reasoning without changing model defaults", (): void => {
+	const params = aiChatParamsSchema.parse({
+		message: "Generate a short JSON object.",
+		options: { reasoningEffort: "max", responseFormat: "json" }
+	});
+	const deepSeekRequest = {
+		model: "deepseek-v4-pro",
+		messages: []
+	} as unknown as ChatCompletionCreateParamsBase;
+	applyChatOptions(deepSeekRequest, params, {
+		provider: "deepseek",
+		apiKey: "test",
+		model: "deepseek-v4-pro",
+		reasoningMode: "disabled"
+	});
+	const deepSeekRecord = deepSeekRequest as unknown as Record<string, unknown>;
+	assert.equal("reasoning_effort" in deepSeekRecord, false);
+	assert.deepEqual(deepSeekRecord.thinking, { type: "disabled" });
+
+	const openAIRequest = createOpenAIResponsesRequestBody(
+		params,
+		{
+			provider: "openai",
+			apiKey: "test",
+			model: "gpt-5.6-sol",
+			reasoningMode: "disabled"
+		},
+		[],
+		"system"
+	) as unknown as Record<string, unknown>;
+	assert.equal("reasoning" in openAIRequest, false);
+});

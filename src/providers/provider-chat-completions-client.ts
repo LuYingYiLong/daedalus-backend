@@ -12,6 +12,7 @@ import { normalizeConfiguredProviderBaseUrl, resolveProviderBaseUrl } from "./pr
 import type { ProviderChatOptions } from "./provider-types.js";
 import { getProviderDefaultModel, getProviderEndpointConfig } from "./provider-registry.js";
 import { resolveReasoningEffort } from "./reasoning-effort.js";
+import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
 
@@ -68,15 +69,21 @@ export function applyChatOptions(requestBody: ChatCompletionCreateParamsBase, pa
 		requestBody.response_format = { type: "json_object" };
 	}
 
-	const reasoningEffort: string | undefined = resolveReasoningEffort(
-		options.provider,
-		resolveChatModel(options),
-		params.options?.reasoningEffort
-	);
-	if (reasoningEffort !== undefined && options.provider === "deepseek") {
+	if (options.reasoningMode === "disabled" && options.provider === "deepseek") {
 		const providerRequest = requestBody as unknown as Record<string, unknown>;
-		providerRequest.reasoning_effort = reasoningEffort;
-		providerRequest.thinking = { type: "enabled" };
+		delete providerRequest.reasoning_effort;
+		providerRequest.thinking = { type: "disabled" };
+	} else {
+		const reasoningEffort: string | undefined = resolveReasoningEffort(
+			options.provider,
+			resolveChatModel(options),
+			params.options?.reasoningEffort
+		);
+		if (reasoningEffort !== undefined && options.provider === "deepseek") {
+			const providerRequest = requestBody as unknown as Record<string, unknown>;
+			providerRequest.reasoning_effort = reasoningEffort;
+			providerRequest.thinking = { type: "enabled" };
+		}
 	}
 }
 
@@ -111,7 +118,8 @@ export async function chatWithOpenAICompatible(
 		throw error;
 	}
 
-	const text: string | null | undefined = completion.choices[0]?.message.content;
+	const choice = completion.choices[0];
+	const text: string | null | undefined = choice?.message.content;
 	if (!text) {
 		await recordProviderUsage({
 			options,
@@ -123,7 +131,13 @@ export async function chatWithOpenAICompatible(
 			streaming: false,
 			usage: parseOpenAIChatUsage(completion)
 		});
-		throw new Error("LLM returned empty response");
+		const message = choice?.message as unknown as Record<string, unknown> | undefined;
+		const reasoningContent: unknown = message?.reasoning_content;
+		throw new ProviderEmptyResponseError({
+			finishReason: choice?.finish_reason ?? undefined,
+			reasoningChars: typeof reasoningContent === "string" ? reasoningContent.length : undefined,
+			refused: typeof message?.refusal === "string" && message.refusal.length > 0
+		});
 	}
 	await recordProviderUsage({
 		options,

@@ -29,6 +29,16 @@ import { classifyProviderError } from "../../providers/provider-error.js";
 import { logger } from "../../logger.js";
 import { sendJson } from "../send-json.js";
 import { sendStudioDirectSessionEvent } from "../session-events.js";
+import { isCancellationError, throwIfAborted } from "../request-lifecycle.js";
+
+type ActiveSelectionAskRun = {
+	sessionId: string;
+	requestId: string;
+	messageId: string;
+	controller: AbortController;
+};
+
+const activeSelectionAskRuns: Map<string, ActiveSelectionAskRun> = new Map();
 
 const INITIAL_CONTEXT_LABELS = {
 	"zh-CN": {
@@ -116,6 +126,7 @@ async function runSelectionAskResponse(params: {
 	userMessage: string;
 	history: ChatMessage[];
 	apiKey: string;
+	abortSignal: AbortSignal;
 }): Promise<void> {
 	const options: ProviderChatOptions = createThreadOptions(params.thread, params.apiKey, params.requestId);
 	const storedUserPrompt: string = await getUserPrompt();
@@ -142,7 +153,8 @@ async function runSelectionAskResponse(params: {
 		for (let attempt: number = 0; attempt < 2; attempt += 1) {
 			let attemptContent: string = "";
 			try {
-				for await (const delta of streamChatWithProvider(chatParams, options, params.history, systemPrompt)) {
+				for await (const delta of streamChatWithProvider(chatParams, options, params.history, systemPrompt, params.abortSignal)) {
+					throwIfAborted(params.abortSignal);
 					attemptContent += delta;
 					content += delta;
 					sendStudioDirectSessionEvent(
@@ -180,6 +192,7 @@ async function runSelectionAskResponse(params: {
 				throw error;
 			}
 		}
+		throwIfAborted(params.abortSignal);
 		await updateSelectionAskAssistantMessage(
 			params.thread.threadId,
 			params.assistantMessage.messageId,
@@ -199,6 +212,28 @@ async function runSelectionAskResponse(params: {
 			}
 		);
 	} catch (error: unknown) {
+		if (isCancellationError(error, params.abortSignal)) {
+			await updateSelectionAskAssistantMessage(
+				params.thread.threadId,
+				params.assistantMessage.messageId,
+				content,
+				"completed"
+			);
+			sendStudioDirectSessionEvent(
+				params.socket,
+				params.thread.sessionId,
+				params.requestId,
+				params.thread.threadId,
+				"session.selectionAsk.message.done",
+				{
+					threadId: params.thread.threadId,
+					messageId: params.assistantMessage.messageId,
+					content,
+					cancelled: true
+				}
+			);
+			return;
+		}
 		const providerError = classifyProviderError(error);
 		await updateSelectionAskAssistantMessage(
 			params.thread.threadId,
@@ -261,6 +296,14 @@ async function prepareSelectionAskTurn(params: {
 	return {
 		...turn,
 		start: (): void => {
+			const controller = new AbortController();
+			const activeRun: ActiveSelectionAskRun = {
+				sessionId: params.thread.sessionId,
+				requestId: params.request.id,
+				messageId: turn.assistantMessage.messageId,
+				controller
+			};
+			activeSelectionAskRuns.set(params.thread.threadId, activeRun);
 			void runSelectionAskResponse({
 				socket: params.socket,
 				thread: params.thread,
@@ -268,7 +311,12 @@ async function prepareSelectionAskTurn(params: {
 				assistantMessage: turn.assistantMessage,
 				userMessage: params.userMessage,
 				history,
-				apiKey: params.apiKey
+				apiKey: params.apiKey,
+				abortSignal: controller.signal
+			}).finally((): void => {
+				if (activeSelectionAskRuns.get(params.thread.threadId) === activeRun) {
+					activeSelectionAskRuns.delete(params.thread.threadId);
+				}
 			});
 		}
 	};
@@ -378,6 +426,26 @@ export async function handleSelectionAskRequest(
 					result: { thread: { ...thread, status: "running" }, messages: [turn.userMessage, turn.assistantMessage] }
 				});
 				turn.start();
+				return;
+			}
+
+			case "session.selectionAsk.cancel": {
+				assertActiveSession(session, request.params.sessionId);
+				const thread: SelectionAskThread | null = await readSelectionAskThread(request.params.sessionId, request.params.threadId);
+				if (thread === null) {
+					throw new Error("selection_ask_not_found: Selection Ask thread not found.");
+				}
+				const activeRun: ActiveSelectionAskRun | undefined = activeSelectionAskRuns.get(thread.threadId);
+				const cancelled: boolean = activeRun !== undefined && activeRun.sessionId === request.params.sessionId;
+				if (activeRun !== undefined && activeRun.sessionId === request.params.sessionId) {
+					activeRun.controller.abort(new DOMException("Selection Ask stopped by user.", "AbortError"));
+				}
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { threadId: thread.threadId, cancelled }
+				});
 				return;
 			}
 

@@ -292,6 +292,30 @@ test("message queue stores text context and reorders pending messages", (): void
 	assert.equal(invalid.errorCode, "invalid_queue_order");
 });
 
+test("message queue preserves context-only messages across hydration", (): void => {
+	const context: AdditionalContextItem = makeContext("ctx-only", "res://scripts/player.gd");
+	const hydrated = hydrateMessageQueue([{
+		id: "event-context-only",
+		requestId: "request-context-only",
+		event: "message.queue.added",
+		createdAt: "2026-08-01T00:00:00.000Z",
+		data: {
+			item: {
+				id: 1,
+				text: "",
+				additionalContext: [context],
+				status: "pending",
+				createdAt: "2026-08-01T00:00:00.000Z",
+				updatedAt: "2026-08-01T00:00:00.000Z"
+			}
+		}
+	}]);
+
+	assert.equal(hydrated.messages.length, 1);
+	assert.equal(hydrated.messages[0]?.text, "");
+	assert.deepEqual(hydrated.messages[0]?.additionalContext, [context]);
+});
+
 test("queued chat request follows the current session model and mode", (): void => {
 	const session = createClientSession(undefined);
 	const item = enqueueMessage(session, {

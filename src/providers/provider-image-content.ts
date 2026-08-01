@@ -115,12 +115,19 @@ export function hasImageAttachments(params: AiChatParams): boolean {
 	return (params.additionalContext ?? []).some((item: AdditionalContextItem): boolean => item.kind === "image");
 }
 
+export function getProviderUserText(params: AiChatParams): string {
+	return params.message.trim().length > 0
+		? params.message
+		: "Use the attached context to respond to the user's request.";
+}
+
 export function createCurrentUserMessage(params: AiChatParams): ChatCompletionUserMessageParam {
 	const images: ProviderImageAttachment[] = getImageAttachments(params.additionalContext);
+	const userText: string = getProviderUserText(params);
 	if (images.length === 0) {
 		return {
 			role: "user",
-			content: params.message
+			content: userText
 		};
 	}
 
@@ -132,7 +139,7 @@ export function createCurrentUserMessage(params: AiChatParams): ChatCompletionUs
 	}));
 	parts.push({
 		type: "text",
-		text: params.message
+		text: userText
 	});
 
 	return {

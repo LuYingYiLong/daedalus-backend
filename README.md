@@ -73,7 +73,7 @@ The current release line is coordinated through checked manifests:
 | Component | Current contract |
 | --- | --- |
 | Backend RPC | Protocol v3 |
-| Daedalus Studio | 1.0.7 or newer for the current binary line |
+| Daedalus Studio | 1.0.8 or newer for the current binary line |
 | Godot Daedalus plugin | Plugin protocol v3 |
 | Godot | 4.5 or newer for the current editor plugin |
 | Source runtime | Node.js 24.18.0 or newer |

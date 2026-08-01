@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
 import { aiChatParamsSchema } from "../../../src/protocol/schema.js";
-import { createCurrentUserMessage, getImageAttachments, ProviderImageInputError } from "../../../src/providers/provider-image-content.js";
+import { createCurrentUserMessage, getImageAttachments, getProviderUserText, ProviderImageInputError } from "../../../src/providers/provider-image-content.js";
 import { preprocessImageAttachmentsForTextModel } from "../../../src/providers/image-recognition.js";
 
 async function withTempAppData(run: () => Promise<void>): Promise<void> {
@@ -45,6 +45,22 @@ test("schema accepts image additional context", (): void => {
 	});
 
 	assert.equal(result.success, true);
+});
+
+test("schema accepts context-only messages and rejects truly empty requests", (): void => {
+	assert.equal(aiChatParamsSchema.safeParse({
+		message: "",
+		additionalContext: [VALID_IMAGE_CONTEXT]
+	}).success, true);
+	assert.equal(aiChatParamsSchema.safeParse({ message: "" }).success, false);
+});
+
+test("provider user text supplies a neutral prompt for context-only messages", (): void => {
+	assert.equal(getProviderUserText({
+		message: "",
+		additionalContext: [VALID_IMAGE_CONTEXT]
+	}), "Use the attached context to respond to the user's request.");
+	assert.equal(getProviderUserText({ message: "Keep this message" }), "Keep this message");
 });
 
 test("schema rejects invalid image mime and oversized byte size", (): void => {

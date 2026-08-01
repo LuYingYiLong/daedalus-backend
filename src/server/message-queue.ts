@@ -107,7 +107,8 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 	}
 	const id: number = readNumber(record.id ?? record.queueId);
 	const text: string = typeof record.text === "string" ? record.text.trim().slice(0, MAX_QUEUE_TEXT_CHARS) : "";
-	if (id <= 0 || text.length === 0) {
+	const additionalContext: AdditionalContextItem[] = cloneAdditionalContextItems(readAdditionalContext(record.additionalContext)) ?? [];
+	if (id <= 0 || (text.length === 0 && additionalContext.length === 0)) {
 		return null;
 	}
 	const createdAt: string = readString(record.createdAt) ?? new Date().toISOString();
@@ -115,7 +116,7 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 	return {
 		id,
 		text,
-		additionalContext: cloneAdditionalContextItems(readAdditionalContext(record.additionalContext)) ?? [],
+		additionalContext,
 		mode: readMode(record.mode),
 		provider: readString(record.provider),
 		model: readString(record.model),

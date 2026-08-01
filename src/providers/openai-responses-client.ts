@@ -12,7 +12,7 @@ import type { AiChatParams, ChatMessage } from "../protocol/types.js";
 import { getProviderDefaultModel } from "./provider-registry.js";
 import { resolveReasoningEffort } from "./reasoning-effort.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
-import { getImageAttachments, type ProviderImageAttachment } from "./provider-image-content.js";
+import { getImageAttachments, getProviderUserText, type ProviderImageAttachment } from "./provider-image-content.js";
 import type { ProviderChatOptions } from "./deepseek-client.js";
 import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
@@ -35,8 +35,9 @@ export function resolveOpenAIResponsesModel(options: ProviderChatOptions): strin
 
 function createCurrentUserInputContent(params: AiChatParams): string | ResponseInputContent[] {
 	const images: ProviderImageAttachment[] = getImageAttachments(params.additionalContext);
+	const userText: string = getProviderUserText(params);
 	if (images.length === 0) {
-		return params.message;
+		return userText;
 	}
 
 	const parts: ResponseInputContent[] = images.map((image: ProviderImageAttachment): ResponseInputContent => ({
@@ -46,7 +47,7 @@ function createCurrentUserInputContent(params: AiChatParams): string | ResponseI
 	}));
 	parts.push({
 		type: "input_text",
-		text: params.message
+		text: userText
 	});
 	return parts;
 }

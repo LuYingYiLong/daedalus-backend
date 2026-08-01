@@ -1828,7 +1828,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				: request.params;
 			const params: AiChatParams = normalizeChatParamsForMode({
 				...rawParams,
-				message: rawParams.message.length > 0 ? rawParams.message : session.workbenchComposer.text,
+				message: rawParams.message.length > 0 || rawParams.additionalContext !== undefined
+					? rawParams.message
+					: session.workbenchComposer.text,
 				mode: rawParams.mode ?? session.workbenchComposer.chatMode,
 				additionalContext: rawParams.additionalContext ?? session.workbenchComposer.additionalContext
 			});

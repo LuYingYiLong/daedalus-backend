@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { AiChatParams, ChatMessage } from "../protocol/types.js";
-import { getImageAttachments, type ProviderImageAttachment } from "./provider-image-content.js";
+import { getImageAttachments, getProviderUserText, type ProviderImageAttachment } from "./provider-image-content.js";
 import { normalizeConfiguredProviderBaseUrl, resolveProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderChatOptions } from "./provider-types.js";
 import { getProviderDefaultModel } from "./provider-registry.js";
@@ -118,16 +118,17 @@ function createImageBlocks(params: AiChatParams): AnthropicImageBlock[] {
 
 export function createCurrentAnthropicUserMessage(params: AiChatParams): AnthropicMessageParam {
 	const contentBlocks: AnthropicContentBlock[] = createImageBlocks(params);
+	const userText: string = getProviderUserText(params);
 	if (contentBlocks.length === 0) {
 		return {
 			role: "user",
-			content: params.message
+			content: userText
 		};
 	}
 
 	contentBlocks.push({
 		type: "text",
-		text: params.message
+		text: userText
 	});
 
 	return {

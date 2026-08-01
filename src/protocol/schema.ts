@@ -219,18 +219,43 @@ export const aiChatParamsSchema = z.object({
 		workflow: z.enum(["auto", "single", "multi_phase", "llm_planned"]).optional(),
 		queueItemId: z.number().int().positive().optional(),
 	}).optional()
+}).superRefine((params, context): void => {
+	if (params.message.trim().length === 0 && (params.additionalContext?.length ?? 0) === 0) {
+		context.addIssue({
+			code: "custom",
+			path: ["message"],
+			message: "Message or additional context is required."
+		});
+	}
 });
 
 const guideTextSchema = z.string().min(1).max(4000);
-const queuedMessageSnapshotSchema = z.object({
-	text: z.string().min(1).max(20000),
+const queuedMessageSnapshotShape = {
+	text: z.string().max(20000),
 	mode: z.enum(["agent", "ask", "plan"]).optional(),
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
 	reasoningEffort: z.string().min(1).max(32).optional(),
 	skillRefs: z.array(skillRefSchema).max(4).optional(),
 	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
-}).strict();
+};
+function requireQueuedMessageContent(
+	params: { text: string; additionalContext?: unknown[] | undefined },
+	context: z.RefinementCtx
+): void {
+	if (params.text.trim().length === 0 && (params.additionalContext?.length ?? 0) === 0) {
+		context.addIssue({
+			code: "custom",
+			path: ["text"],
+			message: "Message text or additional context is required."
+		});
+	}
+}
+const queuedMessageSnapshotSchema = z.object(queuedMessageSnapshotShape).strict().superRefine(requireQueuedMessageContent);
+const queuedMessageUpdateSchema = z.object({
+	...queuedMessageSnapshotShape,
+	queueId: z.number().int().positive(),
+}).strict().superRefine(requireQueuedMessageContent);
 const workbenchAdditionalContextActionSchema = z.discriminatedUnion("action", [
 	z.object({
 		action: z.literal("set"),
@@ -946,6 +971,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.selectionAsk.cancel"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			threadId: z.string().min(1),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.list"),
 		params: z.object({}).optional(),
 	}),
@@ -1125,9 +1159,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("message.queue.update"),
-		params: queuedMessageSnapshotSchema.extend({
-			queueId: z.number().int().positive(),
-		}),
+		params: queuedMessageUpdateSchema,
 	}),
 	z.object({
 		type: z.literal("request"),

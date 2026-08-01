@@ -47,6 +47,7 @@ import {
 	type StoredSessionEvent,
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
+import { listSelectionAskThreads } from "../session/selection-ask-store.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -764,6 +765,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						...await createTimelinePageResult(timeline, openMessageLimit),
 						pendingGuides: session.pendingGuides.map(serializePendingGuide),
 						messageQueue: serializeMessageQueue(session),
+						selectionAskThreads: await listSelectionAskThreads(timeline.metadata.id),
 						workbench: serializeWorkbench(session),
 						...serializeAgentRunRuntime(session),
 						workspaceWarning: workspaceWarning ?? null

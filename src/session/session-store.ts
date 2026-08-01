@@ -890,6 +890,10 @@ export async function rewindSessionFromRequest(sessionId: string, requestId: str
 				const placeholders: string = ids.map((): string => "?").join(",");
 				const timelineSequence: number | null = findRewindTimelineSequence(db, sessionId, ids);
 				db.prepare(`
+					DELETE FROM selection_ask_threads
+					WHERE session_id = ? AND source_request_id IN (${placeholders})
+				`).run(sessionId, ...ids);
+				db.prepare(`
 					DELETE FROM session_events
 					WHERE session_id = ? AND channel = 'timeline'
 						AND (request_id IN (${placeholders}) OR (? IS NOT NULL AND sequence >= ?))

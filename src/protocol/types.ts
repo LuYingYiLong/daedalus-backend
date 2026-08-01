@@ -1,9 +1,10 @@
 import type { z } from "zod";
-import type { additionalContextItemSchema, aiChatParamsSchema, clientRequestSchema, promptIdSchema, skillIdSchema, skillRefSchema } from "./schema.js";
+import type { additionalContextItemSchema, aiChatParamsSchema, clientRequestSchema, messageTextAnchorSchema, promptIdSchema, skillIdSchema, skillRefSchema } from "./schema.js";
 
 export type AiChatParams = z.infer<typeof aiChatParamsSchema>;
 
 export type AdditionalContextItem = z.infer<typeof additionalContextItemSchema>;
+export type MessageTextAnchor = z.infer<typeof messageTextAnchorSchema>;
 
 export type ClientRequest = z.infer<typeof clientRequestSchema>;
 
@@ -130,11 +131,16 @@ export type InternalLegacyServerEventName =
 
 export type ServerEventNameInput = CanonicalServerEventName | InternalLegacyServerEventName;
 
+export type StudioDirectEventName =
+	| "session.selectionAsk.message.delta"
+	| "session.selectionAsk.message.done"
+	| "session.selectionAsk.message.error";
+
 export type ServerEvent = {
 	protocolVersion: 3;
 	type: "event";
 	eventId: string;
-	event: CanonicalServerEventName;
+	event: CanonicalServerEventName | StudioDirectEventName;
 	sessionId: string;
 	requestId: string;
 	runId: string;

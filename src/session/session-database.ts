@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 3;
+const DB_SCHEMA_VERSION: number = 4;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -137,6 +137,41 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_run_continuations_session
 			ON agent_run_continuations (session_id, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS selection_ask_threads (
+			thread_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			anchor_key TEXT NOT NULL,
+			source_entry_id TEXT NOT NULL,
+			source_request_id TEXT NOT NULL,
+			anchor_json TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			reasoning_effort TEXT,
+			base_url TEXT,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(session_id, anchor_key)
+		);
+		CREATE INDEX IF NOT EXISTS idx_selection_ask_threads_session
+			ON selection_ask_threads (session_id, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_selection_ask_threads_source_request
+			ON selection_ask_threads (session_id, source_request_id);
+		CREATE TABLE IF NOT EXISTS selection_ask_messages (
+			message_id TEXT PRIMARY KEY,
+			thread_id TEXT NOT NULL REFERENCES selection_ask_threads(thread_id) ON DELETE CASCADE,
+			sequence INTEGER NOT NULL,
+			request_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT NOT NULL,
+			status TEXT NOT NULL,
+			error_message TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(thread_id, sequence)
+		);
+		CREATE INDEX IF NOT EXISTS idx_selection_ask_messages_thread
+			ON selection_ask_messages (thread_id, sequence);
 		DROP TABLE IF EXISTS event_aliases;
 		DROP TABLE IF EXISTS legacy_imports;
 		DROP TABLE IF EXISTS migration_issues;
@@ -144,6 +179,10 @@ function migrateSchema(db: DatabaseSync): void {
 		VALUES (${DB_SCHEMA_VERSION}, datetime('now'));
 		PRAGMA user_version = ${DB_SCHEMA_VERSION};
 	`);
+	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
+	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
+		db.exec("ALTER TABLE selection_ask_messages ADD COLUMN error_message TEXT");
+	}
 }
 
 async function openDatabase(): Promise<SessionDatabaseState> {

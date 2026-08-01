@@ -94,9 +94,35 @@ const sessionUiMetadataParamsSchema = z.object({
 	workflowTodoCollapsed: z.boolean().optional()
 }).strict();
 
+export const messageTextAnchorSchema = z.object({
+	entryId: z.string().trim().min(1).max(240),
+	requestId: z.string().trim().min(1).max(240),
+	role: z.enum(["user", "assistant"]),
+	segmentKey: z.string().trim().min(1).max(240),
+	startOffset: z.number().int().min(0).max(2_000_000_000),
+	endOffset: z.number().int().positive().max(2_000_000_000),
+	quote: z.string().min(1).max(8000),
+	contextBefore: z.string().max(800),
+	contextAfter: z.string().max(800)
+}).strict().superRefine((anchor, context): void => {
+	if (anchor.endOffset <= anchor.startOffset) {
+		context.addIssue({
+			code: "custom",
+			path: ["endOffset"],
+			message: "Selection endOffset must be greater than startOffset."
+		});
+	}
+});
+
+const messageSelectionContextDataSchema = z.object({
+	anchor: messageTextAnchorSchema,
+	selectedText: z.string().min(1).max(8000),
+	annotation: z.string().max(1200)
+}).strict();
+
 export const additionalContextItemSchema = z.object({
 	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment"]),
+	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection"]),
 	title: z.string().min(1).max(200),
 	subtitle: z.string().max(400).optional(),
 	pinned: z.boolean().optional(),
@@ -108,6 +134,25 @@ export const additionalContextItemSchema = z.object({
 	summary: z.string().max(1200).optional(),
 	data: z.unknown().optional()
 }).superRefine((item, context): void => {
+	if (item.kind === "message_selection") {
+		const parsed = messageSelectionContextDataSchema.safeParse(item.data);
+		if (!parsed.success || parsed.data.selectedText !== parsed.data.anchor.quote) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "Message selection context data must contain a matching anchor, selectedText, and annotation."
+			});
+		}
+		if (item.pinned === true) {
+			context.addIssue({
+				code: "custom",
+				path: ["pinned"],
+				message: "Message selection context cannot be pinned."
+			});
+		}
+		return;
+	}
+
 	if (item.kind === "text_attachment") {
 		if (!textAttachmentContextDataSchema.safeParse(item.data).success) {
 			context.addIssue({
@@ -850,6 +895,45 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			afterOffset: z.number().int().min(0).optional(),
 			limit: z.number().int().positive().max(500).optional(),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.selectionAsk.list"),
+		params: z.object({
+			sessionId: z.string().min(1)
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.selectionAsk.get"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			threadId: z.string().min(1),
+			beforeSequence: z.number().int().positive().optional(),
+			limit: z.number().int().min(1).max(200).optional()
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.selectionAsk.create"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			anchor: messageTextAnchorSchema,
+			locale: z.enum(["zh-CN", "en-US"]).optional()
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.selectionAsk.send"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			threadId: z.string().min(1),
+			message: z.string().trim().min(1).max(20000)
+		}).strict()
 	}),
 	z.object({
 		type: z.literal("request"),

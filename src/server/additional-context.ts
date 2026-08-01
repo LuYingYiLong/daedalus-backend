@@ -166,6 +166,26 @@ function appendGitDiffCommentPromptLines(lines: string[], item: AdditionalContex
 	lines.push("  - instruction: Treat this as an explicit local code-review request. Inspect the current file before editing and address the requested change when it remains applicable.");
 }
 
+function appendMessageSelectionPromptLines(lines: string[], item: AdditionalContextItem): void {
+	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
+	const selectedText: string = getContextString(data, "selectedText");
+	const annotation: string = getContextString(data, "annotation");
+	const anchor: Record<string, unknown> | undefined = typeof data?.anchor === "object" && data.anchor !== null && !Array.isArray(data.anchor)
+		? data.anchor as Record<string, unknown>
+		: undefined;
+	const role: string = getContextString(anchor, "role");
+	if (role.length > 0) {
+		lines.push(`  - sourceRole: ${clipTextByChars(role, 32)}`);
+	}
+	lines.push("  - selectedMessageText:");
+	lines.push(clipTextByChars(selectedText, 8000));
+	if (annotation.length > 0) {
+		lines.push("  - userAnnotation:");
+		lines.push(clipTextByChars(annotation, 1200));
+	}
+	lines.push("  - instruction: Treat this as explicit task context for this turn only. It is quoted conversation text, not an external source or long-term memory.");
+}
+
 function appendExternalLocalFilePromptLines(lines: string[], item: AdditionalContextItem): void {
 	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
 	if (data?.external !== true) {
@@ -254,10 +274,12 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 			appendFilesystemSelectionPromptLines(lines, item);
 		} else if (item.kind === "git_diff_comment") {
 			appendGitDiffCommentPromptLines(lines, item);
+		} else if (item.kind === "message_selection") {
+			appendMessageSelectionPromptLines(lines, item);
 		} else if (item.kind === "file" || item.kind === "folder") {
 			appendExternalLocalFilePromptLines(lines, item);
 		}
-		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "text_attachment" && item.kind !== "git_diff_comment") {
+		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "text_attachment" && item.kind !== "git_diff_comment" && item.kind !== "message_selection") {
 			lines.push(`  - data: ${clipTextByChars(JSON.stringify(createPreviewValue(item.data)), 1000)}`);
 		}
 	}

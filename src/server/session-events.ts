@@ -4,7 +4,8 @@ import type {
 	AiChatParams,
 	CanonicalServerEventName,
 	ServerEvent,
-	ServerEventNameInput
+	ServerEventNameInput,
+	StudioDirectEventName
 } from "../protocol/types.js";
 import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendAgentEvent, appendSessionEvent, appendWorkflowEvent, openSession, renameSession, type SessionMetadata } from "../session/session-store.js";
@@ -360,7 +361,7 @@ export function persistSessionEvent(
 }
 
 function createEventEnvelope(
-	eventName: CanonicalServerEventName,
+	eventName: CanonicalServerEventName | StudioDirectEventName,
 	eventData: unknown,
 	requestId: string,
 	sessionId?: string | undefined
@@ -392,7 +393,7 @@ function emitCanonicalSessionEvent(
 		broadcastSessionEvent(socket, envelope.sessionId, envelope);
 		persistSessionEvent(
 			session,
-			envelope.event,
+			envelope.event as ServerEventNameInput,
 			envelope.data,
 			persistRequestId,
 			envelope.sessionId,
@@ -691,6 +692,25 @@ export function sendGlobalEvent(socket: WebSocket, requestId: string, eventName:
 	}
 
 	sendJson(socket, createEventEnvelope(canonicalizeServerEventName(eventName), data, requestId));
+}
+
+export function sendStudioDirectSessionEvent(
+	socket: WebSocket,
+	sessionId: string,
+	requestId: string,
+	runId: string,
+	eventName: StudioDirectEventName,
+	data: Record<string, unknown>
+): void {
+	if (socket.readyState !== WebSocket.OPEN) {
+		return;
+	}
+	const eventData: Record<string, unknown> = {
+		...data,
+		sessionId,
+		runId
+	};
+	sendJson(socket, createEventEnvelope(eventName, eventData, requestId, sessionId));
 }
 
 export function maybeScheduleSessionTitleGeneration(

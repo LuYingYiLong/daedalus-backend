@@ -126,6 +126,45 @@ test("git review comments remain pinned and keep independent line identities", (
 	assert.equal(session.workbenchComposer.additionalContext.every((context: AdditionalContextItem): boolean => context.pinned === true), true);
 });
 
+test("message selections dedupe by anchor and can never be pinned", (): void => {
+	const session = createClientSession(undefined);
+	const selection: AdditionalContextItem = {
+		id: "selection-a",
+		kind: "message_selection",
+		title: "Selected text",
+		source: "manual",
+		pinned: true,
+		data: {
+			anchor: {
+				entryId: "user-1",
+				requestId: "request-1",
+				role: "user",
+				segmentKey: "user:content",
+				startOffset: 2,
+				endOffset: 6,
+				quote: "text",
+				contextBefore: "a ",
+				contextAfter: " after"
+			},
+			selectedText: "text",
+			annotation: "first"
+		}
+	};
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "addOrReplace", item: selection } });
+	applyWorkbenchPatch(session, {
+		additionalContextAction: {
+			action: "addOrReplace",
+			item: { ...selection, id: "selection-b", data: { ...(selection.data as Record<string, unknown>), annotation: "updated" } }
+		}
+	});
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "pin", contextId: "selection-a", pinned: true } });
+
+	assert.equal(session.workbenchComposer.additionalContext.length, 1);
+	assert.equal(session.workbenchComposer.additionalContext[0]?.id, "selection-a");
+	assert.equal(session.workbenchComposer.additionalContext[0]?.pinned, undefined);
+	assert.equal((session.workbenchComposer.additionalContext[0]?.data as { annotation?: string }).annotation, "updated");
+});
+
 test("workbench snapshot derives active run and pending approval shape", (): void => {
 	const session = createClientSession(undefined);
 	session.activeRunRequestId = "run-1";

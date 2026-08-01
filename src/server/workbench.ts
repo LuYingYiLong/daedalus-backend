@@ -94,6 +94,19 @@ function getContextKey(context: AdditionalContextItem): string {
 	if (context.kind === "git_diff_comment") {
 		return [context.kind, context.id].join("\n");
 	}
+	if (context.kind === "message_selection") {
+		const data: Record<string, unknown> = getContextDataRecord(context);
+		const anchor: Record<string, unknown> = typeof data.anchor === "object" && data.anchor !== null && !Array.isArray(data.anchor)
+			? data.anchor as Record<string, unknown>
+			: {};
+		return [
+			context.kind,
+			String(anchor.entryId ?? ""),
+			String(anchor.segmentKey ?? ""),
+			String(anchor.startOffset ?? ""),
+			String(anchor.endOffset ?? "")
+		].join("\n");
+	}
 	return [context.kind, context.resourcePath ?? "", context.nodePath ?? ""].join("\n");
 }
 
@@ -108,7 +121,9 @@ function normalizeContexts(contexts: readonly AdditionalContextItem[]): Addition
 		const existingIndex: number | undefined = indexesByKey.get(key);
 		const cloned: AdditionalContextItem = context.kind === "git_diff_comment"
 			? { ...cloneContext(context), pinned: true }
-			: cloneContext(context);
+			: context.kind === "message_selection"
+				? { ...cloneContext(context), pinned: undefined }
+				: cloneContext(context);
 		if (existingIndex === undefined) {
 			indexesByKey.set(key, normalized.length);
 			normalized.push(cloned);
@@ -353,6 +368,9 @@ export function applyWorkbenchPatch(session: ClientSession, patch: WorkbenchPatc
 			const index: number = findContextIndex(session.workbenchComposer.additionalContext, action.contextId);
 			if (index >= 0) {
 				const context: AdditionalContextItem = session.workbenchComposer.additionalContext[index] as AdditionalContextItem;
+				if (context.kind === "message_selection") {
+					return changed;
+				}
 				session.workbenchComposer.additionalContext[index] = {
 					...context,
 					pinned: context.kind === "git_diff_comment" ? true : action.pinned

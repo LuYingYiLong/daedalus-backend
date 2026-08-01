@@ -120,6 +120,35 @@ test("additional context formats local git review comments with file and line ta
 	assert.match(section, /local code-review request/);
 });
 
+test("additional context injects message selections as turn-only task context", (): void => {
+	const section: string = createAdditionalContextPromptSection([{
+		id: "message-selection-1",
+		kind: "message_selection",
+		source: "manual",
+		title: "Selected response",
+		data: {
+			anchor: {
+				entryId: "assistant-1",
+				requestId: "request-1",
+				role: "assistant",
+				segmentKey: "assistant:markdown:0",
+				startOffset: 0,
+				endOffset: 5,
+				quote: "Godot",
+				contextBefore: "",
+				contextAfter: " Engine"
+			},
+			selectedText: "Godot",
+			annotation: "Use this as the next task target."
+		}
+	}]);
+
+	assert.match(section, /selectedMessageText:\s+Godot/u);
+	assert.match(section, /Use this as the next task target/u);
+	assert.match(section, /this turn only/u);
+	assert.doesNotMatch(section, /"anchor"/u);
+});
+
 test("additional context preserves external absolute file references", (): void => {
 	const section: string = createAdditionalContextPromptSection([{
 		id: "external-file-1",

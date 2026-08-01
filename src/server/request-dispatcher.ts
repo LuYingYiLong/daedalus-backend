@@ -97,6 +97,10 @@ const handleGodotDocumentationRequest: RequestHandler = createLazyHandler(async 
 	return (await import("./handlers/godot-documentation-handlers.js")).handleGodotDocumentationRequest;
 });
 
+const handleSelectionAskRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/selection-ask-handlers.js")).handleSelectionAskRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -159,6 +163,10 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"session.editor.bind",
 	"session.timeline",
 	"session.timeline.search.index",
+	"session.selectionAsk.list",
+	"session.selectionAsk.get",
+	"session.selectionAsk.create",
+	"session.selectionAsk.send",
 	"session.timeline.index",
 	"session.integrity.check",
 	"session.list",
@@ -299,6 +307,10 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["session.editor.bind", handleSessionRequest],
 	["session.timeline", handleSessionRequest],
 	["session.timeline.search.index", handleSessionRequest],
+	["session.selectionAsk.list", handleSelectionAskRequest],
+	["session.selectionAsk.get", handleSelectionAskRequest],
+	["session.selectionAsk.create", handleSelectionAskRequest],
+	["session.selectionAsk.send", handleSelectionAskRequest],
 	["session.timeline.index", handleSessionRequest],
 	["session.integrity.check", handleSessionRequest],
 	["session.list", handleSessionRequest],

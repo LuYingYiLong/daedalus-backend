@@ -80,7 +80,11 @@ export class ApprovalGateway {
 		args: Record<string, unknown>,
 		toolCallId: string,
 		workspaceId?: string | undefined,
-		context: { requestId?: string | undefined; sessionId?: string | undefined } = {}
+		context: {
+			requestId?: string | undefined;
+			sessionId?: string | undefined;
+			activeScenePath?: string | undefined;
+		} = {}
 	): Promise<ApprovalDecision> {
 		const requestId: string | undefined = context.requestId;
 		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
@@ -89,8 +93,11 @@ export class ApprovalGateway {
 		if (
 			requestId !== undefined
 			&& goalBinding !== undefined
+			&& effectiveMode === "manual"
 			&& (risk === "write" || risk === "destructive")
-			&& !isGoalCheckpointCapableToolCall(llmToolName, args)
+			&& !isGoalCheckpointCapableToolCall(llmToolName, args, {
+				activeScenePath: context.activeScenePath
+			})
 		) {
 			return {
 				action: "request_approval",

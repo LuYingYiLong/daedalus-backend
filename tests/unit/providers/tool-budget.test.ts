@@ -1,15 +1,23 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createToolBudgetRequiredResult, getContinuedMaxSteps, getContinuedToolResultCharLimit } from "../../../src/providers/agent-tool-budget.js";
+import { createToolBudgetRequiredResult, getContinuedMaxSteps, getContinuedToolResultCharLimit, shouldPauseForToolBudget } from "../../../src/providers/agent-tool-budget.js";
 import type { ChatCompletionsAgentContinuation } from "../../../src/providers/agent-types.js";
+import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../../../src/tools/llm-tool-budget.js";
 
-test("default tool budgets are slightly raised for simple and normal runs", (): void => {
-	assert.equal(resolveToolBudget("simple"), 6);
-	assert.equal(resolveToolBudget("normal"), 12);
-	assert.equal(resolveToolBudget("codegen"), 20);
-	assert.equal(resolveToolBudget("project_edit"), 30);
+test("tool budgets leave enough room for project-scale runs", (): void => {
+	assert.equal(resolveToolBudget("simple"), 10);
+	assert.equal(resolveToolBudget("normal"), 20);
+	assert.equal(resolveToolBudget("codegen"), 32);
+	assert.equal(resolveToolBudget("project_edit"), 48);
+	assert.equal(MAX_TOTAL_TOOL_RESULT_CHARS, 128000);
+});
+
+test("only manual mode pauses for a tool budget decision", (): void => {
+	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("manual")), true);
+	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("auto-safe")), false);
+	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("full-trust")), false);
 });
 
 test("tool budget continuation grants the configured extra step and char budget", (): void => {
@@ -33,7 +41,7 @@ test("tool budget continuation grants the configured extra step and char budget"
 	});
 
 	assert.equal(result.additionalSteps, TOOL_BUDGET_CONTINUE_STEPS);
-	assert.equal(getContinuedMaxSteps({ message: "继续" }, result.continuation), 22);
+	assert.equal(getContinuedMaxSteps({ message: "继续" }, result.continuation), 28);
 	assert.equal(getContinuedToolResultCharLimit(result.continuation), MAX_TOTAL_TOOL_RESULT_CHARS + TOOL_RESULT_CONTINUE_CHARS);
 });
 

@@ -174,8 +174,10 @@ import { ensureProviderConfigured } from "../../application/provider-session-ser
 import { findSessionWithPendingApproval } from "../client-connections.js";
 import { withMcpRequestContext } from "../../mcp/request-context.js";
 import {
+	getAgentRun,
 	recordAgentRunApprovedToolResult,
-	recordAgentRunToolEvent
+	recordAgentRunToolEvent,
+	updateAgentRun
 } from "../agent-run-controller.js";
 
 function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, historyTokensStored: number | null = null): Record<string, unknown> {
@@ -378,6 +380,14 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				});
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executing", {
 					startedAt: new Date().toISOString()
+				});
+			}
+			if (
+				pendingContinuation !== undefined
+				&& getAgentRun(session, pendingContinuation.requestId)?.stage === "awaiting_approval"
+			) {
+				updateAgentRun(socket, session, pendingContinuation.requestId, "executing", {
+					pause: null
 				});
 			}
 			const result = await awaitWithAbort(

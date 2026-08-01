@@ -1,26 +1,26 @@
-export const DEFAULT_TOOL_STEPS: number = 10;
+export const DEFAULT_TOOL_STEPS: number = 16;
 
 export type ToolBudgetLevel = "simple" | "normal" | "codegen" | "project_edit";
 
 const TOOL_BUDGET_MAP: Record<ToolBudgetLevel, number> = {
-	simple: 6,
-	normal: 12,
-	codegen: 20,
-	project_edit: 30
+	simple: 10,
+	normal: 20,
+	codegen: 32,
+	project_edit: 48
 };
 
 const SKILL_BUDGET_MAP: Record<string, number> = {
-	"gdscript.review": 8,
-	"godot.project_init": 12,
-	"file.creator": 16,
-	"scene.builder": 20,
-	"backend.helper": 10,
-	"builtin:gdscript-review": 8,
-	"builtin:godot-project-init": 12,
-	"builtin:file-creator": 16,
-	"builtin:scene-builder": 20,
-	"builtin:backend-helper": 10,
-	"builtin:skill-creator": 16
+	"gdscript.review": 12,
+	"godot.project_init": 20,
+	"file.creator": 24,
+	"scene.builder": 32,
+	"backend.helper": 16,
+	"builtin:gdscript-review": 12,
+	"builtin:godot-project-init": 20,
+	"builtin:file-creator": 24,
+	"builtin:scene-builder": 32,
+	"builtin:backend-helper": 16,
+	"builtin:skill-creator": 24
 };
 
 export function resolveToolBudget(
@@ -38,7 +38,7 @@ export function resolveToolBudget(
 	return DEFAULT_TOOL_STEPS;
 }
 
-export const MAX_TOOL_RESULT_CHARS: number = 12000;
-export const MAX_TOTAL_TOOL_RESULT_CHARS: number = 48000;
-export const TOOL_BUDGET_CONTINUE_STEPS: number = 10;
-export const TOOL_RESULT_CONTINUE_CHARS: number = MAX_TOTAL_TOOL_RESULT_CHARS;
+export const MAX_TOOL_RESULT_CHARS: number = 24000;
+export const MAX_TOTAL_TOOL_RESULT_CHARS: number = 128000;
+export const TOOL_BUDGET_CONTINUE_STEPS: number = 16;
+export const TOOL_RESULT_CONTINUE_CHARS: number = 64000;

@@ -4,8 +4,7 @@ import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult, ToolBudgetLimitKind } from "./agent-types.js";
 
 export function shouldPauseForToolBudget(gateway: ApprovalGateway): boolean {
-	const mode = gateway.getMode();
-	return mode === "manual" || mode === "auto-safe";
+	return gateway.getMode() === "manual";
 }
 
 export function createToolBudgetId(): string {

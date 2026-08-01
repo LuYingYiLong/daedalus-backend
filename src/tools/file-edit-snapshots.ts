@@ -132,7 +132,11 @@ function collectTrackedTargets(mcpHost: McpHost, workspaceRoot: string, llmToolN
 	return Array.from(targets.values());
 }
 
-export function isGoalCheckpointCapableToolCall(llmToolName: string, args: Record<string, unknown>): boolean {
+export function isGoalCheckpointCapableToolCall(
+	llmToolName: string,
+	args: Record<string, unknown>,
+	context: { activeScenePath?: string | undefined } = {}
+): boolean {
 	if (
 		llmToolName === "mcp_godot_set_project_setting"
 		|| llmToolName === "mcp_godot_unset_project_setting"
@@ -155,9 +159,17 @@ export function isGoalCheckpointCapableToolCall(llmToolName: string, args: Recor
 		"mcp_godot_add_node_to_scene",
 		"mcp_godot_attach_script_to_node",
 		"mcp_godot_connect_signal_in_scene",
-		"mcp_godot_apply_scene_patch",
-		"mcp_godot_editor_apply_scene_patch"
+		"mcp_godot_apply_scene_patch"
 	].includes(llmToolName)) return typeof args.scenePath === "string" && args.scenePath.trim().length > 0;
+	if (llmToolName === "mcp_godot_editor_apply_scene_patch") {
+		if (args.saveAfter === false) {
+			return false;
+		}
+		const targetScenePath: unknown = typeof args.scenePath === "string"
+			? args.scenePath
+			: context.activeScenePath;
+		return typeof targetScenePath === "string" && targetScenePath.trim().length > 0;
+	}
 	return false;
 }
 

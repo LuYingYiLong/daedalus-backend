@@ -52,6 +52,27 @@ test("illegal run transitions are rejected", (): void => {
 	}, /Illegal agent run transition/u);
 });
 
+test("an approved run resumes execution before finalizing", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-approval"
+	});
+	const executing = transitionAgentRunState(initial, "executing");
+	const waiting = transitionAgentRunState(executing, "awaiting_approval", {
+		pause: {
+			kind: "approval",
+			id: "approval-test",
+			toolName: "mcp_godot_editor_apply_scene_patch",
+			reason: "Scene patch"
+		}
+	});
+	const resumed = transitionAgentRunState(waiting, "executing", { pause: null });
+	const finalizing = transitionAgentRunState(resumed, "finalizing");
+
+	assert.equal(resumed.pause, null);
+	assert.equal(finalizing.stage, "finalizing");
+});
+
 test("restart interrupts every active stage but preserves paused runs", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",

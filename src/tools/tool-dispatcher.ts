@@ -172,9 +172,13 @@ async function executeSingleToolCall(
 	const workspaceId: string | undefined = toolContext?.workspaceId ?? mcpHost.getActiveWorkspaceId();
 	const executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
 	const approvalReason: string = getApprovalReasonFromArgs(argsParsed, "");
+	const activeScenePath: string | undefined = typeof mcpHost.getEditorBridge === "function"
+		? mcpHost.getEditorBridge().getActiveScenePath()
+		: undefined;
 	const decision = await gateway.evaluate(functionName, executionArgs, toolCall.id, workspaceId, {
 		requestId: toolContext?.requestId,
-		sessionId: toolContext?.sessionId
+		sessionId: toolContext?.sessionId,
+		activeScenePath
 	});
 	if (decision.review !== undefined) {
 		onEvent?.({

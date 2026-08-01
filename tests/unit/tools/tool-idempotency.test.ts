@@ -8,6 +8,7 @@ import {
 	refreshEditorFilesystemAfterGodotMutation,
 	shouldDedupeLlmToolExecution
 } from "../../../src/tools/tool-idempotency.js";
+import { MAX_TOOL_RESULT_CHARS } from "../../../src/tools/llm-tool-budget.js";
 
 test("only write and destructive tools are deduplicated", (): void => {
 	assert.equal(shouldDedupeLlmToolExecution("mcp_godot_read_text_file"), false);
@@ -70,7 +71,7 @@ test("read tools do not produce execution identities", (): void => {
 });
 
 test("scene view results can remain intact until the visual enricher consumes them", async (): Promise<void> => {
-	const dataUrl: string = `data:image/png;base64,${"a".repeat(16_000)}`;
+	const dataUrl: string = `data:image/png;base64,${"a".repeat(MAX_TOOL_RESULT_CHARS + 1_000)}`;
 	const content: string = JSON.stringify({
 		ok: true,
 		result: {

@@ -102,3 +102,38 @@ test("does not create file edit drafts for reused tool executions", async (): Pr
 		assert.equal(result.fileEditDraft, undefined);
 	});
 });
+
+test("captures the active scene for Editor Bridge patches without an explicit scene path", async (): Promise<void> => {
+	await withTempWorkspace(async (root: string): Promise<void> => {
+		const { createRuntimeWorkspace } = await import(`../../../src/workspace/registry.js?case=${Date.now()}-${Math.random()}`);
+		const { captureFileEditBatchDraft } = await import(`../../../src/tools/file-edit-snapshots.js?case=${Date.now()}-${Math.random()}`);
+		const workspace = createRuntimeWorkspace(root);
+		const scenePath: string = path.join(root, "scenes", "Main.tscn");
+		await fs.mkdir(path.dirname(scenePath), { recursive: true });
+		await fs.writeFile(scenePath, "[gd_scene]\n[node name=\"Main\" type=\"Node\"]\n", "utf8");
+
+		const host = {
+			getActiveWorkspaceId: (): string => workspace.id,
+			getEditorBridge: () => ({ getActiveScenePath: (): string => "res://scenes/Main.tscn" })
+		} as unknown as McpHost;
+
+		const result = await captureFileEditBatchDraft(
+			host,
+			"mcp_godot_editor_apply_scene_patch",
+			{ operations: [{ type: "add_node", parentPath: ".", nodeType: "Node", nodeName: "Child" }] },
+			async () => {
+				await fs.writeFile(scenePath, "[gd_scene]\n[node name=\"Main\" type=\"Node\"]\n[node name=\"Child\" type=\"Node\" parent=\".\"]\n", "utf8");
+				return {
+					content: JSON.stringify({ ok: true, modified: true }),
+					rawContentLength: 28,
+					truncated: false,
+					reused: false
+				};
+			}
+		);
+
+		assert.equal(result.fileEditDraft?.edits.length, 1);
+		assert.equal(result.fileEditDraft?.edits[0]?.path, "scenes/Main.tscn");
+		assert.match(result.fileEditDraft?.edits[0]?.afterText ?? "", /Child/u);
+	});
+});

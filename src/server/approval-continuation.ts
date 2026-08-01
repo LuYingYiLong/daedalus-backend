@@ -335,6 +335,11 @@ export async function sendContinuedAgentResult(
 	pendingContinuation: PendingAiContinuation,
 	historyBudgetTokens: number | null = null
 ): Promise<void> {
+	if (getAgentRun(session, pendingContinuation.requestId)?.stage === "awaiting_approval") {
+		updateAgentRun(socket, session, pendingContinuation.requestId, "executing", {
+			pause: null
+		});
+	}
 	if (agentResult.status === "approval_required") {
 		const nextPendingContinuation: PendingAiContinuation = createPendingAiContinuation(
 			pendingContinuation.params,

@@ -47,6 +47,8 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"session.pin.set",
 	"session.selectionAsk.cancel",
 	"session.selectionAsk.create",
+	"session.selectionAsk.delete",
+	"session.selectionAsk.deleteAll",
 	"session.selectionAsk.get",
 	"session.selectionAsk.list",
 	"session.selectionAsk.send",

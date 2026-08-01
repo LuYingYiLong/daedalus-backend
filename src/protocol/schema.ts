@@ -980,6 +980,23 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.selectionAsk.delete"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			threadId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.selectionAsk.deleteAll"),
+		params: z.object({
+			sessionId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.list"),
 		params: z.object({}).optional(),
 	}),

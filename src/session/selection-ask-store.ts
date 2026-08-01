@@ -287,6 +287,24 @@ export async function readSelectionAskMessagesForProvider(threadId: string): Pro
 	}));
 }
 
+export async function deleteSelectionAskThread(sessionId: string, threadId: string): Promise<boolean> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const result = db.prepare(`
+		DELETE FROM selection_ask_threads
+		WHERE session_id = ? AND thread_id = ?
+	`).run(sessionId, threadId);
+	return Number(result.changes) > 0;
+}
+
+export async function deleteAllSelectionAskThreads(sessionId: string): Promise<number> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const result = db.prepare(`
+		DELETE FROM selection_ask_threads
+		WHERE session_id = ?
+	`).run(sessionId);
+	return Number(result.changes);
+}
+
 export async function deleteSelectionAskThreadsBySourceRequestIds(sessionId: string, requestIds: readonly string[]): Promise<void> {
 	if (requestIds.length === 0) {
 		return;

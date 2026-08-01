@@ -13,6 +13,8 @@ import { resolveModelProfile } from "../../tokens/model-profiles.js";
 import {
 	appendSelectionAskTurn,
 	createOrReadSelectionAskThread,
+	deleteAllSelectionAskThreads,
+	deleteSelectionAskThread,
 	listSelectionAskThreads,
 	readSelectionAskMessagesForProvider,
 	readSelectionAskThread,
@@ -445,6 +447,46 @@ export async function handleSelectionAskRequest(
 					id: request.id,
 					ok: true,
 					result: { threadId: thread.threadId, cancelled }
+				});
+				return;
+			}
+
+			case "session.selectionAsk.delete": {
+				assertActiveSession(session, request.params.sessionId);
+				const thread: SelectionAskThread | null = await readSelectionAskThread(request.params.sessionId, request.params.threadId);
+				if (thread === null) {
+					throw new Error("selection_ask_not_found: Selection Ask thread not found.");
+				}
+				const activeRun: ActiveSelectionAskRun | undefined = activeSelectionAskRuns.get(thread.threadId);
+				if (activeRun?.sessionId === request.params.sessionId) {
+					activeRun.controller.abort(new DOMException("Selection Ask deleted by user.", "AbortError"));
+					activeSelectionAskRuns.delete(thread.threadId);
+				}
+				const deleted: boolean = await deleteSelectionAskThread(request.params.sessionId, thread.threadId);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { threadId: thread.threadId, deleted }
+				});
+				return;
+			}
+
+			case "session.selectionAsk.deleteAll": {
+				assertActiveSession(session, request.params.sessionId);
+				for (const [threadId, activeRun] of activeSelectionAskRuns) {
+					if (activeRun.sessionId !== request.params.sessionId) {
+						continue;
+					}
+					activeRun.controller.abort(new DOMException("Selection Ask threads deleted by user.", "AbortError"));
+					activeSelectionAskRuns.delete(threadId);
+				}
+				const deletedCount: number = await deleteAllSelectionAskThreads(request.params.sessionId);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { deletedCount }
 				});
 				return;
 			}

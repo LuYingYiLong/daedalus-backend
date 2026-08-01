@@ -86,3 +86,38 @@ test("selection Ask rows cascade when the owning session is deleted", async (): 
 		await rm(profile, { recursive: true, force: true });
 	}
 });
+
+test("selection Ask threads can be deleted individually or all at once", async (): Promise<void> => {
+	const profile: string = await mkdtemp(join(tmpdir(), "daedalus-selection-ask-remove-"));
+	const databasePath: string = join(profile, "sessions.sqlite3");
+	const database = await import("../../../src/session/session-database.js");
+	await database.resetSessionDatabaseForTests(databasePath);
+	try {
+		const sessions = await import("../../../src/session/session-store.js");
+		const selectionAsk = await import("../../../src/session/selection-ask-store.js");
+		const metadata = await sessions.createSession("Remove selection Ask");
+		const createThread = async (requestId: string): Promise<string> => {
+			const result = await selectionAsk.createOrReadSelectionAskThread({
+				sessionId: metadata.id,
+				anchor: {
+					entryId: `user-${requestId}`, requestId, role: "user", segmentKey: "user:content",
+					startOffset: 0, endOffset: 4, quote: "test", contextBefore: "", contextAfter: ""
+				},
+				provider: "deepseek",
+				model: "deepseek-v4-pro"
+			});
+			return result.thread.threadId;
+		};
+		const firstThreadId: string = await createThread("request-1");
+		await createThread("request-2");
+
+		assert.equal(await selectionAsk.deleteSelectionAskThread(metadata.id, firstThreadId), true);
+		assert.equal(await selectionAsk.deleteSelectionAskThread(metadata.id, firstThreadId), false);
+		assert.equal((await selectionAsk.listSelectionAskThreads(metadata.id)).length, 1);
+		assert.equal(await selectionAsk.deleteAllSelectionAskThreads(metadata.id), 1);
+		assert.deepEqual(await selectionAsk.listSelectionAskThreads(metadata.id), []);
+	} finally {
+		await database.resetSessionDatabaseForTests();
+		await rm(profile, { recursive: true, force: true });
+	}
+});

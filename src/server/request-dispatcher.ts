@@ -101,6 +101,10 @@ const handleSelectionAskRequest: RequestHandler = createLazyHandler(async (): Pr
 	return (await import("./handlers/selection-ask-handlers.js")).handleSelectionAskRequest;
 });
 
+const handleGoalRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/goal-handlers.js")).handleGoalRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -128,6 +132,13 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"provider.model.update",
 	"ai.chat",
 	"agent.run.retry",
+	"agent.goal.current",
+	"agent.goal.pause",
+	"agent.goal.resume",
+	"agent.goal.cancel",
+	"agent.goal.extendBudget",
+	"agent.goal.rollback.preview",
+	"agent.goal.rollback.apply",
 	"ai.next_step_hints",
 	"ai.cancel",
 	"ai.toolBudget.continue",
@@ -300,6 +311,13 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["ai.toolBudget.stop", handleChatRequest],
 	["ai.chat", handleChatRequest],
 	["agent.run.retry", handleChatRequest],
+	["agent.goal.current", handleGoalRequest],
+	["agent.goal.pause", handleGoalRequest],
+	["agent.goal.resume", handleGoalRequest],
+	["agent.goal.cancel", handleGoalRequest],
+	["agent.goal.extendBudget", handleGoalRequest],
+	["agent.goal.rollback.preview", handleGoalRequest],
+	["agent.goal.rollback.apply", handleGoalRequest],
 	["ai.next_step_hints", handleChatRequest],
 	["session.reset", handleSessionRequest],
 	["session.info", handleSessionRequest],

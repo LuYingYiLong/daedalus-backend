@@ -188,11 +188,15 @@ import {
 	hydrateAgentRunRuntime,
 	serializeAgentRunRuntime
 } from "./agent-run-recovery.js";
+import { getLatestAgentGoal } from "./goal-controller.js";
 import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
 import { logger } from "../logger.js";
 import { resolveSessionCreateWorkspaceId } from "./session-create-workspace.js";
 import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
+import { createGlobalSkillWorkspace, composeSkillCatalogPrompt } from "../skills/runtime.js";
+import type { SkillWorkspace } from "../skills/types.js";
+import { createWorkspaceToolCatalog, filterToolNamesForWorkspace } from "../tools/tool-catalog.js";
 
 function sessionRpcError(
 	error: unknown,
@@ -294,7 +298,7 @@ type TokenEstimatePart = {
 
 type ContextEstimateParams = {
 	message?: string | undefined;
-	mode?: "agent" | "ask" | "plan" | undefined;
+	mode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	additionalContext?: AdditionalContextItem[] | undefined;
@@ -390,7 +394,7 @@ function createCompressReason(session: ClientSession, activeSession: boolean, me
 	return null;
 }
 
-async function createContextEstimateResult(session: ClientSession, params: ContextEstimateParams | undefined): Promise<Record<string, unknown>> {
+export async function createContextEstimateResult(session: ClientSession, mcpHost: McpHost, params: ContextEstimateParams | undefined): Promise<Record<string, unknown>> {
 	const activeSession: boolean = session.sessionId !== undefined;
 	if (activeSession) {
 		await waitForFullSessionLoad(session);
@@ -405,13 +409,19 @@ async function createContextEstimateResult(session: ClientSession, params: Conte
 	const profile: ModelProfile = resolveModelProfile(provider, model);
 	const providerOptions: ProviderChatOptions | null = await createContextEstimateProviderOptions(session, provider, model);
 	const message: string = params?.message ?? session.workbenchComposer.text;
-	const mode: "agent" | "ask" | "plan" = params?.mode ?? session.workbenchComposer.chatMode ?? "agent";
+	const mode: "agent" | "ask" | "plan" | "goal" = params?.mode ?? session.workbenchComposer.chatMode ?? "agent";
 	const additionalContext: AdditionalContextItem[] = cloneAdditionalContextItems(params?.additionalContext ?? session.workbenchComposer.additionalContext) ?? [];
 	const rawChatParams: AiChatParams = { message, mode, additionalContext };
 	const chatParams: AiChatParams = activeSession
 		? await hydrateImageAttachmentContexts(session.sessionId, rawChatParams)
 		: rawChatParams;
 	const storedUserPrompt: string = await getUserPrompt();
+	const baseSystemPrompt: string = await composeSystemPrompt(
+		undefined,
+		undefined,
+		createProviderRuntimeContextText(provider, model),
+		mode
+	);
 	const systemPrompt: string = await composeSystemPrompt(
 		undefined,
 		storedUserPrompt.length > 0 ? storedUserPrompt : undefined,
@@ -419,28 +429,55 @@ async function createContextEstimateResult(session: ClientSession, params: Conte
 		mode
 	);
 	const additionalContextSection: string = createAdditionalContextPromptSection(chatParams.additionalContext);
-	const systemAndContextPart: TokenEstimatePart = await estimateTextPart(
-		providerOptions,
-		systemPrompt + (additionalContextSection.length > 0 ? `\n\n${additionalContextSection}` : "")
-	);
+	const baseSystemPart = await estimateTextPart(providerOptions, baseSystemPrompt);
+	const fullSystemPart = await estimateTextPart(providerOptions, systemPrompt);
+	const customInstructionsTokens = Math.max(0, fullSystemPart.tokens - baseSystemPart.tokens);
+	const additionalContextPart = await estimateTextPart(providerOptions, additionalContextSection);
+	const skillWorkspace: SkillWorkspace = session.activeWorkspace === undefined
+		? createGlobalSkillWorkspace()
+		: { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath };
+	const skillsPrompt = await composeSkillCatalogPrompt(skillWorkspace);
+	const skillsPart = await estimateTextPart(providerOptions, skillsPrompt);
+	let mcpContext: string = "";
+	try {
+		mcpContext = await createMcpSystemContext(mcpHost, session);
+	} catch {
+		// Context diagnostics should remain available while an optional MCP runtime is unavailable.
+		mcpContext = "";
+	}
+	const mcpContextPart = await estimateTextPart(providerOptions, mcpContext);
+	const allowedToolNames = resolveAllowedToolsForChatParams(chatParams, undefined, session.activeWorkspace?.id);
+	const toolCatalog = createWorkspaceToolCatalog({ workspaceId: session.activeWorkspace?.id, sessionId: session.sessionId });
+	const toolDefinitions = allowedToolNames === undefined
+		? toolCatalog.getDefinitions()
+		: toolCatalog.getDefinitionsForNames(filterToolNamesForWorkspace(allowedToolNames, session.activeWorkspace?.id));
+	const toolDefinitionsPart = await estimateTextPart(providerOptions, JSON.stringify(toolDefinitions));
+	const systemAndContextPart: TokenEstimatePart = {
+		tokens: baseSystemPart.tokens + customInstructionsTokens + skillsPart.tokens + mcpContextPart.tokens + toolDefinitionsPart.tokens + additionalContextPart.tokens,
+		source: fullSystemPart.source === "provider" || mcpContextPart.source === "provider" ? "provider" : "local"
+	};
 	const currentMessagePart: TokenEstimatePart = await estimateCurrentMessagePart(providerOptions, chatParams);
 	const outputReserveTokens: number = profile.defaultOutputReserveTokens;
 	const historyBudgetTokens: number = await computeInputBudget({
 		profile,
 		outputReserveTokens,
-		systemPromptTokens: systemAndContextPart.tokens,
-		mcpContextTokens: 0,
-		toolDefinitionsTokens: 0,
+		systemPromptTokens: baseSystemPart.tokens + customInstructionsTokens + skillsPart.tokens + additionalContextPart.tokens,
+		mcpContextTokens: mcpContextPart.tokens,
+		toolDefinitionsTokens: toolDefinitionsPart.tokens,
 		currentMessageTokens: currentMessagePart.tokens,
 		tokenCounter: await getTokenCounter()
 	});
 	const historyMessages: ChatMessage[] = activeSession ? await selectHistoryForModel(session, historyBudgetTokens) : [];
-	const historyTokens: number = await estimateMessagesTokens(historyMessages);
+	const summaryMessages = historyMessages.filter((item: ChatMessage): boolean => item === session.summaryMessage);
+	const ordinaryHistoryMessages = historyMessages.filter((item: ChatMessage): boolean => item !== session.summaryMessage);
+	const summaryTokens = await estimateMessagesTokens(summaryMessages);
+	const historyTokens: number = await estimateMessagesTokens(ordinaryHistoryMessages);
 	const usedTokens: number = Math.max(
 		0,
 		systemAndContextPart.tokens
 		+ currentMessagePart.tokens
 		+ historyTokens
+		+ summaryTokens
 		+ outputReserveTokens
 		+ profile.safetyMarginTokens
 	);
@@ -452,6 +489,24 @@ async function createContextEstimateResult(session: ClientSession, params: Conte
 	const compressionConfig: ProviderConfigWithSecret | null = activeSession ? await loadProviderConfigWithSecret(session.activeProvider) : null;
 	const hasCompressionKey: boolean = session.providerApiKey !== undefined || compressionConfig?.apiKey !== undefined;
 	const compressReason: string | null = createCompressReason(session, activeSession, session.messages.length, hasCompressionKey);
+	const breakdownSource = [
+		["base_system", baseSystemPart.tokens],
+		["custom_instructions", customInstructionsTokens],
+		["skills", skillsPart.tokens],
+		["mcp_context", mcpContextPart.tokens],
+		["tool_definitions", toolDefinitionsPart.tokens],
+		["history", historyTokens],
+		["summary", summaryTokens],
+		["current_message", currentMessagePart.tokens],
+		["additional_context", additionalContextPart.tokens],
+		["output_reserve", outputReserveTokens],
+		["safety_margin", profile.safetyMarginTokens]
+	] as const;
+	const breakdown = breakdownSource.map(([kind, tokens]) => ({
+		kind,
+		tokens,
+		percent: usedTokens > 0 ? Math.round((tokens / usedTokens) * 1000) / 10 : 0
+	}));
 
 	return {
 		usedTokens,
@@ -459,10 +514,14 @@ async function createContextEstimateResult(session: ClientSession, params: Conte
 		percent,
 		availableTokens,
 		historyTokens,
+		summaryTokens,
 		currentMessageTokens: currentMessagePart.tokens,
 		systemAndContextTokens: systemAndContextPart.tokens,
 		outputReserveTokens,
 		safetyMarginTokens: profile.safetyMarginTokens,
+		breakdown,
+		pressure: percent >= 90 ? "critical" : percent >= 75 ? "high" : percent >= 50 ? "moderate" : "low",
+		largestContributor: [...breakdown].sort((left, right): number => right.tokens - left.tokens)[0] ?? null,
 		modelLabel: `${getProviderDisplayName(provider)} / ${model}`,
 		estimationSource: systemAndContextPart.source === "provider" || currentMessagePart.source === "provider" ? "provider" : "local",
 		canCompress: compressReason === null,
@@ -747,6 +806,18 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					await loadHydratedPendingApprovalStates(session, apiKey);
 				}
 				subscribeSocketToSession(socket, timeline.metadata.id);
+				const godotGoalFallback: boolean = getClientConnection(socket)?.clientType === "godot_plugin"
+					&& timeline.metadata.chatMode === "goal";
+				const serializedWorkbench = serializeWorkbench(session);
+				const clientWorkbench = godotGoalFallback
+					? {
+						...serializedWorkbench,
+						composer: {
+							...(serializedWorkbench.composer as Record<string, unknown>),
+							chatMode: "agent"
+						}
+					}
+					: serializedWorkbench;
 
 				sendJson(socket, {
 					type: "response",
@@ -756,6 +827,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						opened: true,
 						metadata: {
 							...timeline.metadata,
+							chatMode: godotGoalFallback ? "agent" : timeline.metadata.chatMode,
 							approvalMode: session.approvalGateway.getMode(),
 							activeSkillId: undefined,
 							legacySkillRefs: timeline.metadata.activeSkillId === undefined
@@ -766,7 +838,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						pendingGuides: session.pendingGuides.map(serializePendingGuide),
 						messageQueue: serializeMessageQueue(session),
 						selectionAskThreads: await listSelectionAskThreads(timeline.metadata.id),
-						workbench: serializeWorkbench(session),
+						currentGoal: getClientConnection(socket)?.clientType === "godot_plugin"
+							? null
+							: await getLatestAgentGoal(timeline.metadata.id),
+						workbench: clientWorkbench,
 						...serializeAgentRunRuntime(session),
 						workspaceWarning: workspaceWarning ?? null
 					}
@@ -1189,7 +1264,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: true,
-					result: await createContextEstimateResult(session, request.params)
+					result: await createContextEstimateResult(session, mcpHost, request.params)
 				});
 			} catch (error: unknown) {
 				sendJson(socket, {

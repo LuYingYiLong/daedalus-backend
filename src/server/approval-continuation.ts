@@ -385,6 +385,7 @@ export async function sendContinuedAgentResult(
 			throw new Error(`Execution decision received for unknown run ${pendingContinuation.requestId}.`);
 		}
 		const executionDecision: ExecutionDecision = validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		updateAgentRun(socket, session, pendingContinuation.requestId, latestRun.stage, { executionDecision });
 		if (executionDecision.disposition === "blocked") {
 			throw new LightweightActionVerificationError(executionDecision.summary);
 		}

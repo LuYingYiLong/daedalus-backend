@@ -1,6 +1,7 @@
 import type { FileEditBatchDraft, FileEditSnapshot } from "../tools/file-edit-snapshots.js";
 import { logger } from "../logger.js";
 import { getSessionDatabase, parseSqlJson, sqlJson } from "../session/session-database.js";
+import { enqueueGoalFileEditDraft } from "./goal-checkpoints.js";
 
 export type FileEditSummaryItem = {
 	path: string;
@@ -79,6 +80,13 @@ function summarizeBatch(batch: PersistedFileEditBatch): FileEditBatchSummary {
 }
 
 function enqueueBatchWrite(sessionId: string, batch: PersistedFileEditBatch): void {
+	const persistedBatch: PersistedFileEditBatch = {
+		...batch,
+		edits: batch.edits.map((edit: FileEditSnapshot): FileEditSnapshot => {
+			const { beforeBase64: _beforeBase64, afterBase64: _afterBase64, ...persistedEdit } = edit;
+			return persistedEdit;
+		})
+	};
 	batchWriteQueue = batchWriteQueue.then(async (): Promise<void> => {
 		const db = await getSessionDatabase();
 		db.prepare(`
@@ -91,7 +99,7 @@ function enqueueBatchWrite(sessionId: string, batch: PersistedFileEditBatch): vo
 			batch.requestId,
 			batch.toolCallId,
 			batch.toolName,
-			sqlJson(batch),
+			sqlJson(persistedBatch),
 			batch.createdAt
 		);
 	}, async (): Promise<void> => {
@@ -106,7 +114,7 @@ function enqueueBatchWrite(sessionId: string, batch: PersistedFileEditBatch): vo
 			batch.requestId,
 			batch.toolCallId,
 			batch.toolName,
-			sqlJson(batch),
+			sqlJson(persistedBatch),
 			batch.createdAt
 		);
 	});
@@ -143,7 +151,15 @@ export function persistFileEditBatch(
 		createdAt: new Date().toISOString(),
 		edits: draft.edits
 	};
-	inMemoryBatches.set(getBatchCacheKey(sessionId, batch.batchId), batch);
+	const publicBatch: PersistedFileEditBatch = {
+		...batch,
+		edits: batch.edits.map((edit: FileEditSnapshot): FileEditSnapshot => {
+			const { beforeBase64: _beforeBase64, afterBase64: _afterBase64, ...publicEdit } = edit;
+			return publicEdit;
+		})
+	};
+	inMemoryBatches.set(getBatchCacheKey(sessionId, batch.batchId), publicBatch);
+	enqueueGoalFileEditDraft(requestId, draft);
 	enqueueBatchWrite(sessionId, batch);
 	return summarizeBatch(batch);
 }

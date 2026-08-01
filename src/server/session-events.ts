@@ -13,10 +13,11 @@ import { createFallbackSessionTitle, generateSessionTitle, shouldApplyGeneratedS
 import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import type { ClientSession, ThinkingEventBuffer } from "./client-session.js";
 import { sendJson } from "./send-json.js";
-import { broadcastSessionEvent } from "./client-connections.js";
+import { broadcastSessionEvent, broadcastStudioSessionEvent } from "./client-connections.js";
 import { logger } from "../logger.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import { saveAgentRunState } from "../session/agent-run-store.js";
+import { notifyGoalRunState } from "./goal-run-observer.js";
 import {
 	createAgentRunState,
 	transitionAgentRunState,
@@ -617,6 +618,7 @@ function emitLegacyLifecycleAsRunState(params: {
 	}
 
 	params.session.agentRuns.set(next.runId, next);
+	notifyGoalRunState(params.socket, params.session, next);
 	if (params.sessionId.length > 0) {
 		const snapshot: AgentRunState = structuredClone(next);
 		enqueueSessionEventWrite(params.session, async (): Promise<void> => {
@@ -711,6 +713,25 @@ export function sendStudioDirectSessionEvent(
 		runId
 	};
 	sendJson(socket, createEventEnvelope(eventName, eventData, requestId, sessionId));
+}
+
+export function sendStudioPersistentSessionEvent(
+	socket: WebSocket,
+	session: ClientSession,
+	sessionId: string,
+	requestId: string,
+	eventName: CanonicalServerEventName,
+	data: Record<string, unknown>
+): void {
+	const eventData: Record<string, unknown> = { ...data, sessionId };
+	const envelope: ServerEvent = createEventEnvelope(eventName, eventData, requestId, sessionId);
+	if (socket.readyState === WebSocket.OPEN) sendJson(socket, envelope);
+	broadcastStudioSessionEvent(socket, sessionId, envelope);
+	persistSessionEvent(session, eventName, eventData, requestId, sessionId, {
+		eventId: envelope.eventId,
+		sequence: envelope.sequence,
+		createdAt: envelope.createdAt
+	});
 }
 
 export function maybeScheduleSessionTitleGeneration(

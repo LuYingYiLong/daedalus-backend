@@ -17,7 +17,7 @@ type MessageQueuePersistEventName =
 export type QueueMessageInput = {
 	text: string;
 	additionalContext?: AdditionalContextItem[] | undefined;
-	mode?: "agent" | "ask" | "plan" | undefined;
+	mode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	provider?: string | undefined;
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
@@ -80,8 +80,8 @@ function readStatus(value: unknown): QueuedMessageStatus {
 	return "pending";
 }
 
-function readMode(value: unknown): "agent" | "ask" | "plan" | undefined {
-	return value === "agent" || value === "ask" || value === "plan" ? value : undefined;
+function readMode(value: unknown): "agent" | "ask" | "plan" | "goal" | undefined {
+	return value === "agent" || value === "ask" || value === "plan" || value === "goal" ? value : undefined;
 }
 
 function readString(value: unknown): string | undefined {

@@ -68,6 +68,8 @@ export type AgentRunState = {
 	requestId: string;
 	rootRequestId: string;
 	retryOfRunId?: string | undefined;
+	goalId?: string | undefined;
+	goalCycle?: number | undefined;
 	revision: number;
 	intent: AgentRunIntent;
 	scope: AgentRunScope;
@@ -81,6 +83,7 @@ export type AgentRunState = {
 	warnings: string[];
 	terminal: AgentRunTerminal | null;
 	checkpoint: AgentRunCheckpoint;
+	executionDecision?: ExecutionDecision | undefined;
 	interruptedReason?: string | undefined;
 	createdAt: string;
 	updatedAt: string;
@@ -144,6 +147,8 @@ export function createAgentRunState(params: {
 	requestId: string;
 	rootRequestId?: string | undefined;
 	retryOfRunId?: string | undefined;
+	goalId?: string | undefined;
+	goalCycle?: number | undefined;
 	intent?: AgentRunIntent | undefined;
 	scope?: AgentRunScope | undefined;
 	lane?: AgentRunLane | undefined;
@@ -159,6 +164,8 @@ export function createAgentRunState(params: {
 		requestId: params.requestId,
 		rootRequestId: params.rootRequestId ?? params.requestId,
 		retryOfRunId: params.retryOfRunId,
+		goalId: params.goalId,
+		goalCycle: params.goalCycle,
 		revision: 1,
 		intent: params.intent ?? "answer",
 		scope: params.scope ?? "bounded",
@@ -175,6 +182,7 @@ export function createAgentRunState(params: {
 			successfulWriteFingerprints: [],
 			evidence: []
 		},
+		executionDecision: undefined,
 		createdAt: now,
 		updatedAt: now
 	};

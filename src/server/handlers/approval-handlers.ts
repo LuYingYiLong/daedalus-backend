@@ -464,7 +464,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					args: pending.args,
 					succeeded: true,
 					summary: result.content.slice(0, 2000),
-					artifactRefs: approvedToolObservation.artifactRefs
+					artifactRefs: approvedToolObservation.artifactRefs,
+					writeCheckpointCovered: result.fileEditDraft !== undefined
 				}
 			);
 			session.pendingAiContinuations.delete(request.params.approvalId);

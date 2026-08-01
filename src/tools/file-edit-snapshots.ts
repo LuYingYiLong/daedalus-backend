@@ -4,7 +4,7 @@ import path from "node:path";
 import type { McpHost } from "../mcp/mcp-host.js";
 import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
 
-const MAX_FILE_EDIT_SNAPSHOT_BYTES: number = 1024 * 1024;
+const MAX_FILE_EDIT_SNAPSHOT_BYTES: number = 20 * 1024 * 1024;
 
 export type FileEditSnapshot = {
 	path: string;
@@ -14,6 +14,8 @@ export type FileEditSnapshot = {
 	existsAfter: boolean;
 	beforeText?: string | undefined;
 	afterText?: string | undefined;
+	beforeBase64?: string | undefined;
+	afterBase64?: string | undefined;
 	beforeSha256?: string | undefined;
 	afterSha256?: string | undefined;
 	additions: number;
@@ -31,6 +33,7 @@ export type FileEditBatchDraft = {
 type SnapshotRead = {
 	exists: boolean;
 	text?: string | undefined;
+	base64?: string | undefined;
 	sha256?: string | undefined;
 	unavailableReason?: string | undefined;
 };
@@ -129,6 +132,35 @@ function collectTrackedTargets(mcpHost: McpHost, workspaceRoot: string, llmToolN
 	return Array.from(targets.values());
 }
 
+export function isGoalCheckpointCapableToolCall(llmToolName: string, args: Record<string, unknown>): boolean {
+	if (
+		llmToolName === "mcp_godot_set_project_setting"
+		|| llmToolName === "mcp_godot_unset_project_setting"
+	) return true;
+	if ([
+		"mcp_workspace_create_text_file",
+		"mcp_workspace_overwrite_text_file",
+		"mcp_workspace_replace_text_in_file",
+		"mcp_workspace_replace_line_in_file",
+		"mcp_workspace_delete_file",
+		"mcp_image_import_to_workspace",
+		"mcp_image_replace_workspace_asset",
+		"mcp_godot_create_text_file",
+		"mcp_godot_overwrite_text_file",
+		"mcp_godot_replace_text_in_file",
+		"mcp_godot_delete_file",
+		"mcp_godot_create_scene"
+	].includes(llmToolName)) return typeof args.relativePath === "string" && args.relativePath.trim().length > 0;
+	if ([
+		"mcp_godot_add_node_to_scene",
+		"mcp_godot_attach_script_to_node",
+		"mcp_godot_connect_signal_in_scene",
+		"mcp_godot_apply_scene_patch",
+		"mcp_godot_editor_apply_scene_patch"
+	].includes(llmToolName)) return typeof args.scenePath === "string" && args.scenePath.trim().length > 0;
+	return false;
+}
+
 async function readSnapshot(target: TrackedTarget): Promise<SnapshotRead> {
 	try {
 		const fileStat = await stat(target.absolutePath);
@@ -149,7 +181,7 @@ async function readSnapshot(target: TrackedTarget): Promise<SnapshotRead> {
 			return {
 				exists: true,
 				sha256: sha256(bytes),
-				unavailableReason: "binary_file"
+				base64: bytes.toString("base64")
 			};
 		}
 		const text: string = bytes.toString("utf8");
@@ -248,7 +280,9 @@ function createEditSnapshot(target: TrackedTarget, before: SnapshotRead, after: 
 
 	const counts = countLineDiff(before.text, after.text);
 	const unavailableReason: string | undefined = before.unavailableReason ?? after.unavailableReason;
-	const undoable: boolean = unavailableReason === undefined && (!before.exists || before.text !== undefined) && (!after.exists || after.text !== undefined);
+	const undoable: boolean = unavailableReason === undefined
+		&& (!before.exists || before.text !== undefined || before.base64 !== undefined)
+		&& (!after.exists || after.text !== undefined || after.base64 !== undefined);
 	return {
 		path: target.path,
 		absolutePath: target.absolutePath,
@@ -257,6 +291,8 @@ function createEditSnapshot(target: TrackedTarget, before: SnapshotRead, after: 
 		existsAfter: after.exists,
 		beforeText: before.text,
 		afterText: after.text,
+		beforeBase64: before.base64,
+		afterBase64: after.base64,
 		beforeSha256: before.sha256,
 		afterSha256: after.sha256,
 		additions: counts.additions,

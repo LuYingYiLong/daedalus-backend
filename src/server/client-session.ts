@@ -25,7 +25,7 @@ export type QueuedMessage = {
 	id: number;
 	text: string;
 	additionalContext: AiChatParams["additionalContext"];
-	mode?: "agent" | "ask" | "plan" | undefined;
+	mode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
@@ -37,7 +37,7 @@ export type QueuedMessage = {
 
 export type WorkbenchComposer = {
 	text: string;
-	chatMode?: "agent" | "ask" | "plan" | undefined;
+	chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;

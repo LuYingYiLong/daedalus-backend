@@ -18,6 +18,8 @@ import {
 } from "../workflow/agent-run-state.js";
 import type { ClientSession } from "./client-session.js";
 import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
+import { notifyGoalRunState } from "./goal-run-observer.js";
+import { enqueueGoalWriteCheckpointUnavailable } from "./goal-checkpoints.js";
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) {
@@ -68,6 +70,8 @@ export function beginAgentRun(params: {
 	runId?: string | undefined;
 	rootRequestId?: string | undefined;
 	retryOfRunId?: string | undefined;
+	goalId?: string | undefined;
+	goalCycle?: number | undefined;
 }): AgentRunState {
 	const state: AgentRunState = createAgentRunState(params);
 	params.session.agentRuns.set(state.runId, state);
@@ -94,6 +98,7 @@ export function updateAgentRun(
 	const next: AgentRunState = transitionAgentRunState(current, stage, patch);
 	session.agentRuns.set(runId, next);
 	emitAgentRunState(socket, session, next);
+	notifyGoalRunState(socket, session, next);
 	return next;
 }
 
@@ -101,7 +106,8 @@ export function recordAgentRunToolEvent(
 	socket: WebSocket,
 	session: ClientSession,
 	runId: string,
-	event: ToolEvent
+	event: ToolEvent,
+	writeCheckpointCovered: boolean = false
 ): void {
 	const current: AgentRunState | undefined = session.agentRuns.get(runId);
 	if (current === undefined || current.terminal !== null) {
@@ -155,6 +161,15 @@ export function recordAgentRunToolEvent(
 		environmentIssue: eventRecord.environmentIssue === true,
 		observedAt: new Date().toISOString()
 	};
+	if (
+		current.goalId !== undefined
+		&& evidence.status === "succeeded"
+		&& (risk === "write" || risk === "destructive")
+		&& !writeCheckpointCovered
+		&& !(event.type === "tool.result" && event.fileEditDraft !== undefined)
+	) {
+		enqueueGoalWriteCheckpointUnavailable(runId, `untracked_write_tool:${event.toolName}`);
+	}
 	const evidenceWithoutDuplicate: ExecutionEvidence[] = current.checkpoint.evidence
 		.filter((item: ExecutionEvidence): boolean => item.toolCallId !== evidence.toolCallId);
 	evidenceWithoutDuplicate.push(evidence);
@@ -202,6 +217,7 @@ export function recordAgentRunApprovedToolResult(
 		succeeded: boolean;
 		summary?: string | undefined;
 		artifactRefs?: string[] | undefined;
+		writeCheckpointCovered?: boolean | undefined;
 	}
 ): void {
 	const calls: Map<string, { toolName: string; risk: ToolRisk; args: Record<string, unknown> }> =
@@ -234,5 +250,5 @@ export function recordAgentRunApprovedToolResult(
 			toolCallId: params.toolCallId,
 			toolName: params.toolName,
 			message: params.summary ?? "Approved tool execution failed."
-	});
+		}, params.writeCheckpointCovered === true);
 }

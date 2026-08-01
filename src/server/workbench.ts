@@ -30,7 +30,7 @@ export type WorkbenchPatch = {
 	clientSequence?: number | undefined;
 	composer?: {
 		text?: string | undefined;
-		chatMode?: "agent" | "ask" | "plan" | undefined;
+	chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
 		provider?: ProviderId | undefined;
 		model?: string | undefined;
 		reasoningEffort?: string | undefined;

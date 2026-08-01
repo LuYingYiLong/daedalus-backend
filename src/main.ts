@@ -1,5 +1,6 @@
 import type WebSocket from "ws";
 import type { WebSocketServer } from "ws";
+import { markActiveAgentGoalsPaused } from "./session/agent-goal-store.js";
 import { closeLogger, getCurrentBackendLogPath, installProcessLogHandlers, logger } from "./logger.js";
 import { McpHost } from "./mcp/mcp-host.js";
 import { getBackendBuildMetadata } from "./runtime/build-metadata.js";
@@ -22,6 +23,7 @@ import {
 } from "./server/client-connections.js";
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
 import { initializeGodotDocumentationManager } from "./godot-documentation/manager.js";
+import { cleanupAgentGoalCheckpoints } from "./server/goal-checkpoints.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
@@ -82,6 +84,14 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 	}
 
 	const mcpHost: McpHost = new McpHost();
+	try {
+		await markActiveAgentGoalsPaused("backend_restart");
+		await cleanupAgentGoalCheckpoints();
+	} catch (error: unknown) {
+		logger.warn("goal", "startup_pause_failed", {
+			error: error instanceof Error ? error.message : String(error)
+		});
+	}
 	try {
 		await mcpHost.connectAll();
 	} catch (error: unknown) {

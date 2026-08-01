@@ -15,6 +15,7 @@ export type DaedalusPathKey =
 	| "config.godotDocumentation"
 	| "config.approval"
 	| "godotDocumentation.root"
+	| "goalCheckpoints.root"
 	| "skills.root"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
@@ -55,6 +56,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"config.godotDocumentation": join(configRoot, "godot-documentation.json"),
 		"config.approval": join(configRoot, "approval.json"),
 		"godotDocumentation.root": join(root, "godot-docs"),
+		"goalCheckpoints.root": join(root, "goal-checkpoints"),
 		"skills.root": join(root, "skills"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
@@ -120,6 +122,10 @@ export function getGodotDocumentationConfigPath(): string {
 
 export function getGodotDocumentationRoot(): string {
 	return getDaedalusPath("godotDocumentation.root");
+}
+
+export function getGoalCheckpointsRoot(): string {
+	return getDaedalusPath("goalCheckpoints.root");
 }
 
 export function getApprovalConfigPath(): string {

@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 4;
+const DB_SCHEMA_VERSION: number = 5;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -137,6 +137,43 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_agent_run_continuations_session
 			ON agent_run_continuations (session_id, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS agent_goals (
+			goal_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			root_request_id TEXT NOT NULL,
+			revision INTEGER NOT NULL,
+			stage TEXT NOT NULL,
+			state_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_goals_active_session
+			ON agent_goals (session_id) WHERE completed_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_agent_goals_session_updated
+			ON agent_goals (session_id, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS agent_goal_runs (
+			goal_id TEXT NOT NULL REFERENCES agent_goals(goal_id) ON DELETE CASCADE,
+			run_id TEXT NOT NULL REFERENCES agent_runs(run_id) ON DELETE CASCADE,
+			cycle INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(goal_id, run_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_goal_runs_goal_cycle
+			ON agent_goal_runs (goal_id, cycle);
+		CREATE TABLE IF NOT EXISTS agent_goal_file_checkpoints (
+			goal_id TEXT NOT NULL REFERENCES agent_goals(goal_id) ON DELETE CASCADE,
+			workspace_id TEXT,
+			relative_path TEXT NOT NULL,
+			before_sha256 TEXT,
+			after_sha256 TEXT,
+			content_sha256 TEXT,
+			size_bytes INTEGER NOT NULL,
+			metadata_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(goal_id, relative_path)
+		);
 		CREATE TABLE IF NOT EXISTS selection_ask_threads (
 			thread_id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,

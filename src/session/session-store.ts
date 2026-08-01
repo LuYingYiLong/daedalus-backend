@@ -1,7 +1,7 @@
 import { access, mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { getDefaultArchivedSessionsDir, getDefaultSessionsDir } from "../app-paths.js";
+import { getDefaultArchivedSessionsDir, getDefaultSessionsDir, getGoalCheckpointsRoot } from "../app-paths.js";
 import type { ChatMessage } from "../protocol/types.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import { findContainingWorkspaceSourceFolder } from "../workspace/registry.js";
@@ -23,7 +23,7 @@ const SESSIONS_DIR: string = getDefaultSessionsDir();
 const ARCHIVED_SESSIONS_DIR: string = getDefaultArchivedSessionsDir();
 const SESSION_ID_PATTERN: RegExp = /^session-[a-zA-Z0-9_-]+$/;
 
-export type SessionChatMode = "agent" | "ask" | "plan";
+export type SessionChatMode = "agent" | "ask" | "plan" | "goal";
 
 export type SessionMetadata = {
 	id: string;
@@ -1168,12 +1168,15 @@ async function deleteSessionRecord(sessionId: string, archived: boolean): Promis
 	await readSessionMetadata(safeSessionId, archived);
 	const dir: string = archived ? getArchivedSessionDir(safeSessionId) : getSessionDir(safeSessionId);
 	const staging: string = `${dir}.deleting-${Date.now().toString(36)}`;
+	const db: DatabaseSync = await getSessionDatabase();
+	const goalIds = (db.prepare("SELECT goal_id FROM agent_goals WHERE session_id = ?").all(safeSessionId) as Array<{ goal_id: string }>)
+		.map((row): string => row.goal_id);
 	const hadDir: boolean = await pathExists(dir);
 	if (hadDir) {
 		await rename(dir, staging);
 	}
 	try {
-		(await getSessionDatabase()).prepare("DELETE FROM sessions WHERE session_id = ?").run(safeSessionId);
+		db.prepare("DELETE FROM sessions WHERE session_id = ?").run(safeSessionId);
 	} catch (error: unknown) {
 		if (hadDir) {
 			await rename(staging, dir).catch((): void => {});
@@ -1182,6 +1185,9 @@ async function deleteSessionRecord(sessionId: string, archived: boolean): Promis
 	}
 	if (hadDir) {
 		await rm(staging, { recursive: true, force: true });
+	}
+	for (const goalId of goalIds) {
+		await rm(join(getGoalCheckpointsRoot(), goalId), { recursive: true, force: true });
 	}
 	invalidateTimelineCache(safeSessionId);
 }

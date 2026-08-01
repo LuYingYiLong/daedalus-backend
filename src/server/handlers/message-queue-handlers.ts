@@ -16,6 +16,7 @@ import {
 	updateQueuedMessage
 } from "../message-queue.js";
 import { bumpWorkbenchRevision, emitWorkbenchUpdated, serializeWorkbench } from "../workbench.js";
+import { getCurrentAgentGoal, pauseAgentGoal } from "../goal-controller.js";
 
 function sendQueueResult(socket: WebSocket, request: ClientRequest, session: ClientSession, extra: Record<string, unknown> = {}): void {
 	sendJson(socket, {
@@ -51,6 +52,12 @@ export async function handleMessageQueueRequest(socket: WebSocket, request: Clie
 
 	case "message.queue.add": {
 		const item: QueuedMessage = enqueueMessage(session, request.params);
+		if (item.mode !== "goal" && session.sessionId !== undefined) {
+			const activeGoal = await getCurrentAgentGoal(session.sessionId);
+			if (activeGoal !== null && activeGoal.stage !== "paused" && activeGoal.stage !== "pausing") {
+				await pauseAgentGoal(socket, session, activeGoal.goalId, "user_interruption");
+			}
+		}
 		await persistMessageQueueEvent(session, request.id, "message.queue.added", {
 			type: "message.queue.added",
 			item: serializeQueuedMessage(item)

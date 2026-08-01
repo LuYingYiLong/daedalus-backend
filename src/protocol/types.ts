@@ -49,6 +49,7 @@ export type ServerResponse =
 
 export type CanonicalServerEventName =
 	| "agent.run.state"
+	| "agent.goal.state"
 	| "agent.run.started"
 	| "agent.run.snapshot"
 	| "agent.step.started"

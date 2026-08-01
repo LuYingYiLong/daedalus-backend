@@ -65,16 +65,18 @@ export const promptTemplatePaths: readonly string[] = [
 	...promptModeTemplatePaths
 ];
 
-const MODE_PROMPT_PATHS: Partial<Record<"agent" | "ask" | "plan", string>> = {
+const MODE_PROMPT_PATHS: Partial<Record<"agent" | "ask" | "plan" | "goal", string>> = {
 	agent: promptModeTemplatePaths[0],
-	ask: promptModeTemplatePaths[1]
+	ask: promptModeTemplatePaths[1],
+	goal: promptModeTemplatePaths[0]
 };
 const CORE_PROMPT_PATH: string = promptFragmentPaths[0];
 const CUSTOM_INSTRUCTIONS_BOUNDARY_PROMPT_PATH: string = promptFragmentPaths[1];
-const MODE_LABELS: Record<"agent" | "ask" | "plan", string> = {
+const MODE_LABELS: Record<"agent" | "ask" | "plan" | "goal", string> = {
 	agent: "Agent",
 	ask: "Ask",
-	plan: "Plan"
+	plan: "Plan",
+	goal: "Goal"
 };
 
 export function formatRuntimeDate(date: Date): string {
@@ -123,7 +125,7 @@ export async function composeSystemPrompt(
 	promptId: PromptId | undefined,
 	extraSystemPrompt: string | undefined,
 	runtimeContext: string = "",
-	chatMode: "agent" | "ask" | "plan" | undefined = undefined
+	chatMode: "agent" | "ask" | "plan" | "goal" | undefined = undefined
 ): Promise<string> {
 	const templateContent: string = await loadPromptTemplate(promptId ?? DEFAULT_PROMPT_ID);
 	const trimmedExtraPrompt: string = extraSystemPrompt?.trim() ?? "";

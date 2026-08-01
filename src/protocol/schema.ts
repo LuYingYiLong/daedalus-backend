@@ -58,7 +58,8 @@ const providerModelRoutingSchema = z.object({
 	sessionTitle: providerTaskModelRefSchema.nullable().optional(),
 	imageGeneration: providerTaskModelRefSchema.nullable().optional(),
 	gitCommit: providerTaskModelRefSchema.nullable().optional(),
-	commandReview: providerTaskModelRefSchema.nullable().optional()
+	commandReview: providerTaskModelRefSchema.nullable().optional(),
+	goalEvaluator: providerTaskModelRefSchema.nullable().optional()
 });
 
 const providerModelCapabilitiesSchema = z.object({
@@ -89,7 +90,7 @@ const sessionUiMetadataParamsSchema = z.object({
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
 	reasoningEffort: z.string().min(1).max(32).optional(),
-	chatMode: z.enum(["agent", "ask", "plan"]).optional(),
+	chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 	workflowTodoCollapsed: z.boolean().optional()
 }).strict();
@@ -198,7 +199,7 @@ export const additionalContextItemSchema = z.object({
 
 export const aiChatParamsSchema = z.object({
 	message: z.string(),
-	mode: z.enum(["agent", "ask", "plan"]).optional(),
+	mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
 	promptId: promptIdSchema.optional(),
@@ -232,7 +233,7 @@ export const aiChatParamsSchema = z.object({
 const guideTextSchema = z.string().min(1).max(4000);
 const queuedMessageSnapshotShape = {
 	text: z.string().max(20000),
-	mode: z.enum(["agent", "ask", "plan"]).optional(),
+	mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 	provider: providerIdSchema.optional(),
 	model: z.string().min(1).optional(),
 	reasoningEffort: z.string().min(1).max(32).optional(),
@@ -282,7 +283,7 @@ const workbenchPatchParamsSchema = z.object({
 	clientSequence: z.number().int().nonnegative().optional(),
 	composer: z.object({
 		text: z.string().max(20000).optional(),
-		chatMode: z.enum(["agent", "ask", "plan"]).optional(),
+		chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 		provider: providerIdSchema.optional(),
 		model: z.string().min(1).optional(),
 		reasoningEffort: z.string().min(1).max(32).optional(),
@@ -635,6 +636,55 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			runId: z.string().min(1)
 		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.current"),
+		params: z.object({ sessionId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.pause"),
+		params: z.object({ goalId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.resume"),
+		params: z.object({ goalId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.cancel"),
+		params: z.object({ goalId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.extendBudget"),
+		params: z.object({
+			goalId: z.string().min(1),
+			additionalCycles: z.number().int().min(0).max(100),
+			additionalTokens: z.number().int().min(0).max(10_000_000),
+			additionalActiveMinutes: z.number().int().min(0).max(10_080)
+		}).strict().refine((value): boolean => (
+			value.additionalCycles > 0 || value.additionalTokens > 0 || value.additionalActiveMinutes > 0
+		), "At least one budget increase is required.")
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.rollback.preview"),
+		params: z.object({ goalId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.goal.rollback.apply"),
+		params: z.object({ goalId: z.string().min(1), fingerprint: z.string().min(1) }).strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1098,7 +1148,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("session.context.estimate"),
 		params: z.object({
 			message: z.string().max(20000).optional(),
-			mode: z.enum(["agent", "ask", "plan"]).optional(),
+			mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 			provider: providerIdSchema.optional(),
 			model: z.string().min(1).optional(),
 			additionalContext: z.array(additionalContextItemSchema).max(10).optional(),

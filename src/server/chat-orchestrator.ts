@@ -203,7 +203,7 @@ import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-ru
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
 import { startWorkflowExecution } from "./workflow/executor.js";
 import { ensureProviderConfigured } from "../application/provider-session-service.js";
-import { beginSessionRun, findSessionWithPendingToolBudget, finishSessionRun, getActiveSessionRunController, registerSessionRunController } from "./client-connections.js";
+import { beginSessionRun, findSessionWithPendingToolBudget, finishSessionRun, getActiveSessionRunController, getClientConnection, registerSessionRunController } from "./client-connections.js";
 import { logger } from "../logger.js";
 import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
 import { createInitialPlan } from "./plan-mode.js";
@@ -218,6 +218,8 @@ import {
 	recordAgentRunToolEvent,
 	updateAgentRun
 } from "./agent-run-controller.js";
+import { attachGoalRun, continueAgentGoal, createAgentGoal, getCurrentAgentGoal, pauseAgentGoal } from "./goal-controller.js";
+import { getGoalRunBinding } from "./goal-run-observer.js";
 import {
 	validateExecutionDecisionEvidence,
 	type AgentRunState,
@@ -751,6 +753,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			throw new Error(`Execution decision received for unknown run ${runId}.`);
 		}
 		const executionDecision: ExecutionDecision = validateExecutionDecisionEvidence(latestRun, agentResult.decision);
+		updateAgentRun(params.socket, params.session, runId, latestRun.stage, { executionDecision });
 		if (executionDecision.disposition === "use_lightweight") {
 			updateAgentRun(params.socket, params.session, runId, "executing", {
 				scope: "bounded",
@@ -1842,6 +1845,59 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			if (modelSnapshotChanged && session.sessionId !== undefined) {
 				await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
 			}
+			if (params.mode !== "goal" && session.sessionId !== undefined && getGoalRunBinding(request.id) === undefined) {
+				const activeGoal = await getCurrentAgentGoal(session.sessionId);
+				if (activeGoal !== null && activeGoal.stage !== "paused" && activeGoal.stage !== "pausing") {
+					await pauseAgentGoal(socket, session, activeGoal.goalId, "user_interruption");
+				}
+			}
+			if (params.mode === "goal") {
+				if (getClientConnection(socket)?.clientType !== "studio") {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: {
+							code: "goal_mode_studio_only",
+							message: "Goal mode is only available to Daedalus Studio."
+						}
+					});
+					break;
+				}
+				await synchronizeSessionApprovalMode(session);
+				try {
+					const goal = await createAgentGoal({
+						socket,
+						session,
+						mcpHost,
+						runChat: handleChatRequest,
+						requestId: request.id,
+						chatParams: params
+					});
+					clearWorkbenchComposer(session, true);
+					emitWorkbenchUpdated(socket, request.id, session);
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: true,
+						result: { accepted: true, goalId: goal.goalId }
+					});
+					continueAgentGoal(goal.goalId);
+				} catch (error: unknown) {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: {
+							code: typeof error === "object" && error !== null && "code" in error
+								? String((error as { code?: unknown }).code ?? "goal_start_failed")
+								: "goal_start_failed",
+							message: error instanceof Error ? error.message : String(error)
+						}
+					});
+				}
+				break;
+			}
 			const webSearchEnabled: boolean = await isWebSearchEnabled();
 			const webSearchAvailable: boolean = webSearchEnabled ? await isWebSearchToolAvailable() : false;
 			if (webSearchEnabled && !webSearchAvailable) {
@@ -1914,6 +1970,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			registerSessionRunController(runSessionId, request.id, abortController);
 			const runStartedAtMs: number = Date.now();
 			const turnStartedAt: string = new Date().toISOString();
+			const goalBinding = getGoalRunBinding(request.id);
 			let persistedParams: AiChatParams = params;
 			let queuedRunForcedStatus: "failed" | "cancelled" | undefined;
 			await setQueueStatusForRun(socket, request.id, session, queueItemId, "sending");
@@ -1927,16 +1984,19 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				const retrySourceRun: AgentRunState | undefined = params.retryOfRunId === undefined
 					? undefined
 					: getAgentRun(session, params.retryOfRunId);
-				beginAgentRun({
+				const startedRun = beginAgentRun({
 					socket,
 					session,
 					sessionId: runSessionId,
 					requestId: request.id,
 					runId: request.id,
-					rootRequestId: retrySourceRun?.rootRequestId,
+					rootRequestId: goalBinding?.rootRequestId ?? retrySourceRun?.rootRequestId,
 					retryOfRunId: retrySourceRun?.runId,
+					goalId: goalBinding?.goalId,
+					goalCycle: goalBinding?.cycle,
 					title: params.message.trim().slice(0, 120) || "Daedalus task"
 				});
+				await attachGoalRun(startedRun);
 				if (retrySourceRun !== undefined) {
 					updateAgentRun(socket, session, request.id, "routing", {
 						checkpoint: structuredClone(retrySourceRun.checkpoint),
@@ -2092,17 +2152,19 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						effectiveParams.additionalContext
 					);
 				}
-				await maybeAutoCompressContextBeforeRun(
-					socket,
-					request.id,
-					session,
-					apiKey,
-					options,
-					effectiveParams,
-					systemPrompt,
-					skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection,
-					abortController.signal
-				);
+				if ((goalBinding?.cycle ?? 1) <= 1) {
+					await maybeAutoCompressContextBeforeRun(
+						socket,
+						request.id,
+						session,
+						apiKey,
+						options,
+						effectiveParams,
+						systemPrompt,
+						skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection,
+						abortController.signal
+					);
+				}
 				const historyBudgetTokens: number = await computeHistoryBudget(
 					session.modelProfile,
 					options,
@@ -2111,7 +2173,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection,
 					abortController.signal
 				);
-				const history: ChatMessage[] = await selectHistoryForModel(session, historyBudgetTokens, request.id);
+				const history: ChatMessage[] = (goalBinding?.cycle ?? 1) > 1
+					? []
+					: await selectHistoryForModel(session, historyBudgetTokens, request.id);
 				const planningContext: string = [
 					skillPrompt,
 					skillCatalogPrompt,

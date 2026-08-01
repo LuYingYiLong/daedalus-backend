@@ -7,6 +7,8 @@ import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
 import { commandRequiresUserApproval, reviewWorkspaceCommand } from "./command-review.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import { getGoalRunBinding } from "../server/goal-run-observer.js";
+import { isGoalCheckpointCapableToolCall } from "./file-edit-snapshots.js";
 
 export type PendingApproval = {
 	approvalId: string;
@@ -80,8 +82,23 @@ export class ApprovalGateway {
 		workspaceId?: string | undefined,
 		context: { requestId?: string | undefined; sessionId?: string | undefined } = {}
 	): Promise<ApprovalDecision> {
-		if (this.mode === "auto-safe" && llmToolName === "mcp_terminal_run_command") {
-			const deterministicDecision: ApprovalDecision = evaluateToolCall(this.mode, llmToolName, args, workspaceId);
+		const requestId: string | undefined = context.requestId;
+		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
+		const effectiveMode: ApprovalMode = goalBinding?.approvalMode ?? this.mode;
+		const risk = getEffectiveToolPolicy(llmToolName, args, workspaceId)?.risk;
+		if (
+			requestId !== undefined
+			&& goalBinding !== undefined
+			&& (risk === "write" || risk === "destructive")
+			&& !isGoalCheckpointCapableToolCall(llmToolName, args)
+		) {
+			return {
+				action: "request_approval",
+				reason: "This Goal write cannot be included in a complete file rollback checkpoint. Continuing will make full Goal rollback unavailable."
+			};
+		}
+		if (effectiveMode === "auto-safe" && llmToolName === "mcp_terminal_run_command") {
+			const deterministicDecision: ApprovalDecision = evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 			if (
 				deterministicDecision.action === "deny"
 				|| (
@@ -115,7 +132,7 @@ export class ApprovalGateway {
 			}
 			return { action: "request_approval", reason: review.reason, review: review.audit };
 		}
-		return evaluateToolCall(this.mode, llmToolName, args, workspaceId);
+		return evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 	}
 
 	requestApproval(

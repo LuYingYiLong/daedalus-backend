@@ -17,6 +17,7 @@ import {
 	waitForSessionEventPersistence
 } from "./session-events.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
+import { pauseAgentGoalAfterDisconnect } from "./goal-controller.js";
 import { getClientConnection, getConnectionSession, hasOtherConnectionsForSession, registerClientConnection, unregisterClientConnection } from "./client-connections.js";
 import { withMcpRequestContext } from "../mcp/request-context.js";
 import { logger } from "../logger.js";
@@ -250,7 +251,13 @@ function handleSocketMessage(
 
 function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: McpHost, remoteAddress: string): void {
 	const connectionSession: ClientSession = getConnectionSession(socket) ?? session;
+	const disconnectedClientType = getClientConnection(socket)?.clientType;
 	const hasOtherConnections: boolean = hasOtherConnectionsForSession(socket, connectionSession.sessionId);
+	if (disconnectedClientType === "studio" && connectionSession.sessionId !== undefined) {
+		void pauseAgentGoalAfterDisconnect(connectionSession.sessionId).catch((error: unknown): void => {
+			logger.warn("goal", "disconnect_pause_failed", { error: error instanceof Error ? error.message : String(error) });
+		});
+	}
 	detachEditorBridgeSocket(socket, mcpHost);
 	unregisterClientConnection(socket);
 	if (!hasOtherConnections) {

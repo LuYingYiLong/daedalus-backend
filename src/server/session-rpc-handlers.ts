@@ -39,7 +39,6 @@ import {
 	checkSessionIntegrity,
 	updateSessionMetadata,
 	getSessionTimelineNavigationIndex, openSessionRecentTimeline, openSessionTimelinePage, openSessionTimelinePageAfter,
-	openSessionTimelineSearchIndexPage,
 	type SessionChatMode,
 	type SessionMetadata,
 	type SessionSummary,
@@ -197,6 +196,7 @@ import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
 import { createGlobalSkillWorkspace, composeSkillCatalogPrompt } from "../skills/runtime.js";
 import type { SkillWorkspace } from "../skills/types.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace } from "../tools/tool-catalog.js";
+import { SessionSearchError, sessionSearchService } from "../session-search/service.js";
 
 function sessionRpcError(
 	error: unknown,
@@ -954,7 +954,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 		}
 
-		case "session.timeline.search.index": {
+		case "session.timeline.search.index":
+		case "session.timeline.search.start":
+		case "session.timeline.search.page":
+		case "session.timeline.search.cancel": {
 			if (getClientConnection(socket)?.clientType !== "studio") {
 				sendJson(socket, {
 					type: "response",
@@ -968,11 +971,31 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				break;
 			}
 			try {
-				const page = await openSessionTimelineSearchIndexPage(
-					request.params.sessionId,
-					request.params.afterOffset ?? 0,
-					request.params.limit ?? 120
-				);
+				const connectionId: string = getClientConnection(socket)!.connectionId;
+				if (request.method === "session.timeline.search.cancel") {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: true,
+						result: { cancelled: sessionSearchService.cancel(connectionId, request.params.searchId) }
+					});
+					break;
+				}
+				const page = request.method === "session.timeline.search.start"
+					? await sessionSearchService.start(connectionId, request.params.sessionId)
+					: request.method === "session.timeline.search.page"
+						? await sessionSearchService.page(
+							connectionId,
+							request.params.searchId,
+							request.params.afterOffset ?? 0,
+							request.params.limit ?? 400
+						)
+						: await sessionSearchService.compatibilityPage(
+							connectionId,
+							request.params.sessionId,
+							request.params.afterOffset ?? 0,
+							request.params.limit ?? 120
+						);
 				sendJson(socket, {
 					type: "response",
 					id: request.id,
@@ -987,7 +1010,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: sessionRpcError(error, "session_timeline_search_index_error", "Failed to load session search index")
+					error: error instanceof SessionSearchError
+						? { code: error.code, message: error.message }
+						: sessionRpcError(error, "session_timeline_search_index_error", "Failed to load session search index")
 				});
 			}
 			break;

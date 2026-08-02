@@ -174,6 +174,50 @@ test("session timeline search index includes only user and assistant markdown wh
 	});
 });
 
+test("session timeline search excludes the collapsed execution transcript before a summary", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Summarized search session");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "Run the task",
+			requestId: "req-summary-search",
+			createdAt: "2026-08-02T00:00:00.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-summary-search", "agent.message.delta", {
+			text: "Hidden impact from the execution transcript."
+		}, {
+			eventId: "event-summary-search-delta",
+			sequence: 1,
+			createdAt: "2026-08-02T00:00:01.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-summary-search", "agent.summary.started", {
+			runId: "run-summary-search",
+			stepId: "summary",
+			stepRunId: "summary-search",
+			foldTitle: "Process"
+		}, {
+			eventId: "event-summary-search-start",
+			sequence: 2,
+			createdAt: "2026-08-02T00:00:02.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-summary-search", "agent.message.done", {
+			text: "Visible impact in the final answer."
+		}, {
+			eventId: "event-summary-search-done",
+			sequence: 3,
+			createdAt: "2026-08-02T00:00:03.000Z"
+		});
+
+		const page = await store.openSessionTimelineSearchIndexPage(metadata.id, 0, 500);
+		const assistant = page.documents.find((document): boolean => document.role === "assistant");
+		assert.deepEqual(assistant?.markdownSegments, ["Visible impact in the final answer."]);
+
+		const projection = await store.buildSessionSearchProjectionSnapshot(metadata.id);
+		const projectedAssistant = projection.blocks.find((block): boolean => block.role === "assistant")?.document;
+		assert.deepEqual(projectedAssistant?.markdownSegments, ["Visible impact in the final answer."]);
+	});
+});
+
 test("session store persists workspace metadata snapshot", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const metadata = await store.createSession("Workspace session", undefined, undefined, {

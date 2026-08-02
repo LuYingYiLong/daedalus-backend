@@ -3,6 +3,7 @@ import { SessionRuntimeRegistry } from "../application/session-runtime-registry.
 import type { ServerEvent } from "../protocol/types.js";
 import type { ClientSession } from "./client-session.js";
 import { sendJson } from "./send-json.js";
+import { sessionSearchService } from "../session-search/service.js";
 
 export type ClientType = "godot_plugin" | "studio" | "cli" | "smoke" | "external_mcp" | "legacy";
 
@@ -85,6 +86,7 @@ export function unregisterClientConnection(socket: WebSocket): ClientConnectionI
 		}
 	}
 	socketConnections.delete(socket);
+	sessionSearchService.releaseOwner(record.connectionId);
 	return toPublicInfo(record);
 }
 
@@ -291,6 +293,7 @@ export function beginSessionRun(sessionId: string | undefined, requestId: string
 	}
 
 	activeSessionRuns.set(sessionId, requestId);
+	sessionSearchService.pauseBackgroundBuilds();
 	return { ok: true };
 }
 

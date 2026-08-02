@@ -17,6 +17,7 @@ import {
 	getPersonalSkillsDir,
 	getProviderConfigPath,
 	getProviderCustomizationsPath,
+	getSessionSearchDatabasePath,
 	getSkillSettingsPath,
 	getTerminalJobsDir,
 	getToolExecutionLedgerPath,
@@ -56,6 +57,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getTerminalJobsDir(), join(root, "terminal-jobs"));
 		assert.equal(getToolExecutionLedgerPath(), join(root, "tool-executions.jsonl"));
 		assert.equal(getUsageMetricsDbPath(), join(root, "metrics", "usage.sqlite"));
+		assert.equal(getSessionSearchDatabasePath(), join(root, "cache", "session-search.sqlite"));
 		assert.equal(getGodotDocumentationRoot(), join(root, "godot-docs"));
 
 		assert.equal(getDaedalusPath("config.workspaces"), getDefaultWorkspaceConfigPath());
@@ -78,6 +80,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("terminalJobs.root"), getTerminalJobsDir());
 		assert.equal(getDaedalusPath("toolExecution.ledger"), getToolExecutionLedgerPath());
 		assert.equal(getDaedalusPath("metrics.usageDb"), getUsageMetricsDbPath());
+		assert.equal(getDaedalusPath("cache.sessionSearch"), getSessionSearchDatabasePath());
 		assert.equal(getDaedalusPath("godotDocumentation.root"), getGodotDocumentationRoot());
 	} finally {
 		if (previousUserProfile === undefined) {

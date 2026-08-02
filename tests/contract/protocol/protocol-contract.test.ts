@@ -48,6 +48,9 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"message.queue.reorder",
 	"session.context.estimate",
 	"session.timeline.search.index",
+	"session.timeline.search.start",
+	"session.timeline.search.page",
+	"session.timeline.search.cancel",
 	"session.timeline.index",
 	"session.guide.reorder",
 	"session.integrity.check",
@@ -208,6 +211,33 @@ test("session.timeline.search.index accepts a paged Studio search request", (): 
 			sessionId: "session-test",
 			limit: 501
 		}
+	}).success, false);
+});
+
+test("session timeline search lifecycle validates start, page and cancel requests", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-start",
+		method: "session.timeline.search.start",
+		params: { sessionId: "session-test" }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-page",
+		method: "session.timeline.search.page",
+		params: { searchId: "search-1", afterOffset: 400, limit: 500 }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-cancel",
+		method: "session.timeline.search.cancel",
+		params: { searchId: "search-1" }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "timeline-search-page-invalid",
+		method: "session.timeline.search.page",
+		params: { searchId: "search-1", limit: 501 }
 	}).success, false);
 });
 

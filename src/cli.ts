@@ -145,6 +145,10 @@ export async function main(args: readonly string[] = process.argv.slice(2)): Pro
 		await runMcp(subcommand);
 		return;
 	}
+	if (command === "internal" && subcommand === "session-search-indexer") {
+		await (await import("./session-search/indexer-process.js")).runSessionSearchIndexerProcess();
+		return;
+	}
 	if (command === "help" || command === "--help" || command === "-h") {
 		printUsage();
 		return;

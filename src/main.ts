@@ -24,6 +24,8 @@ import {
 import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/metrics-store.js";
 import { initializeGodotDocumentationManager } from "./godot-documentation/manager.js";
 import { cleanupAgentGoalCheckpoints } from "./server/goal-checkpoints.js";
+import { startSessionSearchPrebuildScheduler, stopSessionSearchPrebuildScheduler } from "./session-search/scheduler.js";
+import { sessionSearchService } from "./session-search/service.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
@@ -146,9 +148,11 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 			throw error;
 		}
 	}
+	startSessionSearchPrebuildScheduler();
 	let closePromise: Promise<void> | null = null;
 	const close = async (reason: string = "requested"): Promise<void> => {
 		closePromise ??= (async (): Promise<void> => {
+			stopSessionSearchPrebuildScheduler();
 			logger.info("backend", "shutdown_started", { reason });
 			const timeout = setTimeout((): void => {
 				logger.error("backend", "shutdown_timeout", new Error("Backend graceful shutdown timed out."));
@@ -161,6 +165,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 				await Promise.all([
 					closeSessionDatabases(),
 					closeUsageMetricsStore(),
+					sessionSearchService.close(),
 					...(runtimeConnectionId === null
 						? []
 						: [clearRuntimeConnection(runtimeConnectionId)])

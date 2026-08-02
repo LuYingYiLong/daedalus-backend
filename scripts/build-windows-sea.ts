@@ -231,6 +231,29 @@ async function runExecutableSelfTests(payloadManifest: BackendPayloadManifestV1)
 	}
 }
 
+async function runSessionSearchIndexerSmokeTest(): Promise<void> {
+	const profilePath: string = resolve(WORK_ROOT, "session-search-smoke-profile");
+	await mkdir(profilePath, { recursive: true });
+	const child: ChildProcessWithoutNullStreams = spawn(
+		EXECUTABLE_PATH,
+		["internal", "session-search-indexer"],
+		{
+			cwd: dirname(EXECUTABLE_PATH),
+			windowsHide: true,
+			env: { ...process.env, USERPROFILE: profilePath, DAEDALUS_LOG_CONSOLE: "0" },
+			stdio: ["pipe", "pipe", "pipe"]
+		}
+	);
+	let stderr: string = "";
+	child.stderr.on("data", (chunk: Buffer): void => { stderr += chunk.toString("utf8"); });
+	child.stdin.write(`${JSON.stringify({ id: "sea-search-cancel", type: "cancel", sessionId: "session-sea-smoke" })}\n`);
+	child.stdin.write(`${JSON.stringify({ id: "sea-search-shutdown", type: "shutdown" })}\n`);
+	const exitCode: number | null = await waitForChildExit(child, 15_000);
+	if (exitCode !== 0) {
+		throw new Error(`SEA session search indexer smoke test failed with ${String(exitCode)}: ${stderr}`);
+	}
+}
+
 async function reservePort(): Promise<number> {
 	const server = createServer();
 	await new Promise<void>((resolveReady, reject): void => {
@@ -590,6 +613,7 @@ async function main(): Promise<void> {
 	const payloadManifestText: string = `${JSON.stringify(payloadManifest, null, 2)}\n`;
 	await writeFile(PAYLOAD_MANIFEST_PATH, payloadManifestText, "utf8");
 	await runExecutableSelfTests(payloadManifest);
+	await runSessionSearchIndexerSmokeTest();
 	await runMcpSmokeTests();
 	await runServerSmokeTest();
 	await runSharedRuntimeSmokeTest(manifest.version);

@@ -20,6 +20,7 @@ export type DaedalusPathKey =
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
+	| "cache.sessionSearch"
 	| "logs.root"
 	| "backend.connection"
 	| "backend.runtimeRoot"
@@ -61,6 +62,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),
+		"cache.sessionSearch": join(root, "cache", "session-search.sqlite"),
 		"logs.root": join(root, "logs"),
 		"backend.connection": join(root, "backend", "connection.json"),
 		"backend.runtimeRoot": join(root, "backend", "runtime"),
@@ -142,6 +144,10 @@ export function getDefaultArchivedSessionsDir(): string {
 
 export function getSessionsDatabasePath(): string {
 	return getDaedalusPath("sessions.database");
+}
+
+export function getSessionSearchDatabasePath(): string {
+	return getDaedalusPath("cache.sessionSearch");
 }
 
 export function getLogsDir(): string {

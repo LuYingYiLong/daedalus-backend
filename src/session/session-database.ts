@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 6;
+const DB_SCHEMA_VERSION: number = 7;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -38,6 +38,14 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_sessions_archive_updated ON sessions (archived_at, updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions (workspace_id, archived_at);
+		CREATE TABLE IF NOT EXISTS session_search_source_state (
+			session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
+			revision INTEGER NOT NULL DEFAULT 0,
+			rebuild_epoch INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL
+		);
+		INSERT OR IGNORE INTO session_search_source_state(session_id, revision, rebuild_epoch, updated_at)
+		SELECT session_id, 0, 0, updated_at FROM sessions;
 		CREATE TABLE IF NOT EXISTS messages (
 			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -210,6 +218,49 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_selection_ask_messages_thread
 			ON selection_ask_messages (thread_id, sequence);
+		CREATE TRIGGER IF NOT EXISTS trg_search_session_insert
+		AFTER INSERT ON sessions BEGIN
+			INSERT OR IGNORE INTO session_search_source_state(session_id, revision, rebuild_epoch, updated_at)
+			VALUES (NEW.session_id, 0, 0, NEW.updated_at);
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_message_insert
+		AFTER INSERT ON messages BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1, updated_at = NEW.created_at
+			WHERE session_id = NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_message_update
+		AFTER UPDATE ON messages BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1, rebuild_epoch = rebuild_epoch + 1, updated_at = NEW.created_at
+			WHERE session_id = NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_message_delete
+		AFTER DELETE ON messages BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1, rebuild_epoch = rebuild_epoch + 1, updated_at = datetime('now')
+			WHERE session_id = OLD.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_timeline_event_insert
+		AFTER INSERT ON session_events WHEN NEW.channel = 'timeline' BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1,
+				rebuild_epoch = rebuild_epoch + CASE WHEN NEW.event_name LIKE 'plan.%' THEN 1 ELSE 0 END,
+				updated_at = NEW.created_at
+			WHERE session_id = NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_timeline_event_update
+		AFTER UPDATE ON session_events WHEN OLD.channel = 'timeline' OR NEW.channel = 'timeline' BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1, rebuild_epoch = rebuild_epoch + 1, updated_at = NEW.created_at
+			WHERE session_id = NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_timeline_event_delete
+		AFTER DELETE ON session_events WHEN OLD.channel = 'timeline' BEGIN
+			UPDATE session_search_source_state
+			SET revision = revision + 1, rebuild_epoch = rebuild_epoch + 1, updated_at = datetime('now')
+			WHERE session_id = OLD.session_id;
+		END;
 		DROP TABLE IF EXISTS event_aliases;
 		DROP TABLE IF EXISTS legacy_imports;
 		DROP TABLE IF EXISTS migration_issues;

@@ -980,6 +980,32 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.timeline.search.start"),
+		params: z.object({
+			sessionId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.timeline.search.page"),
+		params: z.object({
+			searchId: z.string().min(1),
+			afterOffset: z.number().int().min(0).optional(),
+			limit: z.number().int().positive().max(500).optional(),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.timeline.search.cancel"),
+		params: z.object({
+			searchId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.selectionAsk.list"),
 		params: z.object({
 			sessionId: z.string().min(1)

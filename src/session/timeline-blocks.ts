@@ -134,6 +134,24 @@ export type TimelineBodyPart =
 	| TimelineInlineDiffPart
 	| TimelineImageGenerationPart;
 
+/**
+ * Returns the assistant Markdown visible in the normal message body. Parts
+ * before a summary marker belong to the collapsed execution transcript and
+ * must not create search matches that cannot be located in the default view.
+ */
+export function getVisibleAssistantMarkdownSegments(parts: readonly TimelineBodyPart[]): string[] {
+	const summaryStartIndex: number = parts.findIndex(
+		(part: TimelineBodyPart): boolean => part.type === "summary_start"
+	);
+	const visibleParts: readonly TimelineBodyPart[] = summaryStartIndex < 0
+		? parts
+		: parts.slice(summaryStartIndex + 1);
+	return visibleParts
+		.filter((part): part is TimelineMarkdownPart => part.type === "markdown")
+		.map((part: TimelineMarkdownPart): string => part.text)
+		.filter((text: string): boolean => text.length > 0);
+}
+
 export type TimelineBuildResult = {
 	blocks: TimelineBlock[];
 	eventCount: number;

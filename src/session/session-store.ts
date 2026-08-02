@@ -14,10 +14,12 @@ import {
 } from "./session-database.js";
 import {
 	buildCanonicalTimelineBlocks,
+	getVisibleAssistantMarkdownSegments,
 	type TimelineBlock,
 	type TimelinePlanApproval,
 	type TimelinePlanClarification
 } from "./timeline-blocks.js";
+import { notifySessionDeleted } from "../session-search/lifecycle.js";
 
 const SESSIONS_DIR: string = getDefaultSessionsDir();
 const ARCHIVED_SESSIONS_DIR: string = getDefaultArchivedSessionsDir();
@@ -138,6 +140,26 @@ export type SessionTimelineSearchIndexPage = {
 	documents: SessionTimelineSearchDocument[];
 };
 
+export type SessionSearchSourceState = {
+	sessionId: string;
+	revision: number;
+	rebuildEpoch: number;
+	updatedAt: string;
+};
+
+export type SessionSearchProjectionBlock = {
+	blockOffset: number;
+	blockKey: string;
+	requestId: string;
+	role: "user" | "assistant";
+	document: SessionTimelineSearchDocument | null;
+};
+
+export type SessionSearchProjectionSnapshot = {
+	source: SessionSearchSourceState;
+	blocks: SessionSearchProjectionBlock[];
+};
+
 type RewindableEvent = {
 	requestId: string;
 	createdAt: string;
@@ -185,6 +207,32 @@ function assertSafeSessionId(sessionId: string): string {
 		throw new Error(`Invalid session id: ${sessionId}`);
 	}
 	return sessionId;
+}
+
+function readSearchSourceStateFromDatabase(db: DatabaseSync, sessionId: string): SessionSearchSourceState {
+	const row = db.prepare(`
+		SELECT revision, rebuild_epoch, updated_at
+		FROM session_search_source_state WHERE session_id = ?
+	`).get(sessionId) as Record<string, unknown> | undefined;
+	if (row === undefined) {
+		throw new Error(`Session search source state not found: ${sessionId}`);
+	}
+	return {
+		sessionId,
+		revision: Number(row.revision),
+		rebuildEpoch: Number(row.rebuild_epoch),
+		updatedAt: String(row.updated_at)
+	};
+}
+
+export async function readSessionSearchSourceState(sessionId: string): Promise<SessionSearchSourceState> {
+	const safeSessionId: string = assertSafeSessionId(sessionId);
+	const db: DatabaseSync = await getSessionDatabase();
+	rowMetadata(
+		db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ?").get(safeSessionId) as Record<string, unknown> | undefined,
+		safeSessionId
+	);
+	return readSearchSourceStateFromDatabase(db, safeSessionId);
 }
 
 export function getSessionDir(sessionId: string): string {
@@ -754,10 +802,7 @@ export async function openSessionTimelineSearchIndexPage(
 				}];
 			}
 
-			const markdownSegments: string[] = block.bodyParts
-				.filter((part): part is Extract<typeof part, { type: "markdown" }> => part.type === "markdown")
-				.map((part): string => part.text)
-				.filter((text: string): boolean => text.length > 0);
+			const markdownSegments: string[] = getVisibleAssistantMarkdownSegments(block.bodyParts);
 			return markdownSegments.length === 0 ? [] : [{
 				blockOffset,
 				requestId: block.requestId,
@@ -772,6 +817,71 @@ export async function openSessionTimelineSearchIndexPage(
 		blockCount: page.blockCount,
 		nextOffset: nextOffsetCandidate < page.blockCount ? nextOffsetCandidate : null,
 		documents
+	};
+}
+
+/**
+ * Builds the canonical search projection in the dedicated indexer process.
+ * This deliberately hydrates the complete timeline; callers in the Backend
+ * request process must use the persistent search cache instead.
+ */
+export async function buildSessionSearchProjectionSnapshot(sessionId: string): Promise<SessionSearchProjectionSnapshot> {
+	const safeSessionId: string = assertSafeSessionId(sessionId);
+	const db: DatabaseSync = await getSessionDatabase();
+	let metadata: SessionMetadata;
+	let source: SessionSearchSourceState;
+	let messages: StoredMessage[];
+	let events: StoredSessionEvent[];
+	db.exec("BEGIN");
+	try {
+		metadata = rowMetadata(
+			db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ?").get(safeSessionId) as Record<string, unknown> | undefined,
+			safeSessionId
+		);
+		source = readSearchSourceStateFromDatabase(db, safeSessionId);
+		messages = readMessages(db, safeSessionId);
+		events = readEvents(db, safeSessionId);
+		db.exec("COMMIT");
+	} catch (error: unknown) {
+		db.exec("ROLLBACK");
+		throw error;
+	}
+	const timeline = buildCanonicalTimelineBlocks({
+		metadata,
+		messages,
+		events
+	});
+	return {
+		source,
+		blocks: timeline.blocks.map((block: TimelineBlock, blockOffset: number): SessionSearchProjectionBlock => {
+			if (block.type === "user") {
+				return {
+					blockOffset,
+					blockKey: timelineBlockKey(block.requestId, block.type),
+					requestId: block.requestId,
+					role: "user",
+					document: block.content.length === 0 ? null : {
+						blockOffset,
+						requestId: block.requestId,
+						role: "user",
+						markdownSegments: [block.content]
+					}
+				};
+			}
+			const markdownSegments: string[] = getVisibleAssistantMarkdownSegments(block.bodyParts);
+			return {
+				blockOffset,
+				blockKey: timelineBlockKey(block.requestId, block.type),
+				requestId: block.requestId,
+				role: "assistant",
+				document: markdownSegments.length === 0 ? null : {
+					blockOffset,
+					requestId: block.requestId,
+					role: "assistant",
+					markdownSegments
+				}
+			};
+		})
 	};
 }
 
@@ -1190,6 +1300,7 @@ async function deleteSessionRecord(sessionId: string, archived: boolean): Promis
 		await rm(join(getGoalCheckpointsRoot(), goalId), { recursive: true, force: true });
 	}
 	invalidateTimelineCache(safeSessionId);
+	notifySessionDeleted(safeSessionId);
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

@@ -5,7 +5,7 @@ import { isPlanSafeDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { executeLlmToolWithIdempotency, getLlmToolExecutionIdentity } from "./tool-idempotency.js";
 import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
-import { commandRequiresUserApproval, reviewWorkspaceCommand } from "./command-review.js";
+import { commandRequiresUserApproval, isBoundedWorkspaceVerificationCommand, reviewWorkspaceCommand } from "./command-review.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
 import { isGoalCheckpointCapableToolCall } from "./file-edit-snapshots.js";
@@ -119,7 +119,7 @@ export class ApprovalGateway {
 			if (hardRiskReason !== null) {
 				return { action: "request_approval", reason: hardRiskReason };
 			}
-			const review = await reviewWorkspaceCommand({
+			const reviewInput = {
 				toolCallId,
 				requestId: context.requestId,
 				sessionId: context.sessionId,
@@ -130,12 +130,28 @@ export class ApprovalGateway {
 					? Object.keys(args.env as Record<string, unknown>).sort()
 					: [],
 				reason: typeof args.reason === "string" ? args.reason : undefined
-			});
+			};
+			const review = await reviewWorkspaceCommand(reviewInput);
 			if (review.decision === "allow") {
 				return { action: "allow", review: review.audit };
 			}
 			if (review.decision === "deny") {
 				return { action: "deny", reason: review.reason, review: review.audit };
+			}
+			if (isBoundedWorkspaceVerificationCommand(reviewInput)) {
+				const reason: string = typeof args.reason === "string" && args.reason.trim().length > 0
+					? args.reason.trim()
+					: "Run a bounded headless Godot verification inside the active workspace.";
+				return {
+					action: "allow",
+					review: {
+						source: "policy",
+						decision: "allow",
+						reason,
+						provider: review.audit.provider,
+						model: review.audit.model
+					}
+				};
 			}
 			return { action: "request_approval", reason: review.reason, review: review.audit };
 		}

@@ -53,10 +53,31 @@ export async function readLatestAgentGoal(sessionId: string): Promise<AgentGoalS
 	const db: DatabaseSync = await getSessionDatabase();
 	const row = db.prepare(`
 		SELECT state_json FROM agent_goals
-		WHERE session_id = ?
+		WHERE session_id = ? AND dismissed_at IS NULL
 		ORDER BY updated_at DESC LIMIT 1
 	`).get(sessionId) as Record<string, unknown> | undefined;
 	return row === undefined ? null : parseSqlJson<AgentGoalState>(row.state_json);
+}
+
+export async function dismissAgentGoalState(goalId: string): Promise<boolean> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const row = db.prepare(`
+		SELECT completed_at, dismissed_at
+		FROM agent_goals
+		WHERE goal_id = ?
+	`).get(goalId) as { completed_at: string | null; dismissed_at: string | null } | undefined;
+	if (row === undefined || row.completed_at === null) {
+		return false;
+	}
+	if (row.dismissed_at !== null) {
+		return true;
+	}
+	db.prepare(`
+		UPDATE agent_goals
+		SET dismissed_at = ?
+		WHERE goal_id = ?
+	`).run(new Date().toISOString(), goalId);
+	return true;
 }
 
 export async function linkAgentGoalRun(goalId: string, runId: string, cycle: number): Promise<void> {

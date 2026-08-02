@@ -4,6 +4,11 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpServerConfig } from "./types.js";
 
+export type McpCallToolOptions = {
+	signal?: AbortSignal | undefined;
+	timeoutMs?: number | undefined;
+};
+
 export class McpSession {
 	private client: Client;
 	private transport: StdioClientTransport | StreamableHTTPClientTransport | undefined;
@@ -48,10 +53,13 @@ export class McpSession {
 		return this.client.listTools();
 	}
 
-	async callTool(name: string, args: Record<string, unknown>) {
+	async callTool(name: string, args: Record<string, unknown>, options: McpCallToolOptions = {}) {
 		return this.client.callTool({
 			name,
 			arguments: args
+		}, undefined, {
+			...(options.signal === undefined ? {} : { signal: options.signal }),
+			...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs })
 		});
 	}
 

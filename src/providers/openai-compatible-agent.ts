@@ -78,7 +78,7 @@ type ToolNameAliasContext = {
 
 function shouldRequireToolCallOnStep(params: AiChatParams, step: number, startStep: number): boolean {
 	const options: Record<string, unknown> | undefined = params.options as Record<string, unknown> | undefined;
-	return step === startStep && options?.requireToolCallOnFirstStep === true;
+	return startStep === 0 && step === 0 && options?.requireToolCallOnFirstStep === true;
 }
 
 export function shouldSkipRequiredToolChoice(options: DeepSeekChatOptions): boolean {

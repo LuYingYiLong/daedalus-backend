@@ -5,6 +5,7 @@ import type { ClientSession } from "../client-session.js";
 import { getClientConnection } from "../client-connections.js";
 import {
 	cancelAgentGoal,
+	dismissAgentGoal,
 	emitAgentGoalState,
 	extendAgentGoalBudget,
 	getCurrentAgentGoal,
@@ -72,6 +73,10 @@ export async function handleGoalRequest(
 		case "agent.goal.cancel":
 			await assertGoalOwnership(session, request.params.goalId);
 			result = await cancelAgentGoal(socket, session, request.params.goalId);
+			break;
+		case "agent.goal.dismiss":
+			await assertGoalOwnership(session, request.params.goalId);
+			result = await dismissAgentGoal(request.params.goalId);
 			break;
 		case "agent.goal.extendBudget":
 			await assertGoalOwnership(session, request.params.goalId);

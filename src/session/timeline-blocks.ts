@@ -185,11 +185,18 @@ function compareEvents(left: StoredSessionEvent, right: StoredSessionEvent): num
 function collectRequestAliases(events: StoredSessionEvent[]): Map<string, string> {
 	const aliases: Map<string, string> = new Map();
 	for (const event of events) {
+		const data: Record<string, unknown> = getEventData(event);
+		if (event.event === "agent.run.state" && asString(data.goalId).trim().length > 0) {
+			const rootRequestId: string = asString(data.rootRequestId).trim();
+			if (event.requestId.length > 0 && rootRequestId.length > 0 && event.requestId !== rootRequestId) {
+				aliases.set(event.requestId, rootRequestId);
+			}
+			continue;
+		}
 		if (!event.event.startsWith("plan.") || event.event === "plan.execution.started") {
 			continue;
 		}
 
-		const data: Record<string, unknown> = getEventData(event);
 		const canonicalRequestId: string = asString(data.requestId).trim();
 		if (event.requestId.length > 0 && canonicalRequestId.length > 0 && event.requestId !== canonicalRequestId) {
 			aliases.set(event.requestId, canonicalRequestId);
@@ -211,8 +218,7 @@ function normalizeEventRequestId(event: StoredSessionEvent, aliases: Map<string,
 	};
 }
 
-function collectRequestEvents(events: StoredSessionEvent[]): Map<string, RequestEvents> {
-	const aliases: Map<string, string> = collectRequestAliases(events);
+function collectRequestEvents(events: StoredSessionEvent[], aliases: Map<string, string>): Map<string, RequestEvents> {
 	const grouped: Map<string, RequestEvents> = new Map();
 
 	for (const sourceEvent of events) {
@@ -923,9 +929,10 @@ function createAssistantBlock(
 	startedAtUtc: string,
 	completedAtUtc: string,
 	events: StoredSessionEvent[],
-	assistantMessage?: StoredMessage | undefined
+	assistantMessage?: StoredMessage | undefined,
+	identityCreatedAt?: string | undefined
 ): TimelineAssistantBlock {
-	const messageCreatedAt: string = assistantMessage?.createdAt ?? completedAtUtc;
+	const messageCreatedAt: string = identityCreatedAt ?? assistantMessage?.createdAt ?? completedAtUtc;
 	return {
 		id: assistantMessage !== undefined
 			? `message:${requestId}:assistant:${messageCreatedAt}`
@@ -949,6 +956,7 @@ type TimelineBuildEntry =
 		requestId: string;
 		userMessage?: StoredMessage | undefined;
 		assistantMessage?: StoredMessage | undefined;
+		assistantIdentityCreatedAt?: string | undefined;
 		events: StoredSessionEvent[];
 		firstEventAt: string;
 		lastEventAt: string;
@@ -1006,13 +1014,18 @@ function getOrCreateRequestEntry(
 	return entry;
 }
 
-function createTimelineBuildEntries(messages: StoredMessage[], groupedEvents: Map<string, RequestEvents>): TimelineBuildEntry[] {
+function createTimelineBuildEntries(
+	messages: StoredMessage[],
+	groupedEvents: Map<string, RequestEvents>,
+	aliases: Map<string, string>
+): TimelineBuildEntry[] {
 	const requestEntries: Map<string, Extract<TimelineBuildEntry, { type: "request" }>> = new Map();
 	const entries: TimelineBuildEntry[] = [];
 	let sequence: number = 0;
 
 	for (const message of messages) {
-		const requestId: string = message.requestId ?? "";
+		const sourceRequestId: string = message.requestId ?? "";
+		const requestId: string = aliases.get(sourceRequestId) ?? sourceRequestId;
 		if (message.role !== "user" && message.role !== "assistant") {
 			sequence += 1;
 			continue;
@@ -1035,6 +1048,9 @@ function createTimelineBuildEntries(messages: StoredMessage[], groupedEvents: Ma
 		}
 		if (message.role === "assistant" && (entry.assistantMessage === undefined || message.createdAt > entry.assistantMessage.createdAt)) {
 			entry.assistantMessage = message;
+		}
+		if (message.role === "assistant" && (entry.assistantIdentityCreatedAt === undefined || message.createdAt < entry.assistantIdentityCreatedAt)) {
+			entry.assistantIdentityCreatedAt = message.createdAt;
 		}
 		entry.orderAt = getTimelineEntryOrderAt(entry);
 		sequence += 1;
@@ -1210,8 +1226,9 @@ function createRenderHints(block: TimelineBlock): TimelineRenderHints {
 
 export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBuildResult {
 	const sourceEvents: StoredSessionEvent[] = [...session.events].sort(compareEvents);
-	const groupedEvents: Map<string, RequestEvents> = collectRequestEvents(sourceEvents);
-	const timelineEntries: TimelineBuildEntry[] = createTimelineBuildEntries(session.messages, groupedEvents);
+	const requestAliases: Map<string, string> = collectRequestAliases(sourceEvents);
+	const groupedEvents: Map<string, RequestEvents> = collectRequestEvents(sourceEvents, requestAliases);
+	const timelineEntries: TimelineBuildEntry[] = createTimelineBuildEntries(session.messages, groupedEvents, requestAliases);
 	const blocks: TimelineBlock[] = [];
 
 	for (const entry of timelineEntries) {
@@ -1251,7 +1268,8 @@ export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBu
 				startedAtUtc,
 				completedAtUtc,
 				entry.events,
-				entry.assistantMessage
+				entry.assistantMessage,
+				entry.assistantIdentityCreatedAt
 			));
 		}
 	}

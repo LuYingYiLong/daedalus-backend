@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+	dismissAgentGoalState,
 	listAgentGoalRunIds,
 	markActiveAgentGoalsPaused,
 	readAgentGoalState,
 	readCurrentAgentGoal,
+	readLatestAgentGoal,
 	saveAgentGoalState
 } from "../../../src/session/agent-goal-store.js";
 import { saveAgentRunState } from "../../../src/session/agent-run-store.js";
@@ -55,6 +57,11 @@ test("agent goal state, run links and restart pause persist", async (): Promise<
 		const paused = await markActiveAgentGoalsPaused("backend_restart");
 		assert.equal(paused[0]?.pauseReason, "backend_restart");
 		assert.equal((await readAgentGoalState(goal.goalId))?.stage, "paused");
+		const cancelled = transitionAgentGoalState(paused[0]!, "cancelled", { pauseReason: null, activeRunId: null });
+		await saveAgentGoalState(cancelled);
+		assert.equal(await dismissAgentGoalState(goal.goalId), true);
+		assert.equal(await readLatestAgentGoal(metadata.id), null);
+		assert.equal((await readAgentGoalState(goal.goalId))?.stage, "cancelled");
 	} finally {
 		await database.resetSessionDatabaseForTests();
 		await rm(directory, { recursive: true, force: true });

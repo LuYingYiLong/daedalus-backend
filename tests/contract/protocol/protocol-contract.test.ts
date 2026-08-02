@@ -23,6 +23,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"agent.goal.pause",
 	"agent.goal.resume",
 	"agent.goal.cancel",
+	"agent.goal.dismiss",
 	"agent.goal.extendBudget",
 	"agent.goal.rollback.preview",
 	"agent.goal.rollback.apply",

@@ -587,6 +587,16 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		});
 	}
 
+	if (toolName === "mcp_terminal_run_command") {
+		const reason: string | undefined = getStringArg(args, "reason");
+		const commandLine: string | undefined = getStringArg(args, "commandLine");
+		const label: string = reason ?? commandLine ?? toolName;
+		return createDisplay("terminal", "Terminal", "terminal", "运行终端命令", label, {
+			kind: "command",
+			label: commandLine ?? label
+		});
+	}
+
 	if (toolName.startsWith("mcp_terminal_")) {
 		const presetName: string = getStringArg(args, "presetName") ?? toolName;
 		const resourcePath: string | undefined = getStringArg(args, "resourcePath");

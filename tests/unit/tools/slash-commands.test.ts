@@ -59,6 +59,10 @@ test("slash command list hides test commands outside development mode", async ()
 			"/help",
 			"/context",
 			"/approvals",
+			"/ask",
+			"/agent",
+			"/plan",
+			"/goal",
 			"/skills",
 			"/skill",
 			"/create-skill",
@@ -87,6 +91,10 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/test-approval",
 			"/test-message-queue",
 			"/test-todo-list",
+			"/ask",
+			"/agent",
+			"/plan",
+			"/goal",
 			"/skills",
 			"/skill",
 			"/create-skill",
@@ -262,5 +270,37 @@ test("/test-todo-list sends a harmless workflow todo snapshot in development mod
 		assert.equal(Array.isArray(stateEvent?.data?.todo?.phases), true);
 		assert.equal(stateEvent?.data?.todo?.phases?.length, 4);
 		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.snapshot"), false);
+	});
+});
+
+test("mode slash commands strip their prefix and forward the requested chat mode", async (): Promise<void> => {
+	const socket = createSocketMock();
+	const session: ClientSession = createClientSession(undefined);
+	const request: ClientRequest = {
+		type: "request",
+		id: "slash-plan",
+		method: "ai.chat",
+		params: {
+			message: "/plan 重构认证流程",
+			mode: "ask",
+			options: { stream: true }
+		}
+	} as ClientRequest;
+
+	const result = await handleSlashCommand({
+		socket,
+		request,
+		session,
+		mcpHost: {} as McpHost,
+		createSessionInfo: (): Record<string, unknown> => ({ ok: true })
+	});
+
+	assert.deepEqual(result, {
+		type: "ai",
+		params: {
+			...request.params,
+			mode: "plan",
+			message: "重构认证流程"
+		}
 	});
 });

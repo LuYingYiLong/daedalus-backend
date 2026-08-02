@@ -104,13 +104,15 @@ export type ExecutionDecision = {
 	expectedLogicalWrites?: number | undefined;
 };
 
-export const executionDecisionSchema = z.object({
+export const executionDecisionToolInputSchema = z.object({
 	disposition: z.enum(["no_change", "use_lightweight", "use_workflow", "blocked"]),
 	summary: z.string().trim().min(1).max(2000),
 	evidenceToolCallIds: z.array(z.string().trim().min(1).max(200)).max(64).default([]),
 	expectedArtifacts: z.array(z.string().trim().min(1).max(1000)).max(64).default([]),
 	expectedLogicalWrites: z.number().int().min(0).max(2).optional()
-}).strict().superRefine((decision, context): void => {
+}).strict();
+
+export const executionDecisionSchema = executionDecisionToolInputSchema.superRefine((decision, context): void => {
 	if (decision.disposition === "no_change" && decision.evidenceToolCallIds.length === 0) {
 		context.addIssue({
 			code: "custom",
@@ -251,10 +253,13 @@ export function validateExecutionDecisionEvidence(
 	run: AgentRunState,
 	decision: ExecutionDecision
 ): ExecutionDecision {
+	const currentRunEvidence: ExecutionEvidence[] = run.checkpoint.evidence.filter((evidence: ExecutionEvidence): boolean => (
+		evidence.observedAt >= run.createdAt
+	));
 	const evidenceById: Map<string, ExecutionEvidence> = new Map(
-		run.checkpoint.evidence.map((item: ExecutionEvidence): [string, ExecutionEvidence] => [item.toolCallId, item])
+		currentRunEvidence.map((item: ExecutionEvidence): [string, ExecutionEvidence] => [item.toolCallId, item])
 	);
-	const usableEvidence: ExecutionEvidence[] = run.checkpoint.evidence.filter((evidence: ExecutionEvidence): boolean => (
+	const usableEvidence: ExecutionEvidence[] = currentRunEvidence.filter((evidence: ExecutionEvidence): boolean => (
 		evidence.status === "succeeded"
 		&& (evidence.risk === "read" || evidence.risk === "verify")
 	));
@@ -280,12 +285,17 @@ export function validateExecutionDecisionEvidence(
 		}
 	}
 
+	if (decision.disposition === "no_change" && decision.evidenceToolCallIds.length === 0) {
+		for (const evidence of usableEvidence.slice(-64)) resolvedIds.push(evidence.toolCallId);
+	}
+
 	if (decision.disposition === "no_change" && resolvedIds.length === 0) {
-		const firstReference: string | undefined = decision.evidenceToolCallIds[0];
-		if (firstReference !== undefined) {
-			throw new Error(`Execution decision references no usable evidence tool call: ${firstReference}.`);
-		}
-		throw new Error("Execution decision requires successful read or verify evidence.");
+		return {
+			...decision,
+			disposition: "use_workflow",
+			evidenceToolCallIds: [],
+			expectedLogicalWrites: undefined
+		};
 	}
 
 	return {

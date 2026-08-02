@@ -57,6 +57,7 @@ export const promptFragmentPaths = [
 ] as const;
 
 export const internalPromptTemplatePaths = [
+	"src/prompts/templates/internal/command-review.md",
 	"src/prompts/templates/internal/session-compressor.md"
 ] as const;
 

@@ -20,7 +20,7 @@ import {
 test("paused agent run state and continuation persist atomically without API keys", async (): Promise<void> => {
 	const directory: string = await mkdtemp(join(tmpdir(), "daedalus-agent-run-store-"));
 	const databasePath: string = join(directory, "sessions.sqlite3");
-	const { resetSessionDatabaseForTests } = await import("../../../src/session/session-database.js");
+		const { getSessionDatabase, resetSessionDatabaseForTests } = await import("../../../src/session/session-database.js");
 	await resetSessionDatabaseForTests(databasePath);
 	try {
 		const { createSession } = await import("../../../src/session/session-store.js");
@@ -81,6 +81,11 @@ test("paused agent run state and continuation persist atomically without API key
 		}, "2026-07-29T00:00:03.000Z");
 		await saveAgentRunState(resumed);
 		assert.equal(await readAgentRunContinuation(paused.runId), null);
+		const database = await getSessionDatabase();
+		const staleContinuation = database.prepare(
+			"SELECT run_id FROM agent_run_continuations WHERE run_id = ?"
+		).get(paused.runId);
+		assert.equal(staleContinuation, undefined);
 		await assert.rejects(
 			saveAgentRunContinuation(paused, {
 				kind: "approval",

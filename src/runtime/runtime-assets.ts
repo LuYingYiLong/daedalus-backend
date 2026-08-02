@@ -18,6 +18,7 @@ export const RUNTIME_ASSET_PATHS = {
 	"prompt.mode.ask": "src/prompts/templates/modes/ask-mode.md",
 	"prompt.fragment.core": "src/prompts/templates/fragments/CORE.md",
 	"prompt.fragment.customInstructionsBoundary": "src/prompts/templates/fragments/custom-instructions-boundary.md",
+	"prompt.internal.commandReview": "src/prompts/templates/internal/command-review.md",
 	"prompt.internal.sessionCompressor": "src/prompts/templates/internal/session-compressor.md",
 	"skill.godotProjectInit": "src/skills/builtin/godot-project-init/SKILL.md",
 	"skill.gdscriptReview": "src/skills/builtin/gdscript-review/SKILL.md",

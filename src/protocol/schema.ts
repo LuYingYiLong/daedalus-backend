@@ -664,6 +664,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("agent.goal.dismiss"),
+		params: z.object({ goalId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("agent.goal.extendBudget"),
 		params: z.object({
 			goalId: z.string().min(1),

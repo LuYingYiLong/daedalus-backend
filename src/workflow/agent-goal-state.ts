@@ -111,6 +111,12 @@ export function isAgentGoalTerminal(stage: AgentGoalStage): boolean {
 	return TERMINAL_STAGES.has(stage);
 }
 
+export function hasAgentGoalBudget(state: AgentGoalState): boolean {
+	return state.usage.cycles < state.budget.maxCycles
+		&& state.usage.tokens < state.budget.maxTokens
+		&& state.usage.activeMilliseconds < state.budget.maxActiveMinutes * 60_000;
+}
+
 export function createAgentGoalState(params: {
 	sessionId: string;
 	rootRequestId: string;

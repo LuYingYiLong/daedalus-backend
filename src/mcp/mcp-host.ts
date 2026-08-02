@@ -29,11 +29,19 @@ import { getApprovalMode } from "../approval-settings-store.js";
 import type { TerminalCommandAuthorization } from "./terminal/authorization.js";
 import { resolveEffectiveGodotExecutable } from "../godot-executable-resolver.js";
 import { logger } from "../logger.js";
+import {
+	COMMAND_TIMEOUT_MS,
+	findPreset,
+	MAX_JOB_TIMEOUT_MS,
+	MIN_JOB_TIMEOUT_MS,
+	normalizeTimeoutMs
+} from "./terminal/presets.js";
 
 const CUSTOM_MCP_CONNECT_TIMEOUT_MS: number = 30_000;
 const CUSTOM_MCP_LIST_TOOLS_TIMEOUT_MS: number = 10_000;
 const CUSTOM_MCP_CLOSE_TIMEOUT_MS: number = 2_000;
 const GLOBAL_CUSTOM_SCOPE_ID: string = "__global_custom_mcp__";
+const TERMINAL_MCP_TIMEOUT_GRACE_MS: number = 30_000;
 
 type McpToolListResult = {
 	tools: Array<{
@@ -75,6 +83,29 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 			clearTimeout(timeout);
 		}
 	}
+}
+
+export function resolveTerminalMcpRequestTimeoutMs(name: string, args: Record<string, unknown>): number | undefined {
+	if (name !== "run_command" && name !== "run_safe_preset" && name !== "run_write_preset") return undefined;
+	if (args.executionMode === "job") return undefined;
+	const requestedTimeout = typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)
+		? Math.floor(args.timeoutMs)
+		: undefined;
+	let commandTimeout: number;
+	if (
+		(name === "run_safe_preset" || name === "run_write_preset")
+		&& typeof args.presetName === "string"
+	) {
+		try {
+			commandTimeout = normalizeTimeoutMs(requestedTimeout, findPreset(args.presetName), COMMAND_TIMEOUT_MS);
+		} catch {
+			commandTimeout = requestedTimeout ?? COMMAND_TIMEOUT_MS;
+		}
+	} else {
+		commandTimeout = requestedTimeout ?? COMMAND_TIMEOUT_MS;
+	}
+	commandTimeout = Math.max(MIN_JOB_TIMEOUT_MS, Math.min(MAX_JOB_TIMEOUT_MS, commandTimeout));
+	return commandTimeout + TERMINAL_MCP_TIMEOUT_GRACE_MS;
 }
 
 export class McpHost {
@@ -640,7 +671,8 @@ export class McpHost {
 		args: Record<string, unknown>,
 		workspaceId?: string | undefined,
 		editorInstanceId?: string | undefined,
-		commandAuthorization?: TerminalCommandAuthorization | undefined
+		commandAuthorization?: TerminalCommandAuthorization | undefined,
+		abortSignal?: AbortSignal | undefined
 	) {
 		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
 			? args.sourceFolderId
@@ -649,7 +681,11 @@ export class McpHost {
 			await this.ensureGlobalInternalServers();
 			return this.getSession(serverId, workspaceId).callTool(
 				name,
-				await this.createTerminalArgs(args, workspaceId, commandAuthorization)
+				await this.createTerminalArgs(args, workspaceId, commandAuthorization),
+				{
+					signal: abortSignal,
+					timeoutMs: resolveTerminalMcpRequestTimeoutMs(name, args)
+				}
 			);
 		}
 
@@ -681,7 +717,7 @@ export class McpHost {
 		const routedServerId: string = workspace === undefined || !sourceScoped
 			? serverId
 			: getSourceScopedServerId(serverId, workspace, getWorkspaceSourceFolder(workspace, sourceFolderId).id);
-		return this.getSession(routedServerId, workspaceId).callTool(name, forwardedArgs);
+		return this.getSession(routedServerId, workspaceId).callTool(name, forwardedArgs, { signal: abortSignal });
 	}
 
 	async listResources(serverId: string, workspaceId?: string | undefined) {

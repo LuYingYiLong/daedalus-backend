@@ -57,6 +57,38 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		examples: ["/approvals"]
 	},
 	{
+		command: "/ask",
+		usage: "/ask [Message]",
+		insertText: "/ask ",
+		description: "切换到 Ask 模式并发送消息。",
+		requiresArgument: true,
+		examples: ["/ask 这是什么意思"]
+	},
+	{
+		command: "/agent",
+		usage: "/agent [Message]",
+		insertText: "/agent ",
+		description: "切换到 Agent 模式并发送消息。",
+		requiresArgument: true,
+		examples: ["/agent 修复这个错误"]
+	},
+	{
+		command: "/plan",
+		usage: "/plan [Message]",
+		insertText: "/plan ",
+		description: "切换到 Plan 模式并发送消息。",
+		requiresArgument: true,
+		examples: ["/plan 规划登录系统重构"]
+	},
+	{
+		command: "/goal",
+		usage: "/goal [Traget]",
+		insertText: "/goal ",
+		description: "切换到 Goal 模式并开始执行目标。",
+		requiresArgument: true,
+		examples: ["/goal 完成登录流程并验证"]
+	},
+	{
 		command: "/skills",
 		usage: "/skills",
 		insertText: "/skills",
@@ -90,13 +122,24 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 	},
 	{
 		command: "/init",
-		usage: "/init [补充要求]",
+		usage: "/init [Requirement]",
 		insertText: "/init ",
 		description: "检查当前 Godot 项目，并请求生成项目根目录 AGENTS.md。",
 		requiresArgument: false,
 		examples: ["/init", "/init 请保留现有项目约束"]
 	}
 ] as const;
+
+const CHAT_MODE_BY_SLASH_COMMAND: Readonly<Record<string, AiChatParams["mode"]>> = {
+	"/ask": "ask",
+	"/agent": "agent",
+	"/plan": "plan",
+	"/goal": "goal"
+};
+
+function getChatModeForSlashCommand(command: string): AiChatParams["mode"] | null {
+	return CHAT_MODE_BY_SLASH_COMMAND[command] ?? null;
+}
 
 const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 	{
@@ -462,6 +505,22 @@ export async function handleSlashCommand(params: {
 	if (command === "/approvals") {
 		await sendChatText(socket, request, formatPendingApprovals(session), session, mcpHost, createSessionInfo);
 		return { type: "handled" };
+	}
+
+	const chatMode: AiChatParams["mode"] | null = getChatModeForSlashCommand(command);
+	if (chatMode !== null) {
+		if (restText.length === 0) {
+			await sendChatText(socket, request, `请在 \`${command}\` 后提供要发送的消息。`, session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		return {
+			type: "ai",
+			params: {
+				...request.params,
+				mode: chatMode,
+				message: restText
+			}
+		};
 	}
 
 	if (command === "/test-approval") {

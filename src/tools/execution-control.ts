@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import {
-	executionDecisionSchema,
+	executionDecisionToolInputSchema,
 	type AgentRunLane,
 	type ExecutionDecision
 } from "../workflow/agent-run-state.js";
@@ -58,9 +58,12 @@ export class ExecutionDecisionSignal extends Error {
 }
 
 export function parseExecutionDecision(value: unknown, context: ExecutionControlContext): ExecutionDecision {
-	const decision: ExecutionDecision = executionDecisionSchema.parse(value);
+	const decision: ExecutionDecision = executionDecisionToolInputSchema.parse(value);
+	if (decision.disposition === "use_lightweight" && decision.expectedLogicalWrites === undefined) {
+		return { ...decision, disposition: "use_workflow" };
+	}
 	if (context.lane === "lightweight" && decision.disposition === "use_lightweight") {
-		throw new Error("A lightweight action cannot request the lightweight lane again.");
+		return { ...decision, disposition: "use_workflow", expectedLogicalWrites: undefined };
 	}
 	return decision;
 }

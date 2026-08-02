@@ -7,6 +7,7 @@ import {
 	transitionAgentRunState,
 	validateExecutionDecisionEvidence
 } from "../../../src/workflow/agent-run-state.js";
+import { parseExecutionDecision } from "../../../src/tools/execution-control.js";
 
 test("agent run revisions are monotonic and terminal transitions happen once", (): void => {
 	const initial = createAgentRunState({
@@ -107,7 +108,8 @@ test("no-change decisions require successful read or verify evidence", (): void 
 	});
 	const initial = createAgentRunState({
 		sessionId: "session-test",
-		requestId: "request-test"
+		requestId: "request-test",
+		now: "2026-07-29T00:00:00.000Z"
 	});
 	const probing = transitionAgentRunState(initial, "probing", {
 		intent: "mutate",
@@ -127,18 +129,20 @@ test("no-change decisions require successful read or verify evidence", (): void 
 	});
 
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, decision).evidenceToolCallIds, ["read-1"]);
-	assert.throws((): void => {
+	assert.equal(
 		validateExecutionDecisionEvidence(probing, {
 			...decision,
 			evidenceToolCallIds: ["missing"]
-		});
-	}, /no usable evidence/u);
+		}).disposition,
+		"use_workflow"
+	);
 });
 
 test("execution decisions safely normalize semantic evidence references", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",
-		requestId: "request-test"
+		requestId: "request-test",
+		now: "2026-07-31T00:00:00.000Z"
 	});
 	const probing = transitionAgentRunState(initial, "probing", {
 		intent: "mutate",
@@ -175,4 +179,53 @@ test("execution decisions safely normalize semantic evidence references", (): vo
 		expectedArtifacts: ["scenes/Main.tscn"]
 	});
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, workflow).evidenceToolCallIds, []);
+});
+
+test("no-change tool input safely adopts successful evidence from only the current run", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-test",
+		now: "2026-08-02T05:00:38.000Z"
+	});
+	const probing = transitionAgentRunState(initial, "probing", {
+		intent: "mutate",
+		scope: "unknown",
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: [],
+			evidence: [{
+				toolCallId: "previous-read",
+				toolName: "mcp_godot_read_text_file",
+				risk: "read",
+				status: "succeeded",
+				artifactRefs: ["scripts/Main.gd"],
+				observedAt: "2026-08-01T14:00:00.000Z"
+			}, {
+				toolCallId: "current-read",
+				toolName: "mcp_godot_read_text_file",
+				risk: "read",
+				status: "succeeded",
+				artifactRefs: ["scripts/Main.gd"],
+				observedAt: "2026-08-02T05:00:51.581Z"
+			}, {
+				toolCallId: "current-verify",
+				toolName: "mcp_terminal_run_safe_preset",
+				risk: "verify",
+				status: "succeeded",
+				artifactRefs: ["scripts/Main.gd"],
+				observedAt: "2026-08-02T05:00:51.819Z"
+			}]
+		}
+	});
+	const decision = parseExecutionDecision({
+		disposition: "no_change",
+		summary: "The requested state is already present and verified.",
+		evidenceToolCallIds: [],
+		expectedArtifacts: ["scripts/Main.gd"]
+	}, { lane: "probe" });
+
+	assert.deepEqual(
+		validateExecutionDecisionEvidence(probing, decision).evidenceToolCallIds,
+		["current-read", "current-verify"]
+	);
 });

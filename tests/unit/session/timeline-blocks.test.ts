@@ -775,6 +775,35 @@ test("canonical timeline restores image generation body part from tool events", 
 	}
 });
 
+test("canonical timeline keeps all Goal cycles in the root assistant block", (): void => {
+	const rootRequestId: string = "request-goal-root";
+	const cycleRequestId: string = "goal-one:cycle:2";
+	const stored: StoredSession = session([
+		{ role: "user", requestId: rootRequestId, content: "Build the game", createdAt: "2026-08-02T00:00:00.000Z" },
+		{ role: "assistant", requestId: rootRequestId, content: "First cycle", createdAt: "2026-08-02T00:01:00.000Z" },
+		{ role: "assistant", requestId: cycleRequestId, content: "Second cycle", createdAt: "2026-08-02T00:02:00.000Z" }
+	], [
+		event("goal-cycle-state", cycleRequestId, "agent.run.state", "2026-08-02T00:01:30.000Z", {
+			runId: cycleRequestId,
+			requestId: cycleRequestId,
+			rootRequestId,
+			goalId: "goal-one",
+			stage: "executing"
+		}),
+		event("goal-root-delta", rootRequestId, "agent.message.delta", "2026-08-02T00:00:30.000Z", { text: "First cycle" }),
+		event("goal-cycle-delta", cycleRequestId, "agent.message.delta", "2026-08-02T00:01:40.000Z", { text: "Second cycle" })
+	]);
+
+	const result = buildCanonicalTimelineBlocks(stored);
+	assert.deepEqual(result.blocks.map((block: TimelineBlock): string => `${block.type}:${block.requestId}`), [
+		`user:${rootRequestId}`,
+		`assistant:${rootRequestId}`
+	]);
+	const assistant = assistantBlock(result.blocks[1]);
+	assert.equal(assistant.id, `message:${rootRequestId}:assistant:2026-08-02T00:01:00.000Z`);
+	assert.equal(assistant.bodyParts.filter((part): boolean => part.type === "markdown").map((part): string => part.type === "markdown" ? part.text : "").join(""), "First cycleSecond cycle");
+});
+
 test("canonical timeline leaves completion warnings to the final assistant summary", (): void => {
 	const warning = "Godot executable was not found; verification was skipped.";
 	const stored: StoredSession = session(

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import test from "node:test";
-import { createMissingRequiredToolCallCorrectionMessage, createToolProtocolCorrectionMessage, resolveRequiredToolChoice, runOpenAICompatibleAgent, runOpenAICompatibleAgentStreaming, shouldDisableThinkingForToolCalls, shouldSkipRequiredToolChoice } from "../../../src/providers/openai-compatible-agent.js";
+import { continueOpenAICompatibleAgent, createMissingRequiredToolCallCorrectionMessage, createToolProtocolCorrectionMessage, resolveRequiredToolChoice, runOpenAICompatibleAgent, runOpenAICompatibleAgentStreaming, shouldDisableThinkingForToolCalls, shouldSkipRequiredToolChoice, type OpenAICompatibleAgentContinuation } from "../../../src/providers/openai-compatible-agent.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import type { AiChatParams } from "../../../src/protocol/types.js";
@@ -431,6 +431,50 @@ async function withApprovalToolCallMockServer(run: (baseUrl: string, requests: R
 	}
 }
 
+async function withApprovalContinuationMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", body });
+		response.writeHead(200, { "Content-Type": "application/json" });
+		response.end(JSON.stringify({
+			id: `chatcmpl-approval-continuation-${requests.length}`,
+			object: "chat.completion",
+			created: 1,
+			model: "deepseek-chat",
+			choices: [{
+				index: 0,
+				message: requests.length === 1 ? {
+					role: "assistant",
+					content: null,
+					tool_calls: [{
+						id: "call-write",
+						type: "function",
+						function: {
+							name: "mcp_godot_create_text_file",
+							arguments: JSON.stringify({ relativePath: "approval-test.md", content: "hello" })
+						}
+					}]
+				} : {
+					role: "assistant",
+					content: "Approved tool result is sufficient; the task is complete."
+				},
+				finish_reason: requests.length === 1 ? "tool_calls" : "stop"
+			}]
+		}));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("Mock server did not expose a TCP port");
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
 test("DeepSeek V4 thinking models skip required tool_choice", (): void => {
 	const tools: ChatCompletionTool[] = [{
 		type: "function",
@@ -768,6 +812,39 @@ test("streaming agent retries when required first tool call returns only prelude
 		assert.match(JSON.stringify(requests[1]?.body.messages), /输出了正文/);
 	}, {
 		content: "先确认 Godot 版本，同时运行语法检查。"
+	});
+});
+
+test("approved continuation does not require a second first-step tool call", async (): Promise<void> => {
+	await withApprovalContinuationMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const params: AiChatParams = {
+			message: "Create and verify a small file",
+			options: { requireToolCallOnFirstStep: true } as AiChatParams["options"] & Record<string, unknown>
+		};
+		const gateway = new ApprovalGateway();
+		const initial = await runOpenAICompatibleAgent(
+			params,
+			{ provider: "deepseek", apiKey: "test-key", baseUrl, model: "deepseek-chat" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			gateway,
+			["mcp_godot_create_text_file"]
+		);
+		assert.equal(initial.status, "approval_required");
+		if (initial.status !== "approval_required") return;
+		const continued = await continueOpenAICompatibleAgent(
+			params,
+			{ provider: "deepseek", apiKey: "test-key", baseUrl, model: "deepseek-chat" },
+			initial.continuation as OpenAICompatibleAgentContinuation,
+			{ toolCallId: "call-write", content: JSON.stringify({ ok: true, validationStatus: "passed" }) },
+			createMockMcpHost(),
+			gateway,
+			["mcp_godot_create_text_file"]
+		);
+		assert.equal(continued.status, "completed");
+		assert.equal(continued.status === "completed" ? continued.text : "", "Approved tool result is sufficient; the task is complete.");
+		assert.equal(requests.length, 2);
 	});
 });
 

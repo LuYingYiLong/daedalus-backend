@@ -17,7 +17,7 @@ import { broadcastSessionEvent, broadcastStudioSessionEvent } from "./client-con
 import { logger } from "../logger.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import { saveAgentRunState } from "../session/agent-run-store.js";
-import { notifyGoalRunState } from "./goal-run-observer.js";
+import { getGoalRunBinding, notifyGoalRunState } from "./goal-run-observer.js";
 import {
 	createAgentRunState,
 	transitionAgentRunState,
@@ -161,6 +161,29 @@ export function shouldPersistSessionEvent(eventName: ServerEventNameInput): bool
 
 export function getThinkingEventBufferKey(sessionId: string, requestId: string): string {
 	return `${sessionId}\n${requestId}`;
+}
+
+export function resolveTimelineRequestId(
+	session: ClientSession,
+	requestId: string,
+	persistRequestId: string,
+	data: unknown
+): { requestId: string; persistRequestId: string } {
+	const dataGoalId: string = getRecordString(data, "goalId");
+	const dataRootRequestId: string = getRecordString(data, "rootRequestId");
+	const boundRootRequestId: string | undefined = getGoalRunBinding(requestId)?.rootRequestId;
+	const storedRun: AgentRunState | undefined = session.agentRuns.get(requestId) ?? session.agentRuns.get(persistRequestId);
+	const storedRootRequestId: string | undefined = storedRun?.goalId === undefined ? undefined : storedRun.rootRequestId;
+	const rootRequestId: string | undefined = dataGoalId.length > 0 && dataRootRequestId.length > 0
+		? dataRootRequestId
+		: boundRootRequestId ?? storedRootRequestId;
+	if (rootRequestId === undefined || rootRequestId.length === 0) {
+		return { requestId, persistRequestId };
+	}
+	return {
+		requestId: rootRequestId,
+		persistRequestId: rootRequestId
+	};
 }
 
 function getPersistedDeltaBufferKey(sessionId: string, requestId: string, eventName: string, data: unknown): string {
@@ -628,8 +651,13 @@ function emitLegacyLifecycleAsRunState(params: {
 	emitCanonicalSessionEvent(
 		params.socket,
 		params.session,
-		createEventEnvelope("agent.run.state", structuredClone(next), next.requestId, params.sessionId),
-		next.requestId
+		createEventEnvelope(
+			"agent.run.state",
+			structuredClone(next),
+			next.goalId === undefined ? next.requestId : next.rootRequestId,
+			params.sessionId
+		),
+		next.goalId === undefined ? next.requestId : next.rootRequestId
 	);
 	return true;
 }
@@ -646,7 +674,8 @@ export function sendSessionEvent(
 	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
 	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
 	const eventData: unknown = withSessionId(data, sessionId);
-	if (shouldSuppressDuplicateTerminalEvent(session, canonicalEventName, eventData, sessionId, persistRequestId)) {
+	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, eventData);
+	if (shouldSuppressDuplicateTerminalEvent(session, canonicalEventName, eventData, sessionId, timelineIdentity.persistRequestId)) {
 		return;
 	}
 	if (
@@ -654,8 +683,8 @@ export function sendSessionEvent(
 			socket,
 			session,
 			sessionId: sessionId ?? "",
-			requestId,
-			persistRequestId,
+			requestId: timelineIdentity.requestId,
+			persistRequestId: timelineIdentity.persistRequestId,
 			eventName: canonicalEventName,
 			data: eventData
 		})
@@ -670,8 +699,8 @@ export function sendSessionEvent(
 			socket,
 			session,
 			sessionId,
-			requestId,
-			persistRequestId,
+			timelineIdentity.requestId,
+			timelineIdentity.persistRequestId,
 			canonicalEventName,
 			eventData
 		);
@@ -683,8 +712,8 @@ export function sendSessionEvent(
 	emitCanonicalSessionEvent(
 		socket,
 		session,
-		createEventEnvelope(canonicalEventName, eventData, requestId, sessionId),
-		persistRequestId
+		createEventEnvelope(canonicalEventName, eventData, timelineIdentity.requestId, sessionId),
+		timelineIdentity.persistRequestId
 	);
 }
 

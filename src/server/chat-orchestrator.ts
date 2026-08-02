@@ -150,6 +150,12 @@ import { bumpWorkbenchRevision, clearWorkbenchComposer, emitWorkbenchUpdated, se
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
 import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "./request-lifecycle.js";
+import {
+	findCancellableAgentRun,
+	isAgentRunTerminal,
+	resolveCancellationTargetRequestId,
+	shouldTerminalizeReturnedAgentRun
+} from "./run-cancellation.js";
 import { estimateTextTokens, estimateMessagesTokens, estimateTextTokensForProvider, estimateCurrentMessageTokensForProvider, computeHistoryBudget, appendChatTurnToSession, appendUserMessageToSession, appendFailedChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterLlmContextMessages } from "./token-budget.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
@@ -779,19 +785,22 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		if (executionDecision.disposition === "blocked") {
 			throw new LightweightActionVerificationError(executionDecision.summary);
 		}
+		const decisionWasVerified: boolean = latestRun.checkpoint.evidence.some((item): boolean => (
+			executionDecision.evidenceToolCallIds.includes(item.toolCallId) && item.risk === "verify"
+		));
 
 		await completeHiddenAnswerExecution(
 			params,
 			persistedChatParams,
 			executionDecision.summary,
 			{
-				resultStatus: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+				resultStatus: decisionWasVerified
 					? "completed"
 					: "completed_with_warnings",
-				verificationStatus: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+				verificationStatus: decisionWasVerified
 					? "verified"
 					: "unverified",
-				warnings: latestRun.checkpoint.evidence.some((item): boolean => item.risk === "verify")
+				warnings: decisionWasVerified
 					? []
 					: ["The no-change decision was supported by read evidence but no dedicated verifier was run."],
 				failureMessage: undefined
@@ -1687,13 +1696,31 @@ async function runToolBudgetDecisionContinuation(params: {
 export async function handleChatRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
 		case "ai.cancel": {
+			const activeGoal = session.sessionId === undefined
+				? null
+				: await getCurrentAgentGoal(session.sessionId);
+			const requestWithController: string | undefined = session.activeAbortControllers.has(request.params.requestId)
+				? request.params.requestId
+				: undefined;
 			const activeSessionRun = getActiveSessionRunController(session.sessionId, request.params.requestId)
 				?? getActiveSessionRunController(session.sessionId);
-			const targetRequestId: string = session.activeAbortControllers.has(request.params.requestId)
-				? request.params.requestId
-				: activeSessionRun?.requestId ?? request.params.requestId;
+			const targetRequestId: string = resolveCancellationTargetRequestId({
+				requestedRequestId: request.params.requestId,
+				requestWithController,
+				activeSessionRequestId: activeSessionRun?.requestId,
+				activeGoalRunId: activeGoal?.activeRunId,
+				activeRuntimeRequestId: session.activeRunRequestId
+			});
 			const controller: AbortController | undefined = session.activeAbortControllers.get(targetRequestId)
-				?? activeSessionRun?.controller;
+				?? (activeSessionRun?.requestId === targetRequestId ? activeSessionRun.controller : undefined);
+			if (
+				activeGoal?.activeRunId !== null
+				&& activeGoal?.activeRunId !== undefined
+				&& activeGoal.stage !== "paused"
+				&& activeGoal.stage !== "pausing"
+			) {
+				await pauseAgentGoal(socket, session, activeGoal.goalId, "user_interruption");
+			}
 			if (controller !== undefined) {
 				setWorkbenchActiveRun(session, {
 					status: "cancelling",
@@ -1702,20 +1729,58 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				emitWorkbenchUpdated(socket, request.id, session);
 				controller.abort();
 			}
-			const cancelledApprovalIds: string[] = await cancelPendingApprovalsForRequest(session, targetRequestId);
-			const cancelledToolBudgetIds: string[] = cancelPendingToolBudgetsForRequest(session, targetRequestId);
+			const cancellationRequestIds: string[] = [...new Set([
+				targetRequestId,
+				request.params.requestId,
+				activeSessionRun?.requestId,
+				activeGoal?.activeRunId,
+				session.activeRunRequestId
+			].filter((candidate: string | null | undefined): candidate is string => typeof candidate === "string" && candidate.length > 0))];
+			const cancelledApprovalIds: string[] = [];
+			const cancelledToolBudgetIds: string[] = [];
+			for (const cancellationRequestId of cancellationRequestIds) {
+				cancelledApprovalIds.push(...await cancelPendingApprovalsForRequest(session, cancellationRequestId));
+				cancelledToolBudgetIds.push(...cancelPendingToolBudgetsForRequest(session, cancellationRequestId));
+			}
+			let forcedRunId: string | null = null;
+			if (controller === undefined && cancelledApprovalIds.length === 0 && cancelledToolBudgetIds.length === 0) {
+				const cancellableRun: AgentRunState | null = await findCancellableAgentRun(session, cancellationRequestIds);
+				if (cancellableRun !== null) {
+					session.agentRuns.set(cancellableRun.runId, cancellableRun);
+					if (!session.agentRunToolCalls.has(cancellableRun.runId)) {
+						session.agentRunToolCalls.set(cancellableRun.runId, new Map());
+					}
+					forcedRunId = cancellableRun.runId;
+					sendAgentCancelled(
+						socket,
+						cancellableRun.requestId,
+						session,
+						cancellableRun.runId,
+						"force_cancelled_by_user"
+					);
+				}
+			}
 			// The aborted stream can finish while this cancellation RPC awaits approval cleanup.
 			// Treat that terminal race as an accepted, idempotent cancellation instead of
 			// reporting a false failure back to the Studio client.
+			const persistedTargetRun: AgentRunState | null = forcedRunId !== null
+				? null
+				: await readAgentRunState(targetRequestId);
 			const alreadyFinished: boolean = controller === undefined
 				&& cancelledApprovalIds.length === 0
 				&& cancelledToolBudgetIds.length === 0
-				&& session.completedRequestIds.has(targetRequestId);
-			if (cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0) {
-				session.activeRunRequestId = session.activeRunRequestId === targetRequestId
-					? undefined
-					: session.activeRunRequestId;
-				finishSessionRun(session.sessionId, targetRequestId);
+				&& forcedRunId === null
+				&& (
+					cancellationRequestIds.some((candidate: string): boolean => session.completedRequestIds.has(candidate))
+					|| (persistedTargetRun !== null && isAgentRunTerminal(persistedTargetRun))
+				);
+			if (cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0 || forcedRunId !== null) {
+				if (session.activeRunRequestId !== undefined && cancellationRequestIds.includes(session.activeRunRequestId)) {
+					session.activeRunRequestId = undefined;
+				}
+				for (const cancellationRequestId of cancellationRequestIds) {
+					finishSessionRun(session.sessionId, cancellationRequestId);
+				}
 				setWorkbenchActiveRun(session, {
 					status: "idle",
 					requestId: targetRequestId
@@ -1727,8 +1792,14 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				id: request.id,
 				ok: true,
 				result: {
-					cancelled: controller !== undefined || cancelledApprovalIds.length > 0 || cancelledToolBudgetIds.length > 0,
+					cancelled: controller !== undefined
+						|| cancelledApprovalIds.length > 0
+						|| cancelledToolBudgetIds.length > 0
+						|| forcedRunId !== null
+						|| alreadyFinished,
 					cancellationRequested: controller !== undefined,
+					forced: forcedRunId !== null,
+					forcedRunId,
 					alreadyFinished,
 					requestId: targetRequestId,
 					cancelledApprovalIds,
@@ -2393,6 +2464,25 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					}
 				} finally {
 					session.approvalGateway = originalApprovalGateway;
+				}
+				const returnedRun: AgentRunState | undefined = getAgentRun(session, request.id);
+				if (returnedRun !== undefined && shouldTerminalizeReturnedAgentRun(returnedRun)) {
+					const invariantMessage = "Agent execution returned without publishing a terminal run state.";
+					queuedRunForcedStatus = "failed";
+					logger.error("ai", "agent_run_missing_terminal_state", new Error(invariantMessage), {
+						requestId: request.id,
+						runId: returnedRun.runId,
+						sessionId: runSessionId,
+						stage: returnedRun.stage
+					});
+					sendSessionEvent(socket, request.id, session, "agent.run.error", {
+						runId: returnedRun.runId,
+						requestId: returnedRun.requestId,
+						status: "error",
+						code: "agent_run_missing_terminal_state",
+						message: invariantMessage,
+						sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+					}, returnedRun.requestId);
 				}
 				logger.info("ai", "chat_finished", {
 					requestId: request.id,

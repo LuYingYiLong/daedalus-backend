@@ -18,7 +18,7 @@ type Invocation = {
 	workspaceRoot?: string | undefined;
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
-	authorizationSource?: "model" | "user" | undefined;
+	authorizationSource?: "model" | "policy" | "user" | undefined;
 };
 
 export async function runCommandWait(params: {
@@ -35,7 +35,7 @@ export async function runCommandWait(params: {
 	workspaceRoot?: string | undefined;
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
-	authorizationSource?: "model" | "user" | undefined;
+	authorizationSource?: "model" | "policy" | "user" | undefined;
 }): Promise<TerminalCommandResult> {
 	return new Promise((resolve) => {
 		const startMs: number = Date.now();
@@ -153,7 +153,7 @@ export function startCommandJob(params: {
 	workspaceRoot?: string | undefined;
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
-	authorizationSource?: "model" | "user" | undefined;
+	authorizationSource?: "model" | "policy" | "user" | undefined;
 }): TerminalJobRecord {
 	const tailLines: number = normalizeTailLines(params.tailLines);
 	const record: TerminalJobRecord = terminalJobStore.createRecord({

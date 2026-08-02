@@ -5,7 +5,7 @@ const consumedAuthorizationIds: Set<string> = new Set();
 
 export type TerminalCommandAuthorization = {
 	id: string;
-	source: "model" | "user";
+	source: "model" | "policy" | "user";
 	requestId: string;
 	toolCallId: string;
 	workspaceId: string | null;
@@ -77,4 +77,3 @@ export function consumeTerminalCommandAuthorization(
 	consumedAuthorizationIds.add(authorization.id);
 	return { allowed: true, source: authorization.source };
 }
-

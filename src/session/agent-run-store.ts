@@ -96,6 +96,15 @@ export async function saveAgentRunState(state: AgentRunState): Promise<void> {
 	const db: DatabaseSync = await getSessionDatabase();
 	runSessionTransaction(db, (): void => {
 		upsertAgentRunState(db, state);
+		if (state.stage === "awaiting_approval" || state.stage === "awaiting_tool_budget") {
+			return;
+		}
+		const persisted = db.prepare(`
+			SELECT revision, stage FROM agent_runs WHERE run_id = ?
+		`).get(state.runId) as { revision: number; stage: string } | undefined;
+		if (persisted?.revision === state.revision && persisted.stage === state.stage) {
+			db.prepare("DELETE FROM agent_run_continuations WHERE run_id = ?").run(state.runId);
+		}
 	});
 }
 

@@ -317,7 +317,7 @@ async function executeSingleToolCall(
 		}
 		const commandAuthorization: TerminalCommandAuthorization | undefined = functionName === "mcp_terminal_run_command" && decision.review?.decision === "allow"
 			? createTerminalCommandAuthorization({
-				source: "model",
+				source: decision.review.source,
 				requestId: toolContext?.requestId ?? toolCall.id,
 				toolCallId: toolCall.id,
 				workspaceId,

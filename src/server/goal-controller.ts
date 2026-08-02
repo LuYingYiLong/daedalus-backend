@@ -12,6 +12,7 @@ import type { AiChatParams, ClientRequest } from "../protocol/types.js";
 import {
 	linkAgentGoalRun,
 	listAgentGoalRunIds,
+	dismissAgentGoalState,
 	readAgentGoalState,
 	readCurrentAgentGoal,
 	readLatestAgentGoal,
@@ -27,6 +28,7 @@ import { waitForGoalCheckpointWrites } from "./goal-checkpoints.js";
 import {
 	cloneAgentGoalState,
 	createAgentGoalState,
+	hasAgentGoalBudget,
 	isAgentGoalTerminal,
 	transitionAgentGoalState,
 	type AgentGoalPauseReason,
@@ -344,12 +346,6 @@ async function readGoalRunUsage(run: AgentRunState): Promise<{ tokens: number; e
 	};
 }
 
-function hasBudget(state: AgentGoalState): boolean {
-	return state.usage.cycles < state.budget.maxCycles
-		&& state.usage.tokens < state.budget.maxTokens
-		&& state.usage.activeMilliseconds < state.budget.maxActiveMinutes * 60_000;
-}
-
 function createContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunState[]): string {
 	const journal = previousRuns.flatMap((run: AgentRunState): ExecutionEvidence[] => run.checkpoint.evidence)
 		.slice(-32)
@@ -408,7 +404,7 @@ async function runNextGoalCycle(goalId: string): Promise<void> {
 		emitAgentGoalState(runtime.socket, runtime.session, state);
 		return;
 	}
-	if (!hasBudget(state)) {
+	if (!hasAgentGoalBudget(state)) {
 		state = transitionAgentGoalState(state, "paused", { readiness, pauseReason: "budget_exhausted", activeRunId: null });
 		emitAgentGoalState(runtime.socket, runtime.session, state);
 		return;
@@ -567,6 +563,18 @@ function createProgressFingerprint(runs: AgentRunState[], evaluation: GoalEvalua
 	});
 }
 
+export type GoalTerminalRunDisposition = "evaluate" | "fail" | "pause";
+
+export function resolveGoalTerminalRunDisposition(
+	goalStage: AgentGoalState["stage"],
+	runStage: AgentRunState["stage"]
+): GoalTerminalRunDisposition {
+	if (runStage === "failed") return "fail";
+	if (goalStage === "pausing" && (runStage === "completed" || runStage === "cancelled")) return "pause";
+	if (runStage === "cancelled") return "fail";
+	return "evaluate";
+}
+
 async function handleTerminalRun(socket: WebSocket, session: ClientSession, run: AgentRunState): Promise<void> {
 	const goalId = run.goalId;
 	if (goalId === undefined) return;
@@ -594,13 +602,30 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 	}
 	const elapsed = runtime.cycleStartedAt === null ? 0 : Math.max(0, Date.now() - runtime.cycleStartedAt);
 	runtime.cycleStartedAt = null;
-	if (state.stage === "pausing") {
+	const terminalDisposition = resolveGoalTerminalRunDisposition(state.stage, run.stage);
+	if (terminalDisposition === "pause") {
 		const paused = transitionAgentGoalState(state, "paused", {
 			pauseReason: "user_interruption",
 			activeRunId: null,
 			usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed }
 		});
 		emitAgentGoalState(socket, session, paused);
+		return;
+	}
+	if (terminalDisposition === "fail") {
+		const failed = transitionAgentGoalState(state, "failed", {
+			pauseReason: null,
+			activeRunId: null,
+			usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed },
+			evaluation: {
+				disposition: "blocked",
+				summary: run.terminal?.message ?? "The linked AgentRun failed.",
+				evidenceToolCallIds: [],
+				unmetCriteria: ["The execution run must complete successfully."],
+				nextAction: null
+			}
+		});
+		emitAgentGoalState(socket, session, failed);
 		return;
 	}
 	if (state.stage === "awaiting_approval" || state.stage === "awaiting_tool_budget") {
@@ -611,13 +636,6 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 		usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed }
 	});
 	emitAgentGoalState(socket, session, state);
-	if (run.stage !== "completed") {
-		const failed = transitionAgentGoalState(state, "failed", {
-			evaluation: { disposition: "blocked", summary: run.terminal?.message ?? "The linked AgentRun failed.", evidenceToolCallIds: [], unmetCriteria: ["The execution run must complete successfully."], nextAction: null }
-		});
-		emitAgentGoalState(socket, session, failed);
-		return;
-	}
 	runtime.evaluationInFlight = true;
 	try {
 		const evaluationStartedAt = Date.now();
@@ -741,6 +759,11 @@ export async function resumeAgentGoal(params: {
 }): Promise<AgentGoalState> {
 	const current = await readMutableGoal(params.goalId);
 	if (current.stage !== "paused") throw Object.assign(new Error(`Goal ${params.goalId} is not paused.`), { code: "goal_not_paused" });
+	if (!hasAgentGoalBudget(current)) {
+		throw Object.assign(new Error("Goal budget is exhausted. Add enough cycle, token, and active-time budget before resuming."), {
+			code: "goal_budget_exhausted"
+		});
+	}
 	const runIds = await listAgentGoalRunIds(params.goalId);
 	const previousRuns = await readGoalRuns(params.goalId);
 	runtimes.set(params.goalId, {
@@ -776,6 +799,19 @@ export async function cancelAgentGoal(socket: WebSocket, session: ClientSession,
 	runtimes.delete(goalId);
 	emitAgentGoalState(socket, session, next);
 	return next;
+}
+
+export async function dismissAgentGoal(goalId: string): Promise<{ goalId: string; dismissed: true }> {
+	const state: AgentGoalState | null = latestGoalStates.get(goalId) ?? await readAgentGoalState(goalId);
+	if (state === null) throw Object.assign(new Error(`Unknown goal: ${goalId}.`), { code: "goal_not_found" });
+	if (!isAgentGoalTerminal(state.stage)) {
+		throw Object.assign(new Error("Only a completed, failed, or cancelled Goal can be closed."), { code: "goal_not_terminal" });
+	}
+	if (!await dismissAgentGoalState(goalId)) {
+		throw Object.assign(new Error(`Goal ${goalId} could not be closed.`), { code: "goal_dismiss_failed" });
+	}
+	latestGoalStates.delete(goalId);
+	return { goalId, dismissed: true };
 }
 
 export async function extendAgentGoalBudget(

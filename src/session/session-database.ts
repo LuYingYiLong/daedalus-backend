@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 5;
+const DB_SCHEMA_VERSION: number = 6;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -146,7 +146,8 @@ function migrateSchema(db: DatabaseSync): void {
 			state_json TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			completed_at TEXT
+			completed_at TEXT,
+			dismissed_at TEXT
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_goals_active_session
 			ON agent_goals (session_id) WHERE completed_at IS NULL;
@@ -219,6 +220,10 @@ function migrateSchema(db: DatabaseSync): void {
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
 		db.exec("ALTER TABLE selection_ask_messages ADD COLUMN error_message TEXT");
+	}
+	const agentGoalColumns = db.prepare("PRAGMA table_info(agent_goals)").all() as Record<string, unknown>[];
+	if (!agentGoalColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "dismissed_at")) {
+		db.exec("ALTER TABLE agent_goals ADD COLUMN dismissed_at TEXT");
 	}
 }
 

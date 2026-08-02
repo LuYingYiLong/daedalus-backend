@@ -66,7 +66,7 @@ export type ApprovalDecision =
 	| { action: "deny"; reason: string; review?: ToolReviewAudit | undefined };
 
 export type ToolReviewAudit = {
-	source: "model";
+	source: "model" | "policy";
 	decision: "allow" | "ask_user" | "deny";
 	reason: string;
 	provider?: string | undefined;

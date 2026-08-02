@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	createAgentGoalState,
+	hasAgentGoalBudget,
 	transitionAgentGoalState
 } from "../../../src/workflow/agent-goal-state.js";
 
@@ -58,4 +59,21 @@ test("agent goal rejects illegal lane changes and supports a readiness recheck",
 	const resumed = transitionAgentGoalState(paused, "readiness", { pauseReason: null });
 	assert.equal(resumed.stage, "readiness");
 	assert.equal(resumed.pauseReason, null);
+});
+
+test("agent goal budget requires remaining capacity in every dimension", (): void => {
+	const initial = createGoal();
+	assert.equal(hasAgentGoalBudget(initial), true);
+	assert.equal(hasAgentGoalBudget({
+		...initial,
+		usage: { ...initial.usage, tokens: initial.budget.maxTokens }
+	}), false);
+	assert.equal(hasAgentGoalBudget({
+		...initial,
+		usage: { ...initial.usage, cycles: initial.budget.maxCycles }
+	}), false);
+	assert.equal(hasAgentGoalBudget({
+		...initial,
+		usage: { ...initial.usage, activeMilliseconds: initial.budget.maxActiveMinutes * 60_000 }
+	}), false);
 });

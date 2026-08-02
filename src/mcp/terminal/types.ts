@@ -53,7 +53,7 @@ export type TerminalCommandResult = {
 	workspaceRoot?: string | undefined;
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
-	authorizationSource?: "model" | "user" | undefined;
+	authorizationSource?: "model" | "policy" | "user" | undefined;
 	stdout: string;
 	stderr: string;
 	durationMs: number;
@@ -91,7 +91,7 @@ export type TerminalJobRecord = {
 	workspaceRoot?: string | undefined;
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
-	authorizationSource?: "model" | "user" | undefined;
+	authorizationSource?: "model" | "policy" | "user" | undefined;
 	error?: string | undefined;
 };
 

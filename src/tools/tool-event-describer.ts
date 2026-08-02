@@ -81,6 +81,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 			label: "generated image"
 		});
 	}
+	if (toolName === "mcp_image_inspect") {
+		const source: string = getStringArg(args, "source") ?? "image";
+		const label: string = getStringArg(args, "relativePath") ?? getStringArg(args, "imageId") ?? source;
+		const relativePath: string | undefined = getStringArg(args, "relativePath");
+		return createDisplay("image", "Image Inspection", "image", "Inspect image", label, relativePath === undefined
+			? { kind: "unknown", label }
+			: { kind: "file", path: relativePath, label });
+	}
 	if (toolName.startsWith("mcp_image_") && toolName.includes("workspace")) {
 		const relativePath: string = getStringArg(args, "relativePath") ?? "workspace image";
 		const category: ToolEventCategory = toolName.includes("propose")

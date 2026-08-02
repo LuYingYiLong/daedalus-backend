@@ -26,6 +26,7 @@ export type Skill = {
 
 const READ_TOOLS: string[] = [
 	"mcp_skills_load",
+	"mcp_image_inspect",
 	"mcp_godot_get_runtime_status",
 	"mcp_godot_get_godot_version",
 	"mcp_godot_search_documentation",

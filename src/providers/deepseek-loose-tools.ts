@@ -112,6 +112,8 @@ const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
 	inspect_live_node: "mcp_godot_editor_inspect_node",
 	editor_capture_scene_view: "mcp_godot_editor_capture_scene_view",
 	capture_scene_view: "mcp_godot_editor_capture_scene_view",
+	image_inspect: "mcp_image_inspect",
+	inspect_image: "mcp_image_inspect",
 	editor_apply_scene_patch: "mcp_godot_editor_apply_scene_patch",
 	apply_editor_scene_patch: "mcp_godot_editor_apply_scene_patch",
 	lsp_get_status: "mcp_godot_lsp_get_status",

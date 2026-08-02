@@ -42,11 +42,15 @@ async function getAllowedCatalogEntries(session: ClientSession, mode: ExternalMc
 	});
 	const webSearchAvailable: boolean = await isWebSearchToolAvailable();
 	return catalog.getEntries()
+		.filter((entry: ToolCatalogEntry): boolean => entry.id !== "mcp_image_inspect")
 		.filter((entry: ToolCatalogEntry): boolean => entry.id !== "mcp_web_search" || webSearchAvailable)
 		.filter((entry: ToolCatalogEntry): boolean => isToolAllowedForExternalMcpMode(mode, entry.id, entry.policy));
 }
 
 async function findCatalogEntry(session: ClientSession, toolName: string): Promise<ToolCatalogEntry | undefined> {
+	if (toolName === "mcp_image_inspect") {
+		return undefined;
+	}
 	if (toolName === "mcp_web_search" && !(await isWebSearchToolAvailable())) {
 		return undefined;
 	}

@@ -9,6 +9,7 @@ import { getToolPolicy } from "./tool-policy.js";
 import { captureFileEditBatchDraft, type FileEditBatchDraft } from "./file-edit-snapshots.js";
 import { logger } from "../logger.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
+import type { ProviderToolImageReference } from "../providers/tool-image-reference.js";
 import { stripApprovalReasonArg } from "./approval-reason.js";
 import type { TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
 import { createSourceScopedWorkspace, findWorkspace } from "../workspace/registry.js";
@@ -42,6 +43,7 @@ export type IdempotentToolExecutionResult = {
 	fingerprint?: string | undefined;
 	fileEditDraft?: FileEditBatchDraft | undefined;
 	imageGeneration?: ImageGenerationResult | undefined;
+	imageReferences?: ProviderToolImageReference[] | undefined;
 };
 
 type ToolExecutionIdentity = {
@@ -468,6 +470,35 @@ async function executeWebSearchTool(args: Record<string, unknown>, abortSignal?:
 	};
 }
 
+async function executeImageInspectTool(
+	args: Record<string, unknown>,
+	workspaceId?: string | undefined,
+	sessionId?: string | undefined
+): Promise<IdempotentToolExecutionResult> {
+	const { resolveImageInspection } = await import("../providers/tool-image-reference.js");
+	const inspection = await resolveImageInspection(args, { workspaceId, sessionId });
+	const content: string = JSON.stringify({
+		ok: true,
+		image: {
+			title: inspection.reference.title,
+			mimeType: inspection.reference.mimeType,
+			byteSize: inspection.reference.byteSize,
+			width: inspection.reference.width ?? null,
+			height: inspection.reference.height ?? null,
+			sha256: inspection.reference.sha256
+		},
+		route: "pending",
+		artifactRefs: [inspection.artifactRef]
+	});
+	return {
+		content,
+		rawContentLength: content.length,
+		truncated: false,
+		reused: false,
+		imageReferences: [inspection.reference]
+	};
+}
+
 export async function executeLlmToolWithIdempotency(
 	mcpHost: McpHost,
 	llmToolName: string,
@@ -481,6 +512,9 @@ export async function executeLlmToolWithIdempotency(
 ): Promise<IdempotentToolExecutionResult> {
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
+	}
+	if (llmToolName === "mcp_image_inspect") {
+		return executeImageInspectTool(args, workspaceId, sessionId);
 	}
 	if (
 		llmToolName === "mcp_image_propose_import_to_workspace"

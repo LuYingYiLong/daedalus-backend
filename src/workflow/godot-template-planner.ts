@@ -27,6 +27,7 @@ const TEXT_FILE_READ_TOOLS: string[] = [
 ];
 
 const SCENE_READ_TOOLS: string[] = [
+	"mcp_image_inspect",
 	"mcp_godot_search_documentation",
 	"mcp_godot_list_scenes",
 	"mcp_godot_read_text_file",

@@ -35,6 +35,13 @@ import {
 	getInitialMaxToolSteps,
 	shouldPauseForToolBudget
 } from "./agent-tool-budget.js";
+import { injectToolImagesIntoAnthropicMessages } from "./provider-tool-image-content.js";
+import type { ProviderToolImageReference } from "./tool-image-reference.js";
+import {
+	createDelegatedObservationText,
+	isProviderImageInputUnsupportedError,
+	recognizeToolImageReferences
+} from "./tool-image-recognition.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -133,9 +140,13 @@ async function createFinalAnswer(
 	messages: AnthropicMessageParam[],
 	systemPrompt: string,
 	reason: string,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	toolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<string> {
-	const finalMessages: AnthropicMessageParam[] = [...messages, createFinalAnswerMessage(reason)];
+	const finalMessages: AnthropicMessageParam[] = await injectToolImagesIntoAnthropicMessages(
+		[...messages, createFinalAnswerMessage(reason)],
+		toolImageReferences
+	);
 	const message = await createAnthropicMessage(params, options, finalMessages, systemPrompt, undefined, abortSignal);
 	const text: string = extractAnthropicText(message.content);
 	return text.length > 0 ? text : createToolResultLimitFallback(reason);
@@ -195,26 +206,42 @@ async function runAgentLoop(
 	onEvent?: OnToolEvent,
 	abortSignal?: AbortSignal | undefined,
 	toolResultEnricher?: ToolResultEnricher | undefined,
-	toolContext?: ToolExecutionContext | undefined
+	toolContext?: ToolExecutionContext | undefined,
+	initialToolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<AnthropicCompatibleAgentResult> {
 	let totalToolResultChars: number = initialToolResultChars;
+	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const anthropicTools: AnthropicToolDefinition[] = createAnthropicTools(tools);
+	let imageFallbackAttempted: boolean = false;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
 
-		const assistant = await readAssistantMessage(
-			params,
-			options,
-			messages,
-			systemPrompt,
-			anthropicTools,
-			streamAssistant,
-			onEvent,
-			abortSignal
-		);
+		let assistant: { text: string; toolUseBlocks: AnthropicToolUseBlock[] };
+		try {
+			assistant = await readAssistantMessage(
+				params,
+				options,
+				await injectToolImagesIntoAnthropicMessages(messages, toolImageReferences),
+				systemPrompt,
+				anthropicTools,
+				streamAssistant,
+				onEvent,
+				abortSignal
+			);
+		} catch (error: unknown) {
+			if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {
+				const observation = await recognizeToolImageReferences(toolImageReferences, options, params.message, abortSignal, false);
+				messages.push({ role: "user", content: createDelegatedObservationText(observation) });
+				toolImageReferences.splice(0, toolImageReferences.length);
+				imageFallbackAttempted = true;
+				step -= 1;
+				continue;
+			}
+			throw error;
+		}
 
 		if (assistant.toolUseBlocks.length === 0) {
 			if (assistant.text.length === 0) {
@@ -226,7 +253,7 @@ async function runAgentLoop(
 		const toolCalls: ChatCompletionMessageToolCall[] = assistant.toolUseBlocks.map(createToolCallFromAnthropicBlock);
 		messages.push(createAssistantMessage(assistant.text, assistant.toolUseBlocks));
 
-		let toolResults: ChatCompletionToolMessageParam[];
+		let toolResults: Awaited<ReturnType<typeof dispatchToolCalls>>;
 		try {
 			toolResults = await dispatchToolCalls(mcpHost, toolCalls, step, gateway, onEvent, toolResultEnricher, toolContext, abortSignal);
 		} catch (error: unknown) {
@@ -257,7 +284,8 @@ async function runAgentLoop(
 						nextStep: step + 1,
 						totalToolResultChars,
 						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars
+						toolResultCharLimit: maxTotalToolResultChars,
+						toolImageReferences: [...toolImageReferences]
 					}
 				};
 			}
@@ -267,6 +295,9 @@ async function runAgentLoop(
 		const resultBlocks: AnthropicToolResultBlock[] = [];
 		let toolResultLimitReason: string | null = null;
 		for (const result of toolResults) {
+			if (result.imageReferences !== undefined) {
+				toolImageReferences.push(...result.imageReferences);
+			}
 			const budgetedResult = fitToolResultContent(extractToolResultText(result), totalToolResultChars, maxTotalToolResultChars);
 			totalToolResultChars += budgetedResult.chars;
 			resultBlocks.push(createAnthropicToolResultBlock({
@@ -296,11 +327,20 @@ async function runAgentLoop(
 						nextStep: step + 1,
 						totalToolResultChars,
 						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars
+						toolResultCharLimit: maxTotalToolResultChars,
+						toolImageReferences: [...toolImageReferences]
 					}
 				});
 			}
-			const finalText: string = await createFinalAnswer(params, options, messages, systemPrompt, reason, abortSignal);
+			const finalText: string = await createFinalAnswer(
+				params,
+				options,
+				messages,
+				systemPrompt,
+				reason,
+				abortSignal,
+				toolImageReferences
+			);
 			if (streamAssistant) {
 				onEvent?.({ type: "ai.delta", text: finalText });
 			}
@@ -324,7 +364,8 @@ async function runAgentLoop(
 				nextStep: maxSteps,
 				totalToolResultChars,
 				maxSteps,
-				toolResultCharLimit: maxTotalToolResultChars
+				toolResultCharLimit: maxTotalToolResultChars,
+				toolImageReferences: [...toolImageReferences]
 			}
 		});
 	}
@@ -335,7 +376,8 @@ async function runAgentLoop(
 		messages,
 		systemPrompt,
 		stepLimitReason,
-		abortSignal
+		abortSignal,
+		toolImageReferences
 	);
 	if (streamAssistant) {
 		onEvent?.({ type: "ai.delta", text: finalText });
@@ -466,7 +508,8 @@ async function continueAnthropicCompatibleAgentInternal(
 			messages,
 			continuation.systemPrompt,
 			reason,
-			abortSignal
+			abortSignal,
+			continuation.toolImageReferences ?? []
 		);
 		if (streamAssistant) {
 			onEvent?.({ type: "ai.delta", text: finalText });
@@ -490,7 +533,8 @@ async function continueAnthropicCompatibleAgentInternal(
 		onEvent,
 		abortSignal,
 		toolResultEnricher,
-		toolContext
+		toolContext,
+		continuation.toolImageReferences ?? []
 	);
 }
 
@@ -555,7 +599,8 @@ async function continueAnthropicCompatibleAgentAfterToolBudgetInternal(
 		onEvent,
 		abortSignal,
 		toolResultEnricher,
-		toolContext
+		toolContext,
+		continuation.toolImageReferences ?? []
 	);
 }
 
@@ -604,7 +649,8 @@ async function finalizeAnthropicCompatibleAgentAfterToolBudgetInternal(
 		[...continuation.messages],
 		continuation.systemPrompt,
 		reason,
-		abortSignal
+		abortSignal,
+		continuation.toolImageReferences ?? []
 	);
 	if (streamAssistant) {
 		onEvent?.({ type: "ai.delta", text: finalText });

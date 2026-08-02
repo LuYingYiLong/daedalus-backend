@@ -8,8 +8,12 @@ import { WorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-c
 import { resolveProviderAdapter } from "./provider-adapter.js";
 import "./provider-adapters.js";
 import { resolveImageGenerationAvailability, type ImageGenerationAvailability } from "./image-generation.js";
+import { resolveChatModel } from "./deepseek-client.js";
+import { modelSupportsImageInput } from "./provider-image-content.js";
+import { resolveProviderTaskModelOptions } from "./task-model-routing.js";
 
 const IMAGE_GENERATION_TOOL_NAME: string = "mcp_image_generate";
+const IMAGE_INSPECTION_TOOL_NAME: string = "mcp_image_inspect";
 const IMAGE_AVAILABILITY_CACHE_TTL_MS: number = 5 * 60 * 1000;
 const imageAvailabilityByRequestId: Map<string, { value: ImageGenerationAvailability; expiresAt: number }> = new Map();
 
@@ -39,30 +43,57 @@ async function getImageGenerationAvailability(toolContext?: ToolExecutionContext
 async function prepareToolAvailability(
 	allowedToolNames: readonly string[] | undefined,
 	systemPrompt: string,
-	toolContext?: ToolExecutionContext | undefined
+	toolContext: ToolExecutionContext | undefined,
+	options: ProviderChatOptions
 ): Promise<{ allowedToolNames: readonly string[] | undefined; systemPrompt: string }> {
-	const includesImageGeneration: boolean = allowedToolNames === undefined
-		|| allowedToolNames.includes(IMAGE_GENERATION_TOOL_NAME);
+	let effectiveAllowedToolNames: readonly string[] | undefined = allowedToolNames;
+	let effectiveSystemPrompt: string = systemPrompt;
+	const includesImageInspection: boolean = effectiveAllowedToolNames === undefined
+		|| effectiveAllowedToolNames.includes(IMAGE_INSPECTION_TOOL_NAME);
+	if (includesImageInspection) {
+		let available: boolean = toolContext?.clientType === "studio"
+			&& (toolContext?.workspaceId !== undefined || toolContext?.sessionId !== undefined);
+		if (available) {
+			const currentModel: string = resolveChatModel(options);
+			available = await modelSupportsImageInput(options.provider, currentModel);
+			if (!available) {
+				try {
+					const imageModel = await resolveProviderTaskModelOptions("imageRecognition", options);
+					available = await modelSupportsImageInput(imageModel.provider, imageModel.model);
+				} catch {
+					available = false;
+				}
+			}
+		}
+		if (!available) {
+			effectiveAllowedToolNames = (effectiveAllowedToolNames ?? new WorkspaceToolCatalog(toolContext).getEntries().map((entry): string => entry.id))
+				.filter((toolName: string): boolean => toolName !== IMAGE_INSPECTION_TOOL_NAME);
+			effectiveSystemPrompt = `${effectiveSystemPrompt}\n\nRuntime capability note: image inspection is unavailable for this run. The current model cannot accept images and no usable image recognition model is configured.`;
+		}
+	}
+	const includesImageGeneration: boolean = effectiveAllowedToolNames === undefined
+		|| effectiveAllowedToolNames.includes(IMAGE_GENERATION_TOOL_NAME);
 	if (!includesImageGeneration) {
-		return { allowedToolNames, systemPrompt };
+		return { allowedToolNames: effectiveAllowedToolNames, systemPrompt: effectiveSystemPrompt };
 	}
 	const availability: ImageGenerationAvailability = await getImageGenerationAvailability(toolContext);
 	if (availability.available) {
-		return { allowedToolNames, systemPrompt };
+		return { allowedToolNames: effectiveAllowedToolNames, systemPrompt: effectiveSystemPrompt };
 	}
-	const effectiveNames: string[] = (allowedToolNames ?? new WorkspaceToolCatalog(toolContext).getEntries().map((entry): string => entry.id))
+	const effectiveNames: string[] = (effectiveAllowedToolNames ?? new WorkspaceToolCatalog(toolContext).getEntries().map((entry): string => entry.id))
 		.filter((toolName: string): boolean => toolName !== IMAGE_GENERATION_TOOL_NAME);
 	return {
 		allowedToolNames: effectiveNames,
-		systemPrompt: `${systemPrompt}\n\nRuntime capability note: image generation is unavailable for this run and mcp_image_generate is not exposed. Reason: ${availability.reason ?? "not configured"}`
+		systemPrompt: `${effectiveSystemPrompt}\n\nRuntime capability note: image generation is unavailable for this run and mcp_image_generate is not exposed. Reason: ${availability.reason ?? "not configured"}`
 	};
 }
 
 async function filterContinuationTools(
 	allowedToolNames: readonly string[] | undefined,
-	toolContext?: ToolExecutionContext | undefined
+	toolContext: ToolExecutionContext | undefined,
+	options: ProviderChatOptions
 ): Promise<readonly string[] | undefined> {
-	return (await prepareToolAvailability(allowedToolNames, "", toolContext)).allowedToolNames;
+	return (await prepareToolAvailability(allowedToolNames, "", toolContext, options)).allowedToolNames;
 }
 
 function assertContinuationMatchesAdapter(options: ProviderChatOptions, continuation: AgentContinuation): void {
@@ -79,6 +110,17 @@ function assertContinuationMatchesAdapter(options: ProviderChatOptions, continua
 	}
 }
 
+function withImageRoutingContext(
+	toolContext: ToolExecutionContext | undefined,
+	options: ProviderChatOptions,
+	contextText: string
+): ToolExecutionContext {
+	return {
+		...(toolContext ?? {}),
+		imageRouting: { options, contextText }
+	};
+}
+
 export async function runProviderAgent(
 	params: AiChatParams,
 	options: ProviderChatOptions,
@@ -92,8 +134,8 @@ export async function runProviderAgent(
 	toolResultEnricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
-	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext);
-	return resolveProviderAdapter(options).runAgent(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, toolContext);
+	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
+	return resolveProviderAdapter(options).runAgent(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function runProviderAgentStreaming(
@@ -109,8 +151,8 @@ export async function runProviderAgentStreaming(
 	toolResultEnricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
-	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext);
-	return resolveProviderAdapter(options).runAgentStreaming(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, toolContext);
+	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
+	return resolveProviderAdapter(options).runAgentStreaming(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function continueProviderAgent(
@@ -126,7 +168,7 @@ export async function continueProviderAgent(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgent(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext), onEvent, abortSignal, toolContext);
+	return resolveProviderAdapter(options).continueAgent(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function continueProviderAgentStreaming(
@@ -142,7 +184,7 @@ export async function continueProviderAgentStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentStreaming(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext), onEvent, abortSignal, toolContext);
+	return resolveProviderAdapter(options).continueAgentStreaming(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function continueProviderAgentAfterToolBudget(
@@ -157,7 +199,7 @@ export async function continueProviderAgentAfterToolBudget(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentAfterToolBudget(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext), onEvent, abortSignal, toolContext);
+	return resolveProviderAdapter(options).continueAgentAfterToolBudget(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function continueProviderAgentAfterToolBudgetStreaming(
@@ -172,7 +214,7 @@ export async function continueProviderAgentAfterToolBudgetStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentAfterToolBudgetStreaming(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext), onEvent, abortSignal, toolContext);
+	return resolveProviderAdapter(options).continueAgentAfterToolBudgetStreaming(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
 }
 
 export async function finalizeProviderAgentAfterToolBudget(

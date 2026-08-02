@@ -109,6 +109,17 @@ test("image generation tool accepts custom aspect ratios", (): void => {
 	assert.match(String(aspectRatio?.description ?? ""), /2:1/u);
 });
 
+test("image inspection is a read tool for workspace and session images", (): void => {
+	const catalog = createWorkspaceToolCatalog();
+	const imageInspect = catalog.getEntry("mcp_image_inspect");
+	assert.equal(imageInspect?.policy.risk, "read");
+	assert.deepEqual(imageInspect?.phaseEligibility, ["read", "verify", "write"]);
+	const properties = getFunctionToolProperties(imageInspect!.definition);
+	assert.deepEqual((properties.source as Record<string, unknown>).enum, ["workspace", "session"]);
+	assert.equal((properties.relativePath as Record<string, unknown>).type, "string");
+	assert.equal((properties.imageId as Record<string, unknown>).type, "string");
+});
+
 test("workspace runtime filter hides Godot tools without an active workspace", (): void => {
 	const names: string[] = filterToolNamesForWorkspace([
 		"mcp_skills_load",
@@ -116,6 +127,7 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_skills_create",
 		"mcp_godot_get_runtime_status",
 		"mcp_image_generate",
+		"mcp_image_inspect",
 		"mcp_web_search",
 		CUSTOM_MCP_TOOLS_SENTINEL,
 		"mcp_custom_context7_get_library_docs_12345678"
@@ -123,6 +135,7 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 	assert.deepEqual(names, [
 		"mcp_custom_context7_get_library_docs_12345678",
 		"mcp_image_generate",
+		"mcp_image_inspect",
 		"mcp_skills_create",
 		"mcp_skills_load",
 		"mcp_skills_propose_create",
@@ -131,6 +144,7 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 	].sort());
 	assert.deepEqual(getNoWorkspaceToolNames().sort(), [
 		"mcp_image_generate",
+		"mcp_image_inspect",
 		"mcp_skills_create",
 		"mcp_skills_load",
 		"mcp_skills_propose_create",

@@ -38,6 +38,13 @@ import {
 import type { NormalizedLlmUsage } from "../usage/metrics-types.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIResponsesUsage } from "../usage/usage-parser.js";
+import { injectToolImagesIntoResponseInput } from "./provider-tool-image-content.js";
+import type { ProviderToolImageReference } from "./tool-image-reference.js";
+import {
+	createDelegatedObservationText,
+	isProviderImageInputUnsupportedError,
+	recognizeToolImageReferences
+} from "./tool-image-recognition.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -335,11 +342,17 @@ async function createFinalAnswer(
 	instructions: string,
 	inputItems: ResponseInputItem[],
 	reason: string,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	toolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<string> {
 	const client = createOpenAIResponsesClient(options);
 	const finalInstructions: string = `${instructions}\n\n${FINALIZE_AFTER_TOOL_LIMIT_PROMPT}\n\n收束原因：${reason}`;
-	const requestBody: ResponseCreateParamsNonStreaming = createRequestBody(params, options, finalInstructions, inputItems);
+	const requestBody: ResponseCreateParamsNonStreaming = createRequestBody(
+		params,
+		options,
+		finalInstructions,
+		await injectToolImagesIntoResponseInput(inputItems, toolImageReferences)
+	);
 	const startedAtMs: number = Date.now();
 	let response: Response;
 	try {
@@ -391,29 +404,48 @@ async function runResponsesAgentLoop(
 	onEvent?: OnToolEvent,
 	abortSignal?: AbortSignal | undefined,
 	toolResultEnricher?: ToolResultEnricher | undefined,
-	toolContext?: ToolExecutionContext | undefined
+	toolContext?: ToolExecutionContext | undefined,
+	initialToolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<ProviderAgentResult> {
 	let totalToolResultChars: number = initialToolResultChars;
+	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const tools: Tool[] = convertToolDefinitions(chatTools);
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(chatTools);
 	let toolProtocolViolationRetries: number = 0;
+	let imageFallbackAttempted: boolean = false;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
 
-		const assistantMessage: ResponsesAssistantMessage = await readResponsesAssistantMessage(
-			params,
-			options,
-			instructions,
-			inputItems,
-			tools,
-			streamAssistant,
-			shouldRequireToolCallOnStep(params, step, startStep),
-			onEvent,
-			abortSignal
-		);
+		let assistantMessage: ResponsesAssistantMessage;
+		try {
+			assistantMessage = await readResponsesAssistantMessage(
+				params,
+				options,
+				instructions,
+				await injectToolImagesIntoResponseInput(inputItems, toolImageReferences),
+				tools,
+				streamAssistant,
+				shouldRequireToolCallOnStep(params, step, startStep),
+				onEvent,
+				abortSignal
+			);
+		} catch (error: unknown) {
+			if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {
+				const observation = await recognizeToolImageReferences(toolImageReferences, options, params.message, abortSignal, false);
+				inputItems.push({
+					role: "user",
+					content: [{ type: "input_text", text: createDelegatedObservationText(observation) }]
+				} as unknown as ResponseInputItem);
+				toolImageReferences.splice(0, toolImageReferences.length);
+				imageFallbackAttempted = true;
+				step -= 1;
+				continue;
+			}
+			throw error;
+		}
 		const toolCalls: ChatCompletionMessageToolCall[] = convertResponsesToolCalls(assistantMessage.toolCalls, allowedToolNames);
 
 		if (toolCalls.length === 0) {
@@ -448,6 +480,11 @@ async function runResponsesAgentLoop(
 
 		try {
 			const toolResults = await dispatchToolCalls(mcpHost, toolCalls, step, gateway, onEvent, toolResultEnricher, toolContext, abortSignal);
+			for (const result of toolResults) {
+				if (result.imageReferences !== undefined) {
+					toolImageReferences.push(...result.imageReferences);
+				}
+			}
 			const appendResult: AppendToolResultItemsResult = appendToolResultItems(inputItems, toolResults, totalToolResultChars, maxTotalToolResultChars);
 			totalToolResultChars += appendResult.addedChars;
 			if (appendResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
@@ -467,7 +504,8 @@ async function runResponsesAgentLoop(
 							nextStep: step + 1,
 							totalToolResultChars,
 							maxSteps,
-							toolResultCharLimit: maxTotalToolResultChars
+							toolResultCharLimit: maxTotalToolResultChars,
+							toolImageReferences: [...toolImageReferences]
 						}
 					});
 				}
@@ -477,7 +515,8 @@ async function runResponsesAgentLoop(
 					instructions,
 					inputItems,
 					reason,
-					abortSignal
+					abortSignal,
+					toolImageReferences
 				);
 				if (streamAssistant) {
 					onEvent?.({ type: "ai.delta", text: finalText });
@@ -505,7 +544,8 @@ async function runResponsesAgentLoop(
 						nextStep: step + 1,
 						totalToolResultChars,
 						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars
+						toolResultCharLimit: maxTotalToolResultChars,
+						toolImageReferences: [...toolImageReferences]
 					}
 				};
 			}
@@ -530,7 +570,8 @@ async function runResponsesAgentLoop(
 						nextStep: step + 1,
 						totalToolResultChars,
 						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars
+						toolResultCharLimit: maxTotalToolResultChars,
+						toolImageReferences: [...toolImageReferences]
 					}
 				});
 			}
@@ -540,7 +581,8 @@ async function runResponsesAgentLoop(
 				instructions,
 				inputItems,
 				reason,
-				abortSignal
+				abortSignal,
+				toolImageReferences
 			);
 			if (streamAssistant) {
 				onEvent?.({ type: "ai.delta", text: finalText });
@@ -565,7 +607,8 @@ async function runResponsesAgentLoop(
 				nextStep: maxSteps,
 				totalToolResultChars,
 				maxSteps,
-				toolResultCharLimit: maxTotalToolResultChars
+				toolResultCharLimit: maxTotalToolResultChars,
+				toolImageReferences: [...toolImageReferences]
 			}
 		});
 	}
@@ -576,7 +619,8 @@ async function runResponsesAgentLoop(
 		instructions,
 		inputItems,
 		stepLimitReason,
-		abortSignal
+		abortSignal,
+		toolImageReferences
 	);
 	if (streamAssistant) {
 		onEvent?.({ type: "ai.delta", text: finalText });
@@ -716,7 +760,8 @@ export async function continueOpenAIResponsesAgent(
 				continuation.instructions,
 				inputItems,
 				reason,
-				abortSignal
+				abortSignal,
+				continuation.toolImageReferences ?? []
 			)
 		};
 	}
@@ -738,7 +783,8 @@ export async function continueOpenAIResponsesAgent(
 		onEvent,
 		abortSignal,
 		toolResultEnricher,
-		toolContext
+		toolContext,
+		continuation.toolImageReferences ?? []
 	);
 }
 
@@ -794,7 +840,8 @@ export async function continueOpenAIResponsesAgentStreaming(
 			continuation.instructions,
 			inputItems,
 			reason,
-			abortSignal
+			abortSignal,
+			continuation.toolImageReferences ?? []
 		);
 		onEvent?.({ type: "ai.delta", text: finalText });
 		return { status: "completed", text: finalText };
@@ -817,7 +864,8 @@ export async function continueOpenAIResponsesAgentStreaming(
 		onEvent,
 		abortSignal,
 		toolResultEnricher,
-		toolContext
+		toolContext,
+		continuation.toolImageReferences ?? []
 	);
 }
 
@@ -854,7 +902,8 @@ async function continueOpenAIResponsesAgentAfterToolBudgetInternal(
 		onEvent,
 		abortSignal,
 		toolResultEnricher,
-		toolContext
+		toolContext,
+		continuation.toolImageReferences ?? []
 	);
 }
 
@@ -903,7 +952,8 @@ async function finalizeOpenAIResponsesAgentAfterToolBudgetInternal(
 		continuation.instructions,
 		[...continuation.inputItems],
 		reason,
-		abortSignal
+		abortSignal,
+		continuation.toolImageReferences ?? []
 	);
 	if (streamAssistant) {
 		onEvent?.({ type: "ai.delta", text: finalText });

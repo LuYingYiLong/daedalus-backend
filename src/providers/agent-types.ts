@@ -2,6 +2,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { AnthropicMessageParam } from "./anthropic-compatible-client.js";
 import type { ExecutionDecision } from "../workflow/agent-run-state.js";
+import type { ProviderToolImageReference } from "./tool-image-reference.js";
 
 export type ChatCompletionsAgentContinuation = {
 	kind?: "chat_completions";
@@ -10,6 +11,7 @@ export type ChatCompletionsAgentContinuation = {
 	totalToolResultChars: number;
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
+	toolImageReferences?: ProviderToolImageReference[] | undefined;
 };
 
 export type ResponsesAgentContinuation = {
@@ -20,6 +22,7 @@ export type ResponsesAgentContinuation = {
 	totalToolResultChars: number;
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
+	toolImageReferences?: ProviderToolImageReference[] | undefined;
 };
 
 export type AnthropicMessagesAgentContinuation = {
@@ -30,6 +33,7 @@ export type AnthropicMessagesAgentContinuation = {
 	totalToolResultChars: number;
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
+	toolImageReferences?: ProviderToolImageReference[] | undefined;
 };
 
 export type AgentContinuation = ChatCompletionsAgentContinuation | ResponsesAgentContinuation | AnthropicMessagesAgentContinuation;

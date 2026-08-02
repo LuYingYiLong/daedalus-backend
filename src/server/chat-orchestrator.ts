@@ -676,6 +676,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			editorInstanceId: params.session.editorInstanceId,
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
+			clientType: getClientConnection(params.socket)?.clientType,
 			executionControl: params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
 				? { lane: params.routeDecision.lane }
 				: undefined
@@ -1469,6 +1470,7 @@ async function runToolBudgetDecisionContinuation(params: {
 			editorInstanceId: session.editorInstanceId,
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
+			clientType: getClientConnection(socket)?.clientType,
 			executionControl: pendingContinuation.executionControl
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"

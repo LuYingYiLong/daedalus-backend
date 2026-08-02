@@ -8,6 +8,7 @@ import type { IdempotentToolExecutionResult } from "./tool-idempotency.js";
 import { parseToolResultSummary, type ParsedToolResultSummary } from "./tool-result-parser.js";
 import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
+import type { ProviderToolImageReference } from "../providers/tool-image-reference.js";
 import type { ToolExecutionContext } from "./tool-catalog.js";
 import { logger } from "../logger.js";
 import { getApprovalReasonFromArgs, stripApprovalReasonArg } from "./approval-reason.js";
@@ -32,8 +33,13 @@ export type ToolEvent =
 export type OnToolEvent = (event: ToolEvent) => void;
 
 const FULL_RESULT_ENRICHMENT_TOOLS: ReadonlySet<string> = new Set([
-	"mcp_godot_editor_capture_scene_view"
+	"mcp_godot_editor_capture_scene_view",
+	"mcp_image_inspect"
 ]);
+
+export type DispatchedToolResult = ChatCompletionToolMessageParam & {
+	imageReferences?: ProviderToolImageReference[] | undefined;
+};
 
 export type ToolProgressUpdate = {
 	status: "message" | "success" | "error";
@@ -135,7 +141,7 @@ async function executeSingleToolCall(
 	enricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined,
 	abortSignal?: AbortSignal | undefined
-): Promise<ChatCompletionToolMessageParam> {
+): Promise<DispatchedToolResult> {
 	if (abortSignal?.aborted) {
 		throw new Error("Request cancelled");
 	}
@@ -332,9 +338,23 @@ async function executeSingleToolCall(
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
-		const result: IdempotentToolExecutionResult = enricher === undefined
+		const effectiveEnricher: ToolResultEnricher | undefined = enricher ?? (
+			functionName === "mcp_image_inspect" && toolContext?.imageRouting !== undefined
+				? async (input): Promise<IdempotentToolExecutionResult> => {
+					const { routeToolImageExecutionResult } = await import("../providers/tool-image-recognition.js");
+					return routeToolImageExecutionResult({
+						result: input.result,
+						options: toolContext.imageRouting!.options,
+						contextText: toolContext.imageRouting!.contextText,
+						abortSignal,
+						onProgress: input.onProgress
+					});
+				}
+				: undefined
+		);
+		const result: IdempotentToolExecutionResult = effectiveEnricher === undefined
 			? rawResult
-			: await enricher({
+			: await effectiveEnricher({
 				toolName: functionName,
 				args: executionArgs,
 				result: rawResult,
@@ -394,7 +414,11 @@ async function executeSingleToolCall(
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: result.content
+			content: result.content,
+			imageReferences: result.imageReferences?.map((reference: ProviderToolImageReference): ProviderToolImageReference => ({
+				...reference,
+				toolCallId: toolCall.id
+			}))
 		};
 	} catch (error: unknown) {
 		if (abortSignal?.aborted) {
@@ -431,7 +455,7 @@ export async function dispatchToolCalls(
 	enricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined,
 	abortSignal?: AbortSignal | undefined
-): Promise<ChatCompletionToolMessageParam[]> {
+): Promise<DispatchedToolResult[]> {
 	const controlCalls: ChatCompletionMessageToolCall[] = toolCalls.filter((
 		toolCall: ChatCompletionMessageToolCall
 	): boolean => toolCall.type === "function" && toolCall.function.name === EXECUTION_CONTROL_TOOL_NAME);
@@ -455,7 +479,7 @@ export async function dispatchToolCalls(
 		throw new ExecutionDecisionSignal(parseExecutionDecision(rawDecision, toolContext.executionControl));
 	}
 
-	const results: ChatCompletionToolMessageParam[] = [];
+	const results: DispatchedToolResult[] = [];
 
 	for (const toolCall of toolCalls) {
 		const result = await executeSingleToolCall(mcpHost, toolCall, step, gateway, onEvent, enricher, toolContext, abortSignal);

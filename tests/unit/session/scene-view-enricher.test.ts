@@ -31,6 +31,7 @@ test("scene view enrich stores the image and hides base64 when vision is unavail
 			options: { provider: "deepseek", apiKey: "test-key", model: "deepseek-v4-flash" },
 			phaseInstruction: "检查场景布局"
 		});
+		const imageBytes: Buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlDkAAAAASUVORK5CYII=", "base64");
 
 		const progressCodes: string[] = [];
 		const result = await sceneView.enricher({
@@ -46,8 +47,8 @@ test("scene view enrich stores the image and hides base64 when vision is unavail
 						ok: true,
 						view: "2d",
 						mimeType: "image/png",
-						dataUrl: "data:image/png;base64,aGVsbG8=",
-						byteSize: 5,
+						dataUrl: `data:image/png;base64,${imageBytes.toString("base64")}`,
+						byteSize: imageBytes.byteLength,
 						width: 32,
 						height: 24
 					}
@@ -58,14 +59,15 @@ test("scene view enrich stores the image and hides base64 when vision is unavail
 			}
 		});
 
-		assert.equal(result.content.includes("aGVsbG8="), false);
+		assert.equal(result.content.includes(imageBytes.toString("base64")), false);
 		const payload = JSON.parse(result.content) as Record<string, unknown>;
 		assert.equal((payload.analysis as Record<string, unknown>).status, "unavailable");
 		assert.equal(sceneView.getCapturedAttachments()[0]?.source, "editor");
 		assert.deepEqual(progressCodes, [
 			"scene_view.capture.started",
 			"scene_view.capture.completed",
-			"scene_view.analysis.unavailable"
+			"image.inspect.delegating",
+			"image.inspect.unavailable"
 		]);
 	});
 });

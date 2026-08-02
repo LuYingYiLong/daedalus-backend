@@ -17,6 +17,7 @@ import {
 	type ExecutionControlContext
 } from "./execution-control.js";
 import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -24,6 +25,11 @@ export type ToolExecutionContext = {
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
 	executionControl?: ExecutionControlContext | undefined;
+	clientType?: "studio" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
+	imageRouting?: {
+		options: ProviderChatOptions;
+		contextText: string;
+	} | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -35,6 +41,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 	read: [
 		"mcp_skills_load",
 		"mcp_web_search",
+		"mcp_image_inspect",
 		"mcp_workspace_list_files",
 		"mcp_workspace_read_text_file",
 		"mcp_workspace_search_text",
@@ -155,6 +162,7 @@ const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_skills_propose_create",
 	"mcp_skills_create",
 	"mcp_image_generate",
+	"mcp_image_inspect",
 	"mcp_web_search"
 ]);
 

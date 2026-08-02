@@ -367,14 +367,29 @@ export async function saveImageAttachment(input: SaveImageAttachmentInput): Prom
 }
 
 export async function readImageAttachmentDataUrl(sessionId: string, attachmentId: string): Promise<string> {
+	const { metadata, bytes } = await readImageAttachmentArtifact(sessionId, attachmentId);
+	return `data:${metadata.mimeType};base64,${bytes.toString("base64")}`;
+}
+
+export async function readImageAttachmentArtifact(
+	sessionId: string,
+	attachmentId: string
+): Promise<{ metadata: ImageAttachmentMetadata; bytes: Buffer }> {
 	await openSession(sessionId);
+	const safeAttachmentId: string = assertSafeAttachmentId(attachmentId);
 	const metadata: ImageAttachmentMetadata = await readAttachmentMetadata<ImageAttachmentMetadata>(
 		sessionId,
-		assertSafeAttachmentId(attachmentId),
+		safeAttachmentId,
 		"image"
 	);
-	const bytes: Buffer = await readFile(attachmentImagePath(sessionId, attachmentId));
-	return `data:${metadata.mimeType};base64,${bytes.toString("base64")}`;
+	if (metadata.id !== safeAttachmentId) {
+		throw new Error("Image attachment metadata does not match request.");
+	}
+	const bytes: Buffer = await readFile(attachmentImagePath(sessionId, safeAttachmentId));
+	if (bytes.byteLength !== metadata.byteSize) {
+		throw new Error("Image attachment bytes do not match metadata.");
+	}
+	return { metadata, bytes };
 }
 
 export async function saveTextAttachment(input: SaveTextAttachmentInput): Promise<AdditionalContextItem> {

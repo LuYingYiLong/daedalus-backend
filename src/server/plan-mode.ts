@@ -23,6 +23,7 @@ import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { createAgentToolEventForwarder } from "./workflow/tool-events.js";
 import { loadCorePrompt } from "../prompts/registry.js";
+import { getClientConnection } from "./client-connections.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
 const CLARIFICATION_REPLY_MAX_COUNT: number = 3;
@@ -536,7 +537,13 @@ async function runPlanAgentDecision(
 		onEvent,
 		abortSignal,
 		undefined,
-		{ workspaceId: runtime.session.activeWorkspace?.id, editorInstanceId: runtime.session.editorInstanceId }
+		{
+			workspaceId: runtime.session.activeWorkspace?.id,
+			editorInstanceId: runtime.session.editorInstanceId,
+			sessionId: runtime.session.sessionId,
+			requestId: planThreadRequestId,
+			clientType: getClientConnection(runtime.socket)?.clientType
+		}
 	);
 	if (agentResult.status === "approval_required") {
 		throw new Error(`Plan runner requested approval for ${agentResult.toolName}, which is not allowed.`);

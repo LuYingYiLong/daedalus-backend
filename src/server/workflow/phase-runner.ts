@@ -24,6 +24,7 @@ import { filterToolNamesForWorkspace } from "../../tools/tool-catalog.js";
 import { isWebSearchToolAvailable } from "../../web-search-settings-store.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
 import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
+import { getClientConnection } from "../client-connections.js";
 
 const SCENE_VIEW_CAPTURE_TOOL: string = "mcp_godot_editor_capture_scene_view";
 const SKILL_LOAD_TOOL: string = "mcp_skills_load";
@@ -99,8 +100,8 @@ export async function runWorkflowPhase(
 	try {
 		agentResult = await awaitWithAbort(
 			streamPhase
-				? runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId })
-				: runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId }),
+				? runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType })
+				: runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType }),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);

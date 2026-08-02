@@ -77,7 +77,7 @@ function parseImageAttachment(item: AdditionalContextItem): ProviderImageAttachm
 		throw new ProviderImageInputError("invalid_image_attachment", "Image context must contain byteSize.");
 	}
 	if (byteSize > MAX_IMAGE_BYTES) {
-		throw new ProviderImageInputError("invalid_image_attachment", "Image is larger than 1 MiB.");
+		throw new ProviderImageInputError("invalid_image_attachment", `Image is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MiB.`);
 	}
 
 	return {
@@ -105,7 +105,7 @@ export function getImageAttachments(items: readonly AdditionalContextItem[] | un
 
 	const totalBytes: number = images.reduce((sum: number, image: ProviderImageAttachment): number => sum + image.byteSize, 0);
 	if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
-		throw new ProviderImageInputError("invalid_image_attachment", "Total image attachment size is larger than 2.5 MiB.");
+		throw new ProviderImageInputError("invalid_image_attachment", `Total image attachment size is larger than ${MAX_TOTAL_IMAGE_BYTES / 1024 / 1024} MiB.`);
 	}
 
 	return images;

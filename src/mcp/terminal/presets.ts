@@ -2,11 +2,22 @@ import * as path from "node:path";
 import type { CommandPreset } from "./types.js";
 
 export const COMMAND_TIMEOUT_MS: number = 30_000;
+export const GODOT_COMMAND_TIMEOUT_MS: number = 120_000;
 export const DEFAULT_JOB_TIMEOUT_MS: number = 30 * 60 * 1000;
 export const MIN_JOB_TIMEOUT_MS: number = 1_000;
 export const MAX_JOB_TIMEOUT_MS: number = 12 * 60 * 60 * 1000;
 export const MIN_WAKE_AFTER_MS: number = 1_000;
 export const MAX_WAKE_AFTER_MS: number = 24 * 60 * 60 * 1000;
+
+export function resolveDefaultCommandTimeoutMs(commandLine: string | undefined): number {
+	if (
+		typeof commandLine === "string"
+		&& /(?:^|[\\/\s"'])godot(?:[^\r\n]*)(?:--import|--headless|--editor|--script)(?:\s|$)/iu.test(commandLine)
+	) {
+		return GODOT_COMMAND_TIMEOUT_MS;
+	}
+	return COMMAND_TIMEOUT_MS;
+}
 
 export const BACKEND_DIR: string = process.env.BACKEND_DIR ?? process.cwd();
 export const GODOT_EXECUTABLE: string = process.env.GODOT_EXECUTABLE_PATH ?? "godot";

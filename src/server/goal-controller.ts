@@ -24,6 +24,7 @@ import { getGoalCheckpointsRoot } from "../app-paths.js";
 import { createFallbackWorkflowRoute } from "../workflow/router.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
 import { listUsageMetricsLogs } from "../usage/metrics-store.js";
+import type { UsageMetricsLog } from "../usage/metrics-types.js";
 import { waitForGoalCheckpointWrites } from "./goal-checkpoints.js";
 import {
 	cloneAgentGoalState,
@@ -88,6 +89,60 @@ export async function getCurrentAgentGoal(sessionId: string): Promise<AgentGoalS
 	const inMemory = [...latestGoalStates.values()].find((state: AgentGoalState): boolean => state.sessionId === sessionId && !isAgentGoalTerminal(state.stage));
 	if (inMemory !== undefined) return cloneAgentGoalState(inMemory);
 	return readCurrentAgentGoal(sessionId);
+}
+
+export function createAgentGoalTelemetrySnapshot(
+	state: AgentGoalState,
+	runIds: readonly string[],
+	logs: readonly Pick<UsageMetricsLog, "requestId" | "runId" | "realTotalTokens" | "usageSource">[],
+	activeElapsedMilliseconds: number = 0,
+	tokenStrategy: "add" | "max" = "add"
+): AgentGoalState {
+	const linkedIds = new Set(runIds);
+	const linkedLogs = logs.filter((log): boolean => (
+		linkedIds.has(log.requestId) || (log.runId !== undefined && linkedIds.has(log.runId))
+	));
+	const measuredTokens: number = linkedLogs.reduce(
+		(sum: number, log): number => sum + Math.max(0, log.realTotalTokens),
+		0
+	);
+	const snapshot = cloneAgentGoalState(state);
+	snapshot.usage = {
+		...snapshot.usage,
+		tokens: tokenStrategy === "add"
+			? snapshot.usage.tokens + measuredTokens
+			: Math.max(snapshot.usage.tokens, measuredTokens),
+		activeMilliseconds: snapshot.usage.activeMilliseconds + Math.max(0, activeElapsedMilliseconds),
+		estimatedTokens: snapshot.usage.estimatedTokens || linkedLogs.some((log): boolean => log.usageSource !== "provider")
+	};
+	return snapshot;
+}
+
+export async function getCurrentAgentGoalTelemetry(sessionId: string): Promise<AgentGoalState | null> {
+	const currentState = await getCurrentAgentGoal(sessionId);
+	const state = currentState ?? await getLatestAgentGoal(sessionId);
+	if (state === null) return null;
+	const isActiveRun = currentState !== null && state.activeRunId !== null;
+	const runIds: string[] = isActiveRun
+		? [state.activeRunId!]
+		: await listAgentGoalRunIds(state.goalId);
+	if (runIds.length === 0) return cloneAgentGoalState(state);
+
+	// Active Goal calls are the newest usage rows. Keep telemetry bounded so opening
+	// the Popover never turns into an unbounded scan of a long-lived session.
+	const logs: UsageMetricsLog[] = (await listUsageMetricsLogs({ sessionId, limit: 500 })).logs;
+
+	const runtime = runtimes.get(state.goalId);
+	const activeElapsedMilliseconds: number = runtime?.cycleStartedAt === null || runtime?.cycleStartedAt === undefined
+		? 0
+		: Math.max(0, Date.now() - runtime.cycleStartedAt);
+	return createAgentGoalTelemetrySnapshot(
+		state,
+		runIds,
+		logs,
+		activeElapsedMilliseconds,
+		isActiveRun ? "add" : "max"
+	);
 }
 
 export async function getLatestAgentGoal(sessionId: string): Promise<AgentGoalState | null> {
@@ -602,12 +657,19 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 	}
 	const elapsed = runtime.cycleStartedAt === null ? 0 : Math.max(0, Date.now() - runtime.cycleStartedAt);
 	runtime.cycleStartedAt = null;
+	const runUsage = await readGoalRunUsage(run);
+	const usageAfterRun: AgentGoalState["usage"] = {
+		...state.usage,
+		tokens: state.usage.tokens + runUsage.tokens,
+		activeMilliseconds: state.usage.activeMilliseconds + elapsed,
+		estimatedTokens: state.usage.estimatedTokens || runUsage.estimated
+	};
 	const terminalDisposition = resolveGoalTerminalRunDisposition(state.stage, run.stage);
 	if (terminalDisposition === "pause") {
 		const paused = transitionAgentGoalState(state, "paused", {
 			pauseReason: "user_interruption",
 			activeRunId: null,
-			usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed }
+			usage: usageAfterRun
 		});
 		emitAgentGoalState(socket, session, paused);
 		return;
@@ -616,7 +678,7 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 		const failed = transitionAgentGoalState(state, "failed", {
 			pauseReason: null,
 			activeRunId: null,
-			usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed },
+			usage: usageAfterRun,
 			evaluation: {
 				disposition: "blocked",
 				summary: run.terminal?.message ?? "The linked AgentRun failed.",
@@ -633,13 +695,12 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 	}
 	state = transitionAgentGoalState(state, "evaluating", {
 		activeRunId: null,
-		usage: { ...state.usage, activeMilliseconds: state.usage.activeMilliseconds + elapsed }
+		usage: usageAfterRun
 	});
 	emitAgentGoalState(socket, session, state);
 	runtime.evaluationInFlight = true;
 	try {
 		const evaluationStartedAt = Date.now();
-		const runUsage = await readGoalRunUsage(run);
 		const goalRuns = await readGoalRuns(goalId, run);
 		const result = await evaluateGoal(state, goalRuns);
 		runtime.evaluationInFlight = false;
@@ -655,7 +716,7 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 			evaluation: result.evaluation,
 			usage: {
 				...latestState.usage,
-				tokens: latestState.usage.tokens + runUsage.tokens + result.estimatedTokens,
+				tokens: latestState.usage.tokens + result.estimatedTokens,
 				activeMilliseconds: latestState.usage.activeMilliseconds + evaluationElapsed,
 				estimatedTokens: true
 			}

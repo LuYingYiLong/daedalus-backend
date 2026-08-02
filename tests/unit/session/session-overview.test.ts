@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+const WEBP_BYTES: Buffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+
 async function withTempAppData(run: () => Promise<void>): Promise<void> {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	process.env.USERPROFILE = await mkdtemp(join(tmpdir(), "daedalus-session-overview-"));
@@ -54,7 +56,7 @@ test("session overview lists recent plans and image sources", async (): Promise<
 		});
 		await attachments.saveGeneratedImageArtifact({
 			sessionId: metadata.id,
-			bytes: Buffer.from("generated-source", "utf8"),
+			bytes: WEBP_BYTES,
 			mimeType: "image/webp",
 			provider: "openai",
 			model: "gpt-image-1",

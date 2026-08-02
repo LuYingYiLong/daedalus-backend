@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { AdditionalContextItem, AiChatParams } from "../protocol/types.js";
 import { MAX_IMAGE_BYTES, SUPPORTED_IMAGE_MIME_TYPES } from "../protocol/image-attachments.js";
+import { assertSupportedImageSignature } from "../protocol/image-file-signature.js";
 import { getSessionDir, openSession } from "./session-store.js";
 import { getSessionDatabase, parseSqlJson, sqlJson } from "./session-database.js";
 
@@ -445,13 +446,15 @@ export async function saveGeneratedImageArtifact(input: SaveGeneratedImageArtifa
 		throw new Error("Generated image is empty.");
 	}
 
+	// 兼容接口可能声明 PNG 却返回 JPEG；以文件签名为准，避免污染工作区资源。
+	const mimeType = assertSupportedImageSignature(input.bytes);
 	const imageId: string = `generated-image-${randomUUID()}`;
 	const createdAt: string = new Date().toISOString();
-	const fileName: string = `${imageId}.${getImageExtension(input.mimeType)}`;
+	const fileName: string = `${imageId}.${getImageExtension(mimeType)}`;
 	const metadata: GeneratedImageArtifactMetadata = {
 		imageId,
 		sessionId: input.sessionId,
-		mimeType: input.mimeType,
+		mimeType,
 		byteSize: input.bytes.byteLength,
 		provider: input.provider,
 		model: input.model,
@@ -471,11 +474,11 @@ export async function saveGeneratedImageArtifact(input: SaveGeneratedImageArtifa
 	}
 
 	await mkdir(getGeneratedImagesDir(input.sessionId), { recursive: true });
-	await writeFile(generatedImagePath(input.sessionId, imageId, input.mimeType), input.bytes);
+	await writeFile(generatedImagePath(input.sessionId, imageId, mimeType), input.bytes);
 	try {
 		await writeAttachmentMetadata(input.sessionId, imageId, "generated_image", metadata, metadata.storagePath);
 	} catch (error: unknown) {
-		await rm(generatedImagePath(input.sessionId, imageId, input.mimeType), { force: true });
+		await rm(generatedImagePath(input.sessionId, imageId, mimeType), { force: true });
 		throw error;
 	}
 	return metadata;

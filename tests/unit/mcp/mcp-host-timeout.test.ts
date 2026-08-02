@@ -4,6 +4,9 @@ import { resolveTerminalMcpRequestTimeoutMs } from "../../../src/mcp/mcp-host.js
 
 test("terminal MCP wait requests outlive their command timeout", (): void => {
 	assert.equal(resolveTerminalMcpRequestTimeoutMs("run_command", { timeoutMs: 90_000 }), 120_000);
+	assert.equal(resolveTerminalMcpRequestTimeoutMs("run_command", {
+		commandLine: "godot --headless --path . --import"
+	}), 150_000);
 	assert.equal(resolveTerminalMcpRequestTimeoutMs("run_safe_preset", {}), 60_000);
 	assert.equal(resolveTerminalMcpRequestTimeoutMs("run_safe_preset", {
 		presetName: "godot.check_only"

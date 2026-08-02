@@ -27,7 +27,7 @@ function createGoal() {
 test("agent goal defaults, revisions and terminal stages are stable", (): void => {
 	const initial = createGoal();
 	assert.equal(initial.title, "Finish the implementation");
-	assert.deepEqual(initial.budget, { maxCycles: 6, maxTokens: 200_000, maxActiveMinutes: 60 });
+	assert.deepEqual(initial.budget, { maxCycles: 12, maxTokens: 1_000_000, maxActiveMinutes: 180 });
 	assert.equal(initial.stage, "readiness");
 
 	const running = transitionAgentGoalState(initial, "running", {

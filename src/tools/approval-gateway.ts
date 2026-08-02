@@ -207,6 +207,8 @@ export class ApprovalGateway {
 		if (!pending) {
 			throw new Error(`Approval not found: ${approvalId}`);
 		}
+		// 审批决定不可重试；先消费再执行，避免超时后把同一审批重新弹给用户。
+		this.pendingApprovals.delete(approvalId);
 
 		const commandAuthorization: TerminalCommandAuthorization | undefined = pending.llmToolName === "mcp_terminal_run_command"
 			? createTerminalCommandAuthorization({
@@ -227,7 +229,6 @@ export class ApprovalGateway {
 			undefined,
 			commandAuthorization
 		);
-		this.pendingApprovals.delete(approvalId);
 		return { content: result.content, cached: result.reused, fileEditDraft: result.fileEditDraft, imageGeneration: result.imageGeneration };
 	}
 

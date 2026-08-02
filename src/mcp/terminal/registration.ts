@@ -20,6 +20,7 @@ import {
 	materializePreset,
 	normalizeTimeoutMs,
 	normalizeWakeAfterMs,
+	resolveDefaultCommandTimeoutMs,
 	resolveWorkingDirectory
 } from "./presets.js";
 import { findWorkspace, getWorkspaceSourceFolder } from "../../workspace/registry.js";
@@ -222,7 +223,7 @@ async function runCommand(input: CommandRunInput & TerminalInternalInput): Promi
 		command: [input.commandLine],
 		workingDirectory: cwd,
 		risk: "verify"
-	}, input.executionMode === "job" ? DEFAULT_JOB_TIMEOUT_MS : COMMAND_TIMEOUT_MS);
+	}, input.executionMode === "job" ? DEFAULT_JOB_TIMEOUT_MS : resolveDefaultCommandTimeoutMs(input.commandLine));
 	const wakeAfterMs: number | undefined = normalizeWakeAfterMs(input.wakeAfterMs);
 	const commonInvocation = {
 		commandLine: input.commandLine,

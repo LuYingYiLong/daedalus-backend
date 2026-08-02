@@ -115,12 +115,19 @@ test("approval persistence folds pending, interrupted, and executed states", ():
 
 	const interruptedStates = foldPendingApprovalStates([
 		createApprovalEvent("requested", requestedData, "2026-07-03T00:00:00.000Z"),
-		createApprovalEvent("approved", { approvedAt: "2026-07-03T00:00:01.000Z" }, "2026-07-03T00:00:01.000Z"),
 		createApprovalEvent("executing", { startedAt: "2026-07-03T00:00:02.000Z" }, "2026-07-03T00:00:02.000Z")
 	]);
 	assert.equal(interruptedStates.length, 1);
 	assert.equal(interruptedStates[0]?.status, "interrupted");
 	assert.equal(interruptedStates[0]?.interrupted, true);
+
+	const approvedThenFailedStates = foldPendingApprovalStates([
+		createApprovalEvent("requested", requestedData, "2026-07-03T00:00:00.000Z"),
+		createApprovalEvent("approved", { approvedAt: "2026-07-03T00:00:01.000Z" }, "2026-07-03T00:00:01.000Z"),
+		createApprovalEvent("executing", { startedAt: "2026-07-03T00:00:02.000Z" }, "2026-07-03T00:00:02.000Z"),
+		createApprovalEvent("failed", { message: "MCP request timed out" }, "2026-07-03T00:00:03.000Z")
+	]);
+	assert.equal(approvedThenFailedStates.length, 0);
 
 	const executedStates = foldPendingApprovalStates([
 		createApprovalEvent("requested", requestedData, "2026-07-03T00:00:00.000Z"),

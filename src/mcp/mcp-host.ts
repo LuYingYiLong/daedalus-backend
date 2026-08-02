@@ -34,7 +34,8 @@ import {
 	findPreset,
 	MAX_JOB_TIMEOUT_MS,
 	MIN_JOB_TIMEOUT_MS,
-	normalizeTimeoutMs
+	normalizeTimeoutMs,
+	resolveDefaultCommandTimeoutMs
 } from "./terminal/presets.js";
 
 const CUSTOM_MCP_CONNECT_TIMEOUT_MS: number = 30_000;
@@ -102,7 +103,7 @@ export function resolveTerminalMcpRequestTimeoutMs(name: string, args: Record<st
 			commandTimeout = requestedTimeout ?? COMMAND_TIMEOUT_MS;
 		}
 	} else {
-		commandTimeout = requestedTimeout ?? COMMAND_TIMEOUT_MS;
+		commandTimeout = requestedTimeout ?? resolveDefaultCommandTimeoutMs(typeof args.commandLine === "string" ? args.commandLine : undefined);
 	}
 	commandTimeout = Math.max(MIN_JOB_TIMEOUT_MS, Math.min(MAX_JOB_TIMEOUT_MS, commandTimeout));
 	return commandTimeout + TERMINAL_MCP_TIMEOUT_GRACE_MS;

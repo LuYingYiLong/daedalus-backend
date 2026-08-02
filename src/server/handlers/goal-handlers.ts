@@ -9,6 +9,7 @@ import {
 	emitAgentGoalState,
 	extendAgentGoalBudget,
 	getCurrentAgentGoal,
+	getCurrentAgentGoalTelemetry,
 	pauseAgentGoal,
 	resumeAgentGoal
 } from "../goal-controller.js";
@@ -51,7 +52,7 @@ export async function handleGoalRequest(
 			if (session.sessionId !== request.params.sessionId) {
 				throw Object.assign(new Error("The requested Goal session is not active."), { code: "goal_session_mismatch" });
 			}
-			result = await getCurrentAgentGoal(request.params.sessionId);
+			result = await getCurrentAgentGoalTelemetry(request.params.sessionId);
 			break;
 		case "agent.goal.pause":
 			await assertGoalOwnership(session, request.params.goalId);

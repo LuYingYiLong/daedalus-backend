@@ -59,6 +59,31 @@ test("workspace image inspection resolves res:// safely and revalidates its hash
 	}
 });
 
+test("workspace image inspection accepts an ordinary multi-megabyte texture atlas", async (): Promise<void> => {
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-image-inspect-atlas-"));
+	await writeFile(join(root, "project.godot"), "[application]\nconfig/name=\"Atlas test\"\n", "utf8");
+	await mkdir(join(root, "assets"), { recursive: true });
+	const atlasBytes: Buffer = Buffer.alloc(3 * 1024 * 1024);
+	ONE_PIXEL_PNG.copy(atlasBytes);
+	await writeFile(join(root, "assets", "tiles_atlas.png"), atlasBytes);
+	const workspace = createRuntimeWorkspace(root);
+	const previousProjectPath: string | undefined = process.env.GODOT_PROJECT_PATH;
+	process.env.GODOT_PROJECT_PATH = root;
+	try {
+		const inspection = await resolveImageInspection({
+			source: "workspace",
+			relativePath: "res://assets/tiles_atlas.png"
+		}, { workspaceId: workspace.id });
+		assert.equal(inspection.reference.byteSize, atlasBytes.byteLength);
+		assert.equal(inspection.reference.mimeType, "image/png");
+	} finally {
+		deleteWorkspace(workspace.id);
+		if (previousProjectPath === undefined) delete process.env.GODOT_PROJECT_PATH;
+		else process.env.GODOT_PROJECT_PATH = previousProjectPath;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("workspace image inspection rejects Godot internals and forged image extensions", async (): Promise<void> => {
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-image-inspect-deny-"));
 	await writeFile(join(root, "project.godot"), "[application]\n", "utf8");

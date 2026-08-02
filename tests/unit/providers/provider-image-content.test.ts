@@ -7,6 +7,7 @@ import type { ChatCompletionUserMessageParam } from "openai/resources/chat/compl
 import { aiChatParamsSchema } from "../../../src/protocol/schema.js";
 import { createCurrentUserMessage, getImageAttachments, getProviderUserText, ProviderImageInputError } from "../../../src/providers/provider-image-content.js";
 import { preprocessImageAttachmentsForTextModel } from "../../../src/providers/image-recognition.js";
+import { MAX_IMAGE_BYTES } from "../../../src/protocol/image-attachments.js";
 
 async function withTempAppData(run: () => Promise<void>): Promise<void> {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
@@ -82,7 +83,7 @@ test("schema rejects invalid image mime and oversized byte size", (): void => {
 			...VALID_IMAGE_CONTEXT,
 			data: {
 				...VALID_IMAGE_CONTEXT.data,
-				byteSize: 1024 * 1024 + 1
+				byteSize: MAX_IMAGE_BYTES + 1
 			}
 		}]
 	});

@@ -297,6 +297,12 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 		let continuationRequestId: string = request.id;
 		let queueItemId: number | undefined;
 		let pendingContinuationForRun: PendingAiContinuation | undefined;
+		let approvedPending: PendingApproval | undefined;
+		let approvalPersistRequestIdForEvent: string = request.id;
+		let approvalRunId: string = request.id;
+		let approvalStepRunId: string = request.id;
+		let approvalDecisionEmitted: boolean = false;
+		let approvedToolExecuted: boolean = false;
 		try {
 			await synchronizeSessionApprovalMode(session);
 			const apiKey: string | undefined = await ensureProviderConfigured(session);
@@ -311,6 +317,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				});
 				break;
 			}
+			approvedPending = pending;
 			if (pending.requiredConsent !== undefined) {
 				const consentText: string | undefined = request.params.consentText;
 				if (consentText !== pending.requiredConsent.expectedText) {
@@ -355,8 +362,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			continuationRequestId = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
 			pendingContinuationForRun = pendingContinuation;
 			queueItemId = pendingContinuation?.params.options?.queueItemId;
-			// A continuation keeps the original AI request id. Register the same controller
-			// under that id so ai.cancel can abort it instead of only the approval RPC.
+			// continuation 沿用原请求 ID，确保 ai.cancel 能中止执行而非仅中止审批 RPC。
 			session.activeAbortControllers.set(continuationRequestId, abortController);
 			throwIfAborted(abortController.signal);
 			if (pendingState?.continuation !== undefined && pendingContinuation === undefined) {
@@ -373,6 +379,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				break;
 			}
 			const approvalPersistRequestId: string = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
+			approvalPersistRequestIdForEvent = approvalPersistRequestId;
+			approvalRunId = pendingContinuation?.workflowState?.plan.id ?? pendingContinuation?.requestId ?? request.id;
+			approvalStepRunId = pendingContinuation?.workflowState?.activePhaseRunId ?? pendingContinuation?.requestId ?? request.id;
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "approved", {
 					approvedAt: new Date().toISOString(),
@@ -390,11 +399,21 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pause: null
 				});
 			}
+			sendSessionEvent(socket, approvalPersistRequestId, session, "agent.tool.approved", {
+				type: "agent.tool.approved",
+				runId: approvalRunId,
+				stepRunId: approvalStepRunId,
+				approvalId: request.params.approvalId,
+				toolCallId: pending.toolCallId,
+				toolName: pending.llmToolName
+			}, approvalPersistRequestId);
+			approvalDecisionEmitted = true;
 			const result = await awaitWithAbort(
 				session.approvalGateway.approve(request.params.approvalId, mcpHost),
 				abortController.signal
 			);
 			throwIfAborted(abortController.signal);
+			approvedToolExecuted = true;
 			const approvedToolObservation: WorkflowToolObservation = createApprovedWorkflowToolObservation(pending, result.content);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executed", {
@@ -423,8 +442,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				}
 			});
 			emitWorkbenchUpdated(socket, request.id, session);
-			const continuationRunId: string = pendingContinuation?.workflowState?.plan.id ?? pendingContinuation?.requestId ?? request.id;
-			const continuationStepRunId: string = pendingContinuation?.workflowState?.activePhaseRunId ?? pendingContinuation?.requestId ?? request.id;
+			const continuationRunId: string = approvalRunId;
+			const continuationStepRunId: string = approvalStepRunId;
 			const resultPersistRequestId: string = pendingContinuation?.requestId ?? request.id;
 			const fileEditBatch = persistFileEditBatch(
 				session.sessionId,
@@ -433,14 +452,6 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				pending.llmToolName,
 				result.fileEditDraft
 			);
-			sendSessionEvent(socket, approvalPersistRequestId, session, "agent.tool.approved", {
-				type: "agent.tool.approved",
-				runId: continuationRunId,
-				stepRunId: continuationStepRunId,
-				approvalId: request.params.approvalId,
-				toolCallId: pending.toolCallId,
-				toolName: pending.llmToolName
-			}, resultPersistRequestId);
 			sendSessionEvent(socket, approvalPersistRequestId, session, "agent.tool.result", {
 				type: "agent.tool.result",
 				runId: continuationRunId,
@@ -635,6 +646,19 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const queueHelpers = await import("../chat-orchestrator.js");
 			await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "failed");
 			const errorMessage: string = error instanceof Error ? error.message : "Approval failed";
+			if (approvalDecisionEmitted && !approvedToolExecuted && approvedPending !== undefined) {
+				session.pendingAiContinuations.delete(request.params.approvalId);
+				await removeAgentRunContinuation(continuationRequestId);
+				sendSessionEvent(socket, approvalPersistRequestIdForEvent, session, "agent.tool.error", {
+					type: "agent.tool.error",
+					runId: approvalRunId,
+					stepRunId: approvalStepRunId,
+					step: pendingContinuationForRun?.continuation.nextStep ?? 0,
+					toolCallId: approvedPending.toolCallId,
+					toolName: approvedPending.llmToolName,
+					message: errorMessage
+				}, continuationRequestId);
+			}
 			if (error instanceof WorkflowExecutionError) {
 				const workflowErrorMessage: string = error.message.length > 0
 					? error.message
@@ -672,7 +696,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			emitWorkbenchUpdated(socket, request.id, session);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, request.params.approvalId, continuationRequestId, "failed", {
-					message: errorMessage
+					message: errorMessage,
+					approvalAccepted: approvalDecisionEmitted
 				});
 			}
 			sendJson(socket, {

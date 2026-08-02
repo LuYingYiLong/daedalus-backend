@@ -11,6 +11,8 @@ import { listProviderModels } from "../../../src/providers/provider-models.js";
 import { modelSupportsImageInput } from "../../../src/providers/provider-image-content.js";
 import { saveProviderConfig } from "../../../src/providers/provider-config-store.js";
 
+const GENERATED_JPEG: Buffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
 type RecordedRequest = {
 	url: string;
 	authorization: string | undefined;
@@ -42,7 +44,7 @@ async function withMiniMaxMockServer(run: (baseUrl: string, requests: RecordedRe
 
 		if (request.url === "/generated.jpeg") {
 			response.writeHead(200, { "Content-Type": "image/jpeg" });
-			response.end(Buffer.from("minimax-url-image", "utf8"));
+			response.end(GENERATED_JPEG);
 			return;
 		}
 
@@ -66,7 +68,7 @@ async function withMiniMaxMockServer(run: (baseUrl: string, requests: RecordedRe
 			response.end(JSON.stringify({
 				base_resp: { status_code: 0, status_msg: "success" },
 				data: {
-					image_base64: [Buffer.from("minimax-generated-image", "utf8").toString("base64")]
+					image_base64: [GENERATED_JPEG.toString("base64")]
 				}
 			}));
 			return;
@@ -213,7 +215,7 @@ test("MiniMax image generation uses image_generation API and saves base64 artifa
 			assert.equal(result.model, "image-01");
 			assert.equal(result.artifacts.length, 1);
 			assert.equal(result.artifacts[0]?.mimeType, "image/jpeg");
-			assert.equal(result.artifacts[0]?.byteSize, Buffer.byteLength("minimax-generated-image"));
+			assert.equal(result.artifacts[0]?.byteSize, GENERATED_JPEG.byteLength);
 			assert.equal(result.artifacts[0]?.storagePath, `attachments/images/${result.artifacts[0]?.imageId}.jpg`);
 		});
 	});
@@ -249,7 +251,7 @@ test("MiniMax image generation downloads image_urls when returned by the API", a
 			assert.equal(result.model, "image-01-live");
 			assert.equal(result.artifacts.length, 1);
 			assert.equal(result.artifacts[0]?.mimeType, "image/jpeg");
-			assert.equal(result.artifacts[0]?.byteSize, Buffer.byteLength("minimax-url-image"));
+			assert.equal(result.artifacts[0]?.byteSize, GENERATED_JPEG.byteLength);
 			assert.equal(result.artifacts[0]?.storagePath, `attachments/images/${result.artifacts[0]?.imageId}.jpg`);
 		});
 	});

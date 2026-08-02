@@ -9,6 +9,8 @@ import { installReadOnlySecretStore, resetSecretStoreDriver } from "../../helper
 import { listProviderModels } from "../../../src/providers/provider-models.js";
 import { saveProviderConfig } from "../../../src/providers/provider-config-store.js";
 
+const GENERATED_PNG: Buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlDkAAAAASUVORK5CYII=", "base64");
+
 type RecordedRequest = {
 	url: string;
 	authorization: string | undefined;
@@ -28,7 +30,7 @@ async function withDashScopeMockServer(run: (baseUrl: string, requests: Recorded
 	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
 		if (request.url === "/generated.png") {
 			response.writeHead(200, { "Content-Type": "image/png" });
-			response.end(Buffer.from("dashscope-generated-image", "utf8"));
+			response.end(GENERATED_PNG);
 			return;
 		}
 		if (request.url === "/compatible-mode/v1/models") {
@@ -182,7 +184,7 @@ test("DashScope image edit sends source images and saves a session artifact", as
 			assert.equal(result.model, "qwen-image-2.0-pro");
 			assert.deepEqual(result.sourceImages, [{ type: "attachment", id: attachmentId }]);
 			assert.equal(result.artifacts.length, 1);
-			assert.equal(result.artifacts[0]?.byteSize, Buffer.byteLength("dashscope-generated-image"));
+			assert.equal(result.artifacts[0]?.byteSize, GENERATED_PNG.byteLength);
 			assert.equal(result.artifacts[0]?.provider, "dashscope");
 		});
 	});

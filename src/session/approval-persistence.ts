@@ -150,7 +150,7 @@ export function foldPendingApprovalStates(events: StoredApprovalEvent[]): Pendin
 			continue;
 		}
 
-		if (event.event === "rejected" || event.event === "executed" || event.event === "cancelled") {
+		if (event.event === "approved" || event.event === "rejected" || event.event === "executed" || event.event === "cancelled") {
 			states.delete(event.approvalId);
 			continue;
 		}
@@ -158,12 +158,6 @@ export function foldPendingApprovalStates(events: StoredApprovalEvent[]): Pendin
 		if (event.event === "executing") {
 			existing.status = "interrupted";
 			existing.interrupted = true;
-			existing.updatedAt = event.createdAt;
-			states.set(event.approvalId, existing);
-			continue;
-		}
-
-		if (event.event === "approved") {
 			existing.updatedAt = event.createdAt;
 			states.set(event.approvalId, existing);
 			continue;

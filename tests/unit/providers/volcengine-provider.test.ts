@@ -11,6 +11,8 @@ import { listProviderModels } from "../../../src/providers/provider-models.js";
 import { modelSupportsImageInput } from "../../../src/providers/provider-image-content.js";
 import { saveProviderConfig } from "../../../src/providers/provider-config-store.js";
 
+const GENERATED_PNG: Buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlDkAAAAASUVORK5CYII=", "base64");
+
 type RecordedRequest = {
 	url: string;
 	authorization: string | undefined;
@@ -54,7 +56,7 @@ async function withVolcengineMockServer(run: (baseUrl: string, requests: Recorde
 				created: 1,
 				output_format: "png",
 				data: [{
-					b64_json: Buffer.from("volcengine-generated-image", "utf8").toString("base64"),
+					b64_json: GENERATED_PNG.toString("base64"),
 					revised_prompt: "blue robot icon"
 				}]
 			}));
@@ -199,7 +201,7 @@ test("Volcengine Ark image generation uses Seedream and saves a session artifact
 			assert.equal(result.provider, "volcengine");
 			assert.equal(result.model, "doubao-seedream-5-0-pro-260628");
 			assert.equal(result.artifacts.length, 1);
-			assert.equal(result.artifacts[0]?.byteSize, Buffer.byteLength("volcengine-generated-image"));
+			assert.equal(result.artifacts[0]?.byteSize, GENERATED_PNG.byteLength);
 			assert.equal(result.artifacts[0]?.storagePath, `attachments/images/${result.artifacts[0]?.imageId}.png`);
 		});
 	});

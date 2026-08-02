@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MAX_IMAGE_BYTES, SUPPORTED_IMAGE_MIME_TYPES } from "./image-attachments.js";
+import { MAX_IMAGE_BYTES, MAX_IMAGE_DATA_URL_CHARS, SUPPORTED_IMAGE_MIME_TYPES } from "./image-attachments.js";
 
 export const promptIdSchema = z.enum([
 	"godot.assistant",
@@ -1390,7 +1390,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			sessionId: z.string().min(1),
 			mimeType: z.enum(SUPPORTED_IMAGE_MIME_TYPES as [string, ...string[]]),
-			dataUrl: z.string().min(1).max(1_500_000),
+			dataUrl: z.string().min(1).max(MAX_IMAGE_DATA_URL_CHARS),
 			byteSize: z.number().int().positive().max(MAX_IMAGE_BYTES),
 			width: z.number().int().positive().optional(),
 			height: z.number().int().positive().optional(),

@@ -5,6 +5,9 @@ import { join } from "node:path";
 import test from "node:test";
 import { aiChatParamsSchema } from "../../../src/protocol/schema.js";
 
+const PNG_BYTES: Buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01]);
+const WEBP_BYTES: Buffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+
 async function withTempAppData(run: () => Promise<void>): Promise<void> {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const appDataDir: string = await mkdtemp(join(tmpdir(), "daedalus-session-attachments-"));
@@ -195,7 +198,7 @@ test("generated image artifacts are saved under the session and read through dat
 		const sessionStore = await import("../../../src/session/session-store.js");
 		const attachments = await import("../../../src/session/session-attachments.js");
 		const metadata = await sessionStore.createSession("Generated image test");
-		const bytes: Buffer = Buffer.from("generated-image-bytes", "utf8");
+		const bytes: Buffer = PNG_BYTES;
 
 		const artifact = await attachments.saveGeneratedImageArtifact({
 			sessionId: metadata.id,
@@ -236,6 +239,27 @@ test("generated image artifacts are saved under the session and read through dat
 	});
 });
 
+test("generated image artifacts use the byte signature instead of incorrect provider MIME metadata", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const metadata = await sessionStore.createSession("Generated JPEG normalization");
+		const jpegBytes: Buffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00]);
+		const artifact = await attachments.saveGeneratedImageArtifact({
+			sessionId: metadata.id,
+			bytes: jpegBytes,
+			mimeType: "image/png",
+			provider: "openai",
+			model: "compatible-image-model",
+			prompt: "texture"
+		});
+
+		assert.equal(artifact.mimeType, "image/jpeg");
+		assert.equal(artifact.fileName, `${artifact.imageId}.jpg`);
+		assert.deepEqual((await attachments.readGeneratedImageArtifact(metadata.id, artifact.imageId)).bytes, jpegBytes);
+	});
+});
+
 test("image generation source refs resolve session attachments and generated images", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");
@@ -250,7 +274,7 @@ test("image generation source refs resolve session attachments and generated ima
 			byteSize: Buffer.byteLength("source-attachment"),
 			title: "Source image"
 		});
-		const generatedBytes: Buffer = Buffer.from("source-generated", "utf8");
+		const generatedBytes: Buffer = WEBP_BYTES;
 		const generated = await attachments.saveGeneratedImageArtifact({
 			sessionId: metadata.id,
 			bytes: generatedBytes,

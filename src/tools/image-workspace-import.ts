@@ -7,6 +7,11 @@ import {
 	readGeneratedImageArtifact,
 	type GeneratedImageArtifactMetadata
 } from "../session/session-attachments.js";
+import {
+	assertImagePathMatchesMimeType,
+	assertSupportedImageSignature,
+	type SupportedImageMimeType
+} from "../protocol/image-file-signature.js";
 
 const PROTECTED_ROOT_SEGMENTS: ReadonlySet<string> = new Set([
 	".git",
@@ -30,24 +35,6 @@ export type ImageWorkspaceImportResult = {
 	exists: boolean;
 	imported: boolean;
 };
-
-function mimeExtension(mimeType: string): string {
-	if (mimeType === "image/png") {
-		return ".png";
-	}
-	if (mimeType === "image/jpeg") {
-		return ".jpg";
-	}
-	if (mimeType === "image/webp") {
-		return ".webp";
-	}
-	throw new Error(`Unsupported generated image MIME type: ${mimeType}`);
-}
-
-function normalizedDestinationExtension(relativePath: string): string {
-	const extension: string = path.extname(relativePath).toLowerCase();
-	return extension === ".jpeg" ? ".jpg" : extension;
-}
 
 async function pathExists(absolutePath: string): Promise<boolean> {
 	try {
@@ -157,10 +144,9 @@ export async function executeImageWorkspaceImport(params: {
 	const sourceFolder = getWorkspaceSourceFolder(workspace, params.sourceFolderId);
 	const generated = await readGeneratedImageArtifact(params.sessionId, params.imageId);
 	const metadata: GeneratedImageArtifactMetadata = generated.metadata;
+	const actualMimeType: SupportedImageMimeType = assertSupportedImageSignature(generated.bytes);
 	const destination = await resolveSafeDestination(sourceFolder.path, params.relativePath);
-	if (normalizedDestinationExtension(destination.relativePath) !== mimeExtension(metadata.mimeType)) {
-		throw new Error(`Destination extension must match ${metadata.mimeType}.`);
-	}
+	assertImagePathMatchesMimeType(destination.relativePath, actualMimeType);
 	const exists: boolean = await pathExists(destination.absolutePath);
 	if (params.mode === "create" && exists) {
 		throw new Error(`Destination already exists: ${destination.relativePath}`);
@@ -188,7 +174,7 @@ export async function executeImageWorkspaceImport(params: {
 		relativePath: destination.relativePath,
 		resourcePath: `res://${destination.relativePath}`,
 		absolutePath: destination.absolutePath,
-		mimeType: metadata.mimeType,
+		mimeType: actualMimeType,
 		byteSize: metadata.byteSize,
 		sha256,
 		exists,

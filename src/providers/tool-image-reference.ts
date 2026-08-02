@@ -5,9 +5,13 @@ import type { AdditionalContextItem } from "../protocol/types.js";
 import {
 	MAX_IMAGE_ATTACHMENTS,
 	MAX_IMAGE_BYTES,
-	MAX_TOTAL_IMAGE_BYTES,
-	SUPPORTED_IMAGE_MIME_TYPES
+	MAX_TOTAL_IMAGE_BYTES
 } from "../protocol/image-attachments.js";
+import {
+	assertImagePathMatchesMimeType,
+	assertSupportedImageSignature,
+	type SupportedImageMimeType
+} from "../protocol/image-file-signature.js";
 import {
 	readGeneratedImageArtifact,
 	readImageAttachmentArtifact
@@ -51,50 +55,16 @@ export type ResolvedImageInspection = {
 	artifactRef: string;
 };
 
-type ImageSignature = {
-	mimeType: string;
-	extensions: readonly string[];
-};
-
-const IMAGE_SIGNATURES: readonly ImageSignature[] = [
-	{ mimeType: "image/png", extensions: [".png"] },
-	{ mimeType: "image/jpeg", extensions: [".jpg", ".jpeg"] },
-	{ mimeType: "image/webp", extensions: [".webp"] },
-	{ mimeType: "image/gif", extensions: [".gif"] }
-];
-
 function sha256(bytes: Buffer): string {
 	return createHash("sha256").update(bytes).digest("hex");
 }
 
-function detectImageMimeType(bytes: Buffer): string | null {
-	if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-		return "image/png";
-	}
-	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
-		return "image/jpeg";
-	}
-	if (bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP") {
-		return "image/webp";
-	}
-	if (bytes.length >= 6) {
-		const signature: string = bytes.toString("ascii", 0, 6);
-		if (signature === "GIF87a" || signature === "GIF89a") {
-			return "image/gif";
-		}
-	}
-	return null;
-}
-
-function assertSupportedImage(bytes: Buffer, declaredMimeType?: string | undefined): string {
+function assertSupportedImage(bytes: Buffer, declaredMimeType?: string | undefined, tolerateDeclaredMismatch: boolean = false): SupportedImageMimeType {
 	if (bytes.byteLength <= 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
 		throw new Error(`Image must be between 1 byte and ${MAX_IMAGE_BYTES} bytes.`);
 	}
-	const detectedMimeType: string | null = detectImageMimeType(bytes);
-	if (detectedMimeType === null || !SUPPORTED_IMAGE_MIME_TYPES.includes(detectedMimeType)) {
-		throw new Error("Image file signature is not a supported PNG, JPEG, WebP, or GIF image.");
-	}
-	if (declaredMimeType !== undefined && declaredMimeType !== detectedMimeType) {
+	const detectedMimeType: SupportedImageMimeType = assertSupportedImageSignature(bytes);
+	if (!tolerateDeclaredMismatch && declaredMimeType !== undefined && declaredMimeType !== detectedMimeType) {
 		throw new Error(`Image MIME type does not match its file signature (${declaredMimeType} != ${detectedMimeType}).`);
 	}
 	return detectedMimeType;
@@ -121,14 +91,6 @@ function assertNotGodotInternalPath(relativePath: string): void {
 	const segments: string[] = relativePath.split("/").filter(Boolean);
 	if (segments.some((segment: string): boolean => segment.toLowerCase() === ".godot")) {
 		throw new Error("Images inside .godot are not available to image inspection.");
-	}
-}
-
-function assertImageExtension(relativePath: string, mimeType: string): void {
-	const lowerPath: string = relativePath.toLowerCase();
-	const signature: ImageSignature | undefined = IMAGE_SIGNATURES.find((item: ImageSignature): boolean => item.mimeType === mimeType);
-	if (signature === undefined || !signature.extensions.some((extension: string): boolean => lowerPath.endsWith(extension))) {
-		throw new Error(`Image extension does not match ${mimeType}.`);
 	}
 }
 
@@ -173,8 +135,8 @@ export async function resolveImageInspection(
 			throw new Error(`Workspace image must be a file no larger than ${MAX_IMAGE_BYTES} bytes.`);
 		}
 		const bytes: Buffer = await readFile(resolved.absolutePath);
-		const mimeType: string = assertSupportedImage(bytes);
-		assertImageExtension(resolved.relativePath, mimeType);
+		const mimeType: SupportedImageMimeType = assertSupportedImage(bytes);
+		assertImagePathMatchesMimeType(resolved.relativePath, mimeType);
 		const reference: ProviderToolImageReference = {
 			source: {
 				kind: "workspace",
@@ -209,7 +171,7 @@ export async function resolveImageInspection(
 	const imageId: string = args.imageId.trim();
 	if (imageId.startsWith("generated-image-")) {
 		const { metadata, bytes } = await readGeneratedImageArtifact(context.sessionId, imageId);
-		const mimeType: string = assertSupportedImage(bytes, metadata.mimeType);
+		const mimeType: SupportedImageMimeType = assertSupportedImage(bytes, metadata.mimeType, true);
 		return {
 			reference: {
 				source: { kind: "session", sessionId: context.sessionId, imageId },
@@ -225,7 +187,7 @@ export async function resolveImageInspection(
 		};
 	}
 	const { metadata, bytes } = await readImageAttachmentArtifact(context.sessionId, imageId);
-	const mimeType: string = assertSupportedImage(bytes, metadata.mimeType);
+	const mimeType: SupportedImageMimeType = assertSupportedImage(bytes, metadata.mimeType);
 	return {
 		reference: {
 			source: { kind: "session", sessionId: context.sessionId, imageId },

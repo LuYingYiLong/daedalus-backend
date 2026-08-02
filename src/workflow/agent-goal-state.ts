@@ -140,7 +140,7 @@ export function createAgentGoalState(params: {
 		activeRunId: null,
 		cycle: 0,
 		modelSnapshot: structuredClone(params.modelSnapshot),
-		budget: { maxCycles: 6, maxTokens: 200_000, maxActiveMinutes: 60 },
+		budget: { maxCycles: 12, maxTokens: 1_000_000, maxActiveMinutes: 180 },
 		usage: { cycles: 0, tokens: 0, activeMilliseconds: 0, estimatedTokens: false },
 		readiness: null,
 		evaluation: null,

@@ -14,6 +14,8 @@ import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import type { AiChatParams } from "../../../src/protocol/types.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
+const GENERATED_PNG: Buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlDkAAAAASUVORK5CYII=", "base64");
+
 type RecordedRequest = {
 	url: string;
 	authorization: string | undefined;
@@ -33,7 +35,7 @@ async function withZhipuMockServer(run: (baseUrl: string, requests: RecordedRequ
 	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
 		if (request.url === "/generated.png") {
 			response.writeHead(200, { "Content-Type": "image/png" });
-			response.end(Buffer.from("zhipu-generated-image", "utf8"));
+			response.end(GENERATED_PNG);
 			return;
 		}
 		if (request.url === "/models") {
@@ -256,7 +258,7 @@ test("Zhipu image generation uses the configured image model and saves a session
 			assert.equal(result.provider, "zhipu");
 			assert.equal(result.model, "glm-image");
 			assert.equal(result.artifacts.length, 1);
-			assert.equal(result.artifacts[0]?.byteSize, Buffer.byteLength("zhipu-generated-image"));
+			assert.equal(result.artifacts[0]?.byteSize, GENERATED_PNG.byteLength);
 			assert.equal(result.artifacts[0]?.storagePath, `attachments/images/${result.artifacts[0]?.imageId}.png`);
 			await assert.rejects(
 				async (): Promise<void> => {

@@ -1216,6 +1216,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			sessionId: z.string().min(1),
 			planLimit: z.number().int().min(0).max(100).optional(),
 			sourceLimit: z.number().int().min(0).max(100).optional(),
+			includePlanPreviews: z.boolean().optional(),
+			includeSourceImages: z.boolean().optional(),
 		}),
 	}),
 	z.object({

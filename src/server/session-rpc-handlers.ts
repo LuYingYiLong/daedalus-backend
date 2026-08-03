@@ -1444,7 +1444,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				result: await createSessionOverview({
 					sessionId: request.params.sessionId,
 					planLimit: request.params.planLimit,
-					sourceLimit: request.params.sourceLimit
+					sourceLimit: request.params.sourceLimit,
+					includePlanPreviews: request.params.includePlanPreviews,
+					includeSourceImages: request.params.includeSourceImages
 				})
 			});
 			break;

@@ -581,7 +581,9 @@ test("session.overview.get accepts session overview limits", (): void => {
 		params: {
 			sessionId: "session-test",
 			planLimit: 3,
-			sourceLimit: 10
+			sourceLimit: 10,
+			includePlanPreviews: false,
+			includeSourceImages: false
 		}
 	}).success, true);
 });

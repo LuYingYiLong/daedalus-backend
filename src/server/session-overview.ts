@@ -129,11 +129,16 @@ async function loadGitInfo(sourceFolder: Pick<WorkspaceSourceFolder, "id" | "pat
 	};
 }
 
-async function listPlanItems(sessionId: string, limit: number): Promise<{ total: number; items: SessionOverviewPlanItem[] }> {
+async function listPlanItems(
+	sessionId: string,
+	limit: number,
+	includePreviews: boolean
+): Promise<{ total: number; items: SessionOverviewPlanItem[] }> {
 	const db = await getSessionDatabase();
 	const countRow = db.prepare("SELECT COUNT(*) AS total FROM plans WHERE session_id = ?").get(sessionId) as Record<string, unknown>;
 	const rows = db.prepare(`
-		SELECT metadata_json, markdown FROM plans WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?
+		SELECT metadata_json${includePreviews ? ", markdown" : ""}
+		FROM plans WHERE session_id = ? ORDER BY updated_at DESC LIMIT ?
 	`).all(sessionId, limit) as Record<string, unknown>[];
 	const items: SessionOverviewPlanItem[] = rows.map((row: Record<string, unknown>): SessionOverviewPlanItem => {
 		const metadata: Record<string, unknown> = parseSqlJson<Record<string, unknown>>(row.metadata_json);
@@ -144,7 +149,9 @@ async function listPlanItems(sessionId: string, limit: number): Promise<{ total:
 			status: getString(metadata, "status") || "unknown",
 			updatedAt: getString(metadata, "updatedAt") || getString(metadata, "createdAt"),
 			planPath: getString(metadata, "planPath") || `plans/${planId}/PLAN.md`,
-			previewMarkdown: getString(metadata, "previewMarkdown") || String(row.markdown).slice(0, 4000)
+			previewMarkdown: includePreviews
+				? getString(metadata, "previewMarkdown") || String(row.markdown).slice(0, 4000)
+				: ""
 		};
 	});
 	return {
@@ -169,24 +176,35 @@ function createDataUrl(mimeType: string, bytes: Buffer): string {
 	return `data:${mimeType};base64,${bytes.toString("base64")}`;
 }
 
-async function readAttachmentSource(sessionId: string, metadataRaw: Record<string, unknown>): Promise<SessionOverviewSourceItem | null> {
+async function readAttachmentSource(
+	sessionId: string,
+	metadataRaw: Record<string, unknown>,
+	includeImageData: boolean
+): Promise<SessionOverviewSourceItem | null> {
 	const metadata: ImageAttachmentMetadata = metadataRaw as ImageAttachmentMetadata;
 	if (!metadata.id?.startsWith("image-") || typeof metadata.mimeType !== "string") {
 		return null;
+	}
+
+	const source: SessionOverviewSourceItem = {
+		id: metadata.id,
+		kind: "image_attachment",
+		title: metadata.title || metadata.fileName || metadata.id,
+		mimeType: metadata.mimeType,
+		createdAt: metadata.createdAt || "",
+		width: getOptionalNumber(metadataRaw, "width"),
+		height: getOptionalNumber(metadataRaw, "height"),
+		byteSize: metadata.byteSize
+	};
+	if (!includeImageData) {
+		return source;
 	}
 
 	try {
 		const imagePath: string = path.join(getSessionDir(sessionId), "attachments", metadata.fileName || `${metadata.id}.png`);
 		const bytes: Buffer = await readFile(imagePath);
 		return {
-			id: metadata.id,
-			kind: "image_attachment",
-			title: metadata.title || metadata.fileName || metadata.id,
-			mimeType: metadata.mimeType,
-			createdAt: metadata.createdAt || "",
-			width: getOptionalNumber(metadataRaw, "width"),
-			height: getOptionalNumber(metadataRaw, "height"),
-			byteSize: metadata.byteSize,
+			...source,
 			thumbnailDataUrl: createDataUrl(metadata.mimeType, bytes)
 		};
 	} catch {
@@ -194,24 +212,35 @@ async function readAttachmentSource(sessionId: string, metadataRaw: Record<strin
 	}
 }
 
-async function readGeneratedImageSource(sessionId: string, metadataRaw: Record<string, unknown>): Promise<SessionOverviewSourceItem | null> {
+async function readGeneratedImageSource(
+	sessionId: string,
+	metadataRaw: Record<string, unknown>,
+	includeImageData: boolean
+): Promise<SessionOverviewSourceItem | null> {
 	const metadata: GeneratedImageArtifactMetadata = metadataRaw as GeneratedImageArtifactMetadata;
 	if (!metadata.imageId?.startsWith("generated-image-") || metadata.sessionId !== sessionId || typeof metadata.mimeType !== "string") {
 		return null;
+	}
+
+	const source: SessionOverviewSourceItem = {
+		id: metadata.imageId,
+		kind: "generated_image",
+		title: metadata.prompt || metadata.fileName || metadata.imageId,
+		mimeType: metadata.mimeType,
+		createdAt: metadata.createdAt || "",
+		width: getOptionalNumber(metadataRaw, "width"),
+		height: getOptionalNumber(metadataRaw, "height"),
+		byteSize: metadata.byteSize
+	};
+	if (!includeImageData) {
+		return source;
 	}
 
 	try {
 		const imagePath: string = path.join(getSessionDir(sessionId), "attachments", "images", metadata.fileName);
 		const bytes: Buffer = await readFile(imagePath);
 		return {
-			id: metadata.imageId,
-			kind: "generated_image",
-			title: metadata.prompt || metadata.fileName || metadata.imageId,
-			mimeType: metadata.mimeType,
-			createdAt: metadata.createdAt || "",
-			width: getOptionalNumber(metadataRaw, "width"),
-			height: getOptionalNumber(metadataRaw, "height"),
-			byteSize: metadata.byteSize,
+			...source,
 			thumbnailDataUrl: createDataUrl(metadata.mimeType, bytes)
 		};
 	} catch {
@@ -242,7 +271,11 @@ async function readTextAttachmentSource(sessionId: string, metadataRaw: Record<s
 	}
 }
 
-async function listSourceItems(sessionId: string, limit: number): Promise<{ total: number; items: SessionOverviewSourceItem[] }> {
+async function listSourceItems(
+	sessionId: string,
+	limit: number,
+	includeImageData: boolean
+): Promise<{ total: number; items: SessionOverviewSourceItem[] }> {
 	const db = await getSessionDatabase();
 	const countRow = db.prepare("SELECT COUNT(*) AS total FROM attachments WHERE session_id = ?").get(sessionId) as Record<string, unknown>;
 	const rows = db.prepare(`
@@ -252,10 +285,10 @@ async function listSourceItems(sessionId: string, limit: number): Promise<{ tota
 	for (const row of rows) {
 		const metadata: Record<string, unknown> = parseSqlJson<Record<string, unknown>>(row.metadata_json);
 		const item: SessionOverviewSourceItem | null = row.kind === "generated_image"
-			? await readGeneratedImageSource(sessionId, metadata)
+			? await readGeneratedImageSource(sessionId, metadata, includeImageData)
 			: row.kind === "text"
 				? await readTextAttachmentSource(sessionId, metadata)
-				: await readAttachmentSource(sessionId, metadata);
+				: await readAttachmentSource(sessionId, metadata, includeImageData);
 		if (item !== null) {
 			items.push(item);
 		}
@@ -271,13 +304,15 @@ export async function createSessionOverview(params: {
 	sessionId: string;
 	planLimit?: number | undefined;
 	sourceLimit?: number | undefined;
+	includePlanPreviews?: boolean | undefined;
+	includeSourceImages?: boolean | undefined;
 }): Promise<SessionOverviewResult> {
 	const session = await openSession(params.sessionId);
 	const metadata: SessionMetadata = session.metadata;
 	const [envInfos, plans, sources] = await Promise.all([
 		loadGitInfos(metadata),
-		listPlanItems(params.sessionId, clampLimit(params.planLimit)),
-		listSourceItems(params.sessionId, clampLimit(params.sourceLimit))
+		listPlanItems(params.sessionId, clampLimit(params.planLimit), params.includePlanPreviews !== false),
+		listSourceItems(params.sessionId, clampLimit(params.sourceLimit), params.includeSourceImages !== false)
 	]);
 
 	return {

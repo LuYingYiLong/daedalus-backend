@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -90,6 +90,75 @@ test("session overview lists recent plans and image sources", async (): Promise<
 				.every((source) => source.thumbnailDataUrl?.startsWith(`data:${source.mimeType};base64,`) === true),
 			true
 		);
+	});
+});
+
+test("session overview can list image metadata without reading image payloads", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const overview = await import("../../../src/server/session-overview.js");
+		const metadata = await sessionStore.createSession("Overview metadata test");
+
+		const imageAttachment = await attachments.saveImageAttachment({
+			sessionId: metadata.id,
+			mimeType: "image/png",
+			dataUrl: "data:image/png;base64,aW1hZ2UtYXR0YWNobWVudA==",
+			byteSize: Buffer.byteLength("image-attachment"),
+			title: "Manual source"
+		});
+		const generatedImage = await attachments.saveGeneratedImageArtifact({
+			sessionId: metadata.id,
+			bytes: WEBP_BYTES,
+			mimeType: "image/webp",
+			provider: "openai",
+			model: "gpt-image-1",
+			prompt: "Generated source"
+		});
+		await rm(join(sessionStore.getSessionDir(metadata.id), "attachments", `${imageAttachment.id}.png`));
+		await rm(join(sessionStore.getSessionDir(metadata.id), "attachments", "images", generatedImage.fileName));
+
+		const result = await overview.createSessionOverview({
+			sessionId: metadata.id,
+			planLimit: 0,
+			sourceLimit: 100,
+			includeSourceImages: false
+		});
+
+		assert.equal(result.sources.total, 2);
+		assert.equal(result.sources.items.length, 2);
+		assert.equal(result.sources.items.every((source) => source.thumbnailDataUrl === undefined), true);
+		assert.equal(result.sources.items.every((source) => source.byteSize > 0), true);
+	});
+});
+
+test("session overview can list plan metadata without returning preview markdown", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const planStore = await import("../../../src/server/plan-store.js");
+		const overview = await import("../../../src/server/session-overview.js");
+		const metadata = await sessionStore.createSession("Overview plan metadata test");
+		const planMetadata = planStore.createPlanMetadata({
+			sessionId: metadata.id,
+			requestId: "request-plan-metadata",
+			status: "ready",
+			title: "Metadata-only plan",
+			originalMessage: "Create a plan",
+			previewMarkdown: "# Preview that should not be returned"
+		});
+		await planStore.writeStoredPlan(planMetadata, "# Full plan markdown");
+
+		const result = await overview.createSessionOverview({
+			sessionId: metadata.id,
+			planLimit: 100,
+			sourceLimit: 0,
+			includePlanPreviews: false
+		});
+
+		assert.equal(result.plans.total, 1);
+		assert.equal(result.plans.items.length, 1);
+		assert.equal(result.plans.items[0]?.title, "Metadata-only plan");
+		assert.equal(result.plans.items[0]?.previewMarkdown, "");
 	});
 });
 

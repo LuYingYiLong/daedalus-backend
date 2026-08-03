@@ -5,13 +5,21 @@ import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { getGodotDocumentationRoot } from "../app-paths.js";
 import { logger } from "../logger.js";
-import { buildGodotDocumentationIndex, type DocumentationIndexSummary } from "./indexer.js";
+import { hasActiveSessionRuns } from "../server/client-connections.js";
+import type { DocumentationIndexSummary } from "./indexer.js";
+import { buildDocumentationIndexInProcess, deepCheckDocumentationInProcess } from "./indexer-client.js";
+import {
+	checkDocumentationRecordFast,
+	listRollbackGenerationIds,
+	sha256File
+} from "./health.js";
 import {
 	compareDocumentationBranches,
 	createGodotDocumentationId,
 	createGodotDocumentationState,
 	getGodotDocumentationBranchCachePath,
 	getGodotDocumentationGenerationDir,
+	getGodotDocumentationIndexPath,
 	getGodotDocumentationPackageDir,
 	getGodotDocumentationSnapshot,
 	getGodotDocumentationStagingRoot,
@@ -19,10 +27,21 @@ import {
 	initializeGodotDocumentationStore,
 	updateGodotDocumentationSettings
 } from "./store.js";
+import {
+	cacheGodotDocumentationArchive,
+	cacheGodotDocumentationTree,
+	cleanupGodotDocumentationSourceStaging,
+	getGodotDocumentationCachedSourcePath,
+	hasGodotDocumentationSource,
+	pruneGodotDocumentationSourceCache,
+	touchGodotDocumentationSource
+} from "./source-cache.js";
 import type {
 	GodotDocumentationBranch,
+	GodotDocumentationGenerationManifest,
 	GodotDocumentationJob,
 	GodotDocumentationRecord,
+	GodotDocumentationSourceRef,
 	GodotDocumentationState
 } from "./types.js";
 
@@ -35,6 +54,8 @@ const MAX_ARCHIVE_ENTRIES: number = 50_000;
 const MAX_REDIRECTS: number = 5;
 const DOWNLOAD_TIMEOUT_MS: number = 10 * 60 * 1000;
 const MAX_NETWORK_RETRIES: number = 2;
+const DEEP_HEALTH_CHECK_INTERVAL_MS: number = 24 * 60 * 60 * 1000;
+const INITIAL_MAINTENANCE_DELAY_MS: number = 15_000;
 
 type BranchCache = {
 	schemaVersion: 1;
@@ -54,10 +75,14 @@ type ActiveJobRuntime = {
 	snapshot: GodotDocumentationJob;
 	controller: AbortController;
 	localSourcePath: string | null;
+	allowNetwork: boolean;
+	deepCheck: boolean;
+	background: boolean;
 };
 
 let activeJob: ActiveJobRuntime | null = null;
 const completedJobs: Map<string, GodotDocumentationJob> = new Map();
+let maintenanceTimer: NodeJS.Timeout | null = null;
 
 function cloneJob(job: GodotDocumentationJob): GodotDocumentationJob {
 	return structuredClone(job);
@@ -761,6 +786,7 @@ async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagin
 	extractedRoot: string;
 	sourcePath: string;
 	commitSha: string;
+	sourceRef: GodotDocumentationSourceRef;
 }> {
 	if (runtime.localSourcePath === null || !isAbsolute(runtime.localSourcePath)) {
 		throw new Error("Local documentation source must be an absolute path.");
@@ -773,12 +799,14 @@ async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagin
 	}
 	const sourceStats = await stat(sourcePath);
 	const extractedRoot: string = join(stagingRoot, "source");
+	let sourceRef: GodotDocumentationSourceRef;
 	if (sourceStats.isFile()) {
 		if (!sourcePath.toLowerCase().endsWith(".zip")) {
 			throw new Error("Local documentation source must be a godot-docs folder or ZIP archive.");
 		}
 		const archivePath: string = join(stagingRoot, "godot-docs.zip");
 		await copyFile(sourcePath, archivePath);
+		sourceRef = await cacheGodotDocumentationArchive(archivePath, "local_zip");
 		await extractArchive(archivePath, extractedRoot, runtime);
 	} else if (sourceStats.isDirectory()) {
 		setJobProgress(runtime, "extracting", 15, "Copying local Godot documentation...");
@@ -790,13 +818,15 @@ async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagin
 			errorOnExist: true
 		});
 		await validateExtractedTree(extractedRoot, runtime.controller.signal);
+		sourceRef = await cacheGodotDocumentationTree(extractedRoot);
 	} else {
 		throw new Error("Local documentation source must be a folder or ZIP archive.");
 	}
 	return {
 		extractedRoot,
 		sourcePath,
-		commitSha: await hashLocalDocumentationTree(extractedRoot, runtime.controller.signal)
+		commitSha: await hashLocalDocumentationTree(extractedRoot, runtime.controller.signal),
+		sourceRef
 	};
 }
 
@@ -829,13 +859,15 @@ async function buildAndActivateDocumentation(params: {
 	currentRecord: GodotDocumentationRecord | undefined;
 	source: "official" | "local";
 	sourcePath?: string | undefined;
+	sourceRef: GodotDocumentationSourceRef;
 }): Promise<void> {
 	const documentId: string = params.currentRecord?.id ?? createGodotDocumentationId(params.branch);
-	const generationDir: string = join(params.stagingRoot, "generation");
+	const generationId: string = `${params.commitSha}-${randomUUID().slice(0, 12)}`;
+	const generationDir: string = join(params.stagingRoot, generationId);
 	const indexPath: string = join(generationDir, "index.sqlite");
 	await mkdir(generationDir, { recursive: true });
 	setJobProgress(params.runtime, "indexing", 45, "Indexing Godot documentation...");
-	const summary: DocumentationIndexSummary = await buildGodotDocumentationIndex({
+	const summary: DocumentationIndexSummary = await buildDocumentationIndexInProcess({
 		extractedRoot: params.extractedRoot,
 		indexPath,
 		branch: params.branch,
@@ -852,14 +884,31 @@ async function buildAndActivateDocumentation(params: {
 		params.source,
 		params.sourcePath
 	);
+	const builtAt: string = new Date().toISOString();
+	const manifest: GodotDocumentationGenerationManifest = {
+		schemaVersion: 1,
+		indexFormatVersion: 1,
+		generationId,
+		branch: params.branch,
+		commitSha: params.commitSha,
+		sourceSha256: params.sourceRef.sha256,
+		sqliteSha256: await sha256File(indexPath),
+		...summary,
+		builtAt,
+		verifiedAt: builtAt
+	};
+	await writeFile(join(generationDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+	setJobProgress(params.runtime, "validating", 96, "Validating the documentation index...");
+	await deepCheckDocumentationInProcess({
+		generationDir,
+		branch: params.branch,
+		commitSha: params.commitSha,
+		signal: params.runtime.controller.signal
+	});
 
 	setJobProgress(params.runtime, "finalizing", 97, "Activating the documentation index...");
-	const targetGenerationDir: string = getGodotDocumentationGenerationDir({
-		id: documentId,
-		commitSha: params.commitSha
-	});
+	const targetGenerationDir: string = join(getGodotDocumentationPackageDir(documentId), generationId);
 	await mkdir(dirname(targetGenerationDir), { recursive: true });
-	await rm(targetGenerationDir, { recursive: true, force: true });
 	await rename(generationDir, targetGenerationDir);
 	const now: string = new Date().toISOString();
 	const nextRecord: GodotDocumentationRecord = {
@@ -868,6 +917,10 @@ async function buildAndActivateDocumentation(params: {
 		commitSha: params.commitSha,
 		source: params.source,
 		...(params.sourcePath === undefined ? {} : { sourcePath: params.sourcePath }),
+		sourceRef: params.sourceRef,
+		activeGenerationId: generationId,
+		health: { status: "ready", code: null, message: null, checkedAt: new Date().toISOString() },
+		repairAvailability: "none",
 		installedAt: params.currentRecord?.installedAt ?? now,
 		updatedAt: now,
 		...summary
@@ -878,6 +931,7 @@ async function buildAndActivateDocumentation(params: {
 			draft.enabled = true;
 		}
 	});
+	await touchGodotDocumentationSource(params.sourceRef);
 	await cleanupOrphanedGenerations();
 }
 
@@ -891,7 +945,7 @@ async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
 		const currentRecord: GodotDocumentationRecord | undefined = runtime.snapshot.documentId === null
 			? undefined
 			: getGodotDocumentationSnapshot().documents[runtime.snapshot.documentId];
-		if (currentRecord?.commitSha === resolvedBranch.commitSha) {
+		if (currentRecord?.commitSha === resolvedBranch.commitSha && currentRecord.health.status === "ready") {
 			runtime.snapshot.unchanged = true;
 			finishJob(runtime, "completed", null);
 			return;
@@ -900,6 +954,7 @@ async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
 		const archivePath: string = join(stagingRoot, "godot-docs.zip");
 		const extractedRoot: string = join(stagingRoot, "source");
 		await downloadArchive(resolvedBranch.commitSha, archivePath, runtime);
+		const sourceRef: GodotDocumentationSourceRef = await cacheGodotDocumentationArchive(archivePath, "official_zip");
 		await extractArchive(archivePath, extractedRoot, runtime);
 
 		await buildAndActivateDocumentation({
@@ -909,7 +964,8 @@ async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
 			branch: resolvedBranch.name,
 			commitSha: resolvedBranch.commitSha,
 			currentRecord,
-			source: "official"
+			source: "official",
+			sourceRef
 		});
 		finishJob(runtime, "completed", null);
 	} catch (error: unknown) {
@@ -935,7 +991,7 @@ async function runLocalDocumentationJob(runtime: ActiveJobRuntime): Promise<void
 		const currentRecord: GodotDocumentationRecord | undefined = runtime.snapshot.documentId === null
 			? undefined
 			: getGodotDocumentationSnapshot().documents[runtime.snapshot.documentId];
-		if (currentRecord?.commitSha === prepared.commitSha && currentRecord.source === "local") {
+		if (currentRecord?.commitSha === prepared.commitSha && currentRecord.source === "local" && currentRecord.health.status === "ready") {
 			runtime.snapshot.unchanged = true;
 			finishJob(runtime, "completed", null);
 			return;
@@ -948,7 +1004,8 @@ async function runLocalDocumentationJob(runtime: ActiveJobRuntime): Promise<void
 			commitSha: prepared.commitSha,
 			currentRecord,
 			source: "local",
-			sourcePath: prepared.sourcePath
+			sourcePath: prepared.sourcePath,
+			sourceRef: prepared.sourceRef
 		});
 		finishJob(runtime, "completed", null);
 	} catch (error: unknown) {
@@ -966,19 +1023,227 @@ async function runLocalDocumentationJob(runtime: ActiveJobRuntime): Promise<void
 	}
 }
 
+async function resolveRepairAvailability(record: GodotDocumentationRecord): Promise<GodotDocumentationRecord["repairAvailability"]> {
+	if ((await listRollbackGenerationIds(record)).length > 0) return "rollback";
+	if (await hasGodotDocumentationSource(record.sourceRef)) return "cached_source";
+	return record.source === "official" ? "network_required" : "source_required";
+}
+
+async function setDocumentHealth(
+	documentId: string,
+	health: GodotDocumentationRecord["health"],
+	repairAvailability?: GodotDocumentationRecord["repairAvailability"] | undefined
+): Promise<void> {
+	await updateGodotDocumentationSettings((draft): void => {
+		const record = draft.documents[documentId];
+		if (record === undefined) return;
+		record.health = health;
+		if (repairAvailability !== undefined) record.repairAvailability = repairAvailability;
+	});
+}
+
+async function runHealthCheckJob(runtime: ActiveJobRuntime): Promise<void> {
+	try {
+		const documentId: string = runtime.snapshot.documentId!;
+		const record = getGodotDocumentationSnapshot().documents[documentId];
+		if (record === undefined) throw new Error(`Unknown Godot documentation item: ${documentId}`);
+		await setDocumentHealth(documentId, {
+			status: "checking",
+			code: null,
+			message: null,
+			checkedAt: record.health.checkedAt
+		});
+		setJobProgress(runtime, "validating", 15, "Checking the documentation index...");
+		const fastHealth = await checkDocumentationRecordFast(record);
+		if (fastHealth.status !== "ready") {
+			throw Object.assign(new Error(fastHealth.message ?? "Documentation index check failed."), {
+				code: fastHealth.code ?? "documentation_index_corrupt"
+			});
+		}
+		if (runtime.deepCheck) {
+			setJobProgress(runtime, "validating", 50, "Running a deep documentation index check...");
+			await deepCheckDocumentationInProcess({
+				generationDir: getGodotDocumentationGenerationDir(record),
+				branch: record.branch,
+				commitSha: record.commitSha,
+				signal: runtime.controller.signal
+			});
+		}
+		await setDocumentHealth(documentId, {
+			status: "ready",
+			code: null,
+			message: null,
+			checkedAt: new Date().toISOString()
+		}, "none");
+		finishJob(runtime, "completed", null);
+	} catch (error: unknown) {
+		const cancelled: boolean = runtime.controller.signal.aborted;
+		const message: string = error instanceof Error ? error.message : String(error);
+		const code: string = error !== null && typeof error === "object" && "code" in error
+			? String(error.code)
+			: "documentation_index_corrupt";
+		const documentId: string | null = runtime.snapshot.documentId;
+		if (!cancelled && documentId !== null) {
+			const record = getGodotDocumentationSnapshot().documents[documentId];
+			if (record !== undefined) {
+				await setDocumentHealth(documentId, {
+					status: record.activeGenerationId === null ? "unavailable" : "degraded",
+					code,
+					message,
+					checkedAt: new Date().toISOString()
+				}, await resolveRepairAvailability(record));
+			}
+		}
+		finishJob(runtime, cancelled ? "cancelled" : "failed", cancelled ? null : message);
+	}
+}
+
+async function activateRollbackGeneration(
+	runtime: ActiveJobRuntime,
+	record: GodotDocumentationRecord,
+	generationId: string
+): Promise<boolean> {
+	const generationDir: string = join(getGodotDocumentationPackageDir(record.id), generationId);
+	setJobProgress(runtime, "rolling_back", 20, "Checking the previous healthy documentation generation...");
+	try {
+		const manifest = await deepCheckDocumentationInProcess({
+			generationDir,
+			branch: record.branch,
+			commitSha: (await readFile(join(generationDir, "manifest.json"), "utf8").then((text): string => {
+				return (JSON.parse(text) as GodotDocumentationGenerationManifest).commitSha;
+			})),
+			signal: runtime.controller.signal
+		});
+		await updateGodotDocumentationSettings((draft): void => {
+			const current = draft.documents[record.id];
+			if (current === undefined) return;
+			current.activeGenerationId = generationId;
+			current.commitSha = manifest.commitSha;
+			current.documentCount = manifest.documentCount;
+			current.chunkCount = manifest.chunkCount;
+			current.classCount = manifest.classCount;
+			current.sizeBytes = manifest.sizeBytes;
+			current.updatedAt = new Date().toISOString();
+			current.health = { status: "ready", code: null, message: null, checkedAt: new Date().toISOString() };
+			current.repairAvailability = "none";
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function runRepairJob(runtime: ActiveJobRuntime): Promise<void> {
+	const stagingRoot: string = join(getGodotDocumentationStagingRoot(), runtime.snapshot.jobId);
+	try {
+		await mkdir(stagingRoot, { recursive: true });
+		const documentId: string = runtime.snapshot.documentId!;
+		const record = getGodotDocumentationSnapshot().documents[documentId];
+		if (record === undefined) throw new Error(`Unknown Godot documentation item: ${documentId}`);
+		await setDocumentHealth(documentId, {
+			status: "repairing",
+			code: record.health.code,
+			message: record.health.message,
+			checkedAt: record.health.checkedAt
+		});
+
+		for (const generationId of await listRollbackGenerationIds(record)) {
+			if (await activateRollbackGeneration(runtime, record, generationId)) {
+				finishJob(runtime, "completed", null);
+				return;
+			}
+		}
+
+		let sourceRef: GodotDocumentationSourceRef | null = record.sourceRef;
+		let extractedRoot: string;
+		if (await hasGodotDocumentationSource(sourceRef)) {
+			setJobProgress(runtime, "extracting", 25, "Preparing the cached documentation source...");
+			await touchGodotDocumentationSource(sourceRef!);
+			if (sourceRef!.kind === "local_tree") {
+				extractedRoot = getGodotDocumentationCachedSourcePath(sourceRef!);
+			} else {
+				extractedRoot = join(stagingRoot, "source");
+				await extractArchive(getGodotDocumentationCachedSourcePath(sourceRef!), extractedRoot, runtime);
+			}
+		} else if (record.source === "official" && runtime.allowNetwork) {
+			setJobProgress(runtime, "resolving", 0, "Resolving the selected godot-docs branch...");
+			const resolved = await resolveBranch(record.branch, runtime.controller.signal);
+			const archivePath: string = join(stagingRoot, "godot-docs.zip");
+			await downloadArchive(resolved.commitSha, archivePath, runtime);
+			sourceRef = await cacheGodotDocumentationArchive(archivePath, "official_zip");
+			extractedRoot = join(stagingRoot, "source");
+			await extractArchive(archivePath, extractedRoot, runtime);
+			record.commitSha = resolved.commitSha;
+		} else {
+			const code: string = record.source === "official" ? "documentation_network_required" : "documentation_source_required";
+			throw Object.assign(new Error(record.source === "official"
+				? "Repair requires downloading the official Godot documentation again."
+				: "Repair requires selecting the local Godot documentation source again."), { code });
+		}
+
+		await buildAndActivateDocumentation({
+			runtime,
+			stagingRoot,
+			extractedRoot,
+			branch: record.branch,
+			commitSha: record.commitSha,
+			currentRecord: record,
+			source: record.source,
+			...(record.sourcePath === undefined ? {} : { sourcePath: record.sourcePath }),
+			sourceRef: sourceRef!
+		});
+		finishJob(runtime, "completed", null);
+	} catch (error: unknown) {
+		const cancelled: boolean = runtime.controller.signal.aborted;
+		const message: string = error instanceof Error ? error.message : String(error);
+		const code: string = error !== null && typeof error === "object" && "code" in error
+			? String(error.code)
+			: "documentation_index_corrupt";
+		const documentId = runtime.snapshot.documentId;
+		if (!cancelled && documentId !== null) {
+			const record = getGodotDocumentationSnapshot().documents[documentId];
+			if (record !== undefined) {
+				await setDocumentHealth(documentId, {
+					status: "unavailable",
+					code,
+					message,
+					checkedAt: new Date().toISOString()
+				}, await resolveRepairAvailability(record));
+			}
+		}
+		logger.warn("godot_documentation", cancelled ? "repair_cancelled" : "repair_failed", {
+			documentId,
+			branch: runtime.snapshot.branch,
+			error: message
+		});
+		finishJob(runtime, cancelled ? "cancelled" : "failed", cancelled ? null : message);
+	} finally {
+		await rm(stagingRoot, { recursive: true, force: true }).catch((): void => undefined);
+	}
+}
+
 function startJob(
 	operation: GodotDocumentationJob["operation"],
 	branch: string,
 	documentId: string | null,
-	localSourcePath: string | null = null
+	localSourcePath: string | null = null,
+	options: { allowNetwork?: boolean; deepCheck?: boolean; background?: boolean } = {}
 ): GodotDocumentationJob {
 	if (activeJob !== null) {
-		throw new Error(`A documentation operation is already running for ${activeJob.snapshot.branch}.`);
+		if (activeJob.background && options.background !== true) {
+			activeJob.controller.abort();
+			activeJob = null;
+		} else {
+			throw new Error(`A documentation operation is already running for ${activeJob.snapshot.branch}.`);
+		}
 	}
 	const now: string = new Date().toISOString();
 	const runtime: ActiveJobRuntime = {
 		controller: new AbortController(),
 		localSourcePath,
+		allowNetwork: options.allowNetwork === true,
+		deepCheck: options.deepCheck === true,
+		background: options.background === true,
 		snapshot: {
 			jobId: `godot-docs-${randomUUID()}`,
 			operation,
@@ -995,7 +1260,11 @@ function startJob(
 		}
 	};
 	activeJob = runtime;
-	void (localSourcePath === null ? runDocumentationJob(runtime) : runLocalDocumentationJob(runtime));
+	void (operation === "check"
+		? runHealthCheckJob(runtime)
+		: operation === "repair"
+			? runRepairJob(runtime)
+			: localSourcePath === null ? runDocumentationJob(runtime) : runLocalDocumentationJob(runtime));
 	return cloneJob(runtime.snapshot);
 }
 
@@ -1003,9 +1272,57 @@ export async function initializeGodotDocumentationManager(): Promise<void> {
 	await initializeGodotDocumentationStore();
 	await Promise.all([
 		rm(getGodotDocumentationStagingRoot(), { recursive: true, force: true }),
-		rm(getGodotDocumentationTrashRoot(), { recursive: true, force: true })
+		rm(getGodotDocumentationTrashRoot(), { recursive: true, force: true }),
+		cleanupGodotDocumentationSourceStaging()
 	]).catch((): void => undefined);
 	await cleanupOrphanedGenerations();
+	const records = Object.values(getGodotDocumentationSnapshot().documents);
+	for (const record of records) {
+		const health = await checkDocumentationRecordFast(record);
+		const availability = health.status === "ready" ? "none" : await resolveRepairAvailability(record);
+		await setDocumentHealth(record.id, health, availability);
+	}
+	await pruneGodotDocumentationSourceCache().catch((error: unknown): void => {
+		logger.warn("godot_documentation", "source_cache_prune_failed", {
+			error: error instanceof Error ? error.message : String(error)
+		});
+	});
+	scheduleDocumentationMaintenance(INITIAL_MAINTENANCE_DELAY_MS);
+}
+
+function scheduleDocumentationMaintenance(delayMs: number): void {
+	if (maintenanceTimer !== null) clearTimeout(maintenanceTimer);
+	maintenanceTimer = setTimeout((): void => {
+		maintenanceTimer = null;
+		void runDocumentationMaintenance();
+	}, delayMs);
+	maintenanceTimer.unref();
+}
+
+async function runDocumentationMaintenance(): Promise<void> {
+	if (activeJob !== null || hasActiveSessionRuns()) {
+		scheduleDocumentationMaintenance(5_000);
+		return;
+	}
+	const records = Object.values(getGodotDocumentationSnapshot().documents);
+	for (const record of records) {
+		if (record.health.status !== "ready" && await hasGodotDocumentationSource(record.sourceRef)) {
+			startJob("repair", record.branch, record.id, null, { allowNetwork: false, background: true });
+			scheduleDocumentationMaintenance(60_000);
+			return;
+		}
+	}
+	const now: number = Date.now();
+	const due = records.find((record): boolean => {
+		const checkedAt: number = record.health.checkedAt === null ? 0 : Date.parse(record.health.checkedAt);
+		return !Number.isFinite(checkedAt) || now - checkedAt >= DEEP_HEALTH_CHECK_INTERVAL_MS;
+	});
+	if (due !== undefined) {
+		startJob("check", due.branch, due.id, null, { deepCheck: true, background: true });
+		scheduleDocumentationMaintenance(60_000);
+		return;
+	}
+	scheduleDocumentationMaintenance(DEEP_HEALTH_CHECK_INTERVAL_MS);
 }
 
 export function getGodotDocumentationState(): GodotDocumentationState {
@@ -1022,13 +1339,15 @@ export function installGodotDocumentation(branch: string): GodotDocumentationJob
 
 export function importLocalGodotDocumentation(branch: string, sourcePath: string): GodotDocumentationJob {
 	const normalizedBranch: string = assertOfficialBranchName(branch);
-	if (Object.values(getGodotDocumentationSnapshot().documents).some((record): boolean => record.branch === normalizedBranch)) {
-		throw new Error(`Documentation for branch ${normalizedBranch} is already installed.`);
+	const existing = Object.values(getGodotDocumentationSnapshot().documents)
+		.find((record): boolean => record.branch === normalizedBranch);
+	if (existing !== undefined && existing.source !== "local") {
+		throw new Error(`Documentation for branch ${normalizedBranch} is already installed from the official source.`);
 	}
 	if (sourcePath.trim().length === 0 || sourcePath.length > 32_768) {
 		throw new Error("Local documentation source path is invalid.");
 	}
-	return startJob("import", normalizedBranch, null, sourcePath);
+	return startJob("import", normalizedBranch, existing?.id ?? null, sourcePath);
 }
 
 export function updateGodotDocumentation(documentId: string): GodotDocumentationJob {
@@ -1037,12 +1356,55 @@ export function updateGodotDocumentation(documentId: string): GodotDocumentation
 		throw new Error(`Unknown Godot documentation item: ${documentId}`);
 	}
 	if (record.source === "local") {
+		if (record.health.status !== "ready" && awaitableSourceAvailable(record)) {
+			return startJob("repair", record.branch, record.id, null, { allowNetwork: false });
+		}
 		if (record.sourcePath === undefined) {
 			throw new Error(`Local Godot documentation item ${documentId} has no source path.`);
 		}
 		return startJob("update", record.branch, record.id, record.sourcePath);
 	}
+	if (record.health.status !== "ready") {
+		return startJob("repair", record.branch, record.id, null, { allowNetwork: true });
+	}
 	return startJob("update", record.branch, record.id);
+}
+
+function awaitableSourceAvailable(record: GodotDocumentationRecord): boolean {
+	return record.sourceRef !== null;
+}
+
+export function checkGodotDocumentationHealth(documentId: string, deep: boolean = false): GodotDocumentationJob {
+	const record = getGodotDocumentationSnapshot().documents[documentId];
+	if (record === undefined) throw new Error(`Unknown Godot documentation item: ${documentId}`);
+	return startJob("check", record.branch, record.id, null, { deepCheck: deep });
+}
+
+export function repairGodotDocumentation(documentId: string, allowNetwork: boolean): GodotDocumentationJob {
+	const record = getGodotDocumentationSnapshot().documents[documentId];
+	if (record === undefined) throw new Error(`Unknown Godot documentation item: ${documentId}`);
+	if (record.source === "official" && record.repairAvailability === "network_required" && !allowNetwork) {
+		throw new Error("documentation_network_required: Repair requires explicit permission to download the official documentation.");
+	}
+	return startJob("repair", record.branch, record.id, null, { allowNetwork });
+}
+
+export async function reportGodotDocumentationQueryFailure(code: string): Promise<void> {
+	if (!["documentation_index_missing", "documentation_index_corrupt", "documentation_index_incompatible"].includes(code)) {
+		return;
+	}
+	for (const record of Object.values(getGodotDocumentationSnapshot().documents)) {
+		if (record.health.status !== "ready") continue;
+		const health = await checkDocumentationRecordFast(record);
+		if (health.status === "ready") continue;
+		await setDocumentHealth(record.id, health, await resolveRepairAvailability(record));
+		logger.warn("godot_documentation", "query_health_failure", {
+			documentId: record.id,
+			branch: record.branch,
+			generation: record.activeGenerationId,
+			code
+		});
+	}
 }
 
 export function getGodotDocumentationJob(jobId: string): GodotDocumentationJob | null {
@@ -1093,15 +1455,21 @@ export async function removeGodotDocumentation(documentId: string): Promise<Godo
 		// The immutable SQLite generation may still be open in a Godot MCP process.
 		// It is no longer referenced and will be removed during the next cleanup pass.
 	}
+	await pruneGodotDocumentationSourceCache().catch((): void => undefined);
 	return getGodotDocumentationState();
 }
 
 async function cleanupOrphanedGenerations(): Promise<void> {
 	const packagesRoot: string = join(getGodotDocumentationRoot(), "packages");
-	const referenced: Set<string> = new Set(
-		Object.values(getGodotDocumentationSnapshot().documents)
-			.map((record: GodotDocumentationRecord): string => normalize(join(record.id, record.commitSha)))
-	);
+	const records = Object.values(getGodotDocumentationSnapshot().documents);
+	const referenced: Set<string> = new Set();
+	for (const record of records) {
+		if (record.activeGenerationId !== null) {
+			referenced.add(normalize(join(record.id, record.activeGenerationId)));
+		}
+		const rollbackId: string | undefined = (await listRollbackGenerationIds(record))[0];
+		if (rollbackId !== undefined) referenced.add(normalize(join(record.id, rollbackId)));
+	}
 	let packageEntries: Dirent[];
 	try {
 		packageEntries = await readdir(packagesRoot, { withFileTypes: true });

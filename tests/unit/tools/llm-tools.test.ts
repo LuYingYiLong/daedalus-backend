@@ -163,6 +163,10 @@ test("tool mapping resolves builtin and dynamic tools", (): void => {
 		serverId: "godot",
 		toolName: "audit_project_health"
 	});
+	assert.deepEqual(resolveToolMapping("mcp_godot_search_documentation"), {
+		serverId: "godot_documentation",
+		toolName: "search_documentation"
+	});
 	assert.deepEqual(resolveToolMapping("mcp_terminal_get_job_status"), {
 		serverId: "terminal",
 		toolName: "get_terminal_job_status"

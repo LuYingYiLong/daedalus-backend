@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { DocumentationIndexError } from "./health.js";
 import {
 	getGodotDocumentationIndexPath,
 	getGodotDocumentationSnapshot,
@@ -45,7 +45,7 @@ export function selectGodotDocumentation(
 	projectVersion?: string | undefined
 ): DocumentationSelection | null {
 	const available: GodotDocumentationRecord[] = records.filter((record): boolean => {
-		return existsSync(getGodotDocumentationIndexPath(record));
+		return record.health.status === "ready" && record.activeGenerationId !== null;
 	});
 	if (available.length === 0) {
 		return null;
@@ -261,9 +261,14 @@ export async function searchGodotDocumentation(params: {
 		params.projectVersion
 	);
 	if (selection === null) {
+		const repairing: boolean = Object.values(settings.documents).some((record): boolean => {
+			return record.health.status === "repairing" || record.health.status === "checking";
+		});
 		return {
 			ok: false,
-			code: params.branch?.trim() ? "documentation_branch_unavailable" : "documentation_unavailable",
+			code: repairing
+				? "documentation_repairing"
+				: params.branch?.trim() ? "documentation_branch_unavailable" : "documentation_unavailable",
 			selected: null,
 			results: [],
 			truncated: false
@@ -275,12 +280,15 @@ export async function searchGodotDocumentation(params: {
 	}
 	const limit: number = Math.max(1, Math.min(MAX_RESULT_LIMIT, Math.trunc(params.limit ?? DEFAULT_RESULT_LIMIT)));
 	const scope: GodotDocumentationScope = params.scope ?? "all";
-	const sqlite = await import("node:sqlite");
-	const db: DatabaseSync = new sqlite.DatabaseSync(getGodotDocumentationIndexPath(selection.record), {
-		readOnly: true
-	});
-	try {
-		const databaseSearch = searchDatabase(db, selection.record, query, scope, limit + 1);
+	const runSearch = async (): Promise<GodotDocumentationSearchResponse> => {
+		const sqlite = await import("node:sqlite");
+		let db: DatabaseSync | null = null;
+		try {
+			db = new sqlite.DatabaseSync(getGodotDocumentationIndexPath(selection.record), {
+				readOnly: true,
+				timeout: 750
+			});
+			const databaseSearch = searchDatabase(db, selection.record, query, scope, limit + 1);
 		const matches: GodotDocumentationSearchResult[] = databaseSearch.results;
 		const results: GodotDocumentationSearchResult[] = matches.slice(0, limit);
 		return {
@@ -295,7 +303,36 @@ export async function searchGodotDocumentation(params: {
 			results,
 			truncated: databaseSearch.truncatedBySize || matches.length > limit
 		};
-	} finally {
-		db.close();
+		} catch (error: unknown) {
+			const message: string = error instanceof Error ? error.message : String(error);
+			if (/SQLITE_(?:BUSY|LOCKED)|database is locked/iu.test(message)) {
+				throw new DocumentationIndexError("documentation_index_busy", "Documentation index is busy. Try again shortly.", { cause: error });
+			}
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				throw new DocumentationIndexError("documentation_index_missing", "Documentation index is missing.", { cause: error });
+			}
+			throw new DocumentationIndexError("documentation_index_corrupt", "Documentation index query failed.", { cause: error });
+		} finally {
+			db?.close();
+		}
+	};
+	try {
+		return await runSearch();
+	} catch (error: unknown) {
+		if (error instanceof DocumentationIndexError && error.code === "documentation_index_busy") {
+			await new Promise<void>((resolve): void => { setTimeout(resolve, 100); });
+			try {
+				return await runSearch();
+			} catch (retryError: unknown) {
+				if (retryError instanceof DocumentationIndexError) {
+					return { ok: false, code: retryError.code, selected: null, results: [], truncated: false };
+				}
+				throw retryError;
+			}
+		}
+		if (error instanceof DocumentationIndexError) {
+			return { ok: false, code: error.code, selected: null, results: [], truncated: false };
+		}
+		throw error;
 	}
 }

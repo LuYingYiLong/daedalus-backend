@@ -36,7 +36,7 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 		toolName: "get_godot_version"
 	},
 	"mcp_godot_search_documentation": {
-		serverId: "godot",
+		serverId: "godot_documentation",
 		toolName: "search_documentation"
 	},
 	"mcp_godot_launch_editor": {

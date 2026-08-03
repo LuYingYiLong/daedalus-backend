@@ -3,6 +3,7 @@ import { toManagerFailure, ManagerError } from "./manager-error.js";
 import { installBackend, rollbackBackend, startBackend, stopBackend, healthBackend, getLatestBackendVersion } from "./backend.js";
 import { applyFrontendUpdate, applyFrontendUpdateWait, downloadAndStageFrontend, getLatestFrontendVersion, rollbackFrontend } from "./frontend.js";
 import { readStatus } from "./status.js";
+import { configureSystemCertificateTrust } from "../runtime/network-trust.js";
 
 type ParsedArgs = {
 	json: boolean;
@@ -11,6 +12,7 @@ type ParsedArgs = {
 };
 
 async function main(): Promise<void> {
+	configureSystemCertificateTrust();
 	const args: ParsedArgs = parseArgs(process.argv.slice(2));
 	try {
 		const result: ManagerResult = await handleCommand(args);

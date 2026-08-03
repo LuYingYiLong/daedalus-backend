@@ -1,7 +1,6 @@
 export const GODOT_MCP_TOOL_NAMES: readonly string[] = [
 	"get_runtime_status",
 	"get_godot_version",
-	"search_documentation",
 	"launch_editor",
 	"run_project",
 	"stop_project",

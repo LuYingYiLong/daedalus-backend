@@ -55,7 +55,7 @@ test("automation MCP manifest is explicit and not exposed through product MCP/to
 	}
 });
 
-test("terminal MCP is a global internal server instead of a workspace server", (): void => {
+test("terminal and documentation MCPs are global internal servers instead of workspace servers", (): void => {
 	const globalServerIds = buildGlobalMcpServerConfigs().map((server): string => server.id);
 	const workspaceServerIds = buildMcpServerConfigs({
 		id: "workspace-terminal-test",
@@ -70,6 +70,8 @@ test("terminal MCP is a global internal server instead of a workspace server", (
 
 	assert.ok(globalServerIds.includes("terminal"));
 	assert.ok(!workspaceServerIds.includes("terminal"));
+	assert.ok(globalServerIds.includes("godot_documentation"));
+	assert.ok(!workspaceServerIds.includes("godot_documentation"));
 	assert.ok(globalServerIds.includes("skills"));
 	assert.ok(workspaceServerIds.includes("skills"));
 });

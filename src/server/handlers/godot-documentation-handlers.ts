@@ -8,10 +8,12 @@ import {
 	cancelGodotDocumentationJob,
 	getGodotDocumentationJob,
 	getGodotDocumentationState,
+	checkGodotDocumentationHealth,
 	importLocalGodotDocumentation,
 	installGodotDocumentation,
 	listGodotDocumentationBranches,
 	removeGodotDocumentation,
+	repairGodotDocumentation,
 	setGodotDocumentationEnabled,
 	updateGodotDocumentation
 } from "../../godot-documentation/manager.js";
@@ -70,6 +72,22 @@ export async function handleGodotDocumentationRequest(
 				id: request.id,
 				ok: true,
 				result: updateGodotDocumentation(request.params.documentId)
+			});
+			return;
+		case "godotDocumentation.health.check":
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: checkGodotDocumentationHealth(request.params.documentId, request.params.deep === true)
+			});
+			return;
+		case "godotDocumentation.repair":
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: repairGodotDocumentation(request.params.documentId, request.params.allowNetwork)
 			});
 			return;
 		case "godotDocumentation.remove":

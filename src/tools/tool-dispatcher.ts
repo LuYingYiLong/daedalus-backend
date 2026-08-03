@@ -62,6 +62,15 @@ type RuntimeCapabilityKind = "godot_cli" | "godot_lsp" | "godot_dap";
 const unavailableRuntimeCapabilities: Map<string, Map<RuntimeCapabilityKind, { reason: string; expiresAt: number }>> = new Map();
 const RUNTIME_CAPABILITY_CACHE_TTL_MS: number = 30 * 60 * 1000;
 
+function readDocumentationFailureCode(content: string): string | null {
+	try {
+		const value = JSON.parse(content) as { ok?: unknown; code?: unknown };
+		return value.ok === false && typeof value.code === "string" ? value.code : null;
+	} catch {
+		return null;
+	}
+}
+
 function getRuntimeCapabilityKind(toolName: string, args: Record<string, unknown>): RuntimeCapabilityKind | null {
 	if (toolName.startsWith("mcp_godot_lsp_")) {
 		return "godot_lsp";
@@ -393,6 +402,13 @@ async function executeSingleToolCall(
 			});
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
+		}
+		if (functionName === "mcp_godot_search_documentation") {
+			const failureCode: string | null = readDocumentationFailureCode(result.content);
+			if (failureCode !== null) {
+				const { reportGodotDocumentationQueryFailure } = await import("../godot-documentation/manager.js");
+				await reportGodotDocumentationQueryFailure(failureCode);
+			}
 		}
 		const parsedSummary: ParsedToolResultSummary = parseToolResultSummary(functionName, executionArgs, result.content);
 		if (parsedSummary.environmentIssue === true) {

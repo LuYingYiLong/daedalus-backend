@@ -195,7 +195,7 @@ export function parseRstDocument(filePath: string, source: string): Documentatio
 	return chunks;
 }
 
-async function findDocumentationRoot(extractedRoot: string): Promise<string> {
+export async function findDocumentationRoot(extractedRoot: string): Promise<string> {
 	const queue: Array<{ path: string; depth: number }> = [{ path: extractedRoot, depth: 0 }];
 	let inspectedDirectories: number = 0;
 	while (queue.length > 0 && inspectedDirectories < 64) {
@@ -234,7 +234,7 @@ async function findDocumentationRoot(extractedRoot: string): Promise<string> {
 	);
 }
 
-async function collectRstFiles(root: string): Promise<Array<{ absolutePath: string; relativePath: string; size: number }>> {
+export async function collectRstFiles(root: string): Promise<Array<{ absolutePath: string; relativePath: string; size: number }>> {
 	const queue: string[] = [root];
 	const files: Array<{ absolutePath: string; relativePath: string; size: number }> = [];
 	let totalBytes: number = 0;

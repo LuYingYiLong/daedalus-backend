@@ -163,6 +163,7 @@ const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_skills_create",
 	"mcp_image_generate",
 	"mcp_image_inspect",
+	"mcp_godot_search_documentation",
 	"mcp_web_search"
 ]);
 

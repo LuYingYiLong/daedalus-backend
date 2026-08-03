@@ -8,7 +8,7 @@ Daedalus Studio production builds use a Windows x64 Node.js SEA binary. The bina
 daedalus-backend.exe serve
 daedalus-backend.exe version --json
 daedalus-backend.exe self-test --json
-daedalus-backend.exe mcp terminal|workspace|godot|skills|external
+daedalus-backend.exe mcp terminal|workspace|godot|documentation|skills|external
 daedalus-backend.exe connection-token --connection-id <id> --json
 ```
 

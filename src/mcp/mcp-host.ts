@@ -1,6 +1,7 @@
 import {
 	buildGlobalMcpServerConfigs,
 	buildMcpServerConfigs,
+	GODOT_DOCUMENTATION_MCP_SERVER_ID,
 	getSourceScopedServerId,
 	TERMINAL_MCP_SERVER_ID
 } from "./mcp-config.js";
@@ -29,6 +30,7 @@ import { getApprovalMode } from "../approval-settings-store.js";
 import type { TerminalCommandAuthorization } from "./terminal/authorization.js";
 import type { McpProgressNotification } from "./terminal/progress.js";
 import { resolveEffectiveGodotExecutable } from "../godot-executable-resolver.js";
+import { readGodotProjectFeatureVersion } from "../godot-documentation/project-version.js";
 import { logger } from "../logger.js";
 import {
 	COMMAND_TIMEOUT_MS,
@@ -346,6 +348,18 @@ export class McpHost {
 		this.globalInternalInitialized = true;
 	}
 
+	private async restartGlobalInternalServer(serverId: string): Promise<void> {
+		const current: McpSession | undefined = this.globalInternalSessions.get(serverId);
+		this.globalInternalSessions.delete(serverId);
+		await current?.close().catch((): void => undefined);
+		const effectiveGodot = await resolveEffectiveGodotExecutable();
+		const config = buildGlobalMcpServerConfigs(effectiveGodot.path).find((candidate): boolean => candidate.id === serverId);
+		if (config === undefined) throw new Error(`Unknown global internal MCP server: ${serverId}`);
+		const session = new McpSession(config);
+		await this.connectSession(config, session);
+		this.globalInternalSessions.set(serverId, session);
+	}
+
 	async refreshGodotExecutableConfiguration(): Promise<void> {
 		const activeWorkspaceId: string | undefined = this.activeWorkspaceId;
 		const workspaceIds: string[] = Array.from(this.workspaceSessions.keys());
@@ -651,8 +665,33 @@ export class McpHost {
 		};
 	}
 
+	private async createDocumentationArgs(
+		args: Record<string, unknown>,
+		workspaceId?: string | undefined
+	): Promise<Record<string, unknown>> {
+		const forwardedArgs: Record<string, unknown> = { ...args };
+		const sourceFolderId: string | undefined = typeof forwardedArgs.sourceFolderId === "string"
+			? forwardedArgs.sourceFolderId
+			: undefined;
+		delete forwardedArgs.sourceFolderId;
+
+		const resolvedWorkspaceId: string | undefined = workspaceId ?? getCurrentMcpWorkspaceId() ?? this.activeWorkspaceId;
+		const workspace: WorkspaceConfig | undefined = resolvedWorkspaceId === undefined
+			? undefined
+			: findWorkspace(resolvedWorkspaceId);
+		if (workspace === undefined) {
+			return forwardedArgs;
+		}
+
+		const sourceFolder = getWorkspaceSourceFolder(workspace, sourceFolderId);
+		const projectVersion: string | undefined = await readGodotProjectFeatureVersion(sourceFolder.path);
+		return projectVersion === undefined
+			? forwardedArgs
+			: { ...forwardedArgs, __daedalusProjectVersion: projectVersion };
+	}
+
 	async listTools(serverId: string, workspaceId?: string | undefined) {
-		if (serverId === TERMINAL_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
 
@@ -680,8 +719,33 @@ export class McpHost {
 		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
 			? args.sourceFolderId
 			: undefined;
-		if (serverId === TERMINAL_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
+		}
+		if (serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
+			const forwardedArgs = await this.createDocumentationArgs(args, workspaceId);
+			try {
+				return await this.getSession(serverId, workspaceId).callTool(
+					name,
+					forwardedArgs,
+					{ signal: abortSignal, timeoutMs: 5_000 }
+				);
+			} catch (error: unknown) {
+				const message: string = error instanceof Error ? error.message : String(error);
+				if (/timed out|timeout/iu.test(message)) {
+					throw new Error("documentation_query_timeout: Documentation query exceeded the 5 second limit.", { cause: error });
+				}
+				if (!/closed|not connected|transport|MCP session not found|connection/iu.test(message)) throw error;
+				logger.warn("mcp", "documentation_transport_retry", { error: message });
+				await this.restartGlobalInternalServer(serverId);
+				return this.getSession(serverId, workspaceId).callTool(
+					name,
+					forwardedArgs,
+					{ signal: abortSignal, timeoutMs: 5_000 }
+				);
+			}
+		}
+		if (serverId === TERMINAL_MCP_SERVER_ID) {
 			return this.getSession(serverId, workspaceId).callTool(
 				name,
 				await this.createTerminalArgs(args, workspaceId, commandAuthorization),
@@ -725,7 +789,7 @@ export class McpHost {
 	}
 
 	async listResources(serverId: string, workspaceId?: string | undefined) {
-		if (serverId === TERMINAL_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
 
@@ -742,7 +806,7 @@ export class McpHost {
 	}
 
 	async readResource(serverId: string, uri: string, workspaceId?: string | undefined) {
-		if (serverId === TERMINAL_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
 

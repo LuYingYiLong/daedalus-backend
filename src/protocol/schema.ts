@@ -329,7 +329,8 @@ const workspaceTreeOrderUpdateParamsSchema = z.object({
 	),
 	pinnedSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
 	recentSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
-	expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3)
+	expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3),
+	expandedWorkspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000)
 }).strict().superRefine((value, context): void => {
 	if (new Set(value.workspaceIds).size !== value.workspaceIds.length) {
 		context.addIssue({
@@ -343,6 +344,13 @@ const workspaceTreeOrderUpdateParamsSchema = z.object({
 			code: "custom",
 			path: ["expandedSectionKeys"],
 			message: "Expanded section keys must be unique."
+		});
+	}
+	if (new Set(value.expandedWorkspaceIds).size !== value.expandedWorkspaceIds.length) {
+		context.addIssue({
+			code: "custom",
+			path: ["expandedWorkspaceIds"],
+			message: "Expanded workspace ids must be unique."
 		});
 	}
 	const seenSessionIds: Set<string> = new Set();
@@ -801,6 +809,24 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("godotDocumentation.update"),
 		params: z.object({
 			documentId: z.string().min(1).max(80),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.health.check"),
+		params: z.object({
+			documentId: z.string().min(1).max(80),
+			deep: z.boolean().optional(),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godotDocumentation.repair"),
+		params: z.object({
+			documentId: z.string().min(1).max(80),
+			allowNetwork: z.boolean(),
 		}),
 	}),
 	z.object({

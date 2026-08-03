@@ -4,21 +4,28 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { getGodotDocumentationConfigPath } from "../../../src/app-paths.js";
 import {
 	buildGodotDocumentationIndex,
 	parseRstDocument
 } from "../../../src/godot-documentation/indexer.js";
 import {
 	extractGodotDocumentationArchive,
+	checkGodotDocumentationHealth,
 	getGodotDocumentationJob,
 	getGodotDocumentationState,
 	importLocalGodotDocumentation,
 	initializeGodotDocumentationManager,
-	inspectGodotDocumentationArchive
+	inspectGodotDocumentationArchive,
+	repairGodotDocumentation
 } from "../../../src/godot-documentation/manager.js";
 import { selectGodotDocumentation } from "../../../src/godot-documentation/search.js";
+import { parseGodotProjectFeatureVersion } from "../../../src/godot-documentation/project-version.js";
 import {
 	getGodotDocumentationIndexPath,
+	getGodotDocumentationManifestPath,
+	getGodotDocumentationSnapshot,
+	initializeGodotDocumentationStore,
 	parseStableDocumentationBranch
 } from "../../../src/godot-documentation/store.js";
 import type { GodotDocumentationRecord } from "../../../src/godot-documentation/types.js";
@@ -95,6 +102,10 @@ function createRecord(branch: string): GodotDocumentationRecord {
 		branch,
 		commitSha: COMMIT_SHA,
 		source: "official",
+		sourceRef: null,
+		activeGenerationId: COMMIT_SHA,
+		health: { status: "ready", code: null, message: null, checkedAt: "2026-07-30T00:00:00.000Z" },
+		repairAvailability: "none",
 		installedAt: "2026-07-30T00:00:00.000Z",
 		updatedAt: "2026-07-30T00:00:00.000Z",
 		documentCount: 1,
@@ -281,6 +292,71 @@ test("stable documentation branch parser accepts only major.minor branches", ():
 	assert.equal(parseStableDocumentationBranch("4.7-stable"), null);
 });
 
+test("documentation project version parsing is independent of a Godot MCP process", (): void => {
+	assert.equal(parseGodotProjectFeatureVersion(`
+[application]
+config/features=PackedStringArray("4.7", "GL Compatibility")
+`), "4.7");
+	assert.equal(parseGodotProjectFeatureVersion("[application]\nconfig/name=\"Example\"\n"), undefined);
+});
+
+test("documentation schema v1 is cleared instead of migrated", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-schema-reset-"));
+	process.env.USERPROFILE = root;
+	try {
+		await mkdir(dirname(getGodotDocumentationConfigPath()), { recursive: true });
+		await writeFile(getGodotDocumentationConfigPath(), JSON.stringify({
+			schemaVersion: 1,
+			enabled: true,
+			documents: { legacy: { id: "legacy" } }
+		}), "utf8");
+		await initializeGodotDocumentationStore(true);
+		assert.deepEqual(getGodotDocumentationSnapshot(), { schemaVersion: 2, enabled: false, documents: {} });
+		assert.equal(JSON.parse(await readFile(getGodotDocumentationConfigPath(), "utf8")).schemaVersion, 2);
+	} finally {
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("invalid v2 documentation records are normalized without trusting persisted health", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-v2-normalize-"));
+	process.env.USERPROFILE = root;
+	try {
+		const record = createRecord("4.7");
+		await mkdir(dirname(getGodotDocumentationConfigPath()), { recursive: true });
+		await writeFile(getGodotDocumentationConfigPath(), JSON.stringify({
+			schemaVersion: 2,
+			enabled: true,
+			documents: {
+				[record.id]: {
+					...record,
+					health: { status: "healthy", code: 42, message: [], checkedAt: {} },
+					repairAvailability: "internet"
+				},
+				broken: { id: "broken" }
+			}
+		}), "utf8");
+		await initializeGodotDocumentationStore(true);
+		const normalized = getGodotDocumentationSnapshot();
+		assert.deepEqual(Object.keys(normalized.documents), [record.id]);
+		assert.deepEqual(normalized.documents[record.id]?.health, {
+			status: "unavailable",
+			code: "documentation_index_missing",
+			message: "Documentation index has not been verified.",
+			checkedAt: null
+		});
+		assert.equal(normalized.documents[record.id]?.repairAvailability, "none");
+	} finally {
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("local documentation import copies, indexes, and persists its source", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-local-import-"));
@@ -295,6 +371,7 @@ Node
 
 Base object for scene tree nodes.
 `, "utf8");
+		await initializeGodotDocumentationStore(true);
 		await initializeGodotDocumentationManager();
 		const started = importLocalGodotDocumentation("4.7-local", sourceRoot);
 		let completed = started;
@@ -310,8 +387,72 @@ Base object for scene tree nodes.
 		assert.equal(record?.source, "local");
 		assert.equal(record?.sourcePath, await realpath(sourceRoot));
 		assert.equal(record?.documentCount, 1);
+		assert.equal(record?.sourceRef?.kind, "local_tree");
+		assert.match(record?.sourceRef?.sha256 ?? "", /^[0-9a-f]{64}$/u);
+		assert.match(record?.activeGenerationId ?? "", /^[0-9a-f]{40}-[0-9a-f-]{12}$/u);
+		assert.equal(record?.health.status, "ready");
 		assert.equal(getGodotDocumentationState().enabled, true);
 		assert.ok((await readFile(getGodotDocumentationIndexPath(record!))).length > 0);
+		assert.equal(JSON.parse(await readFile(getGodotDocumentationManifestPath(record!), "utf8")).indexFormatVersion, 1);
+
+		const originalGenerationId: string = record!.activeGenerationId!;
+		await writeFile(join(sourceRoot, "classes", "class_node.rst"), `
+Node
+====
+
+Updated local source used to create a second healthy generation.
+`, "utf8");
+		const updateStarted = importLocalGodotDocumentation("4.7-local", sourceRoot);
+		let updateCompleted = updateStarted;
+		for (let attempt: number = 0; attempt < 300 && !["completed", "failed", "cancelled"].includes(updateCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			updateCompleted = getGodotDocumentationJob(updateStarted.jobId) ?? updateCompleted;
+		}
+		assert.equal(updateCompleted.stage, "completed", updateCompleted.error ?? "second generation did not complete");
+		const updated = getGodotDocumentationState().documents[0]!;
+		assert.notEqual(updated.activeGenerationId, originalGenerationId);
+
+		await writeFile(getGodotDocumentationIndexPath(updated), "corrupt", "utf8");
+		const checkStarted = checkGodotDocumentationHealth(record!.id, true);
+		let checkCompleted = checkStarted;
+		for (let attempt: number = 0; attempt < 200 && !["completed", "failed", "cancelled"].includes(checkCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			checkCompleted = getGodotDocumentationJob(checkStarted.jobId) ?? checkCompleted;
+		}
+		assert.equal(checkCompleted.stage, "failed");
+		assert.equal(getGodotDocumentationState().documents[0]?.repairAvailability, "rollback");
+
+		const repairStarted = repairGodotDocumentation(record!.id, false);
+		let repairCompleted = repairStarted;
+		for (let attempt: number = 0; attempt < 300 && !["completed", "failed", "cancelled"].includes(repairCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			repairCompleted = getGodotDocumentationJob(repairStarted.jobId) ?? repairCompleted;
+		}
+		assert.equal(repairCompleted.stage, "completed", repairCompleted.error ?? "cached repair did not complete");
+		const rolledBack = getGodotDocumentationState().documents[0]!;
+		assert.equal(rolledBack.health.status, "ready");
+		assert.equal(rolledBack.activeGenerationId, originalGenerationId);
+
+		await writeFile(getGodotDocumentationIndexPath(rolledBack), "corrupt", "utf8");
+		const cachedCheckStarted = checkGodotDocumentationHealth(record!.id, true);
+		let cachedCheckCompleted = cachedCheckStarted;
+		for (let attempt: number = 0; attempt < 200 && !["completed", "failed", "cancelled"].includes(cachedCheckCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			cachedCheckCompleted = getGodotDocumentationJob(cachedCheckStarted.jobId) ?? cachedCheckCompleted;
+		}
+		assert.equal(cachedCheckCompleted.stage, "failed");
+		assert.equal(getGodotDocumentationState().documents[0]?.repairAvailability, "cached_source");
+
+		const cachedRepairStarted = repairGodotDocumentation(record!.id, false);
+		let cachedRepairCompleted = cachedRepairStarted;
+		for (let attempt: number = 0; attempt < 300 && !["completed", "failed", "cancelled"].includes(cachedRepairCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			cachedRepairCompleted = getGodotDocumentationJob(cachedRepairStarted.jobId) ?? cachedRepairCompleted;
+		}
+		assert.equal(cachedRepairCompleted.stage, "completed", cachedRepairCompleted.error ?? "cached repair did not complete");
+		const repaired = getGodotDocumentationState().documents[0]!;
+		assert.equal(repaired.health.status, "ready");
+		assert.notEqual(repaired.activeGenerationId, originalGenerationId);
 	} finally {
 		if (previousUserProfile === undefined) {
 			delete process.env.USERPROFILE;

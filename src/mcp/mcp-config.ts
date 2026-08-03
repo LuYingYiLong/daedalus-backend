@@ -8,6 +8,7 @@ import { createSelfInvocation } from "../runtime/self-invocation.js";
 
 export const TERMINAL_MCP_SERVER_ID: string = "terminal";
 export const WORKSPACE_MCP_SERVER_ID: string = "workspace";
+export const GODOT_DOCUMENTATION_MCP_SERVER_ID: string = "godot_documentation";
 
 const defaultWs = getDefaultWorkspace();
 const DEFAULT_GODOT_PROJECT_PATH: string | undefined = process.env.GODOT_PROJECT_PATH ?? defaultWs?.rootPath;
@@ -26,6 +27,7 @@ export function getSourceScopedServerId(
 
 export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string | undefined): McpServerConfig[] {
 	const terminalInvocation = createSelfInvocation(["mcp", "terminal"]);
+	const documentationInvocation = createSelfInvocation(["mcp", "documentation"]);
 	const skillsInvocation = createSelfInvocation(["mcp", "skills"]);
 	const terminalEnv: Record<string, string> = {
 		BACKEND_DIR: process.cwd()
@@ -48,6 +50,13 @@ export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string 
 			command: terminalInvocation.command,
 			args: terminalInvocation.args,
 			env: terminalEnv
+		},
+		{
+			id: GODOT_DOCUMENTATION_MCP_SERVER_ID,
+			name: "Godot Documentation MCP",
+			transport: "stdio",
+			command: documentationInvocation.command,
+			args: documentationInvocation.args
 		},
 		{
 			id: "skills",

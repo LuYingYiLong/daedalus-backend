@@ -31,11 +31,13 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"generalSettings.update",
 	"godotDocumentation.branches.list",
 	"godotDocumentation.get",
+	"godotDocumentation.health.check",
 	"godotDocumentation.importLocal",
 	"godotDocumentation.install",
 	"godotDocumentation.job.cancel",
 	"godotDocumentation.job.get",
 	"godotDocumentation.remove",
+	"godotDocumentation.repair",
 	"godotDocumentation.setEnabled",
 	"godotDocumentation.update",
 	"provider.custom.add",
@@ -196,6 +198,27 @@ test("Godot documentation local import requires a branch and absolute-source can
 	}).success, false);
 });
 
+test("Godot documentation health and repair requests require explicit targets and network consent", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "godot-docs-health",
+		method: "godotDocumentation.health.check",
+		params: { documentId: "godot-docs-47", deep: true }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "godot-docs-repair",
+		method: "godotDocumentation.repair",
+		params: { documentId: "godot-docs-47", allowNetwork: false }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "godot-docs-repair-invalid",
+		method: "godotDocumentation.repair",
+		params: { documentId: "godot-docs-47" }
+	}).success, false);
+});
+
 test("workspace tree order accepts a complete unique order snapshot", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
@@ -209,7 +232,8 @@ test("workspace tree order accepts a complete unique order snapshot", (): void =
 			},
 			pinnedSessionIds: ["session-pinned"],
 			recentSessionIds: ["session-recent"],
-			expandedSectionKeys: ["pinned", "projects"]
+			expandedSectionKeys: ["pinned", "projects"],
+			expandedWorkspaceIds: ["workspace-b"]
 		}
 	}).success, true);
 });
@@ -276,7 +300,8 @@ test("workspace tree order rejects duplicate session ids across workspaces", ():
 			},
 			pinnedSessionIds: [],
 			recentSessionIds: [],
-			expandedSectionKeys: ["pinned", "projects", "recent"]
+			expandedSectionKeys: ["pinned", "projects", "recent"],
+			expandedWorkspaceIds: ["workspace-a"]
 		}
 	}).success, false);
 });

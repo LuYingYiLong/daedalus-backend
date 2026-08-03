@@ -254,6 +254,121 @@ async function runSessionSearchIndexerSmokeTest(): Promise<void> {
 	}
 }
 
+type DocumentationIndexerSmokeResponse = {
+	id: string;
+	type: "progress" | "completed" | "error";
+	message?: string;
+	summary?: {
+		documentCount: number;
+		chunkCount: number;
+		classCount: number;
+		sizeBytes: number;
+	};
+};
+
+async function runDocumentationIndexerSmokeCommand(
+	profilePath: string,
+	command: Record<string, unknown>
+): Promise<DocumentationIndexerSmokeResponse> {
+	const child: ChildProcessWithoutNullStreams = spawn(
+		EXECUTABLE_PATH,
+		["internal", "documentation-indexer"],
+		{
+			cwd: dirname(EXECUTABLE_PATH),
+			windowsHide: true,
+			env: { ...process.env, USERPROFILE: profilePath, DAEDALUS_LOG_CONSOLE: "0" },
+			stdio: ["pipe", "pipe", "pipe"]
+		}
+	);
+	let stdout: string = "";
+	let stderr: string = "";
+	child.stdout.on("data", (chunk: Buffer): void => { stdout += chunk.toString("utf8"); });
+	child.stderr.on("data", (chunk: Buffer): void => { stderr += chunk.toString("utf8"); });
+	child.stdin.end(`${JSON.stringify(command)}\n`);
+	const exitCode: number | null = await waitForChildExit(child, 15_000);
+	if (exitCode !== 0) {
+		throw new Error(`SEA documentation indexer smoke command failed with ${String(exitCode)}: ${stderr}`);
+	}
+	const responses: DocumentationIndexerSmokeResponse[] = stdout
+		.split(/\r?\n/u)
+		.filter(Boolean)
+		.map((line: string): DocumentationIndexerSmokeResponse => JSON.parse(line) as DocumentationIndexerSmokeResponse);
+	const response = responses.findLast((entry): boolean => entry.type === "completed" || entry.type === "error");
+	if (response === undefined || response.type !== "completed") {
+		throw new Error(`SEA documentation indexer returned no successful result: ${response?.message ?? stdout}`);
+	}
+	return response;
+}
+
+async function runDocumentationIndexerSmokeTest(): Promise<void> {
+	const profilePath: string = resolve(WORK_ROOT, "documentation-indexer-smoke-profile");
+	const sourcePath: string = resolve(WORK_ROOT, "documentation-indexer-smoke-source");
+	const generationPath: string = resolve(WORK_ROOT, "documentation-indexer-smoke-generation");
+	const indexPath: string = resolve(generationPath, "index.sqlite");
+	const commitSha: string = "0123456789abcdef0123456789abcdef01234567";
+	await mkdir(resolve(sourcePath, "classes"), { recursive: true });
+	await mkdir(generationPath, { recursive: true });
+	await writeFile(resolve(sourcePath, "conf.py"), "# SEA documentation indexer smoke\n", "utf8");
+	await writeFile(resolve(sourcePath, "classes", "class_node.rst"), [
+		".. _class_Node:",
+		"",
+		"Node",
+		"====",
+		"",
+		"Base object for scene tree nodes.",
+		""
+	].join("\n"), "utf8");
+
+	const cancelled: ChildProcessWithoutNullStreams = spawn(
+		EXECUTABLE_PATH,
+		["internal", "documentation-indexer"],
+		{
+			cwd: dirname(EXECUTABLE_PATH),
+			windowsHide: true,
+			env: { ...process.env, USERPROFILE: profilePath, DAEDALUS_LOG_CONSOLE: "0" },
+			stdio: ["pipe", "pipe", "pipe"]
+		}
+	);
+	cancelled.kill();
+	await waitForChildExit(cancelled, 5_000);
+
+	const buildId: string = "sea-documentation-build";
+	const built = await runDocumentationIndexerSmokeCommand(profilePath, {
+		id: buildId,
+		type: "build",
+		extractedRoot: sourcePath,
+		indexPath,
+		branch: "4.7",
+		commitSha
+	});
+	if (built.summary === undefined || built.summary.chunkCount < 1) {
+		throw new Error("SEA documentation indexer did not build a searchable fixture.");
+	}
+	const now: string = new Date().toISOString();
+	await writeFile(resolve(generationPath, "manifest.json"), `${JSON.stringify({
+		schemaVersion: 1,
+		indexFormatVersion: 1,
+		generationId: "sea-documentation-generation",
+		branch: "4.7",
+		commitSha,
+		sourceSha256: null,
+		sqliteSha256: await sha256File(indexPath),
+		documentCount: built.summary.documentCount,
+		chunkCount: built.summary.chunkCount,
+		classCount: built.summary.classCount,
+		sizeBytes: (await stat(indexPath)).size,
+		builtAt: now,
+		verifiedAt: now
+	}, null, 2)}\n`, "utf8");
+	await runDocumentationIndexerSmokeCommand(profilePath, {
+		id: "sea-documentation-check",
+		type: "check",
+		generationDir: generationPath,
+		branch: "4.7",
+		commitSha
+	});
+}
+
 async function reservePort(): Promise<number> {
 	const server = createServer();
 	await new Promise<void>((resolveReady, reject): void => {
@@ -614,6 +729,7 @@ async function main(): Promise<void> {
 	await writeFile(PAYLOAD_MANIFEST_PATH, payloadManifestText, "utf8");
 	await runExecutableSelfTests(payloadManifest);
 	await runSessionSearchIndexerSmokeTest();
+	await runDocumentationIndexerSmokeTest();
 	await runMcpSmokeTests();
 	await runServerSmokeTest();
 	await runSharedRuntimeSmokeTest(manifest.version);

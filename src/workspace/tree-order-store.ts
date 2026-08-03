@@ -14,6 +14,7 @@ export type WorkspaceTreeOrderPreferences = {
 	pinnedSessionIds: string[];
 	recentSessionIds: string[];
 	expandedSectionKeys: WorkspaceTreeSectionKey[];
+	expandedWorkspaceIds: string[];
 	updatedAt: string;
 };
 
@@ -24,6 +25,7 @@ export type WorkspaceTreeOrderUpdate = Pick<
 	| "pinnedSessionIds"
 	| "recentSessionIds"
 	| "expandedSectionKeys"
+	| "expandedWorkspaceIds"
 >;
 
 export type WorkspaceTreeOrderInventory = {
@@ -44,6 +46,7 @@ function createEmptyPreferences(): WorkspaceTreeOrderPreferences {
 		pinnedSessionIds: [],
 		recentSessionIds: [],
 		expandedSectionKeys: [...WORKSPACE_TREE_SECTION_KEYS],
+		expandedWorkspaceIds: [],
 		updatedAt: new Date(0).toISOString()
 	};
 }
@@ -73,15 +76,18 @@ function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences |
 		|| !Array.isArray(value.pinnedSessionIds)
 		|| !Array.isArray(value.recentSessionIds)
 		|| !Array.isArray(value.expandedSectionKeys)
+		|| (value.expandedWorkspaceIds !== undefined && !Array.isArray(value.expandedWorkspaceIds))
 		|| typeof value.updatedAt !== "string"
 		|| !value.workspaceIds.every(isId)
 		|| !value.pinnedSessionIds.every(isId)
 		|| !value.recentSessionIds.every(isId)
 		|| !value.expandedSectionKeys.every(isWorkspaceTreeSectionKey)
+		|| (Array.isArray(value.expandedWorkspaceIds) && !value.expandedWorkspaceIds.every(isId))
 		|| hasDuplicates(value.workspaceIds)
 		|| hasDuplicates(value.pinnedSessionIds)
 		|| hasDuplicates(value.recentSessionIds)
 		|| hasDuplicates(value.expandedSectionKeys)
+		|| (Array.isArray(value.expandedWorkspaceIds) && hasDuplicates(value.expandedWorkspaceIds))
 	) {
 		return null;
 	}
@@ -114,6 +120,11 @@ function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences |
 		pinnedSessionIds: [...value.pinnedSessionIds],
 		recentSessionIds: [...value.recentSessionIds],
 		expandedSectionKeys: [...value.expandedSectionKeys],
+		// Older v2 snapshots predate per-workspace expansion persistence. Preserve
+		// their previous UI behavior by treating every saved workspace as expanded.
+		expandedWorkspaceIds: Array.isArray(value.expandedWorkspaceIds)
+			? [...value.expandedWorkspaceIds]
+			: [...value.workspaceIds],
 		updatedAt: value.updatedAt
 	};
 }
@@ -174,6 +185,9 @@ export function reconcileWorkspaceTreeOrder(
 	updatedAt: string = new Date().toISOString()
 ): WorkspaceTreeOrderPreferences {
 	const currentWorkspaceIds: string[] = inventory.workspaces.map((workspace): string => workspace.id);
+	const currentWorkspaceIdSet: ReadonlySet<string> = new Set(currentWorkspaceIds);
+	const savedWorkspaceIdSet: ReadonlySet<string> = new Set(preferences.workspaceIds);
+	const savedExpandedWorkspaceIdSet: ReadonlySet<string> = new Set(preferences.expandedWorkspaceIds);
 	const visibleSessionIdsByWorkspace: Record<string, string[]> = createVisibleSessionIdsByWorkspace(inventory);
 	const workspaceIds: string[] = mergeSavedOrder(currentWorkspaceIds, preferences.workspaceIds);
 	const sessionIdsByWorkspace: Record<string, string[]> = {};
@@ -200,6 +214,10 @@ export function reconcileWorkspaceTreeOrder(
 		pinnedSessionIds,
 		recentSessionIds,
 		expandedSectionKeys: preferences.expandedSectionKeys.filter(isWorkspaceTreeSectionKey),
+		expandedWorkspaceIds: workspaceIds.filter((workspaceId: string): boolean => {
+			return currentWorkspaceIdSet.has(workspaceId)
+				&& (!savedWorkspaceIdSet.has(workspaceId) || savedExpandedWorkspaceIdSet.has(workspaceId));
+		}),
 		updatedAt
 	};
 }
@@ -277,6 +295,9 @@ export function validateWorkspaceTreeOrderUpdate(
 	) {
 		throw new Error("workspace_tree_order_invalid_section");
 	}
+	if (hasDuplicates(update.expandedWorkspaceIds)) {
+		throw new Error("workspace_tree_order_duplicate_expanded_workspace");
+	}
 }
 
 function hasSameOrder(
@@ -288,13 +309,15 @@ function hasSameOrder(
 		sessionIdsByWorkspace: left.sessionIdsByWorkspace,
 		pinnedSessionIds: left.pinnedSessionIds,
 		recentSessionIds: left.recentSessionIds,
-		expandedSectionKeys: left.expandedSectionKeys
+		expandedSectionKeys: left.expandedSectionKeys,
+		expandedWorkspaceIds: left.expandedWorkspaceIds
 	}) === JSON.stringify({
 		workspaceIds: right.workspaceIds,
 		sessionIdsByWorkspace: right.sessionIdsByWorkspace,
 		pinnedSessionIds: right.pinnedSessionIds,
 		recentSessionIds: right.recentSessionIds,
-		expandedSectionKeys: right.expandedSectionKeys
+		expandedSectionKeys: right.expandedSectionKeys,
+		expandedWorkspaceIds: right.expandedWorkspaceIds
 	});
 }
 

@@ -7,13 +7,16 @@ import {
 } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 import type {
+	DocumentationHealthStatus,
+	DocumentationRepairAvailability,
 	GodotDocumentationRecord,
+	GodotDocumentationSourceRef,
 	GodotDocumentationSettings,
 	GodotDocumentationState
 } from "./types.js";
 
 const EMPTY_SETTINGS: GodotDocumentationSettings = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	enabled: false,
 	documents: {}
 };
@@ -38,6 +41,45 @@ function readNonNegativeInteger(value: unknown): number | null {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+function normalizeSourceRef(value: unknown): GodotDocumentationSourceRef | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const kind = value.kind === "official_zip" || value.kind === "local_zip" || value.kind === "local_tree"
+		? value.kind
+		: null;
+	const sha256: string | null = readString(value.sha256, 64);
+	const sizeBytes: number | null = readNonNegativeInteger(value.sizeBytes);
+	return kind !== null && sha256 !== null && /^[0-9a-f]{64}$/u.test(sha256) && sizeBytes !== null
+		? { kind, sha256, sizeBytes }
+		: null;
+}
+
+function normalizeHealth(value: unknown): GodotDocumentationRecord["health"] {
+	const statuses: ReadonlySet<DocumentationHealthStatus> = new Set([
+		"checking", "ready", "degraded", "repairing", "unavailable"
+	]);
+	if (!isRecord(value) || typeof value.status !== "string" || !statuses.has(value.status as DocumentationHealthStatus)) {
+		return { status: "unavailable", code: "documentation_index_missing", message: "Documentation index has not been verified.", checkedAt: null };
+	}
+	return {
+		status: value.status as DocumentationHealthStatus,
+		code: value.code === null ? null : readString(value.code, 120),
+		message: value.message === null ? null : readString(value.message, 2_000),
+		checkedAt: value.checkedAt === null ? null : readString(value.checkedAt, 80)
+	};
+}
+
+function normalizeRepairAvailability(value: unknown): DocumentationRepairAvailability {
+	return value === "rollback"
+		|| value === "cached_source"
+		|| value === "network_required"
+		|| value === "source_required"
+		|| value === "none"
+		? value
+		: "none";
+}
+
 function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 	if (!isRecord(value)) {
 		return null;
@@ -47,6 +89,10 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 	const commitSha: string | null = readString(value.commitSha, 40);
 	const source: "official" | "local" = value.source === "local" ? "local" : "official";
 	const sourcePath: string | null = source === "local" ? readString(value.sourcePath, 32_768) : null;
+	const sourceRef: GodotDocumentationSourceRef | null = normalizeSourceRef(value.sourceRef);
+	const activeGenerationId: string | null = value.activeGenerationId === null
+		? null
+		: readString(value.activeGenerationId, 180);
 	const installedAt: string | null = readString(value.installedAt, 80);
 	const updatedAt: string | null = readString(value.updatedAt, 80);
 	const documentCount: number | null = readNonNegativeInteger(value.documentCount);
@@ -58,6 +104,7 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 		|| branch === null
 		|| commitSha === null
 		|| !/^[0-9a-f]{40}$/u.test(commitSha)
+		|| (activeGenerationId !== null && !/^[a-zA-Z0-9._-]+$/u.test(activeGenerationId))
 		|| (source === "local" && sourcePath === null)
 		|| installedAt === null
 		|| updatedAt === null
@@ -74,6 +121,10 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 		commitSha,
 		source,
 		...(sourcePath === null ? {} : { sourcePath }),
+		sourceRef,
+		activeGenerationId,
+		health: normalizeHealth(value.health),
+		repairAvailability: normalizeRepairAvailability(value.repairAvailability),
 		installedAt,
 		updatedAt,
 		documentCount,
@@ -84,7 +135,7 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 }
 
 function normalizeSettings(value: unknown): GodotDocumentationSettings {
-	if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.documents)) {
+	if (!isRecord(value) || value.schemaVersion !== 2 || !isRecord(value.documents)) {
 		return structuredClone(EMPTY_SETTINGS);
 	}
 	const documents: Record<string, GodotDocumentationRecord> = {};
@@ -95,7 +146,7 @@ function normalizeSettings(value: unknown): GodotDocumentationSettings {
 		}
 	}
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		enabled: value.enabled === true && Object.keys(documents).length > 0,
 		documents
 	};
@@ -109,13 +160,17 @@ export async function initializeGodotDocumentationStore(force: boolean = false):
 	let replaceInvalid: boolean = false;
 	try {
 		raw = JSON.parse(await readFile(getGodotDocumentationConfigPath(), "utf8")) as unknown;
-		replaceInvalid = !isRecord(raw) || raw.schemaVersion !== 1;
+		replaceInvalid = !isRecord(raw) || raw.schemaVersion !== 2;
 	} catch (error: unknown) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 			replaceInvalid = true;
 		}
 	}
-	snapshot = normalizeSettings(raw);
+	const normalized: GodotDocumentationSettings = normalizeSettings(raw);
+	if (!replaceInvalid && JSON.stringify(normalized) !== JSON.stringify(raw)) {
+		replaceInvalid = true;
+	}
+	snapshot = normalized;
 	initialized = true;
 	writeQueue = Promise.resolve();
 	if (replaceInvalid) {
@@ -128,19 +183,35 @@ export function getGodotDocumentationSnapshot(): GodotDocumentationSettings {
 }
 
 export function isGodotDocumentationEnabled(): boolean {
-	return snapshot.enabled && Object.keys(snapshot.documents).length > 0;
+	return snapshot.enabled && Object.values(snapshot.documents).some((record): boolean => {
+		return record.health.status === "ready" && record.activeGenerationId !== null;
+	});
 }
 
 export function createGodotDocumentationId(branch: string): string {
 	return `godot-docs-${createHash("sha256").update(branch).digest("hex").slice(0, 16)}`;
 }
 
-export function getGodotDocumentationGenerationDir(record: Pick<GodotDocumentationRecord, "id" | "commitSha">): string {
-	return join(getGodotDocumentationRoot(), "packages", record.id, record.commitSha);
+export function getGodotDocumentationGenerationDir(
+	record: Pick<GodotDocumentationRecord, "id"> & Partial<Pick<GodotDocumentationRecord, "activeGenerationId" | "commitSha">>
+): string {
+	const generationId: string | null | undefined = record.activeGenerationId ?? record.commitSha;
+	if (generationId === null || generationId === undefined || generationId.trim().length === 0) {
+		throw new Error(`Documentation ${record.id} has no active generation.`);
+	}
+	return join(getGodotDocumentationRoot(), "packages", record.id, generationId);
 }
 
-export function getGodotDocumentationIndexPath(record: Pick<GodotDocumentationRecord, "id" | "commitSha">): string {
+export function getGodotDocumentationIndexPath(
+	record: Pick<GodotDocumentationRecord, "id"> & Partial<Pick<GodotDocumentationRecord, "activeGenerationId" | "commitSha">>
+): string {
 	return join(getGodotDocumentationGenerationDir(record), "index.sqlite");
+}
+
+export function getGodotDocumentationManifestPath(
+	record: Pick<GodotDocumentationRecord, "id"> & Partial<Pick<GodotDocumentationRecord, "activeGenerationId" | "commitSha">>
+): string {
+	return join(getGodotDocumentationGenerationDir(record), "manifest.json");
 }
 
 export function getGodotDocumentationPackageDir(documentId: string): string {
@@ -153,6 +224,14 @@ export function getGodotDocumentationStagingRoot(): string {
 
 export function getGodotDocumentationTrashRoot(): string {
 	return join(getGodotDocumentationRoot(), ".trash");
+}
+
+export function getGodotDocumentationSourcesRoot(): string {
+	return join(getGodotDocumentationRoot(), "sources");
+}
+
+export function getGodotDocumentationSourceDir(sha256: string): string {
+	return join(getGodotDocumentationSourcesRoot(), sha256);
 }
 
 export function getGodotDocumentationBranchCachePath(): string {
@@ -183,7 +262,7 @@ export function createGodotDocumentationState(activeJob: GodotDocumentationState
 			return compareDocumentationBranches(right.branch, left.branch);
 		});
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		enabled: snapshot.enabled,
 		documents,
 		activeJob

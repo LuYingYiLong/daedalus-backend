@@ -5,7 +5,7 @@ import type { GodotDocumentationSettings } from "../../../src/godot-documentatio
 
 function createSettings(enabled: boolean): GodotDocumentationSettings {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		enabled,
 		documents: {
 			"godot-docs-47": {
@@ -13,6 +13,10 @@ function createSettings(enabled: boolean): GodotDocumentationSettings {
 				branch: "4.7",
 				commitSha: "0585d03bea24497cf91f0969c81a187c892371c4",
 				source: "official",
+				sourceRef: null,
+				activeGenerationId: "0585d03bea24497cf91f0969c81a187c892371c4",
+				health: { status: "ready", code: null, message: null, checkedAt: "2026-07-30T00:00:00.000Z" },
+				repairAvailability: "none",
 				installedAt: "2026-07-30T00:00:00.000Z",
 				updatedAt: "2026-07-30T00:00:00.000Z",
 				documentCount: 1591,

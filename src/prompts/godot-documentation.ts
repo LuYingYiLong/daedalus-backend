@@ -2,6 +2,7 @@ import type { GodotDocumentationSettings } from "../godot-documentation/types.js
 
 export function createGodotDocumentationPromptSection(settings: GodotDocumentationSettings): string {
 	const records = Object.values(settings.documents)
+		.filter((record): boolean => record.health.status === "ready" && record.activeGenerationId !== null)
 		.sort((left, right): number => left.branch.localeCompare(right.branch, undefined, { numeric: true }));
 	if (!settings.enabled || records.length === 0) {
 		return "";

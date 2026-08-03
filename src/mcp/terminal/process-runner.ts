@@ -5,7 +5,10 @@ import {
 	describePresetCommand
 } from "./presets.js";
 import { terminalJobStore } from "./job-store.js";
-import type { CommandPreset, TerminalCommandResult, TerminalJobRecord, TerminalSandboxMode } from "./types.js";
+import type { TerminalOutputStream } from "./progress.js";
+import type { CommandPreset, TerminalCommandResult, TerminalJobRecord, TerminalJobStatus, TerminalSandboxMode } from "./types.js";
+
+export type TerminalOutputListener = (stream: TerminalOutputStream, text: string) => void;
 
 type Invocation = {
 	command: string;
@@ -36,12 +39,20 @@ export async function runCommandWait(params: {
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
 	authorizationSource?: "model" | "policy" | "user" | undefined;
+	onOutput?: TerminalOutputListener | undefined;
+	signal?: AbortSignal | undefined;
 }): Promise<TerminalCommandResult> {
 	return new Promise((resolve) => {
 		const startMs: number = Date.now();
 		let stdout: string = "";
 		let stderr: string = "";
 		let child: ChildProcess;
+		let cancelled: boolean = false;
+		const removeAbortListener = (): void => params.signal?.removeEventListener("abort", handleAbort);
+		const handleAbort = (): void => {
+			cancelled = true;
+			child.kill();
+		};
 
 		try {
 			child = spawn(params.command[0]!, params.command.slice(1), {
@@ -76,18 +87,24 @@ export async function runCommandWait(params: {
 		}
 
 		child.stdout?.on("data", (data: Buffer): void => {
-			stdout += data.toString("utf8");
+			const text: string = data.toString("utf8");
+			stdout += text;
+			params.onOutput?.("stdout", text);
 		});
 
 		child.stderr?.on("data", (data: Buffer): void => {
-			stderr += data.toString("utf8");
+			const text: string = data.toString("utf8");
+			stderr += text;
+			params.onOutput?.("stderr", text);
 		});
 
 		child.on("error", (error: Error): void => {
+			removeAbortListener();
 			stderr += `\nProcess error: ${error.message}`;
 			resolve({
 				preset: params.preset.name,
 				ok: false,
+				status: "spawn_error",
 				exitCode: null,
 				command: params.command,
 				commandLine: describePresetCommand(params.command),
@@ -108,13 +125,22 @@ export async function runCommandWait(params: {
 			});
 		});
 
-		child.on("close", (exitCode: number | null): void => {
+		child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+			removeAbortListener();
 			const stdoutResult = truncateOutput(stdout, MAX_STDOUT_CHARS);
 			const stderrResult = truncateOutput(stderr, MAX_STDERR_CHARS);
+			const status: Exclude<TerminalJobStatus, "running"> = cancelled
+				? "cancelled"
+				: exitCode === 0
+					? "completed"
+					: signal !== null
+						? "timed_out"
+						: "failed";
 
 			resolve({
 				preset: params.preset.name,
 				ok: exitCode === 0,
+				status,
 				exitCode,
 				command: params.command,
 				commandLine: describePresetCommand(params.command),
@@ -130,10 +156,18 @@ export async function runCommandWait(params: {
 				authorizationSource: params.authorizationSource,
 				stdout: stdoutResult.text,
 				stderr: stderrResult.text,
+				stdoutOmittedChars: stdoutResult.omittedChars,
+				stderrOmittedChars: stderrResult.omittedChars,
 				durationMs: Date.now() - startMs,
 				truncated: stdoutResult.truncated || stderrResult.truncated
 			});
 		});
+
+		if (params.signal?.aborted === true) {
+			handleAbort();
+		} else {
+			params.signal?.addEventListener("abort", handleAbort, { once: true });
+		}
 	});
 }
 
@@ -227,12 +261,20 @@ export async function runCommandInvocationWait(params: {
 	invocation: Invocation;
 	cwd: string;
 	timeoutMs?: number | undefined;
+	onOutput?: TerminalOutputListener | undefined;
+	signal?: AbortSignal | undefined;
 }): Promise<TerminalCommandResult> {
 	return new Promise((resolve) => {
 		const startMs: number = Date.now();
 		let stdout: string = "";
 		let stderr: string = "";
 		let child: ChildProcess;
+		let cancelled: boolean = false;
+		const removeAbortListener = (): void => params.signal?.removeEventListener("abort", handleAbort);
+		const handleAbort = (): void => {
+			cancelled = true;
+			child.kill();
+		};
 
 		try {
 			child = spawn(params.invocation.command, params.invocation.args, {
@@ -265,18 +307,24 @@ export async function runCommandInvocationWait(params: {
 		}
 
 		child.stdout?.on("data", (data: Buffer): void => {
-			stdout += data.toString("utf8");
+			const text: string = data.toString("utf8");
+			stdout += text;
+			params.onOutput?.("stdout", text);
 		});
 
 		child.stderr?.on("data", (data: Buffer): void => {
-			stderr += data.toString("utf8");
+			const text: string = data.toString("utf8");
+			stderr += text;
+			params.onOutput?.("stderr", text);
 		});
 
 		child.on("error", (error: Error): void => {
+			removeAbortListener();
 			stderr += `\nProcess error: ${error.message}`;
 			resolve({
 				preset: params.presetName,
 				ok: false,
+				status: "spawn_error",
 				exitCode: null,
 				command: [params.invocation.command, ...params.invocation.args],
 				commandLine: params.invocation.commandLine,
@@ -294,13 +342,22 @@ export async function runCommandInvocationWait(params: {
 			});
 		});
 
-		child.on("close", (exitCode: number | null): void => {
+		child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+			removeAbortListener();
 			const stdoutResult = truncateOutput(stdout, MAX_STDOUT_CHARS);
 			const stderrResult = truncateOutput(stderr, MAX_STDERR_CHARS);
+			const status: Exclude<TerminalJobStatus, "running"> = cancelled
+				? "cancelled"
+				: exitCode === 0
+					? "completed"
+					: signal !== null
+						? "timed_out"
+						: "failed";
 
 			resolve({
 				preset: params.presetName,
 				ok: exitCode === 0,
+				status,
 				exitCode,
 				command: [params.invocation.command, ...params.invocation.args],
 				commandLine: params.invocation.commandLine,
@@ -313,10 +370,18 @@ export async function runCommandInvocationWait(params: {
 				authorizationSource: params.invocation.authorizationSource,
 				stdout: stdoutResult.text,
 				stderr: stderrResult.text,
+				stdoutOmittedChars: stdoutResult.omittedChars,
+				stderrOmittedChars: stderrResult.omittedChars,
 				durationMs: Date.now() - startMs,
 				truncated: stdoutResult.truncated || stderrResult.truncated
 			});
 		});
+
+		if (params.signal?.aborted === true) {
+			handleAbort();
+		} else {
+			params.signal?.addEventListener("abort", handleAbort, { once: true });
+		}
 	});
 }
 

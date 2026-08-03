@@ -683,8 +683,11 @@ export function sendSessionEvent(
 			socket,
 			session,
 			sessionId: sessionId ?? "",
-			requestId: timelineIdentity.requestId,
-			persistRequestId: timelineIdentity.persistRequestId,
+			// Goal cycle events share the root request only for timeline grouping.
+			// Lifecycle transitions must keep using the concrete cycle Run or a
+			// later cycle can accidentally transition the already-terminal root Run.
+			requestId,
+			persistRequestId,
 			eventName: canonicalEventName,
 			data: eventData
 		})
@@ -715,6 +718,28 @@ export function sendSessionEvent(
 		createEventEnvelope(canonicalEventName, eventData, timelineIdentity.requestId, sessionId),
 		timelineIdentity.persistRequestId
 	);
+}
+
+export function sendTransientSessionEvent(
+	socket: WebSocket,
+	requestId: string,
+	session: ClientSession,
+	eventName: Extract<CanonicalServerEventName, "agent.tool.progress">,
+	data: unknown,
+	persistRequestId: string = requestId,
+	sessionIdOverride?: string | undefined
+): void {
+	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
+	if (sessionId === undefined) {
+		return;
+	}
+	const eventData: unknown = withSessionId(data, sessionId);
+	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, eventData);
+	const envelope: ServerEvent = createEventEnvelope(eventName, eventData, timelineIdentity.requestId, sessionId);
+	if (socket.readyState === WebSocket.OPEN) {
+		sendJson(socket, envelope);
+	}
+	broadcastStudioSessionEvent(socket, sessionId, envelope);
 }
 
 export function sendGlobalEvent(socket: WebSocket, requestId: string, eventName: ServerEventNameInput, data: unknown): void {

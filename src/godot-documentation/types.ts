@@ -4,6 +4,8 @@ export type GodotDocumentationRecord = {
 	id: string;
 	branch: string;
 	commitSha: string;
+	source: "official" | "local";
+	sourcePath?: string | undefined;
 	installedAt: string;
 	updatedAt: string;
 	documentCount: number;
@@ -36,7 +38,7 @@ export type GodotDocumentationJobStage =
 
 export type GodotDocumentationJob = {
 	jobId: string;
-	operation: "install" | "update";
+	operation: "install" | "update" | "import";
 	branch: string;
 	documentId: string | null;
 	stage: GodotDocumentationJobStage;

@@ -789,6 +789,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("godotDocumentation.importLocal"),
+		params: z.object({
+			branch: z.string().min(1).max(120),
+			sourcePath: z.string().min(1).max(32_768),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("godotDocumentation.update"),
 		params: z.object({
 			documentId: z.string().min(1).max(80),

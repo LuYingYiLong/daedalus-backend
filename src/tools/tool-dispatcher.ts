@@ -13,6 +13,7 @@ import type { ToolExecutionContext } from "./tool-catalog.js";
 import { logger } from "../logger.js";
 import { getApprovalReasonFromArgs, stripApprovalReasonArg } from "./approval-reason.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import { parseTerminalMcpProgress, type TerminalOutputDelta } from "../mcp/terminal/progress.js";
 import {
 	EXECUTION_CONTROL_TOOL_NAME,
 	ExecutionDecisionSignal,
@@ -46,6 +47,7 @@ export type ToolProgressUpdate = {
 	title: string;
 	details: string;
 	code: string;
+	terminalOutputDelta?: TerminalOutputDelta | undefined;
 };
 
 export type ToolResultEnricher = (input: {
@@ -333,7 +335,26 @@ async function executeSingleToolCall(
 			toolContext?.sessionId,
 			abortSignal,
 			commandAuthorization,
-			enricher !== undefined && FULL_RESULT_ENRICHMENT_TOOLS.has(functionName)
+			enricher !== undefined && FULL_RESULT_ENRICHMENT_TOOLS.has(functionName),
+			functionName !== "mcp_terminal_run_command" || onEvent === undefined
+				? undefined
+				: (progress): void => {
+					const terminalOutputDelta: TerminalOutputDelta | null = parseTerminalMcpProgress(progress);
+					if (terminalOutputDelta === null) {
+						return;
+					}
+					onEvent({
+						type: "tool.progress",
+						step,
+						toolCallId: toolCall.id,
+						toolName: functionName,
+						status: "message",
+						title: "Terminal output",
+						details: "",
+						code: "terminal_output",
+						terminalOutputDelta
+					});
+				}
 		);
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");

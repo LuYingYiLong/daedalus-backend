@@ -86,17 +86,56 @@ async function waitForTerminalJob(jobId: string, expectedStatus: TerminalJobReco
 test("terminal wait mode preserves immediate command result shape", async (): Promise<void> => {
 	await withAppData(async (): Promise<void> => {
 		const { preset, command } = nodePreset("console.log('wait-ok')");
+		const streamedOutput: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
 		const result = await runCommandWait({
 			preset,
 			command,
 			cwd: process.cwd(),
-			timeoutMs: 5000
+			timeoutMs: 5000,
+			onOutput: (stream, text): void => {
+				streamedOutput.push({ stream, text });
+			}
 		});
 
 		assert.equal(result.ok, true);
 		assert.equal(result.exitCode, 0);
 		assert.match(result.stdout, /wait-ok/);
+		assert.match(streamedOutput.filter((item): boolean => item.stream === "stdout").map((item): string => item.text).join(""), /wait-ok/);
 		assert.equal(result.preset, "test.node");
+	});
+});
+
+test("terminal wait mode reports cancellation and terminates the process", async (): Promise<void> => {
+	await withAppData(async (): Promise<void> => {
+		const { preset, command } = nodePreset("setTimeout(() => console.log('late'), 5000)");
+		const abortController = new AbortController();
+		const resultPromise = runCommandWait({
+			preset,
+			command,
+			cwd: process.cwd(),
+			timeoutMs: 5000,
+			signal: abortController.signal
+		});
+		setTimeout((): void => abortController.abort(), 50);
+
+		const result = await resultPromise;
+		assert.equal(result.ok, false);
+		assert.equal(result.status, "cancelled");
+	});
+});
+
+test("terminal wait mode reports command timeout", async (): Promise<void> => {
+	await withAppData(async (): Promise<void> => {
+		const { preset, command } = nodePreset("setTimeout(() => console.log('late'), 5000)");
+		const result = await runCommandWait({
+			preset,
+			command,
+			cwd: process.cwd(),
+			timeoutMs: 50
+		});
+
+		assert.equal(result.ok, false);
+		assert.equal(result.status, "timed_out");
 	});
 });
 

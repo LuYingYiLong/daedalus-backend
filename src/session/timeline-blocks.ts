@@ -1166,7 +1166,21 @@ function findLatestSnapshots(events: StoredSessionEvent[]): { latestWorkflowSnap
 		}
 		if (event.event === "agent.run.state" && isRecord(event.data)) {
 			if (isRecord(event.data.todo)) {
-				latestAgentSnapshot = event.data.todo;
+				const todo = structuredClone(event.data.todo);
+				if (event.data.stage === "completed") {
+					for (const key of ["phases", "todos"] as const) {
+					if (!Array.isArray(todo[key])) continue;
+					todo[key] = todo[key].map((item: unknown): unknown => (
+							isRecord(item)
+								&& item.status !== "done"
+								&& item.status !== "completed"
+								&& item.status !== "success"
+								? { ...item, status: "done" }
+								: item
+						));
+					}
+				}
+				latestAgentSnapshot = todo;
 			} else if (event.data.todo === null) {
 				latestAgentSnapshot = null;
 			}

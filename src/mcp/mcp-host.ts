@@ -27,6 +27,7 @@ import {
 import { getCurrentMcpWorkspaceId } from "./request-context.js";
 import { getApprovalMode } from "../approval-settings-store.js";
 import type { TerminalCommandAuthorization } from "./terminal/authorization.js";
+import type { McpProgressNotification } from "./terminal/progress.js";
 import { resolveEffectiveGodotExecutable } from "../godot-executable-resolver.js";
 import { logger } from "../logger.js";
 import {
@@ -673,7 +674,8 @@ export class McpHost {
 		workspaceId?: string | undefined,
 		editorInstanceId?: string | undefined,
 		commandAuthorization?: TerminalCommandAuthorization | undefined,
-		abortSignal?: AbortSignal | undefined
+		abortSignal?: AbortSignal | undefined,
+		onProgress?: ((progress: McpProgressNotification) => void) | undefined
 	) {
 		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
 			? args.sourceFolderId
@@ -685,7 +687,8 @@ export class McpHost {
 				await this.createTerminalArgs(args, workspaceId, commandAuthorization),
 				{
 					signal: abortSignal,
-					timeoutMs: resolveTerminalMcpRequestTimeoutMs(name, args)
+					timeoutMs: resolveTerminalMcpRequestTimeoutMs(name, args),
+					onProgress
 				}
 			);
 		}

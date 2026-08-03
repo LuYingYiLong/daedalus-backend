@@ -57,6 +57,9 @@ type GoalRuntime = {
 	evaluationInFlight: boolean;
 	processedTerminalRunIds: Set<string>;
 	lastProgressFingerprint: string | null;
+	cycleInFlight: boolean;
+	continuationRequested: boolean;
+	continuationScheduled: boolean;
 };
 
 const evaluationSchema = z.object({
@@ -372,7 +375,10 @@ export async function createAgentGoal(params: {
 		cycleStartedAt: null,
 		evaluationInFlight: false,
 		processedTerminalRunIds: new Set(),
-		lastProgressFingerprint: null
+		lastProgressFingerprint: null,
+		cycleInFlight: false,
+		continuationRequested: false,
+		continuationScheduled: false
 	});
 	emitAgentGoalState(params.socket, params.session, state);
 	return state;
@@ -436,8 +442,48 @@ async function readGoalRuns(goalId: string, currentRun?: AgentRunState): Promise
 	));
 }
 
+async function handleGoalCoordinatorFailure(goalId: string, error: unknown): Promise<void> {
+	const runtime = runtimes.get(goalId);
+	const latestState = await readLatestGoalState(goalId);
+	if (runtime === undefined || latestState === null || isAgentGoalTerminal(latestState.stage)) return;
+	const paused = transitionAgentGoalState(latestState, "paused", {
+		pauseReason: "readiness_blocked",
+		activeRunId: null,
+		evaluation: {
+			disposition: "blocked",
+			summary: error instanceof Error ? error.message : String(error),
+			evidenceToolCallIds: [],
+			unmetCriteria: ["The next Goal cycle could not be started safely."],
+			nextAction: null
+		}
+	});
+	emitAgentGoalState(runtime.socket, runtime.session, paused);
+}
+
+function scheduleGoalContinuation(goalId: string, runtime: GoalRuntime): void {
+	if (runtime.continuationScheduled || runtime.cycleInFlight) return;
+	runtime.continuationScheduled = true;
+	queueMicrotask((): void => {
+		runtime.continuationScheduled = false;
+		if (runtimes.get(goalId) !== runtime || !runtime.continuationRequested || runtime.cycleInFlight) return;
+		runtime.continuationRequested = false;
+		runtime.cycleInFlight = true;
+		void runNextGoalCycle(goalId)
+			.catch((error: unknown): Promise<void> => handleGoalCoordinatorFailure(goalId, error))
+			.finally((): void => {
+				runtime.cycleInFlight = false;
+				if (runtimes.get(goalId) === runtime && runtime.continuationRequested) {
+					scheduleGoalContinuation(goalId, runtime);
+				}
+			});
+	});
+}
+
 export function continueAgentGoal(goalId: string): void {
-	void runNextGoalCycle(goalId);
+	const runtime = runtimes.get(goalId);
+	if (runtime === undefined) return;
+	runtime.continuationRequested = true;
+	scheduleGoalContinuation(goalId, runtime);
 }
 
 async function runNextGoalCycle(goalId: string): Promise<void> {
@@ -537,7 +583,8 @@ export function enforceGoalEvaluationGates(evaluation: GoalEvaluation, runs: Age
 		&& validationEvidence.some((item: ExecutionEvidence): boolean => Date.parse(item.observedAt) >= lastWriteMs);
 	const mutationIntent = runs.some((run: AgentRunState): boolean => run.intent === "mutate");
 	let parsed = structuredClone(evaluation);
-	if (parsed.evidenceToolCallIds.some((id: string): boolean => !evidenceIds.has(id))) {
+	const referencesUnknownEvidence = parsed.evidenceToolCallIds.some((id: string): boolean => !evidenceIds.has(id));
+	if (referencesUnknownEvidence) {
 		parsed = {
 			disposition: "blocked",
 			summary: "Goal evaluator referenced evidence that is not present in this Goal.",
@@ -554,6 +601,21 @@ export function enforceGoalEvaluationGates(evaluation: GoalEvaluation, runs: Age
 	}
 	if (parsed.disposition === "achieved" && (currentRun.stage !== "completed" || currentRun.verificationStatus === "failed")) {
 		parsed = { ...parsed, disposition: "blocked", unmetCriteria: [...parsed.unmetCriteria, "The latest linked AgentRun did not complete successfully."], nextAction: null };
+	}
+	const latestRunCanContinue = currentRun.stage === "completed"
+		&& currentRun.verificationStatus !== "failed"
+		&& currentRun.executionDecision?.disposition !== "blocked"
+		&& !referencesUnknownEvidence;
+	if (parsed.disposition === "blocked" && latestRunCanContinue) {
+		parsed = {
+			...parsed,
+			disposition: "continue",
+			summary: "The evaluator blocker conflicts with the authoritative completed AgentRun state; continue from the latest safe checkpoint.",
+			unmetCriteria: parsed.unmetCriteria.length > 0
+				? parsed.unmetCriteria
+				: ["The Goal has not yet been proven complete by the available evidence."],
+			nextAction: parsed.nextAction ?? "Inspect the remaining Goal criteria and continue useful work from the latest evidence."
+		};
 	}
 	return parsed;
 }
@@ -572,12 +634,23 @@ async function evaluateGoal(state: AgentGoalState, runs: AgentRunState[]): Promi
 	const prompt = [
 		"Evaluate whether the Goal is actually complete. Return only the requested JSON object.",
 		"Do not award completion based on an assistant claim. Use only the supplied successful evidence.",
+		"The latest linked AgentRun facts below are authoritative. Historical evaluator hints must never override its terminal or verification state.",
 		`Goal and completion condition:\n${state.condition}`,
-		`Latest run terminal status: ${currentRun.terminal?.resultStatus ?? currentRun.stage}`,
+		`Latest linked AgentRun facts:\n${JSON.stringify({
+			runId: currentRun.runId,
+			goalCycle: currentRun.goalCycle,
+			stage: currentRun.stage,
+			terminalStatus: currentRun.terminal?.resultStatus ?? null,
+			verificationStatus: currentRun.verificationStatus,
+			executionDecision: currentRun.executionDecision?.disposition ?? null
+		})}`,
 		`Goal run intents: ${runs.map((run: AgentRunState): string => run.intent).join(", ")}`,
 		`Goal verification statuses: ${runs.map((run: AgentRunState): string => run.verificationStatus ?? "unknown").join(", ")}`,
 		`Successful evidence across Goal runs:\n${JSON.stringify(promptEvidence)}`,
-		`Previous evaluation:\n${JSON.stringify(state.evaluation)}`,
+		`Historical evaluator hints (non-authoritative):\n${JSON.stringify(state.evaluation === null ? null : {
+			unmetCriteria: state.evaluation.unmetCriteria,
+			nextAction: state.evaluation.nextAction
+		})}`,
 		"Schema: {disposition:'achieved'|'continue'|'blocked',summary:string,evidenceToolCallIds:string[],unmetCriteria:string[],nextAction:string|null}"
 	].join("\n\n");
 	let parsed: GoalEvaluation | null = null;
@@ -619,6 +692,24 @@ function createProgressFingerprint(runs: AgentRunState[], evaluation: GoalEvalua
 }
 
 export type GoalTerminalRunDisposition = "evaluate" | "fail" | "pause";
+
+export type GoalPostEvaluationAction =
+	| "achieve"
+	| "continue"
+	| "pause_blocked"
+	| "pause_budget_exhausted"
+	| "pause_no_progress";
+
+export function resolveGoalPostEvaluationAction(
+	state: AgentGoalState,
+	evaluation: GoalEvaluation,
+	noProgress: boolean
+): GoalPostEvaluationAction {
+	if (evaluation.disposition === "achieved") return "achieve";
+	if (evaluation.disposition === "blocked") return "pause_blocked";
+	if (noProgress) return "pause_no_progress";
+	return hasAgentGoalBudget(state) ? "continue" : "pause_budget_exhausted";
+}
 
 export function resolveGoalTerminalRunDisposition(
 	goalStage: AgentGoalState["stage"],
@@ -723,14 +814,19 @@ async function handleTerminalRun(socket: WebSocket, session: ClientSession, run:
 		});
 		emitAgentGoalState(socket, session, state);
 		if (wasInterrupted) return;
-		if (result.evaluation.disposition === "achieved") {
+		const postEvaluationAction = resolveGoalPostEvaluationAction(state, result.evaluation, noProgress);
+		if (postEvaluationAction === "achieve") {
 			const achieved = transitionAgentGoalState(state, "achieved");
 			emitAgentGoalState(socket, session, achieved);
 			return;
 		}
-		if (result.evaluation.disposition === "blocked" || noProgress) {
+		if (postEvaluationAction !== "continue") {
 			const paused = transitionAgentGoalState(state, "paused", {
-				pauseReason: noProgress ? "no_progress" : "readiness_blocked"
+				pauseReason: postEvaluationAction === "pause_no_progress"
+					? "no_progress"
+					: postEvaluationAction === "pause_budget_exhausted"
+						? "budget_exhausted"
+						: "readiness_blocked"
 			});
 			emitAgentGoalState(socket, session, paused);
 			return;
@@ -845,7 +941,10 @@ export async function resumeAgentGoal(params: {
 		processedTerminalRunIds: new Set(runIds),
 		lastProgressFingerprint: previousRuns.length === 0 || current.evaluation === null
 			? null
-			: createProgressFingerprint(previousRuns, current.evaluation)
+			: createProgressFingerprint(previousRuns, current.evaluation),
+		cycleInFlight: false,
+		continuationRequested: false,
+		continuationScheduled: false
 	});
 	const next = transitionAgentGoalState(current, "readiness", { pauseReason: null });
 	emitAgentGoalState(params.socket, params.session, next);

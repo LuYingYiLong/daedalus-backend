@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { terminalJobStore } from "./job-store.js";
-import { runCommandInvocationWait, runCommandWait, startCommandInvocationJob, startCommandJob } from "./process-runner.js";
+import { runCommandInvocationWait, runCommandWait, startCommandInvocationJob, startCommandJob, type TerminalOutputListener } from "./process-runner.js";
+import { serializeTerminalMcpProgress, type TerminalOutputStream } from "./progress.js";
+import { sanitizeTerminalDisplayText } from "./display-output.js";
 import { createSandboxInvocation } from "./sandbox-runner.js";
 import {
 	BACKEND_DIR,
@@ -28,6 +30,142 @@ import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { CommandPreset, CommandRunInput, PresetRunInput, TerminalCommandResult, TerminalJobRecord } from "./types.js";
 import { logger } from "../../logger.js";
 import { consumeTerminalCommandAuthorization, type TerminalCommandAuthorization } from "./authorization.js";
+
+const TERMINAL_PROGRESS_FLUSH_MS: number = 80;
+const MAX_TERMINAL_PROGRESS_BATCH_CHARS: number = 8192;
+const MAX_TERMINAL_PROGRESS_PENDING_CHARS: number = 64 * 1024;
+
+type TerminalProgressExtra = {
+	_meta?: { progressToken?: string | number | undefined } | undefined;
+	signal?: AbortSignal | undefined;
+	sendNotification: (notification: {
+		method: "notifications/progress";
+		params: {
+			progressToken: string | number;
+			progress: number;
+			message: string;
+		};
+	}) => Promise<void>;
+};
+
+export type TerminalProgressReporter = {
+	onOutput?: TerminalOutputListener | undefined;
+	close: () => Promise<void>;
+};
+
+export function createTerminalProgressReporter(extra: TerminalProgressExtra): TerminalProgressReporter {
+	const progressToken: string | number | undefined = extra._meta?.progressToken;
+	if (progressToken === undefined) {
+		return { close: async (): Promise<void> => undefined };
+	}
+
+	const buffers: Record<TerminalOutputStream, string> = { stdout: "", stderr: "" };
+	const omittedChars: Record<TerminalOutputStream, number> = { stdout: 0, stderr: 0 };
+	const discardUntilLineBoundary: Record<TerminalOutputStream, boolean> = { stdout: false, stderr: false };
+	let sequence: number = 0;
+	let timer: NodeJS.Timeout | null = null;
+	let sendQueue: Promise<void> = Promise.resolve();
+
+	const flushStream = (stream: TerminalOutputStream, final: boolean = false): void => {
+		const bufferedText: string = buffers[stream];
+		if (bufferedText.length === 0 || discardUntilLineBoundary[stream]) {
+			return;
+		}
+		const lastLineFeed: number = bufferedText.lastIndexOf("\n");
+		const lastCarriageReturn: number = bufferedText.lastIndexOf("\r");
+		const boundary: number = Math.max(lastLineFeed, lastCarriageReturn);
+		if (!final && boundary < 0) {
+			if (bufferedText.length > MAX_TERMINAL_PROGRESS_PENDING_CHARS) {
+				omittedChars[stream] += bufferedText.length;
+				buffers[stream] = "";
+				discardUntilLineBoundary[stream] = true;
+			}
+			return;
+		}
+
+		const consumedChars: number = final ? bufferedText.length : boundary + 1;
+		const sanitizedText: string = sanitizeTerminalDisplayText(bufferedText.slice(0, consumedChars));
+		buffers[stream] = bufferedText.slice(consumedChars);
+		if (sanitizedText.length === 0) {
+			return;
+		}
+		const overflow: number = Math.max(0, sanitizedText.length - MAX_TERMINAL_PROGRESS_BATCH_CHARS);
+		const text: string = overflow === 0 ? sanitizedText : sanitizedText.slice(-MAX_TERMINAL_PROGRESS_BATCH_CHARS);
+		omittedChars[stream] += overflow;
+		sequence += 1;
+		const message: string = serializeTerminalMcpProgress({
+			version: 1,
+			kind: "terminal_output",
+			stream,
+			sequence,
+			text,
+			omittedChars: omittedChars[stream]
+		});
+		sendQueue = sendQueue.then(
+			(): Promise<void> => extra.sendNotification({
+				method: "notifications/progress",
+				params: { progressToken, progress: sequence, message }
+			}),
+			(): Promise<void> => extra.sendNotification({
+				method: "notifications/progress",
+				params: { progressToken, progress: sequence, message }
+			})
+		).catch((): void => undefined);
+	};
+
+	const flush = (final: boolean = false): void => {
+		if (timer !== null) {
+			clearTimeout(timer);
+			timer = null;
+		}
+		flushStream("stdout", final);
+		flushStream("stderr", final);
+	};
+
+	const scheduleFlush = (): void => {
+		if (timer !== null) {
+			return;
+		}
+		timer = setTimeout(flush, TERMINAL_PROGRESS_FLUSH_MS);
+		timer.unref();
+	};
+
+	return {
+		onOutput: (stream: TerminalOutputStream, text: string): void => {
+			if (discardUntilLineBoundary[stream]) {
+				const lineFeed: number = text.indexOf("\n");
+				const carriageReturn: number = text.indexOf("\r");
+				const boundaries: number[] = [lineFeed, carriageReturn].filter((index: number): boolean => index >= 0);
+				const boundary: number | undefined = boundaries.length === 0 ? undefined : Math.min(...boundaries);
+				if (boundary === undefined) {
+					omittedChars[stream] += text.length;
+					return;
+				}
+				omittedChars[stream] += boundary + 1;
+				discardUntilLineBoundary[stream] = false;
+				text = text.slice(boundary + 1);
+			}
+			buffers[stream] += text;
+			if (buffers[stream].length > MAX_TERMINAL_PROGRESS_PENDING_CHARS) {
+				flush();
+				return;
+			}
+			scheduleFlush();
+		},
+		close: async (): Promise<void> => {
+			if (discardUntilLineBoundary.stdout) {
+				omittedChars.stdout += buffers.stdout.length;
+				buffers.stdout = "";
+			}
+			if (discardUntilLineBoundary.stderr) {
+				omittedChars.stderr += buffers.stderr.length;
+				buffers.stderr = "";
+			}
+			flush(true);
+			await sendQueue;
+		}
+	};
+}
 
 function asJsonTextResult(value: unknown): { content: Array<{ type: "text"; text: string }> } {
 	return {
@@ -192,7 +330,11 @@ function resolveCommandCwd(input: CommandRunInput & TerminalInternalInput, conte
 	return resolvedCwd;
 }
 
-async function runCommand(input: CommandRunInput & TerminalInternalInput): Promise<Record<string, unknown>> {
+async function runCommand(
+	input: CommandRunInput & TerminalInternalInput,
+	onOutput?: TerminalOutputListener | undefined,
+	signal?: AbortSignal | undefined
+): Promise<Record<string, unknown>> {
 	const context = resolveTerminalContext(input);
 	const trusted: boolean = input.__daedalusApprovalMode === "full-trust";
 	const workspaceRoot: string = context.workspaceRoot;
@@ -311,7 +453,9 @@ async function runCommand(input: CommandRunInput & TerminalInternalInput): Promi
 		presetName: "terminal.command",
 		invocation: executableInvocation,
 		cwd,
-		timeoutMs
+		timeoutMs,
+		onOutput,
+		signal
 	});
 	logger.info("terminal", "command_finished", {
 		cwd,
@@ -533,7 +677,14 @@ export function registerTerminalTools(server: McpServer): void {
 			description: "在当前 workspace 中运行自由命令。普通模式必须使用 OS 沙箱，Full Trust 模式裸跑。",
 			inputSchema: commandRunSchema
 		},
-		async (input: CommandRunInput & TerminalInternalInput) => asJsonTextResult(await runCommand(input))
+		async (input: CommandRunInput & TerminalInternalInput, extra) => {
+			const progress: TerminalProgressReporter = createTerminalProgressReporter(extra);
+			try {
+				return asJsonTextResult(await runCommand(input, progress.onOutput, extra.signal));
+			} finally {
+				await progress.close();
+			}
+		}
 	);
 
 	server.registerTool(

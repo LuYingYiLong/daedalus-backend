@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import test from "node:test";
 
 const WEBP_BYTES: Buffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x04, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
@@ -76,6 +76,7 @@ test("session overview lists recent plans and image sources", async (): Promise<
 
 		assert.equal(result.sessionId, metadata.id);
 		assert.equal(result.envInfo, null);
+		assert.deepEqual(result.envInfos, []);
 		assert.equal(result.plans.total, 4);
 		assert.equal(result.plans.items.length, 3);
 		assert.deepEqual(result.plans.items.map((plan) => plan.title), ["Plan 3", "Plan 2", "Plan 1"]);
@@ -101,7 +102,9 @@ test("session overview returns git env info only for git workspaces", async (t):
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");
 		const overview = await import("../../../src/server/session-overview.js");
+		const workspaceRegistry = await import("../../../src/workspace/registry.js");
 		const workspaceRoot: string = await mkdtemp(join(tmpdir(), "daedalus-overview-git-"));
+		const secondaryRoot: string = await mkdtemp(join(tmpdir(), "daedalus-overview-secondary-"));
 
 		spawnSync("git", ["init"], { cwd: workspaceRoot, encoding: "utf8" });
 		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: workspaceRoot, encoding: "utf8" });
@@ -110,17 +113,29 @@ test("session overview returns git env info only for git workspaces", async (t):
 		spawnSync("git", ["add", "tracked.txt"], { cwd: workspaceRoot, encoding: "utf8" });
 		spawnSync("git", ["commit", "-m", "initial"], { cwd: workspaceRoot, encoding: "utf8" });
 		await writeFile(join(workspaceRoot, "tracked.txt"), "before\nafter\n", "utf8");
+		spawnSync("git", ["init"], { cwd: secondaryRoot, encoding: "utf8" });
+		spawnSync("git", ["config", "user.email", "test@example.com"], { cwd: secondaryRoot, encoding: "utf8" });
+		spawnSync("git", ["config", "user.name", "Daedalus Test"], { cwd: secondaryRoot, encoding: "utf8" });
+		await writeFile(join(secondaryRoot, "secondary.txt"), "secondary\n", "utf8");
+		spawnSync("git", ["add", "secondary.txt"], { cwd: secondaryRoot, encoding: "utf8" });
+		spawnSync("git", ["commit", "-m", "initial"], { cwd: secondaryRoot, encoding: "utf8" });
+		await writeFile(join(secondaryRoot, "secondary.txt"), "secondary\nchanged\n", "utf8");
 
-		const metadata = await sessionStore.createSession("Git overview", "workspace-git", undefined, {
+		const workspace = workspaceRegistry.upsertRuntimeWorkspace({
 			id: "workspace-git",
 			name: "Git Workspace",
 			kind: "godot",
 			rootPath: workspaceRoot,
 			icon: 0,
 			color: 0,
-			sourceFolders: [{ id: "primary", path: workspaceRoot, capabilities: { git: true, godot: false } }],
+			sourceFolders: [
+				{ id: "primary", path: workspaceRoot, capabilities: { git: true, godot: false } },
+				{ id: "secondary", path: secondaryRoot, capabilities: { git: true, godot: false } }
+			],
 			primarySourceFolderId: "primary"
 		});
+
+		const metadata = await sessionStore.createSession("Git overview", "workspace-git", undefined, workspace);
 
 		const result = await overview.createSessionOverview({
 			sessionId: metadata.id
@@ -131,5 +146,9 @@ test("session overview returns git env info only for git workspaces", async (t):
 		assert.equal(result.envInfo?.deletions, 0);
 		assert.equal(result.envInfo?.changedFiles, 1);
 		assert.ok(result.envInfo?.branch !== undefined);
+		assert.equal(result.envInfos.length, 2);
+		assert.deepEqual(result.envInfos.map((info) => info.sourceFolderId), ["primary", "secondary"]);
+		assert.deepEqual(result.envInfos.map((info) => info.title), [basename(workspaceRoot), basename(secondaryRoot)]);
+		assert.equal(result.envInfos.every((info) => info.changedFiles === 1), true);
 	});
 });

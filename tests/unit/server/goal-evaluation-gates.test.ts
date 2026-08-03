@@ -28,6 +28,7 @@ function completedRun(params: {
 	verificationStatus: AgentRunState["verificationStatus"];
 	evidence: ExecutionEvidence[];
 	lastWriteAt?: string;
+	executionDecision?: AgentRunState["executionDecision"];
 }): AgentRunState {
 	const now = `2026-08-01T00:00:0${params.cycle}.000Z`;
 	return {
@@ -47,7 +48,8 @@ function completedRun(params: {
 			evidence: params.evidence,
 			successfulWriteFingerprints: params.intent === "mutate" ? [`write-${params.cycle}`] : [],
 			...(params.lastWriteAt === undefined ? {} : { lastWriteAt: params.lastWriteAt })
-		}
+		},
+		executionDecision: params.executionDecision
 	};
 }
 
@@ -124,4 +126,51 @@ test("Goal completion rejects evidence ids that do not belong to any linked run"
 	const result = enforceGoalEvaluationGates(achieved("invented-call"), [run]);
 	assert.equal(result.disposition, "blocked");
 	assert.deepEqual(result.evidenceToolCallIds, []);
+});
+
+test("Goal evaluation ignores a stale blocked claim when the latest linked run completed", () => {
+	const run = completedRun({
+		runId: "run-completed",
+		cycle: 6,
+		intent: "mutate",
+		verificationStatus: "verified",
+		evidence: [evidence("verify-call", "verify", "2026-08-01T00:00:06.000Z", "passed")]
+	});
+	const staleEvaluation: GoalEvaluation = {
+		disposition: "blocked",
+		summary: "The latest linked run is still probing.",
+		evidenceToolCallIds: ["verify-call"],
+		unmetCriteria: ["The run must complete."],
+		nextAction: "Wait for the run to complete."
+	};
+
+	const result = enforceGoalEvaluationGates(staleEvaluation, [run]);
+	assert.equal(result.disposition, "continue");
+	assert.match(result.summary, /authoritative completed AgentRun/i);
+});
+
+test("Goal evaluation preserves a structured blocked execution decision", () => {
+	const run = completedRun({
+		runId: "run-blocked",
+		cycle: 2,
+		intent: "mutate",
+		verificationStatus: "unverified",
+		evidence: [],
+		executionDecision: {
+			disposition: "blocked",
+			summary: "A required external service is unavailable.",
+			evidenceToolCallIds: [],
+			expectedArtifacts: []
+		}
+	});
+	const blockedEvaluation: GoalEvaluation = {
+		disposition: "blocked",
+		summary: "A required external service is unavailable.",
+		evidenceToolCallIds: [],
+		unmetCriteria: ["Restore the external service."],
+		nextAction: null
+	};
+
+	const result = enforceGoalEvaluationGates(blockedEvaluation, [run]);
+	assert.equal(result.disposition, "blocked");
 });

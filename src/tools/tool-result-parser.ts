@@ -1,3 +1,5 @@
+import { createTerminalDisplaySnapshot, type TerminalDisplaySnapshot } from "../mcp/terminal/display-output.js";
+
 export type ToolValidationStatus = "passed" | "failed" | "unknown";
 
 export type ParsedToolResultSummary = {
@@ -13,6 +15,7 @@ export type ParsedToolResultSummary = {
 	terminalJobId?: string | undefined;
 	terminalJobStatus?: string | undefined;
 	terminalJobWakeAfterMs?: number | undefined;
+	terminalDisplay?: TerminalDisplaySnapshot | undefined;
 };
 
 const DIAGNOSTICS_ENVIRONMENT_ERROR_PATTERN: RegExp = /\b(godot_diagnostics_unavailable|lsp_unavailable|dap_unavailable|no active workspace|ECONNREFUSED|ETIMEDOUT|timeout|not available|not running)\b/iu;
@@ -277,7 +280,10 @@ export function parseToolResultSummary(
 	}
 
 	if (toolName === "mcp_terminal_run_command" || toolName === "mcp_terminal_run_safe_preset" || toolName === "mcp_terminal_run_write_preset" || isGodotRuntimeTool(toolName)) {
-		return parseTerminalSummary(record, args);
+		const summary: ParsedToolResultSummary = parseTerminalSummary(record, args);
+		return toolName === "mcp_terminal_run_command"
+			? { ...summary, terminalDisplay: createTerminalDisplaySnapshot(record, args) }
+			: summary;
 	}
 
 	if (toolName === "mcp_godot_lsp_get_file_diagnostics") {

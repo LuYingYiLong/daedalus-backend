@@ -8,6 +8,7 @@ import {
 	cancelGodotDocumentationJob,
 	getGodotDocumentationJob,
 	getGodotDocumentationState,
+	importLocalGodotDocumentation,
 	installGodotDocumentation,
 	listGodotDocumentationBranches,
 	removeGodotDocumentation,
@@ -53,6 +54,14 @@ export async function handleGodotDocumentationRequest(
 				id: request.id,
 				ok: true,
 				result: installGodotDocumentation(request.params.branch)
+			});
+			return;
+		case "godotDocumentation.importLocal":
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: importLocalGodotDocumentation(request.params.branch, request.params.sourcePath)
 			});
 			return;
 		case "godotDocumentation.update":

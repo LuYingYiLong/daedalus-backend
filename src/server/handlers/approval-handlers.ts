@@ -5,6 +5,7 @@ import type { ProviderAgentResult } from "../../providers/agent-types.js";
 import { continueProviderAgent, continueProviderAgentStreaming } from "../../providers/provider-agent.js";
 import { removeAgentRunContinuation } from "../../session/agent-run-store.js";
 import type { OnToolEvent, ToolEvent } from "../../tools/tool-dispatcher.js";
+import { parseTerminalMcpProgress, type TerminalOutputDelta } from "../../mcp/terminal/progress.js";
 import { parseToolResultSummary } from "../../tools/tool-result-parser.js";
 import { chatWithDeepSeek, createDeepSeekClient, resolveChatModel, type ProviderChatOptions } from "../../providers/deepseek-client.js";
 import { McpHost } from "../../mcp/mcp-host.js";
@@ -408,8 +409,36 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				toolName: pending.llmToolName
 			}, approvalPersistRequestId);
 			approvalDecisionEmitted = true;
+			const approvalProgressForwarder: OnToolEvent = createAgentToolEventForwarder(
+				socket,
+				approvalPersistRequestId,
+				session,
+				approvalRunId,
+				approvalStepRunId,
+				approvalPersistRequestId,
+				mcpHost
+			);
 			const result = await awaitWithAbort(
-				session.approvalGateway.approve(request.params.approvalId, mcpHost),
+				session.approvalGateway.approve(request.params.approvalId, mcpHost, {
+					abortSignal: abortController.signal,
+					onProgress: (progress): void => {
+						const terminalOutputDelta: TerminalOutputDelta | null = parseTerminalMcpProgress(progress);
+						if (terminalOutputDelta === null) {
+							return;
+						}
+						approvalProgressForwarder({
+							type: "tool.progress",
+							step: pendingContinuation?.continuation.nextStep ?? 0,
+							toolCallId: pending.toolCallId,
+							toolName: pending.llmToolName,
+							status: "message",
+							title: "Terminal output",
+							details: "",
+							code: "terminal_output",
+							terminalOutputDelta
+						});
+					}
+				}),
 				abortController.signal
 			);
 			throwIfAborted(abortController.signal);

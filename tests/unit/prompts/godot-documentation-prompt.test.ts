@@ -12,6 +12,7 @@ function createSettings(enabled: boolean): GodotDocumentationSettings {
 				id: "godot-docs-47",
 				branch: "4.7",
 				commitSha: "0585d03bea24497cf91f0969c81a187c892371c4",
+				source: "official",
 				installedAt: "2026-07-30T00:00:00.000Z",
 				updatedAt: "2026-07-30T00:00:00.000Z",
 				documentCount: 1591,

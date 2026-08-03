@@ -7,6 +7,7 @@ import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
 import { commandRequiresUserApproval, isBoundedWorkspaceVerificationCommand, reviewWorkspaceCommand } from "./command-review.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
 import { isGoalCheckpointCapableToolCall } from "./file-edit-snapshots.js";
 
@@ -201,7 +202,10 @@ export class ApprovalGateway {
 		return pending;
 	}
 
-	async approve(approvalId: string, mcpHost: McpHost): Promise<{ content: string; cached?: boolean | undefined; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined }> {
+	async approve(approvalId: string, mcpHost: McpHost, options: {
+		abortSignal?: AbortSignal | undefined;
+		onProgress?: ((progress: McpProgressNotification) => void) | undefined;
+	} = {}): Promise<{ content: string; cached?: boolean | undefined; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined }> {
 		const pending: PendingApproval | undefined = this.pendingApprovals.get(approvalId);
 
 		if (!pending) {
@@ -226,8 +230,10 @@ export class ApprovalGateway {
 			pending.workspaceId,
 			pending.editorInstanceId,
 			pending.sessionId,
-			undefined,
-			commandAuthorization
+			options.abortSignal,
+			commandAuthorization,
+			false,
+			options.onProgress
 		);
 		return { content: result.content, cached: result.reused, fileEditDraft: result.fileEditDraft, imageGeneration: result.imageGeneration };
 	}

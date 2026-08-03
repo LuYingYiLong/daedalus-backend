@@ -4,11 +4,16 @@ import { getSessionDir, openSession, type SessionMetadata } from "../session/ses
 import type { GeneratedImageArtifactMetadata, ImageAttachmentMetadata, TextAttachmentMetadata } from "../session/session-attachments.js";
 import { getSessionDatabase, parseSqlJson } from "../session/session-database.js";
 import { isInsideGitWorkTree, readGitBranch, runGit } from "./git-utils.js";
+import { findWorkspace } from "../workspace/registry.js";
+import type { WorkspaceSourceFolder } from "../workspace/types.js";
 
 const DEFAULT_OVERVIEW_LIMIT: number = 3;
 const MAX_OVERVIEW_LIMIT: number = 100;
 
 export type SessionOverviewGitInfo = {
+	sourceFolderId: string;
+	sourceFolderPath: string;
+	title: string;
 	hasGitRepository: boolean;
 	branch: string | null;
 	additions: number;
@@ -41,6 +46,7 @@ export type SessionOverviewSourceItem = {
 export type SessionOverviewResult = {
 	sessionId: string;
 	envInfo: SessionOverviewGitInfo | null;
+	envInfos: SessionOverviewGitInfo[];
 	plans: {
 		total: number;
 		items: SessionOverviewPlanItem[];
@@ -72,8 +78,9 @@ function getOptionalNumber(value: Record<string, unknown>, key: string): number 
 	return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
 }
 
-async function loadGitInfo(workspaceRoot: string | undefined): Promise<SessionOverviewGitInfo | null> {
-	if (workspaceRoot === undefined || workspaceRoot.trim().length === 0) {
+async function loadGitInfo(sourceFolder: Pick<WorkspaceSourceFolder, "id" | "path">): Promise<SessionOverviewGitInfo | null> {
+	const workspaceRoot: string = sourceFolder.path;
+	if (workspaceRoot.trim().length === 0) {
 		return null;
 	}
 
@@ -111,6 +118,9 @@ async function loadGitInfo(workspaceRoot: string | undefined): Promise<SessionOv
 	}
 
 	return {
+		sourceFolderId: sourceFolder.id,
+		sourceFolderPath: workspaceRoot,
+		title: path.basename(workspaceRoot) || workspaceRoot,
 		hasGitRepository: true,
 		branch,
 		additions,
@@ -141,6 +151,18 @@ async function listPlanItems(sessionId: string, limit: number): Promise<{ total:
 		total: Number(countRow.total),
 		items
 	};
+}
+
+async function loadGitInfos(metadata: SessionMetadata): Promise<SessionOverviewGitInfo[]> {
+	const workspace = metadata.workspaceId === undefined ? undefined : findWorkspace(metadata.workspaceId);
+	const sourceFolders: Array<Pick<WorkspaceSourceFolder, "id" | "path">> = workspace?.sourceFolders
+		?? (metadata.workspaceRoot?.trim()
+			? [{ id: "primary", path: metadata.workspaceRoot }]
+			: []);
+	const infos: Array<SessionOverviewGitInfo | null> = await Promise.all(
+		sourceFolders.map((sourceFolder): Promise<SessionOverviewGitInfo | null> => loadGitInfo(sourceFolder))
+	);
+	return infos.filter((info): info is SessionOverviewGitInfo => info !== null);
 }
 
 function createDataUrl(mimeType: string, bytes: Buffer): string {
@@ -252,15 +274,16 @@ export async function createSessionOverview(params: {
 }): Promise<SessionOverviewResult> {
 	const session = await openSession(params.sessionId);
 	const metadata: SessionMetadata = session.metadata;
-	const [envInfo, plans, sources] = await Promise.all([
-		loadGitInfo(metadata.workspaceRoot),
+	const [envInfos, plans, sources] = await Promise.all([
+		loadGitInfos(metadata),
 		listPlanItems(params.sessionId, clampLimit(params.planLimit)),
 		listSourceItems(params.sessionId, clampLimit(params.sourceLimit))
 	]);
 
 	return {
 		sessionId: params.sessionId,
-		envInfo,
+		envInfo: envInfos[0] ?? null,
+		envInfos,
 		plans,
 		sources
 	};

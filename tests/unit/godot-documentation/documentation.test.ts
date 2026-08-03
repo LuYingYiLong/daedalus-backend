@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,6 +10,10 @@ import {
 } from "../../../src/godot-documentation/indexer.js";
 import {
 	extractGodotDocumentationArchive,
+	getGodotDocumentationJob,
+	getGodotDocumentationState,
+	importLocalGodotDocumentation,
+	initializeGodotDocumentationManager,
 	inspectGodotDocumentationArchive
 } from "../../../src/godot-documentation/manager.js";
 import { selectGodotDocumentation } from "../../../src/godot-documentation/search.js";
@@ -90,6 +94,7 @@ function createRecord(branch: string): GodotDocumentationRecord {
 		id: `docs-${branch}`,
 		branch,
 		commitSha: COMMIT_SHA,
+		source: "official",
 		installedAt: "2026-07-30T00:00:00.000Z",
 		updatedAt: "2026-07-30T00:00:00.000Z",
 		documentCount: 1,
@@ -274,4 +279,45 @@ test("stable documentation branch parser accepts only major.minor branches", ():
 	assert.deepEqual(parseStableDocumentationBranch("4.7"), { major: 4, minor: 7 });
 	assert.equal(parseStableDocumentationBranch("master"), null);
 	assert.equal(parseStableDocumentationBranch("4.7-stable"), null);
+});
+
+test("local documentation import copies, indexes, and persists its source", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-local-import-"));
+	const sourceRoot: string = join(root, "fixture", "godot-docs-local");
+	process.env.USERPROFILE = join(root, "profile");
+	try {
+		await mkdir(join(sourceRoot, "classes"), { recursive: true });
+		await writeFile(join(sourceRoot, "conf.py"), "# local fixture\n", "utf8");
+		await writeFile(join(sourceRoot, "classes", "class_node.rst"), `
+Node
+====
+
+Base object for scene tree nodes.
+`, "utf8");
+		await initializeGodotDocumentationManager();
+		const started = importLocalGodotDocumentation("4.7-local", sourceRoot);
+		let completed = started;
+		for (let attempt: number = 0; attempt < 200 && !["completed", "failed", "cancelled"].includes(completed.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => {
+				setTimeout(resolvePromise, 25);
+			});
+			completed = getGodotDocumentationJob(started.jobId) ?? completed;
+		}
+		assert.equal(completed.stage, "completed", completed.error ?? "local documentation import did not complete");
+		const record = getGodotDocumentationState().documents.find((candidate): boolean => candidate.branch === "4.7-local");
+		assert.notEqual(record, undefined);
+		assert.equal(record?.source, "local");
+		assert.equal(record?.sourcePath, await realpath(sourceRoot));
+		assert.equal(record?.documentCount, 1);
+		assert.equal(getGodotDocumentationState().enabled, true);
+		assert.ok((await readFile(getGodotDocumentationIndexPath(record!))).length > 0);
+	} finally {
+		if (previousUserProfile === undefined) {
+			delete process.env.USERPROFILE;
+		} else {
+			process.env.USERPROFILE = previousUserProfile;
+		}
+		await rm(root, { recursive: true, force: true });
+	}
 });

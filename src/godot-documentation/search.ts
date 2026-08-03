@@ -128,6 +128,10 @@ function buildFtsQuery(query: string, joiner: "AND" | "OR"): string | null {
 }
 
 function createSourceUrl(record: GodotDocumentationRecord, path: string, anchor: string | null): string {
+	if (record.source === "local") {
+		const encodedPath: string = path.split("/").map(encodeURIComponent).join("/");
+		return `daedalus-docs://local/${encodeURIComponent(record.id)}/${encodedPath}${anchor === null ? "" : `#${encodeURIComponent(anchor)}`}`;
+	}
 	const docsVersion: string = record.branch === "master" ? "latest" : record.branch;
 	const pagePath: string = path.replace(/\.rst$/u, ".html");
 	const encodedPath: string = pagePath.split("/").map(encodeURIComponent).join("/");

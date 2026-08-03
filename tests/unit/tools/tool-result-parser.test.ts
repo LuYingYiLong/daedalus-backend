@@ -23,6 +23,32 @@ test("terminal preset failed result becomes structured failed validation", (): v
 	assert.match(summary.failedChecks?.[0] ?? "", /Unexpected token/);
 });
 
+test("free terminal command exposes a bounded redacted display snapshot", (): void => {
+	const summary = parseToolResultSummary(
+		"mcp_terminal_run_command",
+		{ commandLine: "curl -H 'Authorization: Bearer private-token' https://example.test", cwd: "scripts" },
+		JSON.stringify({
+			ok: true,
+			exitCode: 0,
+			commandLine: "curl -H 'Authorization: Bearer private-token' https://example.test",
+			cwd: "C:\\private\\workspace\\scripts",
+			sandboxMode: "os-sandbox",
+			stdout: `\u001b[32mTOKEN=private-token\u001b[0m\n${"x".repeat(7000)}`,
+			stderr: "",
+			durationMs: 1250,
+			truncated: false
+		})
+	);
+
+	assert.equal(summary.terminalDisplay?.cwd, "scripts");
+	assert.equal(summary.terminalDisplay?.sandboxMode, "os-sandbox");
+	assert.equal(summary.terminalDisplay?.durationMs, 1250);
+	assert.doesNotMatch(summary.terminalDisplay?.commandLine ?? "", /private-token/);
+	assert.doesNotMatch(summary.terminalDisplay?.stdout ?? "", /private-token|\u001b/);
+	assert.ok((summary.terminalDisplay?.stdout.length ?? 0) <= 6000);
+	assert.ok((summary.terminalDisplay?.stdoutOmittedChars ?? 0) > 0);
+});
+
 test("generic valid false result with errors becomes failed validation", (): void => {
 	const summary = parseToolResultSummary(
 		"mcp_godot_create_text_file",

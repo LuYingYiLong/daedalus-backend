@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { open, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, open, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { getGodotDocumentationRoot } from "../app-paths.js";
@@ -53,6 +53,7 @@ type BranchListResult = {
 type ActiveJobRuntime = {
 	snapshot: GodotDocumentationJob;
 	controller: AbortController;
+	localSourcePath: string | null;
 };
 
 let activeJob: ActiveJobRuntime | null = null;
@@ -723,15 +724,161 @@ async function validateExtractedTree(root: string, signal: AbortSignal): Promise
 	}
 }
 
-async function persistAttribution(generationDir: string, branch: string, commitSha: string): Promise<void> {
+async function hashLocalDocumentationTree(root: string, signal: AbortSignal): Promise<string> {
+	const hash = createHash("sha1");
+	const queue: string[] = [root];
+	while (queue.length > 0) {
+		if (signal.aborted) {
+			throw new Error("Documentation import cancelled.");
+		}
+		const current: string = queue.shift()!;
+		const entries: Dirent[] = (await readdir(current, { withFileTypes: true }))
+			.sort((left: Dirent, right: Dirent): number => left.name.localeCompare(right.name));
+		for (const entry of entries) {
+			const candidate: string = join(current, entry.name);
+			if (entry.isDirectory()) {
+				queue.push(candidate);
+				continue;
+			}
+			if (!entry.isFile() || (entry.name !== "conf.py" && !entry.name.endsWith(".rst"))) {
+				continue;
+			}
+			hash.update(relative(root, candidate).replaceAll("\\", "/"));
+			hash.update("\0");
+			hash.update(await readFile(candidate));
+			hash.update("\0");
+		}
+	}
+	return hash.digest("hex");
+}
+
+function isPathInside(root: string, candidate: string): boolean {
+	const relativePath: string = relative(root, candidate);
+	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagingRoot: string): Promise<{
+	extractedRoot: string;
+	sourcePath: string;
+	commitSha: string;
+}> {
+	if (runtime.localSourcePath === null || !isAbsolute(runtime.localSourcePath)) {
+		throw new Error("Local documentation source must be an absolute path.");
+	}
+	setJobProgress(runtime, "resolving", 0, "Inspecting local Godot documentation...");
+	const sourcePath: string = await realpath(runtime.localSourcePath);
+	const documentationRoot: string = resolve(getGodotDocumentationRoot());
+	if (isPathInside(documentationRoot, sourcePath)) {
+		throw new Error("Local documentation source cannot be inside Daedalus documentation storage.");
+	}
+	const sourceStats = await stat(sourcePath);
+	const extractedRoot: string = join(stagingRoot, "source");
+	if (sourceStats.isFile()) {
+		if (!sourcePath.toLowerCase().endsWith(".zip")) {
+			throw new Error("Local documentation source must be a godot-docs folder or ZIP archive.");
+		}
+		const archivePath: string = join(stagingRoot, "godot-docs.zip");
+		await copyFile(sourcePath, archivePath);
+		await extractArchive(archivePath, extractedRoot, runtime);
+	} else if (sourceStats.isDirectory()) {
+		setJobProgress(runtime, "extracting", 15, "Copying local Godot documentation...");
+		await validateExtractedTree(sourcePath, runtime.controller.signal);
+		await cp(sourcePath, extractedRoot, {
+			recursive: true,
+			dereference: false,
+			force: false,
+			errorOnExist: true
+		});
+		await validateExtractedTree(extractedRoot, runtime.controller.signal);
+	} else {
+		throw new Error("Local documentation source must be a folder or ZIP archive.");
+	}
+	return {
+		extractedRoot,
+		sourcePath,
+		commitSha: await hashLocalDocumentationTree(extractedRoot, runtime.controller.signal)
+	};
+}
+
+async function persistAttribution(
+	generationDir: string,
+	branch: string,
+	commitSha: string,
+	source: "official" | "local",
+	sourcePath?: string
+): Promise<void> {
 	await writeFile(join(generationDir, "attribution.json"), `${JSON.stringify({
-		source: `https://github.com/${GITHUB_REPOSITORY}/tree/${commitSha}`,
+		source: source === "official" ? `https://github.com/${GITHUB_REPOSITORY}/tree/${commitSha}` : "local",
+		...(sourcePath === undefined ? {} : { sourcePath }),
 		branch,
 		commitSha,
 		manualLicense: "CC BY 3.0",
 		classReferenceLicense: "MIT",
-		licenseUrl: `https://github.com/${GITHUB_REPOSITORY}/blob/${commitSha}/LICENSE.txt`
+		licenseUrl: source === "official"
+			? `https://github.com/${GITHUB_REPOSITORY}/blob/${commitSha}/LICENSE.txt`
+			: `https://github.com/${GITHUB_REPOSITORY}/blob/master/LICENSE.txt`
 	}, null, 2)}\n`, "utf8");
+}
+
+async function buildAndActivateDocumentation(params: {
+	runtime: ActiveJobRuntime;
+	stagingRoot: string;
+	extractedRoot: string;
+	branch: string;
+	commitSha: string;
+	currentRecord: GodotDocumentationRecord | undefined;
+	source: "official" | "local";
+	sourcePath?: string | undefined;
+}): Promise<void> {
+	const documentId: string = params.currentRecord?.id ?? createGodotDocumentationId(params.branch);
+	const generationDir: string = join(params.stagingRoot, "generation");
+	const indexPath: string = join(generationDir, "index.sqlite");
+	await mkdir(generationDir, { recursive: true });
+	setJobProgress(params.runtime, "indexing", 45, "Indexing Godot documentation...");
+	const summary: DocumentationIndexSummary = await buildGodotDocumentationIndex({
+		extractedRoot: params.extractedRoot,
+		indexPath,
+		branch: params.branch,
+		commitSha: params.commitSha,
+		signal: params.runtime.controller.signal,
+		onProgress(progress: number): void {
+			setJobProgress(params.runtime, "indexing", 45 + progress * 50, "Indexing Godot documentation...");
+		}
+	});
+	await persistAttribution(
+		generationDir,
+		params.branch,
+		params.commitSha,
+		params.source,
+		params.sourcePath
+	);
+
+	setJobProgress(params.runtime, "finalizing", 97, "Activating the documentation index...");
+	const targetGenerationDir: string = getGodotDocumentationGenerationDir({
+		id: documentId,
+		commitSha: params.commitSha
+	});
+	await mkdir(dirname(targetGenerationDir), { recursive: true });
+	await rm(targetGenerationDir, { recursive: true, force: true });
+	await rename(generationDir, targetGenerationDir);
+	const now: string = new Date().toISOString();
+	const nextRecord: GodotDocumentationRecord = {
+		id: documentId,
+		branch: params.branch,
+		commitSha: params.commitSha,
+		source: params.source,
+		...(params.sourcePath === undefined ? {} : { sourcePath: params.sourcePath }),
+		installedAt: params.currentRecord?.installedAt ?? now,
+		updatedAt: now,
+		...summary
+	};
+	await updateGodotDocumentationSettings((draft): void => {
+		draft.documents[documentId] = nextRecord;
+		if (params.currentRecord === undefined && Object.keys(draft.documents).length === 1) {
+			draft.enabled = true;
+		}
+	});
+	await cleanupOrphanedGenerations();
 }
 
 async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
@@ -755,47 +902,15 @@ async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
 		await downloadArchive(resolvedBranch.commitSha, archivePath, runtime);
 		await extractArchive(archivePath, extractedRoot, runtime);
 
-		const documentId: string = currentRecord?.id ?? createGodotDocumentationId(resolvedBranch.name);
-		const generationDir: string = join(stagingRoot, "generation");
-		const indexPath: string = join(generationDir, "index.sqlite");
-		await mkdir(generationDir, { recursive: true });
-		setJobProgress(runtime, "indexing", 45, "Indexing Godot documentation...");
-		const summary: DocumentationIndexSummary = await buildGodotDocumentationIndex({
+		await buildAndActivateDocumentation({
+			runtime,
+			stagingRoot,
 			extractedRoot,
-			indexPath,
 			branch: resolvedBranch.name,
 			commitSha: resolvedBranch.commitSha,
-			signal: runtime.controller.signal,
-			onProgress(progress: number): void {
-				setJobProgress(runtime, "indexing", 45 + progress * 50, "Indexing Godot documentation...");
-			}
+			currentRecord,
+			source: "official"
 		});
-		await persistAttribution(generationDir, resolvedBranch.name, resolvedBranch.commitSha);
-
-		setJobProgress(runtime, "finalizing", 97, "Activating the documentation index...");
-		const targetGenerationDir: string = getGodotDocumentationGenerationDir({
-			id: documentId,
-			commitSha: resolvedBranch.commitSha
-		});
-		await mkdir(dirname(targetGenerationDir), { recursive: true });
-		await rm(targetGenerationDir, { recursive: true, force: true });
-		await rename(generationDir, targetGenerationDir);
-		const now: string = new Date().toISOString();
-		const nextRecord: GodotDocumentationRecord = {
-			id: documentId,
-			branch: resolvedBranch.name,
-			commitSha: resolvedBranch.commitSha,
-			installedAt: currentRecord?.installedAt ?? now,
-			updatedAt: now,
-			...summary
-		};
-		await updateGodotDocumentationSettings((draft): void => {
-			draft.documents[documentId] = nextRecord;
-			if (currentRecord === undefined && Object.keys(draft.documents).length === 1) {
-				draft.enabled = true;
-			}
-		});
-		await cleanupOrphanedGenerations();
 		finishJob(runtime, "completed", null);
 	} catch (error: unknown) {
 		const cancelled: boolean = runtime.controller.signal.aborted;
@@ -812,13 +927,58 @@ async function runDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
 	}
 }
 
-function startJob(operation: "install" | "update", branch: string, documentId: string | null): GodotDocumentationJob {
+async function runLocalDocumentationJob(runtime: ActiveJobRuntime): Promise<void> {
+	const stagingRoot: string = join(getGodotDocumentationStagingRoot(), runtime.snapshot.jobId);
+	try {
+		await mkdir(stagingRoot, { recursive: true });
+		const prepared = await prepareLocalDocumentationSource(runtime, stagingRoot);
+		const currentRecord: GodotDocumentationRecord | undefined = runtime.snapshot.documentId === null
+			? undefined
+			: getGodotDocumentationSnapshot().documents[runtime.snapshot.documentId];
+		if (currentRecord?.commitSha === prepared.commitSha && currentRecord.source === "local") {
+			runtime.snapshot.unchanged = true;
+			finishJob(runtime, "completed", null);
+			return;
+		}
+		await buildAndActivateDocumentation({
+			runtime,
+			stagingRoot,
+			extractedRoot: prepared.extractedRoot,
+			branch: runtime.snapshot.branch,
+			commitSha: prepared.commitSha,
+			currentRecord,
+			source: "local",
+			sourcePath: prepared.sourcePath
+		});
+		finishJob(runtime, "completed", null);
+	} catch (error: unknown) {
+		const cancelled: boolean = runtime.controller.signal.aborted;
+		const message: string = error instanceof Error ? error.message : "Documentation operation failed.";
+		logger.warn("godot_documentation", cancelled ? "local_job_cancelled" : "local_job_failed", {
+			jobId: runtime.snapshot.jobId,
+			branch: runtime.snapshot.branch,
+			stage: runtime.snapshot.stage,
+			error: message
+		});
+		finishJob(runtime, cancelled ? "cancelled" : "failed", cancelled ? null : message);
+	} finally {
+		await rm(stagingRoot, { recursive: true, force: true }).catch((): void => undefined);
+	}
+}
+
+function startJob(
+	operation: GodotDocumentationJob["operation"],
+	branch: string,
+	documentId: string | null,
+	localSourcePath: string | null = null
+): GodotDocumentationJob {
 	if (activeJob !== null) {
 		throw new Error(`A documentation operation is already running for ${activeJob.snapshot.branch}.`);
 	}
 	const now: string = new Date().toISOString();
 	const runtime: ActiveJobRuntime = {
 		controller: new AbortController(),
+		localSourcePath,
 		snapshot: {
 			jobId: `godot-docs-${randomUUID()}`,
 			operation,
@@ -835,7 +995,7 @@ function startJob(operation: "install" | "update", branch: string, documentId: s
 		}
 	};
 	activeJob = runtime;
-	void runDocumentationJob(runtime);
+	void (localSourcePath === null ? runDocumentationJob(runtime) : runLocalDocumentationJob(runtime));
 	return cloneJob(runtime.snapshot);
 }
 
@@ -860,10 +1020,27 @@ export function installGodotDocumentation(branch: string): GodotDocumentationJob
 	return startJob("install", normalizedBranch, null);
 }
 
+export function importLocalGodotDocumentation(branch: string, sourcePath: string): GodotDocumentationJob {
+	const normalizedBranch: string = assertOfficialBranchName(branch);
+	if (Object.values(getGodotDocumentationSnapshot().documents).some((record): boolean => record.branch === normalizedBranch)) {
+		throw new Error(`Documentation for branch ${normalizedBranch} is already installed.`);
+	}
+	if (sourcePath.trim().length === 0 || sourcePath.length > 32_768) {
+		throw new Error("Local documentation source path is invalid.");
+	}
+	return startJob("import", normalizedBranch, null, sourcePath);
+}
+
 export function updateGodotDocumentation(documentId: string): GodotDocumentationJob {
 	const record: GodotDocumentationRecord | undefined = getGodotDocumentationSnapshot().documents[documentId];
 	if (record === undefined) {
 		throw new Error(`Unknown Godot documentation item: ${documentId}`);
+	}
+	if (record.source === "local") {
+		if (record.sourcePath === undefined) {
+			throw new Error(`Local Godot documentation item ${documentId} has no source path.`);
+		}
+		return startJob("update", record.branch, record.id, record.sourcePath);
 	}
 	return startJob("update", record.branch, record.id);
 }

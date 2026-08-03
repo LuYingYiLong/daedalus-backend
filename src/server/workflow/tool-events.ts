@@ -5,7 +5,7 @@ import type { OnToolEvent, ToolEvent } from "../../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../../tools/tool-result-parser.js";
 import { getEffectiveToolPolicy, getToolPolicy } from "../../tools/tool-policy.js";
 import type { WorkflowPhase } from "../../workflow/types.js";
-import { sendSessionEvent } from "../session-events.js";
+import { sendSessionEvent, sendTransientSessionEvent } from "../session-events.js";
 import { scheduleTerminalJobWakeup } from "../terminal-job-wakeup.js";
 import type { WorkflowPhaseToolStats } from "./shared-types.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
@@ -78,7 +78,10 @@ export function createAgentToolEventForwarder(
 			if (event.toolName === "mcp_skills_load") {
 				return;
 			}
-			sendSessionEvent(socket, requestId, session, "agent.tool.progress", {
+			const sendProgress = event.code === "terminal_output"
+				? sendTransientSessionEvent
+				: sendSessionEvent;
+			sendProgress(socket, requestId, session, "agent.tool.progress", {
 				...event,
 				type: "agent.tool.progress",
 				runId,

@@ -41,6 +41,7 @@ export type CommandRunInput = {
 export type TerminalCommandResult = {
 	preset: string;
 	ok: boolean;
+	status?: Exclude<TerminalJobStatus, "running"> | undefined;
 	exitCode: number | null;
 	command: string[];
 	commandLine: string;
@@ -56,6 +57,8 @@ export type TerminalCommandResult = {
 	authorizationSource?: "model" | "policy" | "user" | undefined;
 	stdout: string;
 	stderr: string;
+	stdoutOmittedChars?: number | undefined;
+	stderrOmittedChars?: number | undefined;
 	durationMs: number;
 	truncated: boolean;
 };

@@ -31,6 +31,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"generalSettings.update",
 	"godotDocumentation.branches.list",
 	"godotDocumentation.get",
+	"godotDocumentation.importLocal",
 	"godotDocumentation.install",
 	"godotDocumentation.job.cancel",
 	"godotDocumentation.job.get",
@@ -172,6 +173,27 @@ test("workspace.delete accepts workspace id", (): void => {
 			workspaceId: "workspace-a"
 		}
 	}).success, true);
+});
+
+test("Godot documentation local import requires a branch and absolute-source candidate", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "godot-docs-import-local",
+		method: "godotDocumentation.importLocal",
+		params: {
+			branch: "4.7",
+			sourcePath: "C:\\Downloads\\godot-docs-4.7.zip"
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "godot-docs-import-local-invalid",
+		method: "godotDocumentation.importLocal",
+		params: {
+			branch: "4.7",
+			sourcePath: ""
+		}
+	}).success, false);
 });
 
 test("workspace tree order accepts a complete unique order snapshot", (): void => {

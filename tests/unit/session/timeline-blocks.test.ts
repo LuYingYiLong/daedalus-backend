@@ -1022,6 +1022,42 @@ test("canonical timeline restores v3 todo state until it is dismissed", (): void
 	assert.equal(dismissed.latestAgentSnapshot, null);
 });
 
+test("canonical timeline reconciles a completed v3 run todo with its terminal state", (): void => {
+	const result = buildCanonicalTimelineBlocks(session([], [
+		event("event-run-state", "request-v3-completed-todo", "agent.run.state", "2026-07-09T01:10:05.000Z", {
+			schemaVersion: 1,
+			runId: "run-v3-completed-todo",
+			requestId: "request-v3-completed-todo",
+			rootRequestId: "request-v3-completed-todo",
+			revision: 8,
+			intent: "mutate",
+			scope: "complex",
+			lane: "workflow",
+			stage: "completed",
+			title: "Continue the active Goal",
+			planId: "workflow-goal-cycle-6",
+			todo: {
+				workflowId: "workflow-goal-cycle-6",
+				phases: [
+					{ id: "inspect", title: "Inspect", status: "pending" },
+					{ id: "implement", title: "Implement", status: "done" },
+					{ id: "verify", title: "Verify", status: "done" },
+					{ id: "summarize", title: "Summarize", status: "pending" }
+				],
+				todos: []
+			},
+			pause: null,
+			verificationStatus: "verified",
+			warnings: [],
+			terminal: { resultStatus: "completed", completedAt: "2026-07-09T01:10:05.000Z" },
+			createdAt: "2026-07-09T01:10:00.000Z",
+			updatedAt: "2026-07-09T01:10:05.000Z"
+		})
+	]));
+	const snapshot = result.latestAgentSnapshot as { phases: Array<{ status: string }> };
+	assert.deepEqual(snapshot.phases.map((phase) => phase.status), ["done", "done", "done", "done"]);
+});
+
 test("canonical timeline restores v3 failed and interrupted run states", (): void => {
 	const failedResult = buildCanonicalTimelineBlocks(session(
 		[

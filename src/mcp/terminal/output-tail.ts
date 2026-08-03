@@ -3,14 +3,16 @@ export const MAX_STDERR_CHARS: number = 12000;
 export const DEFAULT_TAIL_LINES: number = 120;
 export const MAX_TAIL_LINES: number = 1000;
 
-export function truncateOutput(text: string, maxChars: number): { text: string; truncated: boolean } {
+export function truncateOutput(text: string, maxChars: number): { text: string; truncated: boolean; omittedChars: number } {
 	if (text.length <= maxChars) {
-		return { text, truncated: false };
+		return { text, truncated: false, omittedChars: 0 };
 	}
 
+	const omittedChars: number = text.length - maxChars;
 	return {
-		text: text.slice(0, maxChars) + `\n\n[输出已截断，原始长度 ${text.length} 字符]`,
-		truncated: true
+		text: text.slice(-maxChars),
+		truncated: true,
+		omittedChars
 	};
 }
 

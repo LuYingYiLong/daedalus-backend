@@ -3,10 +3,12 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpServerConfig } from "./types.js";
+import type { McpProgressNotification } from "./terminal/progress.js";
 
 export type McpCallToolOptions = {
 	signal?: AbortSignal | undefined;
 	timeoutMs?: number | undefined;
+	onProgress?: ((progress: McpProgressNotification) => void) | undefined;
 };
 
 export class McpSession {
@@ -59,7 +61,11 @@ export class McpSession {
 			arguments: args
 		}, undefined, {
 			...(options.signal === undefined ? {} : { signal: options.signal }),
-			...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs })
+			...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
+			...(options.onProgress === undefined ? {} : {
+				onprogress: options.onProgress,
+				resetTimeoutOnProgress: true
+			})
 		});
 	}
 

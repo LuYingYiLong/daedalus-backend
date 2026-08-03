@@ -12,6 +12,7 @@ import type { ImageGenerationResult } from "../providers/image-generation.js";
 import type { ProviderToolImageReference } from "../providers/tool-image-reference.js";
 import { stripApprovalReasonArg } from "./approval-reason.js";
 import type { TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
+import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { createSourceScopedWorkspace, findWorkspace } from "../workspace/registry.js";
 
 const TOOL_EXECUTION_DEDUP_TTL_MS: number = 30 * 60 * 1000;
@@ -364,7 +365,8 @@ async function executeMappedTool(
 	editorInstanceId?: string | undefined,
 	commandAuthorization?: TerminalCommandAuthorization | undefined,
 	preserveFullResultForEnrichment: boolean = false,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	onProgress?: ((progress: McpProgressNotification) => void) | undefined
 ): Promise<IdempotentToolExecutionResult> {
 	const result = await mcpHost.callTool(
 		serverId,
@@ -373,7 +375,8 @@ async function executeMappedTool(
 		workspaceId,
 		editorInstanceId,
 		commandAuthorization,
-		abortSignal
+		abortSignal,
+		onProgress
 	) as ToolResultContent;
 	const textResult: string = extractTextContent(result);
 	const truncated: boolean = textResult.length > MAX_TOOL_RESULT_CHARS;
@@ -517,7 +520,8 @@ export async function executeLlmToolWithIdempotency(
 	sessionId?: string | undefined,
 	abortSignal?: AbortSignal | undefined,
 	commandAuthorization?: TerminalCommandAuthorization | undefined,
-	preserveFullResultForEnrichment: boolean = false
+	preserveFullResultForEnrichment: boolean = false,
+	onProgress?: ((progress: McpProgressNotification) => void) | undefined
 ): Promise<IdempotentToolExecutionResult> {
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
@@ -564,7 +568,8 @@ export async function executeLlmToolWithIdempotency(
 				editorInstanceId,
 				commandAuthorization,
 				preserveFullResultForEnrichment,
-				abortSignal
+				abortSignal,
+				onProgress
 			)
 		);
 		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
@@ -607,7 +612,8 @@ export async function executeLlmToolWithIdempotency(
 				editorInstanceId,
 				undefined,
 				preserveFullResultForEnrichment,
-				abortSignal
+				abortSignal,
+				onProgress
 			)
 		);
 		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);

@@ -47,6 +47,7 @@ import {
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
 import { listSelectionAskThreads } from "../session/selection-ask-store.js";
+import { exportSessionToSqlite } from "../session/session-export.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -1103,6 +1104,36 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				result: { deletedArchived: true, sessionId: request.params.sessionId }
 			});
 			break;
+
+		case "session.export": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "studio_only",
+						message: "session.export is only available to Daedalus Studio."
+					}
+				});
+				break;
+			}
+			if (session.sessionId === request.params.sessionId) {
+				await waitForFullSessionLoad(session);
+				await waitForSessionEventPersistence(session);
+			}
+			const result = await exportSessionToSqlite(
+				request.params.sessionId,
+				request.params.destinationPath
+			);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result
+			});
+			break;
+		}
 
 		case "session.save":
 			await waitForFullSessionLoad(session);

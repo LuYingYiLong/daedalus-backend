@@ -101,10 +101,13 @@ export function createFallbackWorkflowRoute(params: AiChatParams, reason: string
 
 export function normalizeWorkflowRouteDecision(raw: RawWorkflowRouteDecision, params: AiChatParams): WorkflowRouteDecision {
 	const explicitMutationIntent: boolean = hasWriteIntent(params.message);
+	const deterministicMutationOverride: boolean = explicitMutationIntent && raw.intent !== "mutate";
 	const complexMutation: boolean = explicitMutationIntent && hasComplexWriteIntent(params.message);
 	const intent: AgentRunIntent = explicitMutationIntent ? "mutate" : raw.intent;
 	const scope: AgentRunScope = complexMutation
 		? "complex"
+		: deterministicMutationOverride
+			? "unknown"
 		: intent === "mutate" && raw.scope === "bounded" && raw.lane === "direct"
 			? "unknown"
 			: raw.scope;
@@ -115,7 +118,7 @@ export function normalizeWorkflowRouteDecision(raw: RawWorkflowRouteDecision, pa
 		lane,
 		reason: [
 			raw.reason?.trim() || "Routed by workflow router.",
-			explicitMutationIntent && raw.intent !== "mutate"
+			deterministicMutationOverride
 				? "Deterministic safety guard preserved the user's mutation intent."
 				: ""
 		].filter((part: string): boolean => part.length > 0).join(" "),
@@ -223,9 +226,12 @@ function parseWorkflowRouteDecision(text: string): RawWorkflowRouteDecision {
 }
 
 export function hasWriteIntent(message: string): boolean {
-	const normalized: string = message.toLowerCase();
+	const normalized: string = message.normalize("NFKC").toLowerCase();
 	if (isExplicitReadOnlyRequest(normalized)) {
 		return false;
+	}
+	if (hasImperativeImprovementIntent(normalized)) {
+		return true;
 	}
 
 	return [
@@ -266,6 +272,40 @@ export function hasWriteIntent(message: string): boolean {
 		"batch",
 		"clear"
 	].some((keyword: string): boolean => normalized.includes(keyword));
+}
+
+function hasImperativeImprovementIntent(normalized: string): boolean {
+	const asksForAdvice: boolean = [
+		/(?:怎么|如何|怎样|哪些|什么).{0,16}(?:优化|改进|调整)/u,
+		/(?:优化|改进|调整)(?:建议|方案|方向|思路)/u,
+		/\b(?:how|what)\b.{0,48}\b(?:optimize|improve|adjust)\b/u
+	].some((pattern: RegExp): boolean => pattern.test(normalized));
+	if (asksForAdvice) {
+		return false;
+	}
+
+	return [
+		"优化一下",
+		"优化下",
+		"改进一下",
+		"调整一下",
+		"帮我优化",
+		"帮我改进",
+		"帮我调整",
+		"请优化",
+		"请改进",
+		"请调整",
+		"直接优化",
+		"继续优化",
+		"开始优化",
+		"please optimize",
+		"please improve",
+		"please adjust",
+		"help me optimize",
+		"help me improve"
+	].some((phrase: string): boolean => normalized.includes(phrase))
+		|| /^(?:优化|改进|调整)(?!建议|方案|方向|思路)/u.test(normalized)
+		|| /^(?:optimize|improve|adjust)\b/u.test(normalized);
 }
 
 export function hasComplexWriteIntent(message: string): boolean {
@@ -362,6 +402,7 @@ function createRouteSystemPromptV3(): string {
 		"- scope=complex: multi-file coordination, migration, destructive work, a long operation, or explicit planning.",
 		"- lane=direct for answer, read for inspect, probe for unknown mutation, lightweight for bounded mutation, workflow for complex mutation.",
 		"Requests to look up installed local Godot documentation, verify a Godot API, or inspect an exact Godot class/member use intent=inspect and lane=read.",
+		"Imperative requests to optimize, improve, or adjust the current project use intent=mutate. Questions asking how something could be optimized are advice, not mutation.",
 		"Creating, modifying, fixing, or generating something does not by itself require workflow.",
 		"Ask mode and explicit read-only requests must never use a mutation lane.",
 		"Output exactly:",

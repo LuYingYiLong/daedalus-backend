@@ -72,8 +72,11 @@ const evaluationSchema = z.object({
 
 const runtimes = new Map<string, GoalRuntime>();
 const latestGoalStates = new Map<string, AgentGoalState>();
+// 终态事件可能在面板关闭后才到达；进程内墓碑配合 dismissed_at 防止面板复活。
+const dismissedGoalIds = new Set<string>();
 
 export function emitAgentGoalState(socket: WebSocket, session: ClientSession, state: AgentGoalState): void {
+	if (dismissedGoalIds.has(state.goalId)) return;
 	const snapshot: AgentGoalState = cloneAgentGoalState(state);
 	latestGoalStates.set(state.goalId, snapshot);
 	if (isAgentGoalTerminal(state.stage)) runtimes.delete(state.goalId);
@@ -150,7 +153,9 @@ export async function getCurrentAgentGoalTelemetry(sessionId: string): Promise<A
 
 export async function getLatestAgentGoal(sessionId: string): Promise<AgentGoalState | null> {
 	const states = [...latestGoalStates.values()]
-		.filter((state: AgentGoalState): boolean => state.sessionId === sessionId)
+		.filter((state: AgentGoalState): boolean => (
+			state.sessionId === sessionId && !dismissedGoalIds.has(state.goalId)
+		))
 		.sort((left: AgentGoalState, right: AgentGoalState): number => right.updatedAt.localeCompare(left.updatedAt));
 	return states[0] === undefined ? readLatestAgentGoal(sessionId) : cloneAgentGoalState(states[0]);
 }
@@ -970,6 +975,7 @@ export async function dismissAgentGoal(goalId: string): Promise<{ goalId: string
 	if (!await dismissAgentGoalState(goalId)) {
 		throw Object.assign(new Error(`Goal ${goalId} could not be closed.`), { code: "goal_dismiss_failed" });
 	}
+	dismissedGoalIds.add(goalId);
 	latestGoalStates.delete(goalId);
 	return { goalId, dismissed: true };
 }

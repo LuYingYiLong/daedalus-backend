@@ -92,6 +92,29 @@ test("router output separates intent, scope, and lane", (): void => {
 	assert.match(probe.reason, /safety guard/);
 });
 
+test("imperative optimization preserves mutation intent while optimization advice stays read-only", (): void => {
+	assert.equal(hasWriteIntent("优化一下关卡与地图"), true);
+	assert.equal(hasWriteIntent("帮我优化一下当前项目"), true);
+	assert.equal(hasWriteIntent("还能怎么优化"), false);
+	assert.equal(hasWriteIntent("有哪些优化建议"), false);
+
+	const decision = normalizeWorkflowRouteDecision({
+		intent: "inspect",
+		scope: "bounded",
+		lane: "read",
+		reason: "Inspect the level first.",
+		planningHint: ""
+	}, {
+		message: "优化一下关卡与地图",
+		mode: "agent"
+	});
+
+	assert.equal(decision.intent, "mutate");
+	assert.equal(decision.scope, "unknown");
+	assert.equal(decision.lane, "probe");
+	assert.match(decision.reason, /safety guard/);
+});
+
 test("project-specific advice is upgraded from direct to read", (): void => {
 	const decision = applyProjectContextRouteOverride({
 		intent: "answer",

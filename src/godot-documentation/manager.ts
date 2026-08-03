@@ -52,6 +52,7 @@ const MAX_DOWNLOAD_BYTES: number = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: number = 2 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: number = 50_000;
 const MAX_REDIRECTS: number = 5;
+const HTTP_REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 const DOWNLOAD_TIMEOUT_MS: number = 10 * 60 * 1000;
 const MAX_NETWORK_RETRIES: number = 2;
 const DEEP_HEALTH_CHECK_INTERVAL_MS: number = 24 * 60 * 60 * 1000;
@@ -226,7 +227,8 @@ function isRetryableNetworkError(error: unknown): boolean {
 			"UND_ERR_CONNECT_TIMEOUT",
 			"UND_ERR_HEADERS_TIMEOUT",
 			"UND_ERR_BODY_TIMEOUT",
-			"UND_ERR_SOCKET"
+			"UND_ERR_SOCKET",
+			"DOCUMENTATION_REDIRECT_MISSING"
 		].includes(code)
 	) {
 		return true;
@@ -302,14 +304,24 @@ async function fetchOfficial(
 			cause: error
 		});
 	}
-	if (response.status >= 300 && response.status < 400) {
+	if (HTTP_REDIRECT_STATUSES.has(response.status)) {
 		if (redirectCount >= MAX_REDIRECTS) {
 			throw new Error("Too many redirects while downloading godot-docs.");
 		}
 		const location: string | null = response.headers.get("location");
 		if (location === null) {
-			throw new Error("Godot documentation redirect did not include a destination.");
+			const error = Object.assign(
+				new Error(`Godot documentation redirect (${response.status}) did not include a destination.`),
+				{ code: "DOCUMENTATION_REDIRECT_MISSING" }
+			);
+			await response.body?.cancel().catch((): void => undefined);
+			if (retryNetwork && !signal.aborted && attempt < MAX_NETWORK_RETRIES) {
+				await waitForNetworkRetry(attempt, signal);
+				return fetchOfficial(url, init, signal, redirectCount, attempt + 1, retryNetwork);
+			}
+			throw error;
 		}
+		await response.body?.cancel().catch((): void => undefined);
 		return fetchOfficial(
 			new URL(location, parsedUrl).toString(),
 			init,

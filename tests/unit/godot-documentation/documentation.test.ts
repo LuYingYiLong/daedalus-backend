@@ -17,6 +17,7 @@ import {
 	importLocalGodotDocumentation,
 	initializeGodotDocumentationManager,
 	inspectGodotDocumentationArchive,
+	listGodotDocumentationBranches,
 	repairGodotDocumentation
 } from "../../../src/godot-documentation/manager.js";
 import { selectGodotDocumentation } from "../../../src/godot-documentation/search.js";
@@ -24,6 +25,7 @@ import { parseGodotProjectFeatureVersion } from "../../../src/godot-documentatio
 import {
 	getGodotDocumentationIndexPath,
 	getGodotDocumentationManifestPath,
+	getGodotDocumentationBranchCachePath,
 	getGodotDocumentationSnapshot,
 	initializeGodotDocumentationStore,
 	parseStableDocumentationBranch
@@ -315,6 +317,34 @@ test("documentation schema v1 is cleared instead of migrated", async (): Promise
 		assert.deepEqual(getGodotDocumentationSnapshot(), { schemaVersion: 2, enabled: false, documents: {} });
 		assert.equal(JSON.parse(await readFile(getGodotDocumentationConfigPath(), "utf8")).schemaVersion, 2);
 	} finally {
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("documentation branch refresh accepts GitHub 304 without a Location header", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const previousFetch: typeof globalThis.fetch = globalThis.fetch;
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-branch-cache-"));
+	process.env.USERPROFILE = root;
+	try {
+		await mkdir(dirname(getGodotDocumentationBranchCachePath()), { recursive: true });
+		await writeFile(getGodotDocumentationBranchCachePath(), JSON.stringify({
+			schemaVersion: 1,
+			etag: "\"godot-docs-test\"",
+			fetchedAt: "2026-08-01T00:00:00.000Z",
+			branches: [{ name: "4.7", commitSha: COMMIT_SHA }]
+		}), "utf8");
+		globalThis.fetch = async (): Promise<Response> => new Response(null, { status: 304 });
+
+		const result = await listGodotDocumentationBranches(true);
+		assert.equal(result.stale, false);
+		assert.equal(result.error, undefined);
+		assert.equal(result.recommendedBranch, "4.7");
+		assert.deepEqual(result.branches.map((branch): string => branch.name), ["4.7"]);
+	} finally {
+		globalThis.fetch = previousFetch;
 		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = previousUserProfile;
 		await rm(root, { recursive: true, force: true });

@@ -1156,6 +1156,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.export"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			destinationPath: z.string().min(1).max(32_767),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.save"),
 		params: sessionUiMetadataParamsSchema.optional(),
 	}),

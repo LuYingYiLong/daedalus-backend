@@ -61,6 +61,7 @@ export type CanonicalServerEventName =
 	| "agent.message.done"
 	| "agent.thinking.delta"
 	| "agent.thinking.done"
+	| "agent.provider.reconnect"
 	| "agent.tool.call"
 	| "agent.tool.reviewed"
 	| "agent.tool.progress"

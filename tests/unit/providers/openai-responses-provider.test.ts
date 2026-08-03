@@ -14,8 +14,10 @@ import {
 import {
 	convertResponsesToolCalls,
 	convertToolDefinitions,
-	runOpenAIResponsesAgent
+	runOpenAIResponsesAgent,
+	runOpenAIResponsesAgentStreaming
 } from "../../../src/providers/openai-responses-agent.js";
+import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderIds } from "../../../src/providers/provider-registry.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
@@ -120,6 +122,50 @@ async function withResponsesMissingToolCallRetryMockServer(run: (baseUrl: string
 		throw new Error("Mock server did not expose a TCP port");
 	}
 
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
+async function withInterruptedResponsesStreamMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", body });
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		const text: string = requests.length === 1 ? "partial" : "complete";
+		response.write(`data: ${JSON.stringify({
+			type: "response.output_text.delta",
+			sequence_number: 0,
+			item_id: "message-1",
+			output_index: 0,
+			content_index: 0,
+			delta: text
+		})}\n\n`);
+		if (requests.length > 1) {
+			response.write(`data: ${JSON.stringify({
+				type: "response.completed",
+				sequence_number: 1,
+				response: {
+					id: "response-recovered",
+					object: "response",
+					created_at: 1,
+					model: "gpt-5.6-sol",
+					status: "completed",
+					output: [],
+					output_text: text
+				}
+			})}\n\n`);
+		}
+		response.end();
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("Mock server did not expose a TCP port");
 	try {
 		await run(`http://127.0.0.1:${address.port}`, requests);
 	} finally {
@@ -266,6 +312,30 @@ test("OpenAI Responses agent retries required first tool call text responses", a
 		assert.equal(requests[0]?.body.tool_choice, "required");
 		assert.match(JSON.stringify(requests[1]?.body.input), /输出了正文/);
 		assert.match(JSON.stringify(requests[1]?.body.input), /mcp_godot_read_text_file/);
+	});
+});
+
+test("OpenAI Responses streaming reconnects when response.completed is missing", async (): Promise<void> => {
+	await withInterruptedResponsesStreamMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const events: ToolEvent[] = [];
+		const result = await runOpenAIResponsesAgentStreaming(
+			{ message: "Stream", options: { stream: true } },
+			{ provider: "openai", apiKey: "test-key", baseUrl, model: "gpt-5.6-sol" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			[],
+			(event: ToolEvent): void => { events.push(event); }
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "complete");
+		assert.equal(requests.length, 2);
+		const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+		assert.equal(reconnects[0]?.status, "waiting");
+		assert.equal(reconnects[0]?.discardedMessageCodePoints, 7);
+		assert.equal(reconnects.at(-1)?.status, "recovered");
 	});
 });
 

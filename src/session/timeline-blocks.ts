@@ -43,6 +43,21 @@ export type TimelineThinkingPart = {
 	done: boolean;
 };
 
+export type TimelineProviderReconnectPart = {
+	type: "provider_reconnect";
+	reconnectId: string;
+	revision: number;
+	provider: string;
+	model: string;
+	status: "waiting" | "reconnecting" | "recovered" | "failed";
+	reason: "transport" | "idle_timeout" | "gateway" | "rate_limit" | "server";
+	attempt: number;
+	maxAttempts: 5 | 15;
+	timeoutMs: number;
+	retryAt?: string | undefined;
+	autoExtended: boolean;
+};
+
 export type TimelineToolPart = {
 	type: "tool";
 	tool_call_id: string;
@@ -127,6 +142,7 @@ export type TimelineImageGenerationPart = {
 export type TimelineBodyPart =
 	| TimelineMarkdownPart
 	| TimelineThinkingPart
+	| TimelineProviderReconnectPart
 	| TimelineToolPart
 	| TimelineSummaryStartPart
 	| TimelineStatusPart
@@ -355,6 +371,63 @@ function appendThinkingPart(parts: TimelineBodyPart[], text: string, done: boole
 	}
 
 	parts.push({ type: "thinking", text, done });
+}
+
+function truncateTextByCodePoints(text: string, count: number): { text: string; removed: number } {
+	if (count <= 0 || text.length === 0) return { text, removed: 0 };
+	const codePoints: string[] = Array.from(text);
+	const removed: number = Math.min(count, codePoints.length);
+	return { text: codePoints.slice(0, codePoints.length - removed).join(""), removed };
+}
+
+function discardAttemptText(parts: TimelineBodyPart[], type: "markdown" | "thinking", count: number): void {
+	let remaining: number = Math.max(0, Math.trunc(count));
+	for (let index: number = parts.length - 1; index >= 0 && remaining > 0; index -= 1) {
+		const part: TimelineBodyPart = parts[index]!;
+		if (part.type !== type) continue;
+		const truncated = truncateTextByCodePoints(part.text, remaining);
+		part.text = truncated.text;
+		remaining -= truncated.removed;
+		if (part.text.length === 0) parts.splice(index, 1);
+	}
+}
+
+function appendProviderReconnectPart(parts: TimelineBodyPart[], eventData: Record<string, unknown>): void {
+	const reconnectId: string = asString(eventData.reconnectId);
+	const revision: number = asNumber(eventData.revision);
+	if (reconnectId.length === 0 || revision <= 0) return;
+	const existingIndex: number = parts.findIndex((part: TimelineBodyPart): boolean => (
+		part.type === "provider_reconnect" && part.reconnectId === reconnectId
+	));
+	const existing: TimelineProviderReconnectPart | undefined = existingIndex >= 0
+		? parts[existingIndex] as TimelineProviderReconnectPart
+		: undefined;
+	if (existing !== undefined && existing.revision >= revision) return;
+
+	discardAttemptText(parts, "markdown", asNumber(eventData.discardedMessageCodePoints));
+	discardAttemptText(parts, "thinking", asNumber(eventData.discardedThinkingCodePoints));
+	const statusValue: string = asString(eventData.status);
+	const reasonValue: string = asString(eventData.reason);
+	const maxAttemptsValue: number = asNumber(eventData.maxAttempts);
+	const part: TimelineProviderReconnectPart = {
+		type: "provider_reconnect",
+		reconnectId,
+		revision,
+		provider: asString(eventData.provider),
+		model: asString(eventData.model),
+		status: statusValue === "reconnecting" || statusValue === "recovered" || statusValue === "failed" ? statusValue : "waiting",
+		reason: reasonValue === "idle_timeout" || reasonValue === "gateway" || reasonValue === "rate_limit" || reasonValue === "server" ? reasonValue : "transport",
+		attempt: Math.max(0, Math.trunc(asNumber(eventData.attempt))),
+		maxAttempts: maxAttemptsValue === 15 ? 15 : 5,
+		timeoutMs: Math.max(0, Math.trunc(asNumber(eventData.timeoutMs))),
+		autoExtended: eventData.autoExtended === true,
+		...(asString(eventData.retryAt).length === 0 ? {} : { retryAt: asString(eventData.retryAt) })
+	};
+	if (existingIndex >= 0) {
+		parts[existingIndex] = part;
+	} else {
+		parts.push(part);
+	}
 }
 
 function normalizeToolEventData(eventName: string, eventData: Record<string, unknown>, eventRecordId: string): Record<string, unknown> {
@@ -836,6 +909,8 @@ function buildAssistantBodyParts(
 			appendThinkingPart(parts, asString(eventData.text), false);
 		} else if (event.event === "ai.thinking.done" || event.event === "agent.thinking.done") {
 			appendThinkingPart(parts, "", true);
+		} else if (event.event === "agent.provider.reconnect") {
+			appendProviderReconnectPart(parts, eventData);
 		} else if (event.event === "ai.status") {
 			appendStatusPart(parts, {
 				status: asString(eventData.status) || "message",

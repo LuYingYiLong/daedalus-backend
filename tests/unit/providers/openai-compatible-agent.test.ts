@@ -125,6 +125,66 @@ async function withStreamingAgentMockServer(run: (baseUrl: string, requests: Rec
 	}
 }
 
+async function withInterruptedStreamingMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", body });
+		assert.equal(request.url, "/chat/completions");
+
+		if (requests.length === 1) {
+			response.writeHead(200, {
+				"Content-Type": "text/event-stream",
+				"Content-Length": "65536",
+				"Connection": "close"
+			});
+			writeSseChunk(response, {
+				id: "chatcmpl-interrupted",
+				object: "chat.completion.chunk",
+				created: 1,
+				model: "deepseek-v4-flash",
+				choices: [{
+					index: 0,
+					delta: { reasoning_content: "Inspecting the project before editing." },
+					finish_reason: null
+				}]
+			});
+			await new Promise<void>((resolve): void => {
+				setImmediate(resolve);
+			});
+			response.destroy(new Error("simulated stream interruption"));
+			return;
+		}
+
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		writeSseChunk(response, {
+			id: "chatcmpl-recovered",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "deepseek-v4-flash",
+			choices: [{
+				index: 0,
+				delta: { content: "Recovered response" },
+				finish_reason: null
+			}]
+		});
+		response.end("data: [DONE]\n\n");
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") {
+		throw new Error("Mock server did not expose a TCP port");
+	}
+
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
 async function withMissingToolCallRetryMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>, firstDelta: Record<string, unknown> = {
 	reasoning_content: "我将调用 mcp_godot_read_text_file 读取文件。"
 }): Promise<void> {
@@ -722,6 +782,32 @@ test("streaming agent finalizes when tool follow-up only returns reasoning conte
 		assert.equal(requests[1]?.body.stream, true);
 		assert.equal(requests[2]?.body.stream, undefined);
 		assert.match(JSON.stringify(requests[2]?.body.messages), /只返回了 thinking\/reasoning_content/);
+	});
+});
+
+test("streaming agent safely retries an interrupted reasoning-only response", async (): Promise<void> => {
+	await withInterruptedStreamingMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const visibleDeltas: string[] = [];
+		const thinkingDeltas: string[] = [];
+		const result = await runOpenAICompatibleAgentStreaming(
+			{ message: "Inspect the project", options: { stream: true } },
+			{ provider: "deepseek", apiKey: "test-key", baseUrl, model: "deepseek-v4-flash" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			["mcp_godot_read_text_file"],
+			(event): void => {
+				if (event.type === "ai.delta") visibleDeltas.push(event.text);
+				if (event.type === "ai.thinking.delta") thinkingDeltas.push(event.text);
+			}
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "Recovered response");
+		assert.deepEqual(visibleDeltas, ["Recovered response"]);
+		assert.deepEqual(thinkingDeltas, ["Inspecting the project before editing."]);
+		assert.equal(requests.length, 2);
 	});
 });
 

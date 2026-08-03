@@ -48,6 +48,16 @@ export function createAgentToolEventForwarder(
 			}, persistRequestId);
 			return;
 		}
+		if (event.type === "provider.reconnect") {
+			const { type: _type, ...reconnect } = event;
+			sendSessionEvent(socket, requestId, session, "agent.provider.reconnect", {
+				...reconnect,
+				...eventMetadata,
+				runId,
+				stepRunId
+			}, persistRequestId);
+			return;
+		}
 		if (event.type === "tool.call") {
 			if (event.toolName === "mcp_skills_load") {
 				return;

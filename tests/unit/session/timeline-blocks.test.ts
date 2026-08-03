@@ -78,6 +78,63 @@ test("canonical timeline keeps request order when older assistant messages are p
 	assert.equal(assistantBlock(result.blocks[3]).content, "最后一轮回答");
 });
 
+test("provider reconnect events discard only failed attempt text and update one persistent part", (): void => {
+	const stored: StoredSession = session([], [
+		event("delta-1", "request-reconnect", "agent.message.delta", "2026-08-03T00:00:00.000Z", { text: "stable partial🙂" }),
+		event("thinking-1", "request-reconnect", "agent.thinking.delta", "2026-08-03T00:00:01.000Z", { text: "thinking" }),
+		event("reconnect-1", "request-reconnect", "agent.provider.reconnect", "2026-08-03T00:00:02.000Z", {
+			reconnectId: "reconnect-a",
+			revision: 1,
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			status: "waiting",
+			reason: "transport",
+			attempt: 1,
+			maxAttempts: 5,
+			timeoutMs: 60_000,
+			autoExtended: false,
+			discardedMessageCodePoints: 8,
+			discardedThinkingCodePoints: 8
+		}),
+		event("reconnect-duplicate", "request-reconnect", "agent.provider.reconnect", "2026-08-03T00:00:03.000Z", {
+			reconnectId: "reconnect-a",
+			revision: 1,
+			status: "waiting",
+			reason: "transport",
+			attempt: 1,
+			maxAttempts: 5,
+			timeoutMs: 60_000,
+			autoExtended: false,
+			discardedMessageCodePoints: 8,
+			discardedThinkingCodePoints: 8
+		}),
+		event("delta-2", "request-reconnect", "agent.message.delta", "2026-08-03T00:00:04.000Z", { text: "complete" }),
+		event("reconnect-2", "request-reconnect", "agent.provider.reconnect", "2026-08-03T00:00:05.000Z", {
+			reconnectId: "reconnect-a",
+			revision: 2,
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			status: "recovered",
+			reason: "transport",
+			attempt: 1,
+			maxAttempts: 5,
+			timeoutMs: 60_000,
+			autoExtended: false,
+			discardedMessageCodePoints: 0,
+			discardedThinkingCodePoints: 0
+		})
+	]);
+
+	const assistant = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const markdown = assistant.bodyParts.filter((part) => part.type === "markdown").map((part) => part.text).join("");
+	const reconnectParts = assistant.bodyParts.filter((part) => part.type === "provider_reconnect");
+	assert.equal(markdown, "stable complete");
+	assert.equal(assistant.bodyParts.some((part) => part.type === "thinking"), false);
+	assert.equal(reconnectParts.length, 1);
+	assert.equal(reconnectParts[0]?.status, "recovered");
+	assert.equal(reconnectParts[0]?.revision, 2);
+});
+
 test("canonical timeline ignores orphan persisted turns when session events identify another conversation", (): void => {
 	const stored: StoredSession = session(
 		[

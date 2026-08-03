@@ -42,6 +42,7 @@ import {
 	isProviderImageInputUnsupportedError,
 	recognizeToolImageReferences
 } from "./tool-image-recognition.js";
+import { runProviderRequestWithResilience } from "./provider-resilience.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -147,12 +148,16 @@ async function createFinalAnswer(
 		[...messages, createFinalAnswerMessage(reason)],
 		toolImageReferences
 	);
-	const message = await createAnthropicMessage(params, options, finalMessages, systemPrompt, undefined, abortSignal);
+	const message = await runProviderRequestWithResilience({
+		providerOptions: options,
+		abortSignal,
+		execute: async (attempt) => createAnthropicMessage(params, options, finalMessages, systemPrompt, undefined, attempt.signal)
+	});
 	const text: string = extractAnthropicText(message.content);
 	return text.length > 0 ? text : createToolResultLimitFallback(reason);
 }
 
-async function readAssistantMessage(
+async function readAssistantMessageAttempt(
 	params: AiChatParams,
 	options: ProviderChatOptions,
 	messages: AnthropicMessageParam[],
@@ -160,7 +165,8 @@ async function readAssistantMessage(
 	tools: readonly AnthropicToolDefinition[],
 	streamAssistant: boolean,
 	onEvent?: OnToolEvent,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	markActivity?: (() => void) | undefined
 ): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> {
 	if (!streamAssistant) {
 		const message = await createAnthropicMessage(params, options, messages, systemPrompt, tools, abortSignal);
@@ -172,7 +178,7 @@ async function readAssistantMessage(
 
 	let text: string = "";
 	let contentBlocks: AnthropicContentBlock[] = [];
-	for await (const event of streamAnthropicMessage(params, options, messages, systemPrompt, tools, abortSignal)) {
+	for await (const event of streamAnthropicMessage(params, options, messages, systemPrompt, tools, abortSignal, markActivity)) {
 		if (event.type === "text_delta") {
 			text += event.text;
 			onEvent?.({ type: "ai.delta", text: event.text });
@@ -188,6 +194,34 @@ async function readAssistantMessage(
 		text,
 		toolUseBlocks: extractAnthropicToolUseBlocks(contentBlocks)
 	};
+}
+
+async function readAssistantMessage(
+	params: AiChatParams,
+	options: ProviderChatOptions,
+	messages: AnthropicMessageParam[],
+	systemPrompt: string,
+	tools: readonly AnthropicToolDefinition[],
+	streamAssistant: boolean,
+	onEvent?: OnToolEvent,
+	abortSignal?: AbortSignal | undefined
+): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> {
+	return runProviderRequestWithResilience({
+		providerOptions: options,
+		onEvent: streamAssistant ? onEvent : undefined,
+		abortSignal,
+		execute: async (attempt): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> => readAssistantMessageAttempt(
+			params,
+			options,
+			messages,
+			systemPrompt,
+			tools,
+			streamAssistant,
+			streamAssistant ? attempt.onEvent : onEvent,
+			attempt.signal,
+			attempt.markActivity
+		)
+	});
 }
 
 async function runAgentLoop(

@@ -20,7 +20,9 @@ import { parseOpenAIResponsesUsage } from "../usage/usage-parser.js";
 
 export function createOpenAIResponsesClient(options: ProviderChatOptions): OpenAI {
 	const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
-		apiKey: options.apiKey
+		apiKey: options.apiKey,
+		maxRetries: 0,
+		timeout: 60_000
 	};
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(options.baseUrl);
 	if (normalizedBaseUrl !== undefined) {

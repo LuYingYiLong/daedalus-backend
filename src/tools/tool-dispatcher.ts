@@ -19,11 +19,13 @@ import {
 	ExecutionDecisionSignal,
 	parseExecutionDecision
 } from "./execution-control.js";
+import type { ProviderReconnectEvent } from "../providers/provider-types.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
 	| { type: "ai.thinking.delta"; text: string }
 	| { type: "ai.thinking.done" }
+	| ({ type: "provider.reconnect" } & ProviderReconnectEvent)
 	| ({ type: "tool.call"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
 	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined } & ParsedToolResultSummary)

@@ -9,6 +9,7 @@ import {
 	createOpenAICompatibleClient,
 	resolveChatModel
 } from "./provider-chat-completions-client.js";
+import { runProviderRequestWithResilience } from "./provider-resilience.js";
 
 export type { ProviderChatOptions } from "./provider-types.js";
 export type DeepSeekChatOptions = ProviderChatOptions;
@@ -30,7 +31,18 @@ export async function chatWithProvider(
 	systemPrompt: string,
 	abortSignal?: AbortSignal | undefined
 ): Promise<string> {
-	return resolveProviderAdapter(options).chat(params, options, history, systemPrompt, abortSignal);
+	const adapter = resolveProviderAdapter(options);
+	return runProviderRequestWithResilience({
+		providerOptions: options,
+		abortSignal,
+		execute: async (attempt): Promise<string> => adapter.chat(
+			params,
+			options,
+			history,
+			systemPrompt,
+			attempt.signal
+		)
+	});
 }
 
 export async function chatWithDeepSeek(

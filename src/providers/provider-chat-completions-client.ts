@@ -19,7 +19,9 @@ import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
 export function createOpenAICompatibleClient(options: ProviderChatOptions): OpenAI {
 	const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
 		apiKey: options.apiKey,
-		baseURL: normalizeConfiguredProviderBaseUrl(options.baseUrl) ?? resolveProviderBaseUrl(options.provider, undefined)
+		baseURL: normalizeConfiguredProviderBaseUrl(options.baseUrl) ?? resolveProviderBaseUrl(options.provider, undefined),
+		maxRetries: 0,
+		timeout: 60_000
 	};
 	return new OpenAI(clientOptions);
 }

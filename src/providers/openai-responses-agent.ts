@@ -45,6 +45,7 @@ import {
 	isProviderImageInputUnsupportedError,
 	recognizeToolImageReferences
 } from "./tool-image-recognition.js";
+import { ProviderIncompleteStreamError, runProviderRequestWithResilience } from "./provider-resilience.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -215,7 +216,7 @@ function createRequestBody(
 	return requestBody;
 }
 
-async function readResponsesAssistantMessage(
+async function readResponsesAssistantMessageAttempt(
 	params: AiChatParams,
 	options: ProviderChatOptions,
 	instructions: string,
@@ -224,7 +225,8 @@ async function readResponsesAssistantMessage(
 	streamAssistant: boolean,
 	requireToolCall: boolean,
 	onEvent?: OnToolEvent,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	markActivity?: (() => void) | undefined
 ): Promise<ResponsesAssistantMessage> {
 	const client = createOpenAIResponsesClient(options);
 	if (!streamAssistant) {
@@ -278,6 +280,7 @@ async function readResponsesAssistantMessage(
 	try {
 		const stream = await client.responses.create(requestBody, { signal: abortSignal });
 		for await (const event of stream) {
+			markActivity?.();
 			const streamEvent: ResponseStreamEvent = event as ResponseStreamEvent;
 			if (streamEvent.type === "response.output_text.delta" && streamEvent.delta.length > 0) {
 				if (firstTokenAtMs === undefined) {
@@ -316,6 +319,21 @@ async function readResponsesAssistantMessage(
 		});
 		throw error;
 	}
+	if (completedResponse === null) {
+		const error = new ProviderIncompleteStreamError("OpenAI Responses stream ended without response.completed.");
+		await recordProviderUsage({
+			options,
+			requestBody,
+			outputText: text,
+			startedAtMs,
+			firstTokenAtMs,
+			status: "error",
+			errorCode: "incomplete_stream",
+			streaming: true,
+			usage: finalUsage
+		});
+		throw error;
+	}
 
 	await recordProviderUsage({
 		options,
@@ -334,6 +352,36 @@ async function readResponsesAssistantMessage(
 		toolCalls: extractFunctionCalls(outputItems),
 		outputItems: outputItems.length > 0 ? outputItems : completedResponse?.output ?? []
 	};
+}
+
+async function readResponsesAssistantMessage(
+	params: AiChatParams,
+	options: ProviderChatOptions,
+	instructions: string,
+	inputItems: ResponseInputItem[],
+	tools: Tool[],
+	streamAssistant: boolean,
+	requireToolCall: boolean,
+	onEvent?: OnToolEvent,
+	abortSignal?: AbortSignal | undefined
+): Promise<ResponsesAssistantMessage> {
+	return runProviderRequestWithResilience({
+		providerOptions: options,
+		onEvent: streamAssistant ? onEvent : undefined,
+		abortSignal,
+		execute: async (attempt): Promise<ResponsesAssistantMessage> => readResponsesAssistantMessageAttempt(
+			params,
+			options,
+			instructions,
+			inputItems,
+			tools,
+			streamAssistant,
+			requireToolCall,
+			streamAssistant ? attempt.onEvent : onEvent,
+			attempt.signal,
+			attempt.markActivity
+		)
+	});
 }
 
 async function createFinalAnswer(
@@ -356,10 +404,14 @@ async function createFinalAnswer(
 	const startedAtMs: number = Date.now();
 	let response: Response;
 	try {
-		response = await client.responses.create(
-			requestBody,
-			{ signal: abortSignal }
-		);
+		response = await runProviderRequestWithResilience({
+			providerOptions: options,
+			abortSignal,
+			execute: async (attempt): Promise<Response> => client.responses.create(
+				requestBody,
+				{ signal: attempt.signal }
+			)
+		});
 	} catch (error: unknown) {
 		await recordProviderUsage({
 			options,

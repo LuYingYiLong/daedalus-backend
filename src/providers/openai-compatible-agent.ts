@@ -47,6 +47,7 @@ import {
 	isProviderImageInputUnsupportedError,
 	recognizeToolImageReferences
 } from "./tool-image-recognition.js";
+import { runProviderRequestWithResilience } from "./provider-resilience.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -882,7 +883,7 @@ function createToolCallsFromAccumulators(accumulators: Map<number, ToolCallAccum
 		}) as ChatCompletionMessageToolCall);
 }
 
-async function readStreamingAssistantMessage(
+async function readStreamingAssistantMessageAttempt(
 	client: OpenAI,
 	params: AiChatParams,
 	options: DeepSeekChatOptions,
@@ -893,7 +894,8 @@ async function readStreamingAssistantMessage(
 	startStep: number,
 	onEvent?: OnToolEvent,
 	emitContentDeltas: boolean = true,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	markActivity?: (() => void) | undefined
 ): Promise<StreamedAssistantMessage> {
 	const requestTools: ChatCompletionTool[] = aliasContext.tools;
 	const requestBody: ChatCompletionCreateParamsStreaming = {
@@ -922,8 +924,10 @@ async function readStreamingAssistantMessage(
 	try {
 		const stream = await client.chat.completions.create(requestBody, { signal: abortSignal });
 		for await (const chunk of stream) {
+			markActivity?.();
 			finalUsage = parseOpenAIChatUsage(chunk) ?? finalUsage;
-			const delta: unknown = (chunk as ChatCompletionChunk).choices[0]?.delta;
+			const choice = (chunk as ChatCompletionChunk).choices[0];
+			const delta: unknown = choice?.delta;
 			if (delta === undefined || delta === null) {
 				continue;
 			}
@@ -1046,6 +1050,40 @@ async function readStreamingAssistantMessage(
 	};
 }
 
+async function readStreamingAssistantMessage(
+	client: OpenAI,
+	params: AiChatParams,
+	options: DeepSeekChatOptions,
+	messages: ChatCompletionMessageParam[],
+	tools: ChatCompletionTool[],
+	aliasContext: ToolNameAliasContext,
+	step: number,
+	startStep: number,
+	onEvent?: OnToolEvent,
+	emitContentDeltas: boolean = true,
+	abortSignal?: AbortSignal | undefined
+): Promise<StreamedAssistantMessage> {
+	return runProviderRequestWithResilience({
+		providerOptions: options,
+		onEvent,
+		abortSignal,
+		execute: async (attempt): Promise<StreamedAssistantMessage> => readStreamingAssistantMessageAttempt(
+			client,
+			params,
+			options,
+			messages,
+			tools,
+			aliasContext,
+			step,
+			startStep,
+			attempt.onEvent,
+			emitContentDeltas,
+			attempt.signal,
+			attempt.markActivity
+		)
+	});
+}
+
 function createAssistantToolMessage(
 	contentText: string | null,
 	toolCalls: ChatCompletionMessageToolCall[],
@@ -1098,7 +1136,11 @@ async function createFinalAnswer(
 	const startedAtMs: number = Date.now();
 	let completion;
 	try {
-		completion = await client.chat.completions.create(requestBody, { signal: abortSignal });
+		completion = await runProviderRequestWithResilience({
+			providerOptions: options,
+			abortSignal,
+			execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
+		});
 	} catch (error: unknown) {
 		await recordProviderUsage({
 			options,
@@ -1221,7 +1263,11 @@ async function runAgentLoop(
 			const startedAtMs: number = Date.now();
 			let completion;
 			try {
-				completion = await client.chat.completions.create(requestBody, { signal: abortSignal });
+				completion = await runProviderRequestWithResilience({
+					providerOptions: options,
+					abortSignal,
+					execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
+				});
 			} catch (error: unknown) {
 				await recordProviderUsage({
 					options,

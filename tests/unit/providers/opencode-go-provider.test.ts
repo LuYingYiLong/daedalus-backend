@@ -14,6 +14,7 @@ import { createProviderChatOptions } from "../../../src/server/provider-chat-opt
 import type { ClientSession } from "../../../src/server/client-session.js";
 import { resolveModelProfile } from "../../../src/tokens/model-profiles.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
+import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 
 type RecordedRequest = {
 	url: string;
@@ -165,6 +166,38 @@ async function withOpenCodeGoMockServer(run: (baseUrl: string, requests: Recorde
 		throw new Error("Mock server did not expose a TCP port");
 	}
 
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
+async function withInterruptedAnthropicStreamMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", authorization: request.headers.authorization, body });
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		writeAnthropicSseChunk(response, {
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "text", text: "" }
+		});
+		writeAnthropicSseChunk(response, {
+			type: "content_block_delta",
+			index: 0,
+			delta: { type: "text_delta", text: requests.length === 1 ? "partial" : "complete" }
+		});
+		writeAnthropicSseChunk(response, { type: "content_block_stop", index: 0 });
+		if (requests.length > 1) writeAnthropicSseChunk(response, { type: "message_stop" });
+		response.end();
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") throw new Error("Mock server did not expose a TCP port");
 	try {
 		await run(`http://127.0.0.1:${address.port}`, requests);
 	} finally {
@@ -347,5 +380,29 @@ test("OpenCode Go Anthropic-compatible streaming agent emits text deltas", async
 			status: "completed",
 			text: "streamed anthropic response"
 		});
+	});
+});
+
+test("Anthropic-compatible streaming reconnects when message_stop is missing", async (): Promise<void> => {
+	await withInterruptedAnthropicStreamMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const events: ToolEvent[] = [];
+		const result = await runAnthropicCompatibleAgentStreaming(
+			{ message: "Stream" },
+			createProviderChatOptions(createSession("qwen3.7-plus", baseUrl), "opencode-go-test-key"),
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			[],
+			(event: ToolEvent): void => { events.push(event); }
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "complete");
+		assert.equal(requests.length, 2);
+		const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+		assert.equal(reconnects[0]?.status, "waiting");
+		assert.equal(reconnects[0]?.discardedMessageCodePoints, 7);
+		assert.equal(reconnects.at(-1)?.status, "recovered");
 	});
 });

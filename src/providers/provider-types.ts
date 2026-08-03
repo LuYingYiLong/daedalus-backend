@@ -90,6 +90,32 @@ export type ProviderChatOptions = {
 	usageContext?: ProviderUsageContext | undefined;
 };
 
+export type ProviderReconnectReason =
+	| "transport"
+	| "idle_timeout"
+	| "gateway"
+	| "rate_limit"
+	| "server";
+
+export type ProviderReconnectEvent = {
+	schemaVersion: 1;
+	reconnectId: string;
+	revision: number;
+	runId: string;
+	stepRunId: string;
+	provider: string;
+	model: string;
+	status: "waiting" | "reconnecting" | "recovered" | "failed";
+	reason: ProviderReconnectReason;
+	attempt: number;
+	maxAttempts: 5 | 15;
+	timeoutMs: number;
+	retryAt?: string | undefined;
+	autoExtended: boolean;
+	discardedMessageCodePoints: number;
+	discardedThinkingCodePoints: number;
+};
+
 export type ProviderRuntimeConfig = {
 	providerId: ProviderId;
 	modelId: string;

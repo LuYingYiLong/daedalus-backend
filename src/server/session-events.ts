@@ -709,7 +709,11 @@ export function sendSessionEvent(
 		);
 		return;
 	}
-	if (canonicalEventName === "agent.message.done" || canonicalEventName === "agent.thinking.done") {
+	if (
+		canonicalEventName === "agent.message.done"
+		|| canonicalEventName === "agent.thinking.done"
+		|| canonicalEventName === "agent.provider.reconnect"
+	) {
 		flushLiveDeltaBuffersForSession(session);
 	}
 	emitCanonicalSessionEvent(

@@ -7,6 +7,7 @@ import { getProviderDefaultModel } from "./provider-registry.js";
 import type { NormalizedLlmUsage } from "../usage/metrics-types.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseAnthropicUsage } from "../usage/usage-parser.js";
+import { ProviderHttpError, ProviderIncompleteStreamError } from "./provider-resilience.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
 
 export type AnthropicTextBlock = {
@@ -321,7 +322,7 @@ export async function createAnthropicMessage(
 			errorCode: `http_${response.status}`,
 			streaming: false
 		});
-		throw new Error(errorMessage);
+		throw new ProviderHttpError(errorMessage, response.status, response.headers);
 	}
 
 	const body: unknown = await response.json() as unknown;
@@ -365,7 +366,8 @@ export async function* streamAnthropicMessage(
 	messages: AnthropicMessageParam[],
 	systemPrompt: string,
 	tools?: readonly AnthropicToolDefinition[] | undefined,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	markActivity?: (() => void) | undefined
 ): AsyncGenerator<AnthropicStreamEvent> {
 	const requestBody: AnthropicRequestBody = createRequestBody(params, options, messages, systemPrompt, tools, true);
 	const requestInit: RequestInit = {
@@ -407,7 +409,7 @@ export async function* streamAnthropicMessage(
 			errorCode: `http_${response.status}`,
 			streaming: true
 		});
-		throw new Error(errorMessage);
+		throw new ProviderHttpError(errorMessage, response.status, response.headers);
 	}
 	if (response.body === null) {
 		await recordProviderUsage({
@@ -418,7 +420,7 @@ export async function* streamAnthropicMessage(
 			errorCode: "empty_stream_body",
 			streaming: true
 		});
-		throw new Error("Anthropic-compatible streaming response has no body");
+		throw new ProviderIncompleteStreamError("Anthropic-compatible streaming response has no body.");
 	}
 
 	const reader = response.body.getReader();
@@ -426,6 +428,7 @@ export async function* streamAnthropicMessage(
 	let buffer: string = "";
 	const contentBlocks: StreamingContentBlock[] = [];
 	let text: string = "";
+	let receivedMessageStop: boolean = false;
 
 	try {
 		while (true) {
@@ -433,6 +436,7 @@ export async function* streamAnthropicMessage(
 			if (readResult.done) {
 				break;
 			}
+			markActivity?.();
 			buffer += decoder.decode(readResult.value, { stream: true });
 			const chunks: string[] = buffer.split("\n\n");
 			buffer = chunks.pop() ?? "";
@@ -446,6 +450,9 @@ export async function* streamAnthropicMessage(
 						continue;
 					}
 					const parsed: unknown = JSON.parse(dataLine) as unknown;
+					if (isRecord(parsed) && parsed.type === "message_stop") {
+						receivedMessageStop = true;
+					}
 					finalUsage = parseAnthropicUsage(parsed) ?? finalUsage;
 					for (const event of applyStreamEvent(parsed, contentBlocks)) {
 						if (firstTokenAtMs === undefined && (event.type === "text_delta" || event.type === "thinking_delta")) {
@@ -461,6 +468,20 @@ export async function* streamAnthropicMessage(
 		}
 	} finally {
 		reader.releaseLock();
+	}
+	if (!receivedMessageStop) {
+		await recordProviderUsage({
+			options,
+			requestBody,
+			outputText: text,
+			startedAtMs,
+			firstTokenAtMs,
+			status: "error",
+			errorCode: "incomplete_stream",
+			streaming: true,
+			usage: finalUsage
+		});
+		throw new ProviderIncompleteStreamError("Anthropic stream ended without message_stop.");
 	}
 
 	const finalBlocks: AnthropicContentBlock[] = contentBlocks

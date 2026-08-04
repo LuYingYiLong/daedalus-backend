@@ -109,7 +109,7 @@ export const executionDecisionToolInputSchema = z.object({
 	summary: z.string().trim().min(1).max(2000),
 	evidenceToolCallIds: z.array(z.string().trim().min(1).max(200)).max(64).default([]),
 	expectedArtifacts: z.array(z.string().trim().min(1).max(1000)).max(64).default([]),
-	expectedLogicalWrites: z.number().int().min(0).max(2).optional()
+	expectedLogicalWrites: z.number().int().min(0).max(64).optional()
 }).strict();
 
 export const executionDecisionSchema = executionDecisionToolInputSchema.superRefine((decision, context): void => {

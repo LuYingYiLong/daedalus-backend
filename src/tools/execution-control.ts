@@ -40,7 +40,7 @@ export const EXECUTION_CONTROL_TOOL_DEFINITION: ChatCompletionTool = {
 				expectedLogicalWrites: {
 					type: "integer",
 					minimum: 0,
-					maximum: 2
+					maximum: 64
 				}
 			}
 		}
@@ -59,8 +59,12 @@ export class ExecutionDecisionSignal extends Error {
 
 export function parseExecutionDecision(value: unknown, context: ExecutionControlContext): ExecutionDecision {
 	const decision: ExecutionDecision = executionDecisionToolInputSchema.parse(value);
-	if (decision.disposition === "use_lightweight" && decision.expectedLogicalWrites === undefined) {
+	const expectedLogicalWrites: number | undefined = decision.expectedLogicalWrites;
+	if (decision.disposition === "use_lightweight" && expectedLogicalWrites === undefined) {
 		return { ...decision, disposition: "use_workflow" };
+	}
+	if (decision.disposition === "use_lightweight" && expectedLogicalWrites !== undefined && expectedLogicalWrites > 2) {
+		return { ...decision, disposition: "use_workflow", expectedLogicalWrites: undefined };
 	}
 	if (context.lane === "lightweight" && decision.disposition === "use_lightweight") {
 		return { ...decision, disposition: "use_workflow", expectedLogicalWrites: undefined };

@@ -78,3 +78,30 @@ test("execution decisions are isolated control calls and return structured signa
 		/not available/u
 	);
 });
+
+test("execution control upgrades oversized lightweight decisions to workflow", async (): Promise<void> => {
+	const decisionJson: string = JSON.stringify({
+		disposition: "use_lightweight",
+		summary: "The inspected change spans multiple files.",
+		evidenceToolCallIds: ["read-1"],
+		expectedArtifacts: ["src/a.ts", "src/b.ts", "src/c.ts"],
+		expectedLogicalWrites: 3
+	});
+
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(decisionJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "probe" } }
+		),
+		(error: unknown): boolean => (
+			error instanceof ExecutionDecisionSignal
+			&& error.decision.disposition === "use_workflow"
+			&& error.decision.expectedLogicalWrites === undefined
+		)
+	);
+});

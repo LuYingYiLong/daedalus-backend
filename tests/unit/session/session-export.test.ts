@@ -25,9 +25,10 @@ async function withTempProfile(run: (profile: string) => Promise<void>): Promise
 test("exports one session and embeds its attachment payload in a standalone SQLite file", async (): Promise<void> => {
 	await withTempProfile(async (profile: string): Promise<void> => {
 		const store = await import("../../../src/session/session-store.js");
-		const { saveTextAttachment } = await import("../../../src/session/session-attachments.js");
+		const { readTextAttachmentContent, saveTextAttachment } = await import("../../../src/session/session-attachments.js");
 		const { getSessionDatabase } = await import("../../../src/session/session-database.js");
 		const { exportSessionToSqlite } = await import("../../../src/session/session-export.js");
+		const { importSessionFromSqlite } = await import("../../../src/session/session-import.js");
 		const first = await store.createSession("Export me", "workspace-a");
 		const second = await store.createSession("Do not export", "workspace-b");
 		await store.saveSession(first.id, [{
@@ -48,6 +49,7 @@ test("exports one session and embeds its attachment payload in a standalone SQLi
 			title: "note.txt"
 		});
 		assert.equal(context.kind, "text_attachment");
+		const attachmentId: string = String((context.data as Record<string, unknown>).attachmentId);
 
 		const source = await getSessionDatabase();
 		source.prepare(`
@@ -98,6 +100,36 @@ test("exports one session and embeds its attachment payload in a standalone SQLi
 			exported.close();
 		}
 		assert.equal((await readFile(destinationPath)).subarray(0, 16).toString("utf8"), "SQLite format 3\u0000");
+
+		await store.deleteSession(first.id);
+		const importResult = await importSessionFromSqlite(destinationPath);
+		assert.equal(importResult.imported, true);
+		assert.equal(importResult.sessionId, first.id);
+		assert.equal(importResult.title, "Export me");
+		assert.equal(importResult.tableCounts.sessions, 1);
+		assert.equal(importResult.tableCounts.messages, 1);
+		assert.equal(importResult.tableCounts.attachments, 1);
+		assert.equal(importResult.restoredFileCount, 1);
+		const restored = await store.openSession(first.id);
+		assert.equal(restored.metadata.title, "Export me");
+		assert.equal(restored.messages[0]?.content, "first session message");
+		assert.equal((await readTextAttachmentContent(first.id, attachmentId)).content, "embedded attachment");
+	});
+});
+
+test("rejects importing a session that already exists", async (): Promise<void> => {
+	await withTempProfile(async (profile: string): Promise<void> => {
+		const store = await import("../../../src/session/session-store.js");
+		const { exportSessionToSqlite } = await import("../../../src/session/session-export.js");
+		const { importSessionFromSqlite } = await import("../../../src/session/session-import.js");
+		const session = await store.createSession("Already here");
+		const destinationPath: string = join(profile, "exports", "already-here.sqlite");
+		await exportSessionToSqlite(session.id, destinationPath);
+
+		await assert.rejects(
+			importSessionFromSqlite(destinationPath),
+			/error importing session|Session already exists/iu
+		);
 	});
 });
 

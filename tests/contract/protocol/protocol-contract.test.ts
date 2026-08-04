@@ -51,6 +51,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"message.queue.reorder",
 	"session.context.estimate",
 	"session.export",
+	"session.import",
 	"session.timeline.search.index",
 	"session.timeline.search.start",
 	"session.timeline.search.page",

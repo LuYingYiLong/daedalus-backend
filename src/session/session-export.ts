@@ -11,16 +11,16 @@ import {
 import { getSessionDatabase } from "./session-database.js";
 
 const SESSION_ID_PATTERN: RegExp = /^session-[A-Za-z0-9_-]+$/u;
-const EXPORT_FORMAT: string = "daedalus-session-sqlite";
-const EXPORT_FORMAT_VERSION: number = 1;
+export const SESSION_EXPORT_FORMAT: string = "daedalus-session-sqlite";
+export const SESSION_EXPORT_FORMAT_VERSION: number = 1;
 
-type SessionTableCopySpec = {
+export type SessionTableCopySpec = {
 	name: string;
 	where?: string;
 	params?: (sessionId: string) => SQLInputValue[];
 };
 
-const SESSION_TABLES: readonly SessionTableCopySpec[] = [
+export const SESSION_EXPORT_TABLES: readonly SessionTableCopySpec[] = [
 	{ name: "schema_migrations" },
 	{ name: "sessions", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "session_search_source_state", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
@@ -111,13 +111,13 @@ function readSchemaSql(source: DatabaseSync, type: "table" | "index" | "trigger"
 }
 
 function createCanonicalTables(source: DatabaseSync, target: DatabaseSync): void {
-	for (const table of SESSION_TABLES) {
+	for (const table of SESSION_EXPORT_TABLES) {
 		target.exec(readSchemaSql(source, "table", table.name));
 	}
 }
 
 function createCanonicalIndexesAndTriggers(source: DatabaseSync, target: DatabaseSync): void {
-	const tableNames: ReadonlySet<string> = new Set(SESSION_TABLES.map((table): string => table.name));
+	const tableNames: ReadonlySet<string> = new Set(SESSION_EXPORT_TABLES.map((table): string => table.name));
 	const schemaRows = source.prepare(`
 		SELECT type, name, tbl_name, sql
 		FROM sqlite_master
@@ -348,7 +348,7 @@ export async function exportSessionToSqlite(
 		const tableCounts: Record<string, number> = {};
 		try {
 			createCanonicalTables(source, target);
-			for (const table of SESSION_TABLES) {
+			for (const table of SESSION_EXPORT_TABLES) {
 				tableCounts[table.name] = copyTableRows(source, target, table, safeSessionId);
 			}
 			createCanonicalIndexesAndTriggers(source, target);
@@ -360,7 +360,7 @@ export async function exportSessionToSqlite(
 				INSERT INTO daedalus_export_metadata(
 					format, format_version, session_id, exported_at, source_database_schema_version
 				) VALUES (?, ?, ?, ?, ?)
-			`).run(EXPORT_FORMAT, EXPORT_FORMAT_VERSION, safeSessionId, new Date().toISOString(), sourceSchemaVersion);
+			`).run(SESSION_EXPORT_FORMAT, SESSION_EXPORT_FORMAT_VERSION, safeSessionId, new Date().toISOString(), sourceSchemaVersion);
 			target.exec(`PRAGMA user_version = ${sourceSchemaVersion};`);
 			target.exec("COMMIT");
 			source.exec("COMMIT");

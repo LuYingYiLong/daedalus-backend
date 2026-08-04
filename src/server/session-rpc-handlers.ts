@@ -48,6 +48,7 @@ import {
 } from "../session/session-store.js";
 import { listSelectionAskThreads } from "../session/selection-ask-store.js";
 import { exportSessionToSqlite } from "../session/session-export.js";
+import { importSessionFromSqlite } from "../session/session-import.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -1129,6 +1130,38 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result
 			});
+			break;
+		}
+
+		case "session.import": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "studio_only",
+						message: "session.import is only available to Daedalus Studio."
+					}
+				});
+				break;
+			}
+			try {
+				const result = await importSessionFromSqlite(request.params.sourcePath);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_import_failed", "Failed to import session")
+				});
+			}
 			break;
 		}
 

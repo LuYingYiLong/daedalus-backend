@@ -3,7 +3,7 @@ import { chatWithDeepSeek } from "../providers/deepseek-client.js";
 import { writeSummary, type SessionSummary } from "../session/session-store.js";
 import type { ClientSession } from "./client-session.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
-import { createSummaryMessage, filterLlmContextMessages, loadSessionCompressorPrompt } from "./token-budget.js";
+import { createSummaryMessage, filterSessionLlmContextMessages, loadSessionCompressorPrompt } from "./token-budget.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 
 export type SessionCompressionResult =
@@ -36,7 +36,7 @@ export async function compressSessionHistory(
 
 	const oldMessages: ChatMessage[] = allMessages.slice(0, allMessages.length - keepRecent);
 	const recentMessages: ChatMessage[] = allMessages.slice(allMessages.length - keepRecent);
-	const conversationText: string = filterLlmContextMessages(oldMessages)
+	const conversationText: string = filterSessionLlmContextMessages(session, oldMessages)
 		.map((message: ChatMessage): string => `${message.role}: ${message.content.slice(0, 300)}`)
 		.join("\n");
 	const compressorOptions = withProviderUsageContext(createProviderChatOptions(session, apiKey), {

@@ -50,6 +50,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"ai.toolBudget.stop",
 	"message.queue.reorder",
 	"session.context.estimate",
+	"session.export",
 	"session.timeline.search.index",
 	"session.timeline.search.start",
 	"session.timeline.search.page",

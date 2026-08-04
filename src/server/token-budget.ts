@@ -16,9 +16,9 @@ import type { ClientSession } from "./client-session.js";
 import { cloneAdditionalContextItems } from "./additional-context.js";
 import { logger } from "../logger.js";
 import { readRuntimeAssetText } from "../runtime/runtime-assets.js";
-import { filterLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
+import { filterLlmContextMessages, filterSessionLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
 
-export { appendFailedChatTurnToSession, filterLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
+export { appendFailedChatTurnToSession, filterLlmContextMessages, filterSessionLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
 
 const tokenCounterPromise: Promise<TokenCounter> = createTokenCounter();
 let sessionCompressorPromptCache: string | undefined;
@@ -233,7 +233,7 @@ export async function selectHistoryForModel(session: ClientSession, budgetTokens
 		: messages.filter((message: ChatMessage): boolean => message.requestId !== excludeRequestId);
 
 	if (session.summaryMessage === undefined) {
-		return selectHistoryWithinBudget(filterRequest(filterLlmContextMessages(session.messages)), budgetTokens);
+		return selectHistoryWithinBudget(filterRequest(filterSessionLlmContextMessages(session)), budgetTokens);
 	}
 
 	const summaryTokens: number = await estimateMessagesTokens([session.summaryMessage]);
@@ -241,7 +241,7 @@ export async function selectHistoryForModel(session: ClientSession, budgetTokens
 	const recentSourceMessages: ChatMessage[] = session.summaryCoveredMessageCount !== undefined
 		? session.messages.slice(session.summaryCoveredMessageCount)
 		: session.messages;
-	const recentMessages: ChatMessage[] = await selectHistoryWithinBudget(filterRequest(filterLlmContextMessages(recentSourceMessages)), recentBudgetTokens);
+	const recentMessages: ChatMessage[] = await selectHistoryWithinBudget(filterRequest(filterSessionLlmContextMessages(session, recentSourceMessages)), recentBudgetTokens);
 	return [session.summaryMessage, ...recentMessages];
 }
 

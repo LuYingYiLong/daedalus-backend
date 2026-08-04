@@ -8,6 +8,7 @@ import { createClientSession } from "../../../src/server/client-session.js";
 import type { ClientSession } from "../../../src/server/client-session.js";
 import { selectMessagesWithinBudget, summarizeMessagesAsSummary } from "../../../src/session/session-compressor.js";
 import type { TokenCounter } from "../../../src/tokens/token-counter.js";
+import { createAgentRunState, transitionAgentRunState } from "../../../src/workflow/agent-run-state.js";
 
 async function withTempAppData<T>(
 	fn: (
@@ -89,6 +90,99 @@ test("failed transcript-only turns persist but stay out of LLM context", async (
 		assert.equal(rewound.length, 0);
 		assert.equal((await store.openSession(metadata.id)).events.length, 0);
 	});
+});
+
+test("session history excludes failed, cancelled and interrupted run requests", async (): Promise<void> => {
+	const transcriptHistory = await import("../../../src/server/transcript-history.js");
+	const session: ClientSession = createClientSession(undefined);
+	session.messages = [
+		{ role: "user", content: "failed task", requestId: "request-failed" },
+		{ role: "user", content: "cancelled task", requestId: "request-cancelled" },
+		{ role: "user", content: "interrupted task", requestId: "request-interrupted" },
+		{ role: "user", content: "completed task", requestId: "request-completed" },
+		{ role: "assistant", content: "completed answer", requestId: "request-completed" },
+		{ role: "user", content: "current task", requestId: "request-current" }
+	];
+	const failed = transitionAgentRunState(createAgentRunState({
+		sessionId: "session-history",
+		requestId: "request-failed"
+	}), "failed", {
+		terminal: {
+			resultStatus: "failed",
+			message: "verification failed",
+			completedAt: "2026-08-04T00:00:00.000Z"
+		}
+	});
+	const cancelled = transitionAgentRunState(createAgentRunState({
+		sessionId: "session-history",
+		requestId: "request-cancelled"
+	}), "cancelled", {
+		terminal: {
+			resultStatus: "cancelled",
+			message: "cancelled",
+			completedAt: "2026-08-04T00:00:00.000Z"
+		}
+	});
+	const interrupted = transitionAgentRunState(createAgentRunState({
+		sessionId: "session-history",
+		requestId: "request-interrupted"
+	}), "interrupted", {
+		interruptedReason: "backend_restart"
+	});
+	const completed = transitionAgentRunState(
+		transitionAgentRunState(createAgentRunState({
+			sessionId: "session-history",
+			requestId: "request-completed"
+		}), "finalizing"),
+		"completed",
+		{
+			terminal: {
+				resultStatus: "completed",
+				completedAt: "2026-08-04T00:00:00.000Z"
+			}
+		}
+	);
+	for (const run of [failed, cancelled, interrupted, completed]) {
+		session.agentRuns.set(run.runId, run);
+	}
+
+	assert.deepEqual(
+		transcriptHistory.filterSessionLlmContextMessages(session).map((message: ChatMessage): string => message.content),
+		["completed task", "completed answer", "current task"]
+	);
+	assert.equal(session.messages.some((message: ChatMessage): boolean => message.content === "interrupted task"), true);
+
+	const completedRetry = transitionAgentRunState(
+		transitionAgentRunState(createAgentRunState({
+			sessionId: "session-history",
+			requestId: "request-interrupted-retry",
+			rootRequestId: interrupted.rootRequestId,
+			retryOfRunId: interrupted.runId
+		}), "finalizing"),
+		"completed",
+		{
+			terminal: {
+				resultStatus: "completed",
+				completedAt: "2026-08-04T00:01:00.000Z"
+			}
+		}
+	);
+	session.agentRuns.set(completedRetry.runId, completedRetry);
+	session.messages.push({
+		role: "assistant",
+		content: "interrupted task completed after retry",
+		requestId: completedRetry.requestId
+	});
+	assert.deepEqual(
+		transcriptHistory.filterSessionLlmContextMessages(session).map((message: ChatMessage): string => message.content),
+		[
+			"interrupted task",
+			"completed task",
+			"completed answer",
+			"current task",
+			"interrupted task completed after retry"
+		]
+	);
 });
 
 test("chat turn persistence reuses pre-saved user message", async (): Promise<void> => {

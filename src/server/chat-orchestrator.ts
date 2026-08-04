@@ -156,7 +156,7 @@ import {
 	resolveCancellationTargetRequestId,
 	shouldTerminalizeReturnedAgentRun
 } from "./run-cancellation.js";
-import { estimateTextTokens, estimateMessagesTokens, estimateTextTokensForProvider, estimateCurrentMessageTokensForProvider, computeHistoryBudget, appendChatTurnToSession, appendUserMessageToSession, appendFailedChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterLlmContextMessages } from "./token-budget.js";
+import { estimateTextTokens, estimateMessagesTokens, estimateTextTokensForProvider, estimateCurrentMessageTokensForProvider, computeHistoryBudget, appendChatTurnToSession, appendUserMessageToSession, appendFailedChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterSessionLlmContextMessages } from "./token-budget.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
@@ -996,7 +996,7 @@ export async function escalatePendingContinuationToWorkflow(params: {
 			? ""
 			: `Successful write fingerprints: ${checkpoint.successfulWriteFingerprints.join(", ") || "none"}.`
 	].filter((item: string): boolean => item.length > 0).join("\n");
-	const history: ChatMessage[] = filterLlmContextMessages(params.session.messages)
+	const history: ChatMessage[] = filterSessionLlmContextMessages(params.session)
 		.filter((message: ChatMessage): boolean => message.requestId !== requestId);
 	let plan: WorkflowPlan | null = await createWorkflowPlanForRoute(
 		workflowParams,
@@ -1064,13 +1064,13 @@ function getFullContextHistoryMessages(session: ClientSession, excludeRequestId?
 		? messages
 		: messages.filter((message: ChatMessage): boolean => message.requestId !== excludeRequestId);
 	if (session.summaryMessage === undefined) {
-		return filterRequest(filterLlmContextMessages(session.messages));
+		return filterRequest(filterSessionLlmContextMessages(session));
 	}
 
 	const recentSourceMessages: ChatMessage[] = session.summaryCoveredMessageCount !== undefined
 		? session.messages.slice(session.summaryCoveredMessageCount)
 		: session.messages;
-	return [session.summaryMessage, ...filterRequest(filterLlmContextMessages(recentSourceMessages))];
+	return [session.summaryMessage, ...filterRequest(filterSessionLlmContextMessages(session, recentSourceMessages))];
 }
 
 async function estimateFullContextUsage(

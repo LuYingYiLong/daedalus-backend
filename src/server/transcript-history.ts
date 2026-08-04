@@ -1,5 +1,6 @@
 import type { AdditionalContextItem, ChatMessage } from "../protocol/types.js";
 import { createWorkspaceMetadataBackfill, updateSessionTranscript, type StoredMessage } from "../session/session-store.js";
+import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ClientSession } from "./client-session.js";
 import { cloneAdditionalContextItems } from "./additional-context.js";
 
@@ -28,6 +29,37 @@ export function isLlmContextMessage(message: ChatMessage): boolean {
 
 export function filterLlmContextMessages(messages: readonly ChatMessage[]): ChatMessage[] {
 	return messages.filter(isLlmContextMessage);
+}
+
+const ABANDONED_AGENT_RUN_STAGES: ReadonlySet<AgentRunState["stage"]> = new Set([
+	"failed",
+	"cancelled"
+]);
+
+export function filterSessionLlmContextMessages(
+	session: ClientSession,
+	messages: readonly ChatMessage[] = session.messages
+): ChatMessage[] {
+	const runs: AgentRunState[] = [...session.agentRuns.values()];
+	const completedRetryRootRequestIds: Set<string> = new Set(
+		runs
+			.filter((run: AgentRunState): boolean => run.stage === "completed" && run.retryOfRunId !== undefined)
+			.map((run: AgentRunState): string => run.rootRequestId)
+	);
+	const abandonedRequestIds: Set<string> = new Set(
+		runs
+			.filter((run: AgentRunState): boolean => (
+				ABANDONED_AGENT_RUN_STAGES.has(run.stage)
+				|| (
+					run.stage === "interrupted"
+					&& !completedRetryRootRequestIds.has(run.rootRequestId)
+				)
+			))
+			.map((run: AgentRunState): string => run.requestId)
+	);
+	return filterLlmContextMessages(messages).filter((message: ChatMessage): boolean => (
+		message.requestId === undefined || !abandonedRequestIds.has(message.requestId)
+	));
 }
 
 export async function appendFailedChatTurnToSession(

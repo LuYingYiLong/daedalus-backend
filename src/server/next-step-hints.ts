@@ -4,7 +4,7 @@ import type { ChatMessage } from "../protocol/types.js";
 import { logger } from "../logger.js";
 import type { ClientSession } from "./client-session.js";
 import { clipTextByChars } from "./additional-context.js";
-import { filterLlmContextMessages } from "./transcript-history.js";
+import { filterSessionLlmContextMessages } from "./transcript-history.js";
 
 const DEFAULT_NEXT_STEP_HINT_COUNT: number = 3;
 const MAX_NEXT_STEP_HINT_COUNT: number = 5;
@@ -76,7 +76,7 @@ export async function createNextStepHints(
 	abortSignal?: AbortSignal | undefined
 ): Promise<NextStepHint[]> {
 	const clippedMaxHints: number = Math.max(1, Math.min(MAX_NEXT_STEP_HINT_COUNT, Math.floor(maxHints)));
-	const history: ChatMessage[] = filterLlmContextMessages(session.messages).slice(-8);
+	const history: ChatMessage[] = filterSessionLlmContextMessages(session).slice(-8);
 	const latestMessages: string = history
 		.map((message: ChatMessage): string => `${message.role}: ${clipTextByChars(message.content, 1200)}`)
 		.join("\n\n");

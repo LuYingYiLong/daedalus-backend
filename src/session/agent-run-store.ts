@@ -92,17 +92,40 @@ function upsertAgentRunState(db: DatabaseSync, state: AgentRunState): void {
 		);
 }
 
+function excludeTerminalRunMessagesFromLlmContext(db: DatabaseSync, state: AgentRunState): void {
+	if (state.stage !== "failed" && state.stage !== "cancelled") {
+		return;
+	}
+	const rows = db.prepare(`
+		SELECT row_id, payload_json FROM messages
+		WHERE session_id = ? AND request_id = ?
+		ORDER BY sequence
+	`).all(state.sessionId, state.requestId) as Array<{ row_id: number; payload_json: unknown }>;
+	const update = db.prepare("UPDATE messages SET payload_json = ? WHERE row_id = ?");
+	for (const row of rows) {
+		const message = parseSqlJson<Record<string, unknown>>(row.payload_json);
+		if (message.excludeFromLlmContext === true) {
+			continue;
+		}
+		update.run(sqlJson({
+			...message,
+			excludeFromLlmContext: true
+		}), row.row_id);
+	}
+}
+
 export async function saveAgentRunState(state: AgentRunState): Promise<void> {
 	const db: DatabaseSync = await getSessionDatabase();
 	runSessionTransaction(db, (): void => {
 		upsertAgentRunState(db, state);
-		if (state.stage === "awaiting_approval" || state.stage === "awaiting_tool_budget") {
-			return;
-		}
 		const persisted = db.prepare(`
 			SELECT revision, stage FROM agent_runs WHERE run_id = ?
 		`).get(state.runId) as { revision: number; stage: string } | undefined;
-		if (persisted?.revision === state.revision && persisted.stage === state.stage) {
+		if (persisted?.revision !== state.revision || persisted.stage !== state.stage) {
+			return;
+		}
+		excludeTerminalRunMessagesFromLlmContext(db, state);
+		if (state.stage !== "awaiting_approval" && state.stage !== "awaiting_tool_budget") {
 			db.prepare("DELETE FROM agent_run_continuations WHERE run_id = ?").run(state.runId);
 		}
 	});

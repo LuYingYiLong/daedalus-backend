@@ -88,7 +88,6 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 	const branch: string | null = readString(value.branch, 120);
 	const commitSha: string | null = readString(value.commitSha, 40);
 	const source: "official" | "local" = value.source === "local" ? "local" : "official";
-	const sourcePath: string | null = source === "local" ? readString(value.sourcePath, 32_768) : null;
 	const sourceRef: GodotDocumentationSourceRef | null = normalizeSourceRef(value.sourceRef);
 	const activeGenerationId: string | null = value.activeGenerationId === null
 		? null
@@ -105,7 +104,7 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 		|| commitSha === null
 		|| !/^[0-9a-f]{40}$/u.test(commitSha)
 		|| (activeGenerationId !== null && !/^[a-zA-Z0-9._-]+$/u.test(activeGenerationId))
-		|| (source === "local" && sourcePath === null)
+		|| (source === "local" && sourceRef === null)
 		|| installedAt === null
 		|| updatedAt === null
 		|| documentCount === null
@@ -120,7 +119,6 @@ function normalizeDocument(value: unknown): GodotDocumentationRecord | null {
 		branch,
 		commitSha,
 		source,
-		...(sourcePath === null ? {} : { sourcePath }),
 		sourceRef,
 		activeGenerationId,
 		health: normalizeHealth(value.health),

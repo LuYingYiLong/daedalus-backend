@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +18,7 @@ import {
 	initializeGodotDocumentationManager,
 	inspectGodotDocumentationArchive,
 	listGodotDocumentationBranches,
+	updateGodotDocumentation,
 	repairGodotDocumentation
 } from "../../../src/godot-documentation/manager.js";
 import { selectGodotDocumentation } from "../../../src/godot-documentation/search.js";
@@ -387,7 +388,7 @@ test("invalid v2 documentation records are normalized without trusting persisted
 	}
 });
 
-test("local documentation import copies, indexes, and persists its source", async (): Promise<void> => {
+test("local documentation import snapshots, indexes, and repairs without its original source", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-local-import-"));
 	const sourceRoot: string = join(root, "fixture", "godot-docs-local");
@@ -415,7 +416,7 @@ Base object for scene tree nodes.
 		const record = getGodotDocumentationState().documents.find((candidate): boolean => candidate.branch === "4.7-local");
 		assert.notEqual(record, undefined);
 		assert.equal(record?.source, "local");
-		assert.equal(record?.sourcePath, await realpath(sourceRoot));
+		assert.equal("sourcePath" in (record ?? {}), false);
 		assert.equal(record?.documentCount, 1);
 		assert.equal(record?.sourceRef?.kind, "local_tree");
 		assert.match(record?.sourceRef?.sha256 ?? "", /^[0-9a-f]{64}$/u);
@@ -441,8 +442,18 @@ Updated local source used to create a second healthy generation.
 		assert.equal(updateCompleted.stage, "completed", updateCompleted.error ?? "second generation did not complete");
 		const updated = getGodotDocumentationState().documents[0]!;
 		assert.notEqual(updated.activeGenerationId, originalGenerationId);
+		assert.equal((await readFile(getGodotDocumentationConfigPath(), "utf8")).includes(sourceRoot), false);
+		await rm(sourceRoot, { recursive: true, force: true });
+		const cachedUpdateStarted = updateGodotDocumentation(updated.id);
+		let cachedUpdateCompleted = cachedUpdateStarted;
+		for (let attempt: number = 0; attempt < 300 && !["completed", "failed", "cancelled"].includes(cachedUpdateCompleted.stage); attempt += 1) {
+			await new Promise<void>((resolvePromise): void => { setTimeout(resolvePromise, 25); });
+			cachedUpdateCompleted = getGodotDocumentationJob(cachedUpdateStarted.jobId) ?? cachedUpdateCompleted;
+		}
+		assert.equal(cachedUpdateCompleted.stage, "completed", cachedUpdateCompleted.error ?? "cached local update did not complete");
+		const cachedUpdated = getGodotDocumentationState().documents[0]!;
 
-		await writeFile(getGodotDocumentationIndexPath(updated), "corrupt", "utf8");
+		await writeFile(getGodotDocumentationIndexPath(cachedUpdated), "corrupt", "utf8");
 		const checkStarted = checkGodotDocumentationHealth(record!.id, true);
 		let checkCompleted = checkStarted;
 		for (let attempt: number = 0; attempt < 200 && !["completed", "failed", "cancelled"].includes(checkCompleted.stage); attempt += 1) {
@@ -461,7 +472,7 @@ Updated local source used to create a second healthy generation.
 		assert.equal(repairCompleted.stage, "completed", repairCompleted.error ?? "cached repair did not complete");
 		const rolledBack = getGodotDocumentationState().documents[0]!;
 		assert.equal(rolledBack.health.status, "ready");
-		assert.equal(rolledBack.activeGenerationId, originalGenerationId);
+		assert.notEqual(rolledBack.activeGenerationId, cachedUpdated.activeGenerationId);
 
 		await writeFile(getGodotDocumentationIndexPath(rolledBack), "corrupt", "utf8");
 		const cachedCheckStarted = checkGodotDocumentationHealth(record!.id, true);

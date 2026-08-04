@@ -1072,11 +1072,19 @@ function compareTimelineBuildEntries(left: TimelineBuildEntry, right: TimelineBu
 	return left.sequence - right.sequence;
 }
 
+function firstNonEmptyTimestamp(...candidates: Array<string | undefined>): string | undefined {
+	return candidates.find((candidate: string | undefined): candidate is string => (
+		typeof candidate === "string" && candidate.length > 0
+	));
+}
+
 function getTimelineEntryOrderAt(entry: Extract<TimelineBuildEntry, { type: "request" }>): string {
-	return entry.userMessage?.createdAt
-		?? entry.firstEventAt
-		?? entry.assistantMessage?.createdAt
-		?? entry.orderAt;
+	return firstNonEmptyTimestamp(
+		entry.userMessage?.createdAt,
+		entry.firstEventAt,
+		entry.assistantMessage?.createdAt,
+		entry.orderAt
+	) ?? "";
 }
 
 function getOrCreateRequestEntry(
@@ -1361,13 +1369,17 @@ export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBu
 		}
 
 		if (entry.assistantMessage !== undefined || entry.events.length > 0) {
-			const startedAtUtc: string = entry.userMessage?.createdAt
-				?? entry.firstEventAt
-				?? entry.assistantMessage?.createdAt
-				?? entry.orderAt;
-			const completedAtUtc: string = entry.assistantMessage?.createdAt
-				?? entry.lastEventAt
-				?? startedAtUtc;
+			const startedAtUtc: string = firstNonEmptyTimestamp(
+				entry.userMessage?.createdAt,
+				entry.firstEventAt,
+				entry.assistantMessage?.createdAt,
+				entry.orderAt
+			) ?? "";
+			const completedAtUtc: string = firstNonEmptyTimestamp(
+				entry.assistantMessage?.createdAt,
+				entry.lastEventAt,
+				startedAtUtc
+			) ?? startedAtUtc;
 			blocks.push(createAssistantBlock(
 				session.metadata.id,
 				entry.requestId,

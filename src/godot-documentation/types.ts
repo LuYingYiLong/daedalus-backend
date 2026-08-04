@@ -32,7 +32,6 @@ export type GodotDocumentationRecord = {
 	branch: string;
 	commitSha: string;
 	source: "official" | "local";
-	sourcePath?: string | undefined;
 	sourceRef: GodotDocumentationSourceRef | null;
 	activeGenerationId: string | null;
 	health: GodotDocumentationHealth;

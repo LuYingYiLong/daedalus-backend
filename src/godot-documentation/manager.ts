@@ -796,7 +796,6 @@ function isPathInside(root: string, candidate: string): boolean {
 
 async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagingRoot: string): Promise<{
 	extractedRoot: string;
-	sourcePath: string;
 	commitSha: string;
 	sourceRef: GodotDocumentationSourceRef;
 }> {
@@ -836,7 +835,6 @@ async function prepareLocalDocumentationSource(runtime: ActiveJobRuntime, stagin
 	}
 	return {
 		extractedRoot,
-		sourcePath,
 		commitSha: await hashLocalDocumentationTree(extractedRoot, runtime.controller.signal),
 		sourceRef
 	};
@@ -846,12 +844,10 @@ async function persistAttribution(
 	generationDir: string,
 	branch: string,
 	commitSha: string,
-	source: "official" | "local",
-	sourcePath?: string
+	source: "official" | "local"
 ): Promise<void> {
 	await writeFile(join(generationDir, "attribution.json"), `${JSON.stringify({
 		source: source === "official" ? `https://github.com/${GITHUB_REPOSITORY}/tree/${commitSha}` : "local",
-		...(sourcePath === undefined ? {} : { sourcePath }),
 		branch,
 		commitSha,
 		manualLicense: "CC BY 3.0",
@@ -870,7 +866,6 @@ async function buildAndActivateDocumentation(params: {
 	commitSha: string;
 	currentRecord: GodotDocumentationRecord | undefined;
 	source: "official" | "local";
-	sourcePath?: string | undefined;
 	sourceRef: GodotDocumentationSourceRef;
 }): Promise<void> {
 	const documentId: string = params.currentRecord?.id ?? createGodotDocumentationId(params.branch);
@@ -893,8 +888,7 @@ async function buildAndActivateDocumentation(params: {
 		generationDir,
 		params.branch,
 		params.commitSha,
-		params.source,
-		params.sourcePath
+		params.source
 	);
 	const builtAt: string = new Date().toISOString();
 	const manifest: GodotDocumentationGenerationManifest = {
@@ -928,7 +922,6 @@ async function buildAndActivateDocumentation(params: {
 		branch: params.branch,
 		commitSha: params.commitSha,
 		source: params.source,
-		...(params.sourcePath === undefined ? {} : { sourcePath: params.sourcePath }),
 		sourceRef: params.sourceRef,
 		activeGenerationId: generationId,
 		health: { status: "ready", code: null, message: null, checkedAt: new Date().toISOString() },
@@ -1016,7 +1009,6 @@ async function runLocalDocumentationJob(runtime: ActiveJobRuntime): Promise<void
 			commitSha: prepared.commitSha,
 			currentRecord,
 			source: "local",
-			sourcePath: prepared.sourcePath,
 			sourceRef: prepared.sourceRef
 		});
 		finishJob(runtime, "completed", null);
@@ -1201,7 +1193,6 @@ async function runRepairJob(runtime: ActiveJobRuntime): Promise<void> {
 			commitSha: record.commitSha,
 			currentRecord: record,
 			source: record.source,
-			...(record.sourcePath === undefined ? {} : { sourcePath: record.sourcePath }),
 			sourceRef: sourceRef!
 		});
 		finishJob(runtime, "completed", null);
@@ -1371,10 +1362,10 @@ export function updateGodotDocumentation(documentId: string): GodotDocumentation
 		if (record.health.status !== "ready" && awaitableSourceAvailable(record)) {
 			return startJob("repair", record.branch, record.id, null, { allowNetwork: false });
 		}
-		if (record.sourcePath === undefined) {
-			throw new Error(`Local Godot documentation item ${documentId} has no source path.`);
+		if (!awaitableSourceAvailable(record)) {
+			throw new Error(`Local Godot documentation item ${documentId} has no cached source snapshot.`);
 		}
-		return startJob("update", record.branch, record.id, record.sourcePath);
+		return startJob("repair", record.branch, record.id, null, { allowNetwork: false });
 	}
 	if (record.health.status !== "ready") {
 		return startJob("repair", record.branch, record.id, null, { allowNetwork: true });

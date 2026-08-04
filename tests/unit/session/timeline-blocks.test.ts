@@ -861,6 +861,24 @@ test("canonical timeline keeps all Goal cycles in the root assistant block", ():
 	assert.equal(assistant.bodyParts.filter((part): boolean => part.type === "markdown").map((part): string => part.type === "markdown" ? part.text : "").join(""), "First cycleSecond cycle");
 });
 
+test("canonical timeline orders an assistant-only persisted Goal cycle by its message timestamp", (): void => {
+	const stored: StoredSession = session([
+		{ role: "user", requestId: "request-first", content: "Can you connect?", createdAt: "2026-07-31T08:43:10.000Z" },
+		{ role: "assistant", requestId: "request-first", content: "Connected.", createdAt: "2026-07-31T08:43:16.000Z" },
+		{ role: "assistant", requestId: "goal-legacy:cycle:2", content: "Legacy Goal summary.", createdAt: "2026-08-02T15:47:56.000Z" }
+	], []);
+
+	const result = buildCanonicalTimelineBlocks(stored);
+	assert.deepEqual(result.blocks.map((block: TimelineBlock): string => `${block.type}:${block.requestId}`), [
+		"user:request-first",
+		"assistant:request-first",
+		"assistant:goal-legacy:cycle:2"
+	]);
+	const legacyGoal = assistantBlock(result.blocks[2]);
+	assert.equal(legacyGoal.startedAtUtc, "2026-08-02T15:47:56.000Z");
+	assert.equal(legacyGoal.completedAtUtc, "2026-08-02T15:47:56.000Z");
+});
+
 test("canonical timeline leaves completion warnings to the final assistant summary", (): void => {
 	const warning = "Godot executable was not found; verification was skipped.";
 	const stored: StoredSession = session(

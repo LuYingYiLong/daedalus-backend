@@ -32,6 +32,11 @@ test("provider catalog exposes valid built-in providers and model references", (
 
 	assert.equal(getProviderDefaultEndpointType("deepseek"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("deepseek"), "openai-compatible");
+	const deepseekModels = getProviderFallbackModels("deepseek");
+	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.contextWindowTokens, 1_000_000);
+	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.maxOutputTokens, 384_000);
+	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.reasoning, true);
+	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.tools, true);
 	assert.equal(getProviderDefaultEndpointType("openai"), "openai-responses");
 	assert.equal(getProviderAdapterFamily("openai"), "openai-responses");
 	assert.equal(getProviderDefinition("openai").modelListMode, "catalog-recommended");
@@ -60,6 +65,11 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(getProviderDefaultEndpointType("dashscope"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("dashscope"), "openai-compatible");
 	const dashscopeModels = getProviderFallbackModels("dashscope");
+	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.8-max")?.contextWindowTokens, 1_000_000);
+	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.8-max")?.capabilities.imageInput, true);
+	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.8-max")?.capabilities.reasoning, true);
+	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.8-max")?.capabilities.tools, true);
+	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.8-max")?.capabilities.vision, true);
 	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.7-plus")?.capabilities.reasoning, true);
 	assert.equal(dashscopeModels.find((model) => model.id === "qwen3.7-plus")?.capabilities.tools, true);
 	assert.equal(dashscopeModels.find((model) => model.id === "qwen-image-2.0-pro")?.capabilities.imageGeneration, true);

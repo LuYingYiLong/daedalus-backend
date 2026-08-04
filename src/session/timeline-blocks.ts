@@ -18,7 +18,8 @@ export type TimelineAssistantBlock = {
 	content: string;
 	startedAtUtc: string;
 	completedAtUtc: string;
-	status?: "failed" | undefined;
+	status?: "failed" | "stopped" | undefined;
+	completionStatus?: "responded" | "stopped" | undefined;
 	bodyParts: TimelineBodyPart[];
 	renderHints?: TimelineRenderHints | undefined;
 };
@@ -859,6 +860,33 @@ function eventCompletesAssistantBlock(event: StoredSessionEvent): boolean {
 		|| runStage === "interrupted";
 }
 
+function getAssistantCompletionStatus(
+	events: readonly StoredSessionEvent[],
+	assistantMessage?: StoredMessage | undefined
+): TimelineAssistantBlock["completionStatus"] {
+	if (events.some((event: StoredSessionEvent): boolean => (
+		event.event === "agent.run.cancelled" || getAgentRunStateStage(event) === "cancelled"
+	))) {
+		return "stopped";
+	}
+
+	if (assistantMessage?.status === "failed") {
+		return undefined;
+	}
+
+	if (assistantMessage !== undefined || events.some((event: StoredSessionEvent): boolean => (
+		event.event === "agent.message.done"
+			|| event.event === "agent.run.done"
+			|| event.event === "workflow.done"
+			|| event.event === "ai.done"
+			|| getAgentRunStateStage(event) === "completed"
+	))) {
+		return "responded";
+	}
+
+	return undefined;
+}
+
 function shouldAppendInlineDiff(events: StoredSessionEvent[], assistantMessage?: StoredMessage | undefined): boolean {
 	if (assistantMessage !== undefined) {
 		return true;
@@ -928,12 +956,6 @@ function buildAssistantBodyParts(
 		} else if (event.event === "agent.run.cancelled") {
 			const reason: string = asString(eventData.reason) || "The request was cancelled.";
 			markRunningImageGenerationFailed(parts, reason);
-			appendStatusPart(parts, {
-				status: "message",
-				title: "Stopped",
-				details: reason,
-				code: "agent_run_cancelled"
-			});
 		} else if (event.event === "agent.run.state") {
 			const stage: string = asString(eventData.stage);
 			const terminal: Record<string, unknown> = isRecord(eventData.terminal) ? eventData.terminal : {};
@@ -948,12 +970,6 @@ function buildAssistantBodyParts(
 			} else if (stage === "cancelled") {
 				const reason: string = asString(terminal.message) || "The request was cancelled.";
 				markRunningImageGenerationFailed(parts, reason);
-				appendStatusPart(parts, {
-					status: "message",
-					title: "Stopped",
-					details: reason,
-					code: "agent_run_cancelled"
-				});
 			} else if (stage === "interrupted") {
 				const reason: string = "The backend stopped before this run reached a terminal state.";
 				markRunningImageGenerationFailed(parts, reason);
@@ -1026,6 +1042,7 @@ function createAssistantBlock(
 	identityCreatedAt?: string | undefined
 ): TimelineAssistantBlock {
 	const messageCreatedAt: string = identityCreatedAt ?? assistantMessage?.createdAt ?? completedAtUtc;
+	const completionStatus: TimelineAssistantBlock["completionStatus"] = getAssistantCompletionStatus(events, assistantMessage);
 	return {
 		id: assistantMessage !== undefined
 			? `message:${requestId}:assistant:${messageCreatedAt}`
@@ -1038,7 +1055,10 @@ function createAssistantBlock(
 		status: assistantMessage?.status === "failed"
 			|| events.some((event: StoredSessionEvent): boolean => getAgentRunStateStage(event) === "failed")
 			? "failed"
-			: undefined,
+			: completionStatus === "stopped"
+				? "stopped"
+				: undefined,
+		completionStatus,
 		bodyParts: buildAssistantBodyParts(sessionId, events, content, requestId, assistantMessage)
 	};
 }

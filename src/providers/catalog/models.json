@@ -515,6 +515,21 @@
     "ownedBy": "zhipu"
   },
   {
+    "id": "qwen3.8-max",
+    "displayName": "Qwen3.8 Max",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 32000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
     "id": "qwen3.7-max",
     "displayName": "Qwen3.7 Max",
     "provider": "dashscope",

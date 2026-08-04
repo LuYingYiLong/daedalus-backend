@@ -929,10 +929,9 @@ test("canonical timeline marks an interrupted image generation as failed", (): v
 		assert.equal(imagePart.status, "failed");
 		assert.equal(imagePart.error, "Cancelled by user.");
 	}
-	const statusPart = assistant.bodyParts.find((part) => {
-		return part.type === "status" && part.code === "agent_run_cancelled";
-	});
-	assert.equal(statusPart?.type, "status");
+	assert.equal(assistant.status, "stopped");
+	assert.equal(assistant.completionStatus, "stopped");
+	assert.equal(assistant.bodyParts.some((part) => part.type === "status" && part.code === "agent_run_cancelled"), false);
 });
 
 test("canonical timeline restores failed transcript-only turn with tool, error and inline diff", (): void => {

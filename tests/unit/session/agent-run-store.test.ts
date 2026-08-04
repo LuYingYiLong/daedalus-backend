@@ -101,6 +101,12 @@ test("paused agent run state and continuation persist atomically without API key
 		runtime.sessionId = metadata.id;
 		runtime.agentRuns.set(resumed.runId, resumed);
 		assert.equal(serializeAgentRunRuntime(runtime).activeAgentRun?.stage, "executing");
+
+		const interrupted = transitionAgentRunState(resumed, "interrupted", {
+			interruptedReason: "backend_restart"
+		}, "2026-07-29T00:00:04.000Z");
+		runtime.agentRuns.set(interrupted.runId, interrupted);
+		assert.equal(serializeAgentRunRuntime(runtime).activeAgentRun, null);
 	} finally {
 		await resetSessionDatabaseForTests();
 		await rm(directory, { recursive: true, force: true });

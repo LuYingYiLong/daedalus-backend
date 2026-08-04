@@ -69,6 +69,7 @@ export function serializeAgentRunRuntime(session: ClientSession): {
 			state.stage !== "completed"
 			&& state.stage !== "failed"
 			&& state.stage !== "cancelled"
+			&& state.stage !== "interrupted"
 		)) ?? null;
 	return { agentRuns, activeAgentRun };
 }

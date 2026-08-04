@@ -211,6 +211,22 @@ test("workbench active run sequence is monotonic across state changes", (): void
 	});
 });
 
+test("workbench snapshot drops stale non-idle active run state", (): void => {
+	const session = createClientSession(undefined);
+	applyWorkbenchPatch(session, {
+		activeRun: {
+			status: "streaming",
+			requestId: "stale-request"
+		}
+	});
+
+	const workbench = serializeWorkbench(session);
+	assert.deepEqual(workbench.activeRun, {
+		status: "idle",
+		sequence: 1
+	});
+});
+
 test("workbench patch ignores stale client sequence without changing revision", (): void => {
 	const session = createClientSession(undefined);
 	const messages: unknown[] = [];

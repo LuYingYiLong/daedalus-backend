@@ -18,6 +18,12 @@ import { sendSessionEvent } from "./session-events.js";
 
 const MAX_COMPOSER_TEXT_CHARS: number = 20000;
 const MAX_WORKBENCH_CONTEXTS: number = 10;
+const INACTIVE_AGENT_RUN_STAGES: ReadonlySet<string> = new Set([
+	"completed",
+	"failed",
+	"cancelled",
+	"interrupted"
+]);
 
 export type WorkbenchAdditionalContextAction =
 	| { action: "set"; items: AdditionalContextItem[] }
@@ -248,10 +254,19 @@ function deriveActiveRun(session: ClientSession): WorkbenchActiveRun {
 	if (session.workbenchActiveRun.status === "idle") {
 		return { status: "idle", sequence };
 	}
-	return {
-		...session.workbenchActiveRun,
-		sequence
-	};
+	if (session.workbenchActiveRun.requestId !== undefined) {
+		const matchingRun = [...session.agentRuns.values()].find((run): boolean => (
+			run.requestId === session.workbenchActiveRun.requestId
+			&& !INACTIVE_AGENT_RUN_STAGES.has(run.stage)
+		));
+		if (matchingRun !== undefined) {
+			return {
+				...session.workbenchActiveRun,
+				sequence
+			};
+		}
+	}
+	return { status: "idle", sequence };
 }
 
 function applyWorkbenchModelSelection(

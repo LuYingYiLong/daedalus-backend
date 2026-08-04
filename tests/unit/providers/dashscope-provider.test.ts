@@ -8,6 +8,7 @@ import test from "node:test";
 import { installReadOnlySecretStore, resetSecretStoreDriver } from "../../helpers/secret-store.js";
 import { listProviderModels } from "../../../src/providers/provider-models.js";
 import { saveProviderConfig } from "../../../src/providers/provider-config-store.js";
+import { getProviderFallbackModels } from "../../../src/providers/provider-registry.js";
 
 const GENERATED_PNG: Buffer = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlDkAAAAASUVORK5CYII=", "base64");
 
@@ -108,7 +109,7 @@ test("DashScope provider model list keeps the recommended catalog when API retur
 			const result = await listProviderModels("dashscope", "dashscope-test-key", `${baseUrl}/compatible-mode/v1`, true);
 
 			assert.equal(result.source, "api");
-			assert.equal(result.models.length, 20);
+			assert.equal(result.models.length, getProviderFallbackModels("dashscope").length);
 			assert.equal(result.models.some((model): boolean => model.id === "qwen3.7-plus"), true);
 			assert.equal(result.models.some((model): boolean => model.id === "qwen-legacy-unrecommended"), false);
 			assert.equal(result.models.find((model): boolean => model.id === "qwen-image-2.0-pro")?.capabilities.imageGeneration, true);

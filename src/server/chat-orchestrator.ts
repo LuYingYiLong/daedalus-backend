@@ -119,6 +119,7 @@ import { getToolPolicy } from "../tools/tool-policy.js";
 import { isPlanSafeDynamicMcpToolName } from "../tools/dynamic-mcp-tools.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace, getNoWorkspaceToolNames } from "../tools/tool-catalog.js";
 import { ApprovalGateway, ReadOnlyToolApprovalGateway, type PendingApproval } from "../tools/approval-gateway.js";
+import { ExecutionContractUnresolvedError, type ExecutionControlContext } from "../tools/execution-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
 import {
@@ -191,15 +192,13 @@ import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enriche
 import {
 	createPendingAiContinuation,
 	cancelPendingApprovalsForRequest,
-	persistApprovalRequested,
-	registerPendingApprovalContinuation,
 	loadHydratedPendingApprovalStates,
 	createMemoryPendingApprovalStates,
 	findPendingApprovalState,
 	restorePendingContinuationForApproval,
 	validatePendingApprovalBeforeExecution,
 	createApprovedWorkflowToolObservation,
-	sendAgentPaused,
+	pauseRunForApproval,
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { cancelPendingToolBudgetsForRequest, createPendingToolBudget, createToolBudgetStopReason, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
@@ -429,6 +428,25 @@ function resolveHiddenAnswerToolNames(
 	return filterReadOnlyAnswerToolNames(sourceToolNames, session.activeWorkspace?.id);
 }
 
+function createExecutionControlContext(
+	params: AiChatParams,
+	routeDecision: WorkflowRouteDecision
+): ExecutionControlContext | undefined {
+	if (routeDecision.lane !== "read" && routeDecision.lane !== "probe" && routeDecision.lane !== "lightweight") {
+		return undefined;
+	}
+	const mode: NonNullable<AiChatParams["mode"]> = params.mode ?? "agent";
+	const explicitlyReadOnly: boolean = routeDecision.safetyOverride === "explicit_read_only"
+		|| routeDecision.safetyOverride === "ask_mode_read_only"
+		|| routeDecision.safetyOverride === "godot_documentation_read";
+	return {
+		lane: routeDecision.lane,
+		allowMutationEscalation: routeDecision.lane !== "read"
+			|| (mode === "agent" && !explicitlyReadOnly),
+		requireDecision: routeDecision.lane === "read" || routeDecision.lane === "probe"
+	};
+}
+
 function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: WorkflowRouteDecision): AiChatParams {
 	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return params;
@@ -445,7 +463,7 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 			options
 		};
 	}
-	if (routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
+	if (routeDecision.lane === "read" || routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
 		options.requireToolCallOnFirstStep = true;
 		options.toolBudget = "simple";
 		return {
@@ -463,7 +481,11 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	};
 }
 
-function createHiddenAnswerSystemPrompt(fullSystemPrompt: string, routeDecision: WorkflowRouteDecision): string {
+function createHiddenAnswerSystemPrompt(
+	fullSystemPrompt: string,
+	routeDecision: WorkflowRouteDecision,
+	executionControl?: ExecutionControlContext | undefined
+): string {
 	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return fullSystemPrompt;
 	}
@@ -507,8 +529,19 @@ function createHiddenAnswerSystemPrompt(fullSystemPrompt: string, routeDecision:
 		].join("\n\n");
 	}
 
+	const canEscalateMutation: boolean = executionControl?.allowMutationEscalation === true;
+
 	return [
 		fullSystemPrompt,
+		[
+			"## Daedalus structured read contract",
+			"- Use the minimum read or verify tools needed to answer from current evidence.",
+			"- You must finish by calling daedalus_report_execution_decision exactly once; ordinary prose is not a valid completion.",
+			"- Choose complete_read and put the complete user-facing answer in summary only when the request is genuinely informational or diagnostic.",
+			canEscalateMutation
+				? "- If current-project evidence shows the user expects a fix, choose use_lightweight for at most two logical writes or use_workflow for broader work. Do not promise a future modification in prose."
+				: "- Mutation escalation is forbidden in this Ask, Plan, documentation-only, or explicitly read-only context."
+		].join("\n"),
 		[
 			"## 隐藏只读回答收束规则",
 			"- 当前执行形态是隐藏的只读 tool answer，不是多阶段 workflow。",
@@ -628,6 +661,8 @@ type HiddenAnswerExecutionParams = {
 	historyBudgetTokens: number;
 	fullSystemPrompt: string;
 	allowedToolNames: readonly string[];
+	mutationToolNames: readonly string[];
+	approvalGateway: ApprovalGateway;
 	userCreatedAt: string;
 	abortSignal?: AbortSignal | undefined;
 };
@@ -637,7 +672,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const runId: string = params.requestId;
 	const stepRunId: string = `${params.requestId}:answer`;
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
-	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision);
+	const executionControl: ExecutionControlContext | undefined = createExecutionControlContext(chatParams, params.routeDecision);
+	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision, executionControl);
 	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.intent === "mutate"
 		? createLightweightActionState()
 		: undefined;
@@ -655,7 +691,9 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			applyToolEventToLightweightActionState(lightweightActionState, event, true);
 		}
 		recordAgentRunToolEvent(params.socket, params.session, runId, event);
-		forwardToolEvent(event);
+		if (!(executionControl?.requireDecision === true && event.type === "ai.delta")) {
+			forwardToolEvent(event);
+		}
 	};
 	const executionOptions: ProviderChatOptions = withProviderUsageContext(params.options, {
 		operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
@@ -666,13 +704,13 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		phaseInstruction: chatParams.message,
 		abortSignal: params.abortSignal
 	});
-	const agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
+	let agentResult: ProviderAgentResult = await awaitWithAbort(runProviderAgentStreaming(
 		chatParams,
 		executionOptions,
 		params.history,
 		fullSystemPrompt,
 		params.mcpHost,
-		params.session.approvalGateway,
+		params.approvalGateway,
 		params.allowedToolNames,
 		onToolEvent,
 		params.abortSignal,
@@ -683,9 +721,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
-			executionControl: params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
-				? { lane: params.routeDecision.lane }
-				: undefined
+			executionControl
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -699,6 +735,62 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 				...capturedAttachments
 			]
 		};
+
+	if (executionControl?.requireDecision === true && agentResult.status === "completed") {
+		const currentRun: AgentRunState | undefined = getAgentRun(params.session, runId);
+		const evidenceSummary: string = (currentRun?.checkpoint.evidence ?? [])
+			.filter((evidence): boolean => evidence.status === "succeeded")
+			.slice(-24)
+			.map((evidence): string => [
+				`- ${evidence.toolCallId}`,
+				`tool=${evidence.toolName}`,
+				evidence.summary === undefined ? "" : `summary=${evidence.summary}`,
+				evidence.artifactRefs.length === 0 ? "" : `artifacts=${evidence.artifactRefs.join(", ")}`
+			].filter((part: string): boolean => part.length > 0).join("; "))
+			.join("\n");
+		const repairOptions: AiChatParams["options"] & Record<string, unknown> = {
+			...(persistedChatParams.options ?? {}),
+			requireToolCallOnFirstStep: true,
+			toolBudget: "simple"
+		};
+		const repairParams: AiChatParams = {
+			...persistedChatParams,
+			message: [
+				"The previous provider turn returned prose without the required execution control call.",
+				"Do not answer with prose. Call daedalus_report_execution_decision exactly once now.",
+				`Original user request: ${persistedChatParams.message}`,
+				`Discarded draft: ${agentResult.text}`,
+				evidenceSummary.length === 0 ? "Available evidence: none." : `Available evidence:\n${evidenceSummary}`
+			].join("\n\n"),
+			options: repairOptions
+		};
+		agentResult = await awaitWithAbort(runProviderAgentStreaming(
+			repairParams,
+			executionOptions,
+			params.history,
+			[
+				fullSystemPrompt,
+				"## Execution contract repair\nOnly the internal daedalus_report_execution_decision tool is allowed. Submit one valid decision and no prose."
+			].join("\n\n"),
+			params.mcpHost,
+			params.approvalGateway,
+			[],
+			onToolEvent,
+			params.abortSignal,
+			undefined,
+			{
+				workspaceId: params.session.activeWorkspace?.id,
+				editorInstanceId: params.session.editorInstanceId,
+				sessionId: params.session.sessionId,
+				requestId: params.requestId,
+				clientType: getClientConnection(params.socket)?.clientType,
+				executionControl
+			}
+		), params.abortSignal);
+		if (agentResult.status === "completed") {
+			throw new ExecutionContractUnresolvedError();
+		}
+	}
 
 	if (agentResult.status === "approval_required") {
 		const pendingContinuation: PendingAiContinuation = createPendingAiContinuation(
@@ -714,23 +806,17 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			true,
 			undefined,
 			lightweightActionState,
-			params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
-				? { lane: params.routeDecision.lane }
-				: undefined
+			executionControl
 		);
-		await registerPendingApprovalContinuation(
-			params.session,
-			params.mcpHost,
-			agentResult.approvalId,
-			pendingContinuation
-		);
-		sendAgentPaused(
-			params.socket,
-			params.requestId,
-			params.session,
+		await pauseRunForApproval({
+			socket: params.socket,
+			requestId: params.requestId,
+			session: params.session,
+			mcpHost: params.mcpHost,
 			runId,
-			agentResult
-		);
+			agentResult,
+			pendingContinuation
+		});
 		return;
 	}
 	if (agentResult.status === "tool_budget_required") {
@@ -746,9 +832,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			userCreatedAt: params.userCreatedAt,
 			stream: true,
 			lightweightActionState,
-			executionControl: params.routeDecision.lane === "probe" || params.routeDecision.lane === "lightweight"
-				? { lane: params.routeDecision.lane }
-				: undefined
+			executionControl
 		});
 		registerPendingToolBudget(params.session, pendingBudget);
 		sendToolBudgetRequired(params.socket, params.requestId, params.session, runId, pendingBudget);
@@ -761,7 +845,23 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		}
 		const executionDecision: ExecutionDecision = validateExecutionDecisionEvidence(latestRun, agentResult.decision);
 		updateAgentRun(params.socket, params.session, runId, latestRun.stage, { executionDecision });
+		logger.info("ai", "execution_disposition_resolved", {
+			requestId: params.requestId,
+			sessionId: params.session.sessionId,
+			initialIntent: params.routeDecision.intent,
+			effectiveLane: params.routeDecision.lane,
+			executionDisposition: executionDecision.disposition,
+			approvalMode: params.session.approvalGateway.getMode(),
+			authorizationScope: params.approvalGateway === params.session.approvalGateway ? "session" : "read_only"
+		});
 		if (executionDecision.disposition === "use_lightweight") {
+			logger.warn("ai", "read_execution_escalated_to_mutation", {
+				requestId: params.requestId,
+				sessionId: params.session.sessionId,
+				initialIntent: params.routeDecision.intent,
+				effectiveLane: "lightweight",
+				approvalMode: params.session.approvalGateway.getMode()
+			});
 			updateAgentRun(params.socket, params.session, runId, "executing", {
 				scope: "bounded",
 				lane: "lightweight"
@@ -769,6 +869,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			await runHiddenAnswerExecution({
 				...params,
 				chatParams: persistedChatParams,
+				allowedToolNames: params.mutationToolNames,
+				approvalGateway: params.session.approvalGateway,
 				routeDecision: {
 					...params.routeDecision,
 					intent: "mutate",
@@ -785,10 +887,26 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		if (executionDecision.disposition === "blocked") {
 			throw new LightweightActionVerificationError(executionDecision.summary);
 		}
+		if (executionDecision.disposition === "complete_read") {
+			forwardToolEvent({ type: "ai.delta", text: executionDecision.summary });
+			await completeHiddenAnswerExecution(
+				params,
+				persistedChatParams,
+				executionDecision.summary,
+				{
+					resultStatus: "completed",
+					verificationStatus: undefined,
+					warnings: [],
+					failureMessage: undefined
+				}
+			);
+			return;
+		}
 		const decisionWasVerified: boolean = latestRun.checkpoint.evidence.some((item): boolean => (
 			executionDecision.evidenceToolCallIds.includes(item.toolCallId) && item.risk === "verify"
 		));
 
+		forwardToolEvent({ type: "ai.delta", text: executionDecision.summary });
 		await completeHiddenAnswerExecution(
 			params,
 			persistedChatParams,
@@ -810,6 +928,9 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	}
 	if (agentResult.status === "protocol_violation") {
 		throw new Error(agentResult.reason);
+	}
+	if (executionControl?.requireDecision === true) {
+		throw new ExecutionContractUnresolvedError();
 	}
 	if (params.routeDecision.lane === "probe") {
 		throw new LightweightActionScopeExceededError("write_intent_not_completed");
@@ -2342,14 +2463,14 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					);
 				}
 
-				const originalApprovalGateway: ApprovalGateway = session.approvalGateway;
 				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session);
-				if (routeDecision.intent !== "mutate") {
-					session.approvalGateway = new ReadOnlyToolApprovalGateway(hiddenAnswerToolNames);
-				} else if (effectiveParams.mode === "ask" && !imageGenerationOnly) {
-					session.approvalGateway = new ReadOnlyToolApprovalGateway(allowedToolNames ?? []);
-				}
-				try {
+				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
+				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.intent !== "mutate"
+					? new ReadOnlyToolApprovalGateway(session.approvalGateway, hiddenAnswerToolNames)
+					: effectiveParams.mode === "ask" && !imageGenerationOnly
+						? new ReadOnlyToolApprovalGateway(session.approvalGateway, allowedToolNames ?? [])
+						: session.approvalGateway;
+				{
 					if (routeDecision.lane === "workflow") {
 						let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
 							effectiveParams,
@@ -2433,6 +2554,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 									historyBudgetTokens,
 									fullSystemPrompt,
 									allowedToolNames: resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session),
+									mutationToolNames,
+									approvalGateway: hiddenAnswerApprovalGateway,
 									userCreatedAt: turnStartedAt,
 									abortSignal: abortController.signal,
 									planningContext,
@@ -2455,6 +2578,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							historyBudgetTokens,
 							fullSystemPrompt,
 							allowedToolNames: hiddenAnswerToolNames,
+							mutationToolNames,
+							approvalGateway: hiddenAnswerApprovalGateway,
 							userCreatedAt: turnStartedAt,
 							abortSignal: abortController.signal,
 							planningContext,
@@ -2462,8 +2587,6 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							webSearchEnabled
 						}), abortController.signal);
 					}
-				} finally {
-					session.approvalGateway = originalApprovalGateway;
 				}
 				const returnedRun: AgentRunState | undefined = getAgentRun(session, request.id);
 				if (returnedRun !== undefined && shouldTerminalizeReturnedAgentRun(returnedRun)) {
@@ -2511,6 +2634,42 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							cancelled: true,
 							requestId: request.id
 						}
+					});
+					break;
+				}
+				if (error instanceof ExecutionContractUnresolvedError) {
+					queuedRunForcedStatus = "failed";
+					logger.error("ai", "execution_contract_unresolved", error, {
+						requestId: request.id,
+						sessionId: runSessionId,
+						workspaceId: session.activeWorkspace?.id,
+						approvalMode: session.approvalGateway.getMode()
+					});
+					sendSessionEvent(socket, request.id, session, "agent.run.error", {
+						runId: request.id,
+						requestId: request.id,
+						status: "error",
+						code: error.code,
+						message: error.message,
+						sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+					});
+					await waitForSessionEventPersistence(session);
+					await appendFailedChatTurnToSession(
+						session,
+						persistedParams.message,
+						{ code: error.code, message: error.message },
+						request.id,
+						turnStartedAt,
+						undefined,
+						persistedParams.additionalContext,
+						"",
+						persistedParams.retryOfRunId === undefined
+					);
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: { code: error.code, message: error.message }
 					});
 					break;
 				}

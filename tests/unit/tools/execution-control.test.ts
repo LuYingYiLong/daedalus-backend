@@ -36,7 +36,7 @@ test("execution decisions are isolated control calls and return structured signa
 			{} as ApprovalGateway,
 			undefined,
 			undefined,
-			{ executionControl: { lane: "probe" } }
+			{ executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true } }
 		),
 		(error: unknown): boolean => (
 			error instanceof ExecutionDecisionSignal
@@ -63,7 +63,7 @@ test("execution decisions are isolated control calls and return structured signa
 			{} as ApprovalGateway,
 			undefined,
 			undefined,
-			{ executionControl: { lane: "probe" } }
+			{ executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true } }
 		),
 		/cannot be mixed/u
 	);
@@ -96,12 +96,69 @@ test("execution control upgrades oversized lightweight decisions to workflow", a
 			{} as ApprovalGateway,
 			undefined,
 			undefined,
-			{ executionControl: { lane: "probe" } }
+			{ executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true } }
 		),
 		(error: unknown): boolean => (
 			error instanceof ExecutionDecisionSignal
 			&& error.decision.disposition === "use_workflow"
 			&& error.decision.expectedLogicalWrites === undefined
 		)
+	);
+});
+
+test("read lanes require complete_read and only Agent-capable scopes may escalate mutation", async (): Promise<void> => {
+	const completeReadJson: string = JSON.stringify({
+		disposition: "complete_read",
+		summary: "The disappearing line is caused by viewport-relative drawing.",
+		evidenceToolCallIds: ["read-1"],
+		expectedArtifacts: []
+	});
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(completeReadJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "read", allowMutationEscalation: false, requireDecision: true } }
+		),
+		(error: unknown): boolean => error instanceof ExecutionDecisionSignal
+			&& error.decision.disposition === "complete_read"
+			&& error.decision.summary.includes("viewport")
+	);
+
+	const mutationJson: string = JSON.stringify({
+		disposition: "use_lightweight",
+		summary: "One bounded fix is needed.",
+		evidenceToolCallIds: ["read-1"],
+		expectedArtifacts: ["scripts/tech_tree.gd"],
+		expectedLogicalWrites: 1
+	});
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(mutationJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "read", allowMutationEscalation: true, requireDecision: true } }
+		),
+		(error: unknown): boolean => error instanceof ExecutionDecisionSignal
+			&& error.decision.disposition === "use_lightweight"
+			&& error.decision.expectedArtifacts.includes("scripts/tech_tree.gd")
+	);
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(mutationJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "read", allowMutationEscalation: false, requireDecision: true } }
+		),
+		/Mutation escalation is not allowed/u
 	);
 });

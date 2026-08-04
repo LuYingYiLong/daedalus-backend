@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import test from "node:test";
-import { ReadOnlyToolApprovalGateway } from "../../../src/tools/approval-gateway.js";
+import { ApprovalGateway, ReadOnlyToolApprovalGateway } from "../../../src/tools/approval-gateway.js";
 import { clearDynamicMcpToolsForWorkspace, getDynamicMcpToolNames, replaceDynamicMcpToolsForWorkspace } from "../../../src/tools/dynamic-mcp-tools.js";
 import { evaluateToolCall, getEffectiveToolPolicy, getToolPolicy } from "../../../src/tools/tool-policy.js";
 
@@ -96,7 +96,8 @@ test("read-only gateway allows only read, verify and plan-safe dynamic MCP tools
 	const dynamicToolNames: string[] = getDynamicMcpToolNames(WORKSPACE_ID);
 	const planSafeToolName: string = dynamicToolNames.find((toolName: string): boolean => toolName.includes("context7")) ?? "";
 	const unsafeToolName: string = dynamicToolNames.find((toolName: string): boolean => toolName.includes("unsafe")) ?? "";
-	const gateway = new ReadOnlyToolApprovalGateway([
+	const baseGateway = new ApprovalGateway("manual");
+	const gateway = new ReadOnlyToolApprovalGateway(baseGateway, [
 		readTool,
 		verifyTool,
 		writeTool,
@@ -110,6 +111,12 @@ test("read-only gateway allows only read, verify and plan-safe dynamic MCP tools
 	assert.equal((await gateway.evaluate(planSafeToolName, {}, "call-custom-read", WORKSPACE_ID)).action, "allow");
 	assert.equal((await gateway.evaluate(unsafeToolName, {}, "call-custom-unsafe", WORKSPACE_ID)).action, "deny");
 	assert.equal(getToolPolicy(planSafeToolName, WORKSPACE_ID)?.risk, "write");
+	baseGateway.setMode("auto-safe");
+	assert.equal(gateway.getMode(), "auto-safe");
+	const pending = baseGateway.requestApproval(writeTool, {}, "call-pending", "Manual write approval");
+	assert.equal(gateway.getPending(pending.approvalId)?.toolCallId, "call-pending");
+	assert.equal(gateway.removePending(pending.approvalId)?.approvalId, pending.approvalId);
+	assert.equal(baseGateway.getPending(pending.approvalId), undefined);
 
 	clearDynamicMcpToolsForWorkspace(WORKSPACE_ID);
 });

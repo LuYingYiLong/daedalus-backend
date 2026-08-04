@@ -32,6 +32,13 @@ export type ApprovalResult =
 	| { status: "pending"; approval: PendingApproval }
 	| { status: "denied"; reason: string };
 
+export type ApprovalScope = {
+	allowedToolNames: ReadonlySet<string>;
+	maximumRisk?: "read" | "verify" | "propose" | undefined;
+	allowApproval: boolean;
+	baseGateway: ApprovalGateway;
+};
+
 export class ApprovalGateway {
 	private pendingApprovals: Map<string, PendingApproval> = new Map();
 	private mode: ApprovalMode;
@@ -252,10 +259,47 @@ export class ApprovalGateway {
 
 export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 	private readonly allowedToolNames: ReadonlySet<string>;
+	private readonly baseGateway: ApprovalGateway;
+	readonly scope: ApprovalScope;
 
-	constructor(allowedToolNames: readonly string[]) {
-		super("manual");
+	constructor(baseGateway: ApprovalGateway, allowedToolNames: readonly string[]) {
+		super(baseGateway.getMode());
+		this.baseGateway = baseGateway;
 		this.allowedToolNames = new Set(allowedToolNames);
+		this.scope = {
+			allowedToolNames: this.allowedToolNames,
+			maximumRisk: "verify",
+			allowApproval: false,
+			baseGateway
+		};
+	}
+
+	override setMode(mode: ApprovalMode): void {
+		this.baseGateway.setMode(mode);
+	}
+
+	override getMode(): ApprovalMode {
+		return this.baseGateway.getMode();
+	}
+
+	override listPending(): PendingApproval[] {
+		return this.baseGateway.listPending();
+	}
+
+	override getPending(approvalId: string): PendingApproval | undefined {
+		return this.baseGateway.getPending(approvalId);
+	}
+
+	override replacePending(pendingApprovals: PendingApproval[]): void {
+		this.baseGateway.replacePending(pendingApprovals);
+	}
+
+	override upsertPending(pendingApproval: PendingApproval): void {
+		this.baseGateway.upsertPending(pendingApproval);
+	}
+
+	override removePending(approvalId: string): PendingApproval | undefined {
+		return this.baseGateway.removePending(approvalId);
 	}
 
 	override async evaluate(

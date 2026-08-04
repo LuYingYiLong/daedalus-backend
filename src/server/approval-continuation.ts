@@ -5,7 +5,7 @@ import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendApprovalEvent, readApprovalEvents } from "../session/session-store.js";
 import {
 	removeAgentRunContinuation,
-	saveAgentRunContinuation
+	saveAgentRunApprovalPause
 } from "../session/agent-run-store.js";
 import { createPersistedApprovalRequestedData, createRuntimePendingContinuation, foldPendingApprovalStates, mergeHydratedPendingApprovalStates, type PendingApprovalState } from "../session/approval-persistence.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
@@ -18,17 +18,18 @@ import {
 } from "../workflow/lightweight-action.js";
 import { evaluateToolCall, getToolPolicy } from "../tools/tool-policy.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
+import { ExecutionContractUnresolvedError } from "../tools/execution-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { McpHost } from "../mcp/mcp-host.js";
 import type { ClientSession, PendingAiContinuation } from "./client-session.js";
 import { appendChatTurnToSession } from "./token-budget.js";
-import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
+import { sendSessionEvent } from "./session-events.js";
 import { sendJson } from "./send-json.js";
 import { createPendingToolBudget, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
 import { getAgentRun, updateAgentRun } from "./agent-run-controller.js";
-import { validateExecutionDecisionEvidence, type AgentRunState, type ExecutionDecision } from "../workflow/agent-run-state.js";
+import { transitionAgentRunState, validateExecutionDecisionEvidence, type AgentRunState, type ExecutionDecision } from "../workflow/agent-run-state.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -103,6 +104,71 @@ export async function registerPendingApprovalContinuation(
 ): Promise<void> {
 	session.pendingAiContinuations.set(approvalId, pendingContinuation);
 	await persistApprovalRequested(session, mcpHost, approvalId, pendingContinuation);
+}
+
+export async function pauseRunForApproval(params: {
+	socket: WebSocket;
+	requestId: string;
+	session: ClientSession;
+	mcpHost: McpHost;
+	runId: string;
+	agentResult: Extract<ProviderAgentResult, { status: "approval_required" }>;
+	pendingContinuation: PendingAiContinuation;
+	persistRequestId?: string | undefined;
+}): Promise<void> {
+	const persistRequestId: string = params.persistRequestId ?? params.requestId;
+	const pendingApproval: PendingApproval | undefined = params.session.approvalGateway.getPending(params.agentResult.approvalId);
+	if (pendingApproval === undefined) {
+		throw new Error(`Approval ${params.agentResult.approvalId} is missing from the authoritative session gateway.`);
+	}
+	params.session.pendingAiContinuations.set(params.agentResult.approvalId, params.pendingContinuation);
+	try {
+		const currentRun: AgentRunState | undefined = getAgentRun(params.session, persistRequestId);
+		if (params.session.sessionId !== undefined && currentRun !== undefined) {
+			const pausedRun: AgentRunState = transitionAgentRunState(currentRun, "awaiting_approval", {
+				pause: {
+					kind: "approval",
+					id: params.agentResult.approvalId,
+					toolName: params.agentResult.toolName,
+					reason: params.agentResult.reason
+				}
+			});
+			await saveAgentRunApprovalPause(pausedRun, {
+				kind: "approval",
+				pauseId: params.agentResult.approvalId,
+				revision: pausedRun.revision,
+				continuation: params.pendingContinuation
+			}, {
+				approvalId: params.agentResult.approvalId,
+				requestId: persistRequestId,
+				data: createPersistedApprovalRequestedData(
+					pendingApproval,
+					params.pendingContinuation,
+					params.mcpHost.getActiveWorkspaceId()
+				)
+			});
+		} else {
+			await persistApprovalRequested(
+				params.session,
+				params.mcpHost,
+				params.agentResult.approvalId,
+				params.pendingContinuation
+			);
+		}
+	} catch (error: unknown) {
+		params.session.pendingAiContinuations.delete(params.agentResult.approvalId);
+		params.session.approvalGateway.removePending(params.agentResult.approvalId);
+		await removeAgentRunContinuation(persistRequestId).catch((): void => undefined);
+		throw error;
+	}
+	sendAgentPaused(
+		params.socket,
+		params.requestId,
+		params.session,
+		params.runId,
+		params.agentResult,
+		persistRequestId
+	);
 }
 
 export async function cancelPendingApprovalsForRequest(session: ClientSession, requestId: string): Promise<string[]> {
@@ -312,18 +378,6 @@ export function sendAgentPaused(socket: WebSocket, requestId: string, session: C
 		toolName: agentResult.toolName,
 		message: `工具 ${agentResult.toolName} 需要审批：${agentResult.approvalId}`
 	}, persistRequestId);
-	const pausedRun: AgentRunState | undefined = getAgentRun(session, persistRequestId);
-	const continuation: PendingAiContinuation | undefined = session.pendingAiContinuations.get(agentResult.approvalId);
-	if (pausedRun !== undefined && continuation !== undefined) {
-		enqueueSessionEventWrite(session, async (): Promise<void> => {
-			await saveAgentRunContinuation(pausedRun, {
-				kind: "approval",
-				pauseId: agentResult.approvalId,
-				revision: pausedRun.revision,
-				continuation
-			});
-		});
-	}
 }
 
 export async function sendContinuedAgentResult(
@@ -354,8 +408,16 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.lightweightActionState,
 			pendingContinuation.executionControl
 		);
-		await registerPendingApprovalContinuation(session, mcpHost, agentResult.approvalId, nextPendingContinuation);
-		sendAgentPaused(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, agentResult, pendingContinuation.requestId);
+		await pauseRunForApproval({
+			socket,
+			requestId,
+			session,
+			mcpHost,
+			runId: pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId,
+			agentResult,
+			pendingContinuation: nextPendingContinuation,
+			persistRequestId: pendingContinuation.requestId
+		});
 		return;
 	}
 	if (agentResult.status === "tool_budget_required") {
@@ -400,6 +462,9 @@ export async function sendContinuedAgentResult(
 		text = executionDecision.summary;
 	} else {
 		text = agentResult.text;
+		if (pendingContinuation.executionControl?.requireDecision === true) {
+			throw new ExecutionContractUnresolvedError();
+		}
 		if (
 			pendingContinuation.executionControl !== undefined
 			&& (getAgentRun(session, pendingContinuation.requestId)?.checkpoint.successfulWriteFingerprints.length ?? 0) === 0

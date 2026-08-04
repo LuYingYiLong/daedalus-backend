@@ -11,7 +11,7 @@ import type { ClientSession, PendingAiContinuation } from "../client-session.js"
 import { appendChatTurnToSession } from "../token-budget.js";
 import { consumePendingGuideSection } from "../pending-guides.js";
 import { sendSessionEvent } from "../session-events.js";
-import { createPendingAiContinuation, registerPendingApprovalContinuation, sendAgentPaused } from "../approval-continuation.js";
+import { createPendingAiContinuation, pauseRunForApproval } from "../approval-continuation.js";
 import { createPendingToolBudget, registerPendingToolBudget, sendToolBudgetRequired } from "../tool-budget-continuation.js";
 import { reviseLlmWorkflowPlan } from "../../workflow/llm-planner.js";
 import { WorkflowExecutionError } from "./workflow-error.js";
@@ -433,7 +433,6 @@ export async function continueWorkflowExecution(
 				userCreatedAt,
 				streamPhase
 			);
-			await registerPendingApprovalContinuation(session, mcpHost, agentResult.approvalId, pendingContinuation);
 			sendWorkflowEvent(socket, requestId, session, "workflow.phase.outcome", {
 				workflowId: plan.id,
 				phaseId: phase.id,
@@ -441,7 +440,16 @@ export async function continueWorkflowExecution(
 				outcome: approvalCommand.outcome
 			}, persistRequestId);
 			sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs, phaseRunId);
-			sendAgentPaused(socket, requestId, session, plan.id, agentResult, persistRequestId);
+			await pauseRunForApproval({
+				socket,
+				requestId,
+				session,
+				mcpHost,
+				runId: plan.id,
+				agentResult,
+				pendingContinuation,
+				persistRequestId
+			});
 			return;
 		}
 

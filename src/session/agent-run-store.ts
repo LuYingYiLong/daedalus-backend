@@ -217,6 +217,77 @@ export async function saveAgentRunContinuation(
 	});
 }
 
+export async function saveAgentRunApprovalPause(
+	run: AgentRunState,
+	continuation: Extract<PersistedAgentRunContinuation, { kind: "approval" }>,
+	approvalEvent: {
+		approvalId: string;
+		requestId: string;
+		data: unknown;
+	}
+): Promise<void> {
+	if (continuation.revision !== run.revision) {
+		throw new Error(`Continuation revision ${continuation.revision} does not match run revision ${run.revision}.`);
+	}
+	if (
+		run.stage !== "awaiting_approval"
+		|| run.pause?.kind !== "approval"
+		|| run.pause.id !== continuation.pauseId
+		|| approvalEvent.approvalId !== continuation.pauseId
+	) {
+		throw new Error(`Approval ${approvalEvent.approvalId} does not match paused run ${run.runId}.`);
+	}
+	const now: string = new Date().toISOString();
+	const db: DatabaseSync = await getSessionDatabase();
+	runSessionTransaction(db, (): void => {
+		upsertAgentRunState(db, run);
+		const persistedRun = db.prepare("SELECT revision FROM agent_runs WHERE run_id = ?")
+			.get(run.runId) as { revision: number } | undefined;
+		if (persistedRun?.revision !== run.revision) {
+			throw new Error(`Cannot persist stale approval pause for run ${run.runId}.`);
+		}
+		db.prepare(`
+			INSERT INTO agent_run_continuations(
+				run_id, session_id, revision, kind, pause_id, payload_json, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(run_id) DO UPDATE SET
+				revision = excluded.revision,
+				kind = excluded.kind,
+				pause_id = excluded.pause_id,
+				payload_json = excluded.payload_json,
+				updated_at = excluded.updated_at
+		`).run(
+			run.runId,
+			run.sessionId,
+			continuation.revision,
+			continuation.kind,
+			continuation.pauseId,
+			sqlJson(serializeWithoutApiKey(continuation)),
+			now,
+			now
+		);
+		const sequenceRow = db.prepare(`
+			SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM session_events
+			WHERE session_id = ? AND channel = 'approval'
+		`).get(run.sessionId) as Record<string, unknown>;
+		db.prepare(`
+			INSERT INTO session_events(
+				event_id, session_id, sequence, channel, request_id, event_name, data_json,
+				approval_id, workflow_id, run_id, created_at
+			) VALUES (?, ?, ?, 'approval', ?, 'requested', ?, ?, NULL, ?, ?)
+		`).run(
+			`approval-event-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+			run.sessionId,
+			Number(sequenceRow.value),
+			approvalEvent.requestId,
+			sqlJson(approvalEvent.data),
+			approvalEvent.approvalId,
+			run.runId,
+			now
+		);
+	});
+}
+
 export async function readAgentRunContinuation(runId: string): Promise<PersistedAgentRunContinuation | null> {
 	const db: DatabaseSync = await getSessionDatabase();
 	const row = db.prepare(`

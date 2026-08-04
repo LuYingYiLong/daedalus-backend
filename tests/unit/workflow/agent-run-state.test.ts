@@ -222,7 +222,7 @@ test("no-change tool input safely adopts successful evidence from only the curre
 		summary: "The requested state is already present and verified.",
 		evidenceToolCallIds: [],
 		expectedArtifacts: ["scripts/Main.gd"]
-	}, { lane: "probe" });
+	}, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
 
 	assert.deepEqual(
 		validateExecutionDecisionEvidence(probing, decision).evidenceToolCallIds,

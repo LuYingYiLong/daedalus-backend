@@ -403,6 +403,7 @@ function createRouteSystemPromptV3(): string {
 		"- lane=direct for answer, read for inspect, probe for unknown mutation, lightweight for bounded mutation, workflow for complex mutation.",
 		"Requests to look up installed local Godot documentation, verify a Godot API, or inspect an exact Godot class/member use intent=inspect and lane=read.",
 		"Imperative requests to optimize, improve, or adjust the current project use intent=mutate. Questions asking how something could be optimized are advice, not mutation.",
+		"In Agent mode, a concrete defect report about the current project normally asks Daedalus to fix that defect even when phrased as a statement rather than an imperative; use intent=mutate. Use intent=inspect only when the user asks why, asks for analysis, asks to inspect/check, or explicitly says not to modify anything.",
 		"Creating, modifying, fixing, or generating something does not by itself require workflow.",
 		"Ask mode and explicit read-only requests must never use a mutation lane.",
 		"Output exactly:",

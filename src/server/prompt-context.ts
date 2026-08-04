@@ -145,15 +145,12 @@ import {
 
 import {
 	createPendingAiContinuation,
-	persistApprovalRequested,
-	registerPendingApprovalContinuation,
 	loadHydratedPendingApprovalStates,
 	createMemoryPendingApprovalStates,
 	findPendingApprovalState,
 	restorePendingContinuationForApproval,
 	validatePendingApprovalBeforeExecution,
 	createApprovedWorkflowToolObservation,
-	sendAgentPaused,
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";

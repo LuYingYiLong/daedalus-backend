@@ -494,7 +494,7 @@ async function runPlanAgentDecision(
 	};
 
 	const allowedToolNames: readonly string[] = resolveAllowedToolsForChatParams(plannerParams, undefined, runtime.session.activeWorkspace?.id) ?? [];
-	const gateway = new ReadOnlyToolApprovalGateway(allowedToolNames);
+	const gateway = new ReadOnlyToolApprovalGateway(runtime.session.approvalGateway, allowedToolNames);
 	const visibleDeltaFilter: PlanVisibleDeltaFilter = createPlanVisibleDeltaFilter();
 	const planThreadRequestId: string = runtime.requestId;
 	const operationRequestId: string = runtime.operationRequestId ?? runtime.requestId;

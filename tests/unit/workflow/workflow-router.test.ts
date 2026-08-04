@@ -236,9 +236,30 @@ test("hidden probe exposes tool progress without creating workflow todos", async
 	assert.equal(hiddenExecutionSource.includes("sceneViewEnricher.enricher"), true);
 	assert.equal(hiddenExecutionSource.includes("sceneViewEnricher.getCapturedAttachments()"), true);
 	assert.equal(source.includes("daedalus_report_execution_decision"), true);
+	assert.equal(source.includes("ordinary prose is not a valid completion"), true);
+	assert.equal(source.includes("session.approvalGateway = new ReadOnlyToolApprovalGateway"), false);
 	assert.equal(source.includes('routeDecision.lane === "probe" ? "probing" : "executing"'), true);
 	assert.equal(
 		source.includes("if (effectiveParams.retryOfRunId === undefined) {\n\t\t\t\t\tawait appendUserMessageToSession("),
 		true
 	);
+});
+
+test("router instructions treat concrete Agent defect reports as mutation intent", async (): Promise<void> => {
+	const source: string = await readFile(
+		new URL("../../../src/workflow/router.ts", import.meta.url),
+		"utf8"
+	);
+	assert.match(source, /concrete defect report about the current project normally asks Daedalus to fix/u);
+	assert.match(source, /even when phrased as a statement rather than an imperative/u);
+	const declarativeRegressionRequest = "当科技树滚动到下方时，线会消失，且存储的鼠标拖动判断不够精确，且拖动完后必须切换到其他类型再返回存储类型后才能恢复回原样";
+	assert.equal(hasWriteIntent(declarativeRegressionRequest), false);
+	const simulatedMisroute = normalizeWorkflowRouteDecision({
+		intent: "inspect",
+		scope: "bounded",
+		lane: "read",
+		reason: "Inspect the reported defect.",
+		planningHint: ""
+	}, { message: declarativeRegressionRequest, mode: "agent" });
+	assert.equal(simulatedMisroute.lane, "read");
 });

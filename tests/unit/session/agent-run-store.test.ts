@@ -8,6 +8,7 @@ import { createClientSession } from "../../../src/server/client-session.js";
 import {
 	readAgentRunContinuation,
 	readAgentRunState,
+	saveAgentRunApprovalPause,
 	saveAgentRunContinuation,
 	saveAgentRunState
 } from "../../../src/session/agent-run-store.js";
@@ -100,6 +101,61 @@ test("paused agent run state and continuation persist atomically without API key
 		runtime.sessionId = metadata.id;
 		runtime.agentRuns.set(resumed.runId, resumed);
 		assert.equal(serializeAgentRunRuntime(runtime).activeAgentRun?.stage, "executing");
+	} finally {
+		await resetSessionDatabaseForTests();
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("approval request, paused run, and continuation commit atomically", async (): Promise<void> => {
+	const directory: string = await mkdtemp(join(tmpdir(), "daedalus-agent-approval-pause-"));
+	const databasePath: string = join(directory, "sessions.sqlite3");
+	const { resetSessionDatabaseForTests } = await import("../../../src/session/session-database.js");
+	await resetSessionDatabaseForTests(databasePath);
+	try {
+		const { createSession, readApprovalEvents } = await import("../../../src/session/session-store.js");
+		const metadata = await createSession("Approval pause", undefined);
+		const executing = transitionAgentRunState(createAgentRunState({
+			sessionId: metadata.id,
+			requestId: "request-approval-pause",
+			runId: "run-approval-pause",
+			now: "2026-08-05T00:00:00.000Z"
+		}), "executing", { intent: "mutate", lane: "lightweight" }, "2026-08-05T00:00:01.000Z");
+		const paused = transitionAgentRunState(executing, "awaiting_approval", {
+			pause: {
+				kind: "approval",
+				id: "approval-atomic",
+				toolName: "mcp_workspace_replace_text_in_file",
+				reason: "Manual mode requires approval"
+			}
+		}, "2026-08-05T00:00:02.000Z");
+		const continuation = {
+			params: { message: "Fix the defect", mode: "agent" },
+			options: { provider: "deepseek", model: "deepseek-v4-flash", apiKey: "secret" },
+			continuation: { messages: [], nextStep: 1, totalToolResultChars: 0 },
+			userMessage: "Fix the defect",
+			requestId: paused.requestId,
+			userCreatedAt: paused.createdAt,
+			stream: true
+		} as unknown as PendingAiContinuation;
+
+		await saveAgentRunApprovalPause(paused, {
+			kind: "approval",
+			pauseId: "approval-atomic",
+			revision: paused.revision,
+			continuation
+		}, {
+			approvalId: "approval-atomic",
+			requestId: paused.requestId,
+			data: { approvalId: "approval-atomic", toolName: "mcp_workspace_replace_text_in_file" }
+		});
+
+		assert.equal((await readAgentRunState(paused.runId))?.stage, "awaiting_approval");
+		assert.equal((await readAgentRunContinuation(paused.runId))?.kind, "approval");
+		const approvalEvents = await readApprovalEvents(metadata.id);
+		assert.equal(approvalEvents.length, 1);
+		assert.equal(approvalEvents[0]?.approvalId, "approval-atomic");
+		assert.equal(approvalEvents[0]?.event, "requested");
 	} finally {
 		await resetSessionDatabaseForTests();
 		await rm(directory, { recursive: true, force: true });

@@ -94,7 +94,7 @@ export type AgentRunStatePatch = Partial<Omit<
 	"schemaVersion" | "runId" | "sessionId" | "requestId" | "rootRequestId" | "revision" | "createdAt" | "updatedAt"
 >>;
 
-export type ExecutionDisposition = "no_change" | "use_lightweight" | "use_workflow" | "blocked";
+export type ExecutionDisposition = "complete_read" | "no_change" | "use_lightweight" | "use_workflow" | "blocked";
 
 export type ExecutionDecision = {
 	disposition: ExecutionDisposition;
@@ -105,7 +105,7 @@ export type ExecutionDecision = {
 };
 
 export const executionDecisionToolInputSchema = z.object({
-	disposition: z.enum(["no_change", "use_lightweight", "use_workflow", "blocked"]),
+	disposition: z.enum(["complete_read", "no_change", "use_lightweight", "use_workflow", "blocked"]),
 	summary: z.string().trim().min(1).max(2000),
 	evidenceToolCallIds: z.array(z.string().trim().min(1).max(200)).max(64).default([]),
 	expectedArtifacts: z.array(z.string().trim().min(1).max(1000)).max(64).default([]),

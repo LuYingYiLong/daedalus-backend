@@ -58,6 +58,25 @@ export function createAgentToolEventForwarder(
 			}, persistRequestId);
 			return;
 		}
+		if (event.type === "tool.preparing") {
+			if (event.toolName === "mcp_skills_load") {
+				return;
+			}
+			sendSessionEvent(socket, requestId, session, "agent.thinking.done", {
+				runId,
+				stepRunId,
+				...eventMetadata
+			}, persistRequestId);
+			sendSessionEvent(socket, requestId, session, "agent.tool.call", {
+				...event,
+				type: "agent.tool.call",
+				preview: true,
+				runId,
+				stepRunId,
+				...eventMetadata
+			}, persistRequestId);
+			return;
+		}
 		if (event.type === "tool.call") {
 			if (event.toolName === "mcp_skills_load") {
 				return;

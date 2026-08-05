@@ -785,6 +785,30 @@ test("streaming agent finalizes when tool follow-up only returns reasoning conte
 	});
 });
 
+test("streaming agent announces a tool before dispatching it", async (): Promise<void> => {
+	await withStreamingAgentMockServer(async (baseUrl: string): Promise<void> => {
+		const events: string[] = [];
+		const result = await runOpenAICompatibleAgentStreaming(
+			{ message: "Read the file", options: { stream: true } },
+			{ provider: "zhipu", apiKey: "test-key", baseUrl, model: "glm-5.2" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			["mcp_godot_read_text_file"],
+			(event): void => {
+				events.push(event.type);
+			}
+		);
+
+		assert.equal(result.status, "completed");
+		const preparingIndex: number = events.indexOf("tool.preparing");
+		const callIndex: number = events.indexOf("tool.call");
+		assert.ok(preparingIndex >= 0);
+		assert.ok(callIndex > preparingIndex);
+	});
+});
+
 test("streaming agent safely retries an interrupted reasoning-only response", async (): Promise<void> => {
 	await withInterruptedStreamingMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
 		const visibleDeltas: string[] = [];

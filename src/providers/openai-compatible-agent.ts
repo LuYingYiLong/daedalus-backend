@@ -19,6 +19,7 @@ import {
 } from "../providers/deepseek-client.js";
 import type { McpHost } from "../mcp/mcp-host.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
+import { describeToolEvent } from "../tools/tool-event-describer.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
 import { ExecutionDecisionSignal } from "../tools/execution-control.js";
@@ -67,6 +68,7 @@ type StreamedAssistantMessage = {
 type ToolCallAccumulator = {
 	index: number;
 	id: string;
+	hasProviderId: boolean;
 	name: string;
 	argumentsText: string;
 };
@@ -832,9 +834,9 @@ function getToolCallDeltaList(delta: unknown): unknown[] {
 	return Array.isArray(toolCallsValue) ? toolCallsValue : [];
 }
 
-function applyToolCallDelta(accumulators: Map<number, ToolCallAccumulator>, value: unknown, step: number): void {
+function applyToolCallDelta(accumulators: Map<number, ToolCallAccumulator>, value: unknown, step: number): ToolCallAccumulator | undefined {
 	if (value === null || typeof value !== "object") {
-		return;
+		return undefined;
 	}
 
 	const delta = value as {
@@ -850,12 +852,14 @@ function applyToolCallDelta(accumulators: Map<number, ToolCallAccumulator>, valu
 	const accumulator: ToolCallAccumulator = existing ?? {
 		index,
 		id: `stream-tool-${step}-${index}`,
+		hasProviderId: false,
 		name: "",
 		argumentsText: ""
 	};
 
 	if (typeof delta.id === "string" && delta.id.length > 0) {
 		accumulator.id = delta.id;
+		accumulator.hasProviderId = true;
 	}
 
 	if (typeof delta.function?.name === "string" && delta.function.name.length > 0) {
@@ -867,6 +871,7 @@ function applyToolCallDelta(accumulators: Map<number, ToolCallAccumulator>, valu
 	}
 
 	accumulators.set(index, accumulator);
+	return accumulator;
 }
 
 function createToolCallsFromAccumulators(accumulators: Map<number, ToolCallAccumulator>): ChatCompletionMessageToolCall[] {
@@ -883,6 +888,25 @@ function createToolCallsFromAccumulators(accumulators: Map<number, ToolCallAccum
 		}) as ChatCompletionMessageToolCall);
 }
 
+function resolveStreamPreviewToolName(toolName: string, aliasContext: ToolNameAliasContext): string {
+	return aliasContext.aliasToOriginal.get(toolName) ?? toolName;
+}
+
+function isNamedFunctionTool(tool: ChatCompletionTool): tool is Extract<ChatCompletionTool, { type: "function" }> {
+	return tool.type === "function";
+}
+
+function previewToolArguments(argumentsText: string): Record<string, unknown> {
+	try {
+		const parsed: unknown = JSON.parse(argumentsText);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? parsed as Record<string, unknown>
+			: {};
+	} catch {
+		return {};
+	}
+}
+
 async function readStreamingAssistantMessageAttempt(
 	client: OpenAI,
 	params: AiChatParams,
@@ -895,7 +919,8 @@ async function readStreamingAssistantMessageAttempt(
 	onEvent?: OnToolEvent,
 	emitContentDeltas: boolean = true,
 	abortSignal?: AbortSignal | undefined,
-	markActivity?: (() => void) | undefined
+	markActivity?: (() => void) | undefined,
+	toolContext?: ToolExecutionContext | undefined
 ): Promise<StreamedAssistantMessage> {
 	const requestTools: ChatCompletionTool[] = aliasContext.tools;
 	const requestBody: ChatCompletionCreateParamsStreaming = {
@@ -920,6 +945,8 @@ async function readStreamingAssistantMessageAttempt(
 	let reasoningContent = "";
 	let emittedReasoning = false;
 	let openThinkTagReasoning = false;
+	let thinkingClosed = false;
+	const announcedToolCallIds: Set<string> = new Set();
 
 	try {
 		const stream = await client.chat.completions.create(requestBody, { signal: abortSignal });
@@ -974,7 +1001,28 @@ async function readStreamingAssistantMessageAttempt(
 			}
 
 			for (const toolCallDelta of getToolCallDeltaList(delta)) {
-				applyToolCallDelta(toolCallAccumulators, toolCallDelta, step);
+				const accumulator: ToolCallAccumulator | undefined = applyToolCallDelta(toolCallAccumulators, toolCallDelta, step);
+				if (accumulator === undefined || !accumulator.hasProviderId || accumulator.name.length === 0 || announcedToolCallIds.has(accumulator.id)) {
+					continue;
+				}
+				const toolName: string = resolveStreamPreviewToolName(accumulator.name, aliasContext);
+				if (!tools.some((tool: ChatCompletionTool): boolean => isNamedFunctionTool(tool) && tool.function.name === toolName)) {
+					continue;
+				}
+				announcedToolCallIds.add(accumulator.id);
+				if (emittedReasoning && !thinkingClosed) {
+					onEvent?.({ type: "ai.thinking.done" });
+					thinkingClosed = true;
+				}
+				const args: Record<string, unknown> = previewToolArguments(accumulator.argumentsText);
+				onEvent?.({
+					type: "tool.preparing",
+					step,
+					toolCallId: accumulator.id,
+					toolName,
+					args,
+					...describeToolEvent(toolName, args, toolContext?.workspaceId)
+				});
 			}
 		}
 	} catch (error: unknown) {
@@ -992,7 +1040,7 @@ async function readStreamingAssistantMessageAttempt(
 		throw error;
 	}
 
-	if (emittedReasoning) {
+	if (emittedReasoning && !thinkingClosed) {
 		onEvent?.({ type: "ai.thinking.done" });
 	}
 
@@ -1061,7 +1109,8 @@ async function readStreamingAssistantMessage(
 	startStep: number,
 	onEvent?: OnToolEvent,
 	emitContentDeltas: boolean = true,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	toolContext?: ToolExecutionContext | undefined
 ): Promise<StreamedAssistantMessage> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
@@ -1079,7 +1128,8 @@ async function readStreamingAssistantMessage(
 			attempt.onEvent,
 			emitContentDeltas,
 			attempt.signal,
-			attempt.markActivity
+			attempt.markActivity,
+			toolContext
 		)
 	});
 }
@@ -1229,7 +1279,8 @@ async function runAgentLoop(
 					startStep,
 					onEvent,
 					!requiredToolCallOnStep,
-					abortSignal
+					abortSignal,
+					toolContext
 				);
 			} catch (error: unknown) {
 				if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {

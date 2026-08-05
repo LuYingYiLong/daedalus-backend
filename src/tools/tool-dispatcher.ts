@@ -27,6 +27,8 @@ export type ToolEvent =
 	| { type: "ai.thinking.delta"; text: string }
 	| { type: "ai.thinking.done" }
 	| ({ type: "provider.reconnect" } & ProviderReconnectEvent)
+	/** 模型流已明确工具调用，但参数流尚未结束；只用于即时 UI 反馈，不代表已执行。 */
+	| ({ type: "tool.preparing"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.call"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
 	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined } & ParsedToolResultSummary)

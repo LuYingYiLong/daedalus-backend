@@ -1550,7 +1550,7 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		type: "function",
 		function: {
 			name: "mcp_terminal_get_capabilities",
-			description: "获取终端 MCP 支持的所有预设命令列表及其风险等级。首次使用终端工具前应先调用此工具了解可用命令。",
+			description: "查询终端 MCP 支持的预设命令及风险等级。它不会运行命令、检查项目或验证任何修改；仅在需要选择预设命令时调用。",
 			parameters: {
 				type: "object",
 				properties: {},

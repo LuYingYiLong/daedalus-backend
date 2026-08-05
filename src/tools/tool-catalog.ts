@@ -97,7 +97,6 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 	verify: [
 		"mcp_godot_validate_scene_script_references",
 		"mcp_godot_lsp_get_file_diagnostics",
-		"mcp_terminal_get_capabilities",
 		"mcp_terminal_run_safe_preset"
 	],
 	write: [

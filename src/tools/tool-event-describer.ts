@@ -597,6 +597,13 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		});
 	}
 
+	if (toolName === "mcp_terminal_get_capabilities") {
+		return createDisplay("terminal", "Terminal", "read", "查看终端能力", "查看可用终端预设", {
+			kind: "command",
+			label: "终端预设"
+		});
+	}
+
 	if (toolName.startsWith("mcp_terminal_")) {
 		const presetName: string = getStringArg(args, "presetName") ?? toolName;
 		const resourcePath: string | undefined = getStringArg(args, "resourcePath");

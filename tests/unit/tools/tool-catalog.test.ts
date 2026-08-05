@@ -192,3 +192,7 @@ test("workflow defaults are catalog-backed and resolve to known tools", (): void
 		}
 	}
 });
+
+test("terminal capability discovery is not a workflow verification tool", (): void => {
+	assert.equal(getDefaultWorkflowToolNames("verify").includes("mcp_terminal_get_capabilities"), false);
+});

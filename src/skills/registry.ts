@@ -73,7 +73,6 @@ const FILE_CREATE_TOOLS: string[] = [
 
 const VERIFY_TOOLS: string[] = [
 	"mcp_godot_lsp_get_file_diagnostics",
-	"mcp_terminal_get_capabilities",
 	"mcp_terminal_run_safe_preset"
 ];
 

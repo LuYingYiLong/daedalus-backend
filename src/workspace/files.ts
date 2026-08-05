@@ -49,6 +49,13 @@ export type WorkspaceListFilesResult = {
 	directoryExists: boolean;
 };
 
+export type WorkspaceTextFileReadOptions = {
+	/** 1-based inclusive line number. */
+	startLine?: number | undefined;
+	/** 1-based inclusive line number. */
+	endLine?: number | undefined;
+};
+
 type ResolvedWorkspacePath = {
 	relativePath: string;
 	absolutePath: string;
@@ -171,7 +178,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		};
 	}
 
-	async function readTextFile(relativePath: string): Promise<string> {
+	async function readTextFile(relativePath: string, options: WorkspaceTextFileReadOptions = {}): Promise<string> {
 		const resolved = await resolveReadPath(relativePath);
 		const stat = await fs.stat(resolved.absolutePath);
 		if (!stat.isFile()) {
@@ -181,7 +188,37 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 			throw new Error(`File too large: ${resolved.relativePath} (${stat.size} bytes)`);
 		}
 
-		return fs.readFile(resolved.absolutePath, "utf8");
+		const content: string = await fs.readFile(resolved.absolutePath, "utf8");
+		const { startLine, endLine } = options;
+		if (startLine === undefined && endLine === undefined) {
+			return content;
+		}
+		if (startLine !== undefined && (!Number.isInteger(startLine) || startLine < 1)) {
+			throw new Error("startLine must be a 1-based positive integer");
+		}
+		if (endLine !== undefined && (!Number.isInteger(endLine) || endLine < 1)) {
+			throw new Error("endLine must be a 1-based positive integer");
+		}
+		if (startLine !== undefined && endLine !== undefined && endLine < startLine) {
+			throw new Error("endLine must be greater than or equal to startLine");
+		}
+
+		const lineStarts: number[] = [0];
+		for (let index: number = 0; index < content.length; index += 1) {
+			if (content[index] === "\n") {
+				lineStarts.push(index + 1);
+			}
+		}
+		const firstLine: number = startLine ?? 1;
+		if (firstLine > lineStarts.length) {
+			return "";
+		}
+		const lastLine: number = Math.min(endLine ?? lineStarts.length, lineStarts.length);
+		const startOffset: number = lineStarts[firstLine - 1] ?? content.length;
+		const endOffset: number = lastLine < lineStarts.length
+			? lineStarts[lastLine] ?? content.length
+			: content.length;
+		return content.slice(startOffset, endOffset);
 	}
 
 	async function listFilesDetailed(input?: WorkspaceListFilesInput): Promise<WorkspaceListFilesResult> {

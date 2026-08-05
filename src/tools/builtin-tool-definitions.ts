@@ -212,9 +212,11 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	),
 	createSceneToolDefinition(
 		"mcp_workspace_read_text_file",
-		"读取当前 workspace 内的 UTF-8 文本文件。路径必须是 workspace 相对路径，不能是绝对路径。",
+		"读取当前 workspace 内的 UTF-8 文本文件。可选按 1-based 行号读取局部范围；路径必须是 workspace 相对路径，不能是绝对路径。",
 		{
-			relativePath: { type: "string", description: "workspace 相对文件路径" }
+			relativePath: { type: "string", description: "workspace 相对文件路径" },
+			startLine: { type: "integer", minimum: 1, description: "可选，起始行号（从 1 开始，包含该行）" },
+			endLine: { type: "integer", minimum: 1, description: "可选，结束行号（从 1 开始，包含该行）" }
 		},
 		["relativePath"]
 	),

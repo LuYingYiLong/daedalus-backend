@@ -21,6 +21,13 @@ test("workspace file service creates, reads, searches and edits text files insid
 
 		await service.replaceTextInFile("src/notes.txt", "three", "done");
 		assert.equal(await service.readTextFile("src/notes.txt"), "one\nupdated\ndone\n");
+		assert.equal(await service.readTextFile("src/notes.txt", { startLine: 2, endLine: 3 }), "updated\ndone\n");
+		assert.equal(await service.readTextFile("src/notes.txt", { startLine: 3 }), "done\n");
+		assert.equal(await service.readTextFile("src/notes.txt", { startLine: 99, endLine: 100 }), "");
+		await assert.rejects(
+			() => service.readTextFile("src/notes.txt", { startLine: 3, endLine: 2 }),
+			/endLine must be greater than or equal to startLine/u
+		);
 
 		await service.deleteFile("src/notes.txt");
 		assert.equal((await service.listFiles()).length, 0);

@@ -35,7 +35,9 @@ const listFilesSchema = z.object({
 });
 
 const readFileSchema = z.object({
-	relativePath: z.string().min(1).describe("Workspace relative file path.")
+	relativePath: z.string().min(1).describe("Workspace relative file path."),
+	startLine: z.number().int().positive().optional().describe("Optional 1-based first line to read."),
+	endLine: z.number().int().positive().optional().describe("Optional 1-based last line to read, inclusive.")
 });
 
 const searchTextSchema = z.object({
@@ -80,7 +82,7 @@ export function registerWorkspaceTools(server: McpServer): void {
 			description: "Read a UTF-8 text file inside the active workspace with path and size checks.",
 			inputSchema: readFileSchema
 		},
-		async ({ relativePath }) => asTextResult(await service.readTextFile(relativePath))
+		async (input) => asTextResult(await service.readTextFile(input.relativePath, input))
 	);
 
 	server.registerTool(

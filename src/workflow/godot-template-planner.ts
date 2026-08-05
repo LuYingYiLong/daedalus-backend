@@ -5,7 +5,7 @@ import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhas
 import { createWorkflowId, createWorkflowTitle, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 
-export type GodotTaskType = "script_create_or_edit" | "scene_create" | "scene_attach_script" | "project_setting_change" | "local_game_create" | "general_edit";
+export type GodotTaskType = "script_create_or_edit" | "scene_create" | "scene_attach_script" | "project_setting_change" | "general_edit";
 
 export type GodotTaskClassification = {
 	type: GodotTaskType;
@@ -120,9 +120,6 @@ export function createGodotTemplateWorkflowPlan(
 	const classification: GodotTaskClassification = classifyGodotTask(target, context);
 	if (classification.type === "scene_attach_script" && classification.scriptPath !== undefined && classification.scenePath !== undefined) {
 		return createScriptSceneAttachPlan(params, classification);
-	}
-	if (classification.type === "local_game_create" && classification.scriptPath !== undefined && classification.scenePath !== undefined) {
-		return createLocalGameCreatePlan(params, classification);
 	}
 	if (classification.type === "script_create_or_edit" && classification.scriptPath !== undefined) {
 		return createScriptWritePlan(params, classification);
@@ -314,89 +311,6 @@ function createSceneCreatePlan(params: AiChatParams, classification: GodotTaskCl
 	return createPlan(params, "Godot 场景创建", phases);
 }
 
-function createLocalGameCreatePlan(params: AiChatParams, classification: GodotTaskClassification): WorkflowPlan {
-	const scriptPath: string = classification.scriptPath ?? "scripts/tic_tac_toe_game.gd";
-	const scenePath: string = classification.scenePath ?? "scenes/tic_tac_toe_game.tscn";
-	const resourceScriptPath: string = `res://${stripResourcePrefix(scriptPath)}`;
-	const resourceScenePath: string = `res://${stripResourcePrefix(scenePath)}`;
-	const phases: WorkflowPhase[] = [
-		createPhase(
-			"inspect-project",
-			"确认项目结构",
-			"read",
-			["mcp_godot_get_project_summary", "mcp_godot_list_project_files", "mcp_godot_search_text"],
-			[
-				"确认当前 Godot 项目结构、已有脚本和场景命名，避免覆盖无关文件。",
-				`重点检查 ${scriptPath} 和 ${scenePath} 是否已存在。`
-			].join("\n"),
-			["已确认项目结构和目标文件状态。"]
-		),
-		createPhase(
-			"write-game-script",
-			"写入游戏脚本",
-			"write",
-			SCRIPT_WRITE_TOOLS,
-			[
-				`实际创建或更新脚本 ${scriptPath}。`,
-				"脚本必须实现完整本地井字棋：3x3 棋盘、X/O 轮流落子、胜负/平局判断、重开按钮、状态文本更新。",
-				"使用 Godot 4 强类型 GDScript，避免推断赋值写法；不要依赖外部资源。",
-				"本阶段只允许写入/预览写入脚本，不要先读取文件或解释计划。",
-				"第一步必须调用脚本写入工具并按审批流程暂停；不要只输出文字意图。"
-			].join("\n"),
-			[`脚本 ${scriptPath} 已由实际写入工具创建或更新。`, "脚本包含完整本地井字棋交互逻辑。"]
-		),
-		createPhase(
-			"write-game-scene",
-			"写入游戏场景",
-			"write",
-			[...SCENE_CREATE_WRITE_TOOLS, ...SCENE_EDIT_WRITE_TOOLS],
-			[
-				`实际创建或更新场景 ${scenePath}，并引用脚本 ${resourceScriptPath}。`,
-				"不要读取脚本，不要解释计划；直接创建场景或写入 .tscn。",
-				"场景根节点使用 Control，包含标题/状态文本、3x3 按钮网格和重开按钮。",
-				"节点命名固定为 StatusLabel、RestartButton、Btn00、Btn01、Btn02、Btn10、Btn11、Btn12、Btn20、Btn21、Btn22，以便脚本通过唯一名称访问。",
-				"优先用 Godot 场景/文本文件工具创建可运行 .tscn；不要使用终端写命令绕过审批。",
-				"第一步必须调用场景写入工具并按审批流程暂停；不要只输出文字意图。"
-			].join("\n"),
-			[`场景 ${scenePath} 已由实际写入工具创建或更新。`, `场景引用 ${resourceScriptPath}。`]
-		),
-		createPhase(
-			"set-main-scene",
-			"设置启动场景",
-			"write",
-			PROJECT_SETTING_WRITE_TOOLS,
-			[
-				`把 application/run/main_scene 设置为 ${resourceScenePath}。`,
-				"必须通过 project setting 工具写入，不要手写 project.godot。",
-				"本阶段只允许项目设置写入/预览写入，不要先读取 project.godot 或解释计划。",
-				"第一步必须调用 project setting 写入工具并按审批流程暂停；不要只输出文字意图。"
-			].join("\n"),
-			[`项目启动场景已设置为 ${resourceScenePath}。`]
-		),
-		createPhase(
-			"verify-game",
-			"验证游戏资源",
-			"verify",
-			["mcp_godot_lsp_get_file_diagnostics", "mcp_godot_validate_scene_script_references", "mcp_godot_inspect_scene_tree", "mcp_terminal_run_safe_preset"],
-			[
-				`验证 ${scriptPath} 和 ${scenePath}。`,
-				"必须调用脚本诊断或场景脚本引用验证工具；如可用，再运行 godot.check_only 针对 .gd 或 .tscn。",
-				"验证失败时明确列出失败原因，不要进入总结。"
-			].join("\n"),
-			["脚本诊断和场景脚本引用验证没有阻塞失败。"]
-		),
-		createPhase(
-			"summarize",
-			"总结交付",
-			"summarize",
-			[],
-			"只基于前面阶段的工具结果总结创建的脚本、场景、启动场景和验证状态。不要调用工具。",
-			["所有前置阶段均完成，且没有未解决失败。"]
-		)
-	];
-	return createPlan(params, "Godot 本地井字棋", phases);
-}
-
 function createProjectSettingPlan(params: AiChatParams): WorkflowPlan {
 	const phases: WorkflowPhase[] = [
 		createPhase("inspect-settings", "读取项目设置", "read", PROJECT_SETTING_READ_TOOLS, "读取当前 project.godot 相关设置。", ["已读取当前项目设置。"]),
@@ -421,7 +335,8 @@ function createPlan(params: AiChatParams, fallbackTitle: string, phases: Workflo
 		phases,
 		todos: createVisibleWorkflowTodos(phases),
 		source: "godot_template",
-		revision: 0
+		revision: 0,
+		executionProfile: "godot"
 	};
 }
 

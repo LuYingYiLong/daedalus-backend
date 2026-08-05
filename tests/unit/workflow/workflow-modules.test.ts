@@ -25,10 +25,33 @@ test("workflow planner uses the neutral provider chat gateway", async (): Promis
 	assert.equal(source.includes("chatWithDeepSeek"), false);
 });
 
-test("fixed fallback is a generic safe workflow and respects read-only policy", (): void => {
+test("fixed fallback is a safe workflow and respects read-only policy", (): void => {
 	const fallback = planWorkflowAfterLlmPlannerFailure({ message: "Anything", mode: "agent", options: { workflow: "llm_planned" } });
 	assert.deepEqual(fallback?.phases.map((phase: WorkflowPhase): WorkflowPhase["toolGroup"] => phase.toolGroup), ["read", "write", "verify", "summarize"]);
 	assert.equal(planWorkflow({ message: "Anything", mode: "agent", options: { executionPolicy: "read_only" } }), null);
+});
+
+test("workspace workflow profile overrides Godot prompt and skill defaults", (): void => {
+	const fallback = planWorkflowAfterLlmPlannerFailure({
+		message: "Update a TypeScript service",
+		mode: "agent",
+		promptId: "godot.assistant",
+		options: { workflow: "llm_planned" }
+	}, "workspace");
+	assert.equal(fallback?.executionProfile, "workspace");
+	assert.deepEqual(
+		fallback?.phases.map((phase: WorkflowPhase): string | undefined => phase.promptId),
+		[undefined, "workspace.assistant", undefined, "workspace.assistant"]
+	);
+	assert.deepEqual(
+		fallback?.phases.map((phase: WorkflowPhase): string | undefined => phase.skillId),
+		[undefined, undefined, undefined, undefined]
+	);
+	assert.doesNotMatch(fallback?.phases.map((phase: WorkflowPhase): string => phase.instruction).join("\n") ?? "", /Godot|GDScript|scene|LSP/u);
+	assert.equal(
+		fallback?.phases.some((phase: WorkflowPhase): boolean => phase.allowedTools.some((toolName: string): boolean => toolName.startsWith("mcp_godot_"))),
+		false
+	);
 });
 
 test("Godot templates only use evidence-driven targets", (): void => {
@@ -43,6 +66,7 @@ test("Godot templates only use evidence-driven targets", (): void => {
 	assert.equal(classifyGodotTask(undefined, { isGodotProject: true }).type, "general_edit");
 	const plan = createGodotTemplateWorkflowPlan({ message: "Any prose", mode: "agent" }, target, { isGodotProject: true });
 	assert.equal(plan?.source, "godot_template");
+	assert.equal(plan?.executionProfile, "godot");
 	assert.ok(plan?.phases.some((phase: WorkflowPhase): boolean => phase.id === "attach-script"));
 });
 

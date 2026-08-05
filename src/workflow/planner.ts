@@ -4,6 +4,7 @@ import { CUSTOM_MCP_TOOLS_SENTINEL } from "../tools/tool-sentinels.js";
 import type { WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getExecutionPolicy } from "./router.js";
+import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowExecutionProfileId } from "./execution-profile.js";
 
 type FixedWorkflowPhaseId = "inspect" | "implement" | "review" | "verify" | "summarize";
 
@@ -70,11 +71,48 @@ export function createWorkflowId(): string {
 	return `workflow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function createPhase(phaseId: FixedWorkflowPhaseId): WorkflowPhase {
+const WORKSPACE_PHASE_CONTENT: Partial<Record<FixedWorkflowPhaseId, Pick<WorkflowPhase, "title" | "instruction" | "acceptanceCriteria">>> = {
+	inspect: {
+		title: "Inspect workspace context",
+		instruction: "Read only the minimum workspace context needed to identify the affected files and constraints. Do not modify files.",
+		acceptanceCriteria: ["Relevant workspace files and constraints were observed through read tools."]
+	},
+	implement: {
+		title: "Implement approved change",
+		instruction: "Make only the necessary approved workspace changes. Use an actual approval-gated write tool; previews and prose do not count as implementation.",
+		acceptanceCriteria: ["The required workspace change was completed by an actual write tool."]
+	},
+	review: {
+		title: "Review result",
+		instruction: "Review the changed files and their immediate callers for concrete regressions. Do not modify files in this phase.",
+		acceptanceCriteria: ["Changed files and relevant immediate integrations were reviewed."]
+	},
+	verify: {
+		title: "Verify change",
+		instruction: "Run the available low-cost verification for the changed workspace artifacts and report passed, failed, and uncovered checks truthfully.",
+		acceptanceCriteria: ["Available verification completed without an unresolved blocking failure."]
+	},
+	summarize: {
+		title: "Summarize delivery",
+		instruction: "Summarize completed changes, verification status, remaining risks, and pending approvals using only prior phase evidence. Do not call tools.",
+		acceptanceCriteria: ["All prior phases are complete and no unresolved failure, blocker, or approval is hidden."]
+	}
+};
+
+function createPhase(phaseId: FixedWorkflowPhaseId, executionProfile: WorkflowExecutionProfileId): WorkflowPhase {
 	const phase: WorkflowPhase = PHASE_TEMPLATES[phaseId];
+	const profile = getWorkflowExecutionProfile(executionProfile);
+	const workspaceContent = executionProfile === "workspace" ? WORKSPACE_PHASE_CONTENT[phaseId] : undefined;
 	return {
 		...phase,
-		allowedTools: [...phase.allowedTools]
+		...workspaceContent,
+		skillId: phaseId === "implement"
+			? profile.writeSkillId
+			: (phaseId === "review" ? profile.reviewSkillId : undefined),
+		promptId: phaseId === "review"
+			? profile.reviewPromptId
+			: ((phaseId === "implement" || phaseId === "summarize") ? profile.promptId : undefined),
+		allowedTools: getWorkflowToolsForProfile(executionProfile, phase.toolGroup ?? "read")
 	};
 }
 
@@ -82,15 +120,16 @@ function createTodos(phases: WorkflowPhase[]): WorkflowTodoItem[] {
 	return createVisibleWorkflowTodos(phases);
 }
 
-function createPlan(title: string, phaseIds: FixedWorkflowPhaseId[]): WorkflowPlan {
-	const phases: WorkflowPhase[] = phaseIds.map(createPhase);
+function createPlan(title: string, phaseIds: FixedWorkflowPhaseId[], executionProfile: WorkflowExecutionProfileId): WorkflowPlan {
+	const phases: WorkflowPhase[] = phaseIds.map((phaseId: FixedWorkflowPhaseId): WorkflowPhase => createPhase(phaseId, executionProfile));
 	return {
 		id: createWorkflowId(),
 		title,
 		phases,
 		todos: createTodos(phases),
 		source: "fixed",
-		revision: 0
+		revision: 0,
+		executionProfile
 	};
 }
 
@@ -126,7 +165,7 @@ export function createWorkflowTitle(message: string): string {
 	return `${normalized.slice(0, 24)}...`;
 }
 
-export function planWorkflow(params: AiChatParams): WorkflowPlan | null {
+export function planWorkflow(params: AiChatParams, executionProfile: WorkflowExecutionProfileId = "godot"): WorkflowPlan | null {
 	const workflowMode = params.options?.workflow ?? "auto";
 	if (
 		workflowMode === "single"
@@ -138,10 +177,13 @@ export function planWorkflow(params: AiChatParams): WorkflowPlan | null {
 		return null;
 	}
 	const title: string = createWorkflowTitle(params.message);
-	return createPlan(title, ["inspect", "implement", "verify", "summarize"]);
+	return createPlan(title, ["inspect", "implement", "verify", "summarize"], executionProfile);
 }
 
-export function planWorkflowAfterLlmPlannerFailure(params: AiChatParams): WorkflowPlan | null {
+export function planWorkflowAfterLlmPlannerFailure(
+	params: AiChatParams,
+	executionProfile: WorkflowExecutionProfileId = "godot"
+): WorkflowPlan | null {
 	if (params.mode === "ask" || params.mode === "plan" || getExecutionPolicy(params) === "read_only") return null;
-	return createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"]);
+	return createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"], executionProfile);
 }

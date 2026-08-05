@@ -16,6 +16,7 @@ import type {
 	WorkflowToolGroup
 } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
+import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowExecutionProfileId } from "./execution-profile.js";
 
 const MAX_LLM_WORKFLOW_STEPS: number = 8;
 const MAX_LLM_WORKFLOW_REVISIONS: number = 3;
@@ -55,17 +56,18 @@ export async function createLlmWorkflowPlan(
 	options: ProviderChatOptions,
 	history: ChatMessage[],
 	planningContext: string,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	executionProfile: WorkflowExecutionProfileId = "godot"
 ): Promise<WorkflowPlan | null> {
 	const text: string = await chatWithProvider(
 		createPlannerParams(createInitialPlanMessage(params.message, planningContext)),
 		options,
 		limitPlanningHistory(history),
-		createPlannerSystemPrompt(),
+		createPlannerSystemPrompt(executionProfile),
 		abortSignal
 	);
 	const rawPlan: LlmPlan = parseLlmPlan(text);
-	return createWorkflowPlanFromLlmPlan(rawPlan, params.message);
+	return createWorkflowPlanFromLlmPlan(rawPlan, params.message, executionProfile);
 }
 
 export async function reviseLlmWorkflowPlan(
@@ -76,7 +78,8 @@ export async function reviseLlmWorkflowPlan(
 	options: ProviderChatOptions,
 	history: ChatMessage[],
 	planningContext: string,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	executionProfile: WorkflowExecutionProfileId = plan.executionProfile ?? "godot"
 ): Promise<WorkflowPlan> {
 	if (plan.source !== "llm") {
 		return plan;
@@ -92,11 +95,11 @@ export async function reviseLlmWorkflowPlan(
 		createPlannerParams(createRevisionMessage(plan, completedPhaseIndex, originalParams.message, phaseOutputs, planningContext)),
 		options,
 		limitPlanningHistory(history),
-		createPlannerSystemPrompt(),
+		createPlannerSystemPrompt(executionProfile),
 		abortSignal
 	);
 	const rawPlan: LlmPlan = parseLlmPlan(text);
-	return mergeRevisedPendingSteps(plan, completedPhaseIndex + 1, rawPlan);
+	return mergeRevisedPendingSteps(plan, completedPhaseIndex + 1, rawPlan, executionProfile);
 }
 
 function createPlannerParams(message: string): AiChatParams {
@@ -111,7 +114,24 @@ function createPlannerParams(message: string): AiChatParams {
 	};
 }
 
-function createPlannerSystemPrompt(): string {
+function createPlannerSystemPrompt(executionProfile: WorkflowExecutionProfileId): string {
+	if (executionProfile === "workspace") {
+		return createWorkspacePlannerSystemPrompt();
+	}
+	return createGodotPlannerSystemPrompt();
+}
+
+function createWorkspacePlannerSystemPrompt(): string {
+	return [
+		"You are a workflow planner. Return one JSON object only; do not call tools or write explanatory prose.",
+		"Schema: { title?: string, steps: [{ id?: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[] }] }.",
+		"Use read only for evidence gathering, write only for approval-gated workspace changes, verify only for non-mutating checks, and summarize for the final user-facing delivery.",
+		"Plan concrete, minimal steps. Complex mutations normally use read, write, verify, summarize. The final step must be summarize. Do not name tools; the server selects the safe tool set.",
+		"This is a general workspace. Do not assume Godot, scenes, GDScript, editor state, or Godot-specific validation."
+	].join("\\n");
+}
+
+function createGodotPlannerSystemPrompt(): string {
 	return [
 		"你是 Godot Daedalus 的任务调度器，只负责输出 JSON 计划，不调用工具，不写解释文本。",
 		"输出必须是一个 JSON object，格式为：",
@@ -190,8 +210,12 @@ function parseJsonObject(text: string): unknown {
 	return parseJsonObjectFromLlm(text, "LLM planner did not return valid JSON");
 }
 
-function createWorkflowPlanFromLlmPlan(rawPlan: LlmPlan, userMessage: string): WorkflowPlan | null {
-	const phases: WorkflowPhase[] = createPhasesFromSteps(rawPlan.steps);
+function createWorkflowPlanFromLlmPlan(
+	rawPlan: LlmPlan,
+	userMessage: string,
+	executionProfile: WorkflowExecutionProfileId
+): WorkflowPlan | null {
+	const phases: WorkflowPhase[] = createPhasesFromSteps(rawPlan.steps, executionProfile);
 	if (phases.length === 0) {
 		return null;
 	}
@@ -203,21 +227,26 @@ function createWorkflowPlanFromLlmPlan(rawPlan: LlmPlan, userMessage: string): W
 		todos: createTodos(phases),
 		source: "llm",
 		revision: 0,
-		maxRevisions: MAX_LLM_WORKFLOW_REVISIONS
+		maxRevisions: MAX_LLM_WORKFLOW_REVISIONS,
+		executionProfile
 	};
 }
 
-function createPhasesFromSteps(steps: LlmPlanStep[]): WorkflowPhase[] {
-	return createPhasesFromStepsWithReservedIds(steps, new Set());
+function createPhasesFromSteps(steps: LlmPlanStep[], executionProfile: WorkflowExecutionProfileId): WorkflowPhase[] {
+	return createPhasesFromStepsWithReservedIds(steps, new Set(), executionProfile);
 }
 
-function createPhasesFromStepsWithReservedIds(steps: LlmPlanStep[], reservedIds: Set<string>): WorkflowPhase[] {
-	const trimmedSteps: LlmPlanStep[] = ensureSummaryStep(steps.slice(0, MAX_LLM_WORKFLOW_STEPS));
+function createPhasesFromStepsWithReservedIds(
+	steps: LlmPlanStep[],
+	reservedIds: Set<string>,
+	executionProfile: WorkflowExecutionProfileId
+): WorkflowPhase[] {
+	const trimmedSteps: LlmPlanStep[] = ensureSummaryStep(steps.slice(0, MAX_LLM_WORKFLOW_STEPS), executionProfile);
 	const usedIds: Set<string> = new Set(reservedIds);
-	return trimmedSteps.map((step: LlmPlanStep, index: number): WorkflowPhase => createPhaseFromStep(step, index, usedIds));
+	return trimmedSteps.map((step: LlmPlanStep, index: number): WorkflowPhase => createPhaseFromStep(step, index, usedIds, executionProfile));
 }
 
-function ensureSummaryStep(steps: LlmPlanStep[]): LlmPlanStep[] {
+function ensureSummaryStep(steps: LlmPlanStep[], executionProfile: WorkflowExecutionProfileId): LlmPlanStep[] {
 	if (steps.length === 0) {
 		return [{
 			id: "summarize",
@@ -225,7 +254,7 @@ function ensureSummaryStep(steps: LlmPlanStep[]): LlmPlanStep[] {
 			instruction: "直接回答用户需求，说明结论和必要的后续建议。",
 			toolGroup: "summarize",
 			acceptanceCriteria: ["用户需求已经被直接回答，且没有未解决的验证失败或审批。"],
-			promptId: "godot.assistant"
+			promptId: getWorkflowExecutionProfile(executionProfile).promptId
 		}];
 	}
 
@@ -246,15 +275,25 @@ function ensureSummaryStep(steps: LlmPlanStep[]): LlmPlanStep[] {
 			instruction: "基于前面步骤结果给用户最终总结，说明完成内容、验证状态和剩余风险。",
 			toolGroup: "summarize",
 			acceptanceCriteria: ["所有前置步骤已完成，验证失败、审批和阻塞状态已被如实说明。"],
-			promptId: "godot.assistant"
+			promptId: getWorkflowExecutionProfile(executionProfile).promptId
 		}
 	];
 }
 
-function createPhaseFromStep(step: LlmPlanStep, index: number, usedIds: Set<string>): WorkflowPhase {
+function createPhaseFromStep(
+	step: LlmPlanStep,
+	index: number,
+	usedIds: Set<string>,
+	executionProfile: WorkflowExecutionProfileId
+): WorkflowPhase {
 	const toolGroup: WorkflowToolGroup = step.toolGroup;
-	const skillId: SkillId | undefined = normalizeSkillId(step.skillId ?? defaultSkillForToolGroup(toolGroup));
-	const promptId: PromptId | undefined = step.promptId ?? defaultPromptForToolGroup(toolGroup);
+	const profile = getWorkflowExecutionProfile(executionProfile);
+	const skillId: SkillId | undefined = executionProfile === "workspace"
+		? undefined
+		: normalizeSkillId(step.skillId ?? defaultSkillForToolGroup(toolGroup));
+	const promptId: PromptId | undefined = executionProfile === "workspace"
+		? profile.promptId
+		: (step.promptId ?? defaultPromptForToolGroup(toolGroup));
 	return {
 		id: createUniqueStepId(step.id ?? step.title, index, usedIds),
 		title: clipText(step.title, 32),
@@ -262,7 +301,9 @@ function createPhaseFromStep(step: LlmPlanStep, index: number, usedIds: Set<stri
 		skillId,
 		promptId,
 		toolBudget: getToolBudgetForToolGroup(toolGroup),
-		allowedTools: getAllowedToolsForLlmPlannedStep(toolGroup, step.title, step.instruction),
+		allowedTools: executionProfile === "workspace"
+			? getWorkflowToolsForProfile(executionProfile, toolGroup)
+			: getAllowedToolsForLlmPlannedStep(toolGroup, step.title, step.instruction),
 		instruction: clipText(step.instruction, MAX_PHASE_INSTRUCTION_CHARS),
 		acceptanceCriteria: normalizeAcceptanceCriteria(step.acceptanceCriteria, toolGroup),
 		completionContract: createWorkflowCompletionContract(toolGroup, step.title, step.instruction, step.acceptanceCriteria),
@@ -270,7 +311,12 @@ function createPhaseFromStep(step: LlmPlanStep, index: number, usedIds: Set<stri
 	};
 }
 
-function mergeRevisedPendingSteps(plan: WorkflowPlan, firstPendingIndex: number, rawPlan: LlmPlan): WorkflowPlan {
+function mergeRevisedPendingSteps(
+	plan: WorkflowPlan,
+	firstPendingIndex: number,
+	rawPlan: LlmPlan,
+	executionProfile: WorkflowExecutionProfileId
+): WorkflowPlan {
 	const completedPhases: WorkflowPhase[] = plan.phases.slice(0, firstPendingIndex);
 	const completedPhaseIds: Set<string> = new Set(completedPhases.map((phase: WorkflowPhase): string => phase.id));
 	const completedPhaseTitles: Set<string> = new Set(completedPhases.map((phase: WorkflowPhase): string => phase.title.toLowerCase()));
@@ -279,7 +325,7 @@ function mergeRevisedPendingSteps(plan: WorkflowPlan, firstPendingIndex: number,
 	));
 	const previousPendingPhases: WorkflowPhase[] = plan.phases.slice(firstPendingIndex);
 	const revisedPendingPhases: WorkflowPhase[] = usableSteps.length > 0
-		? createPhasesFromStepsWithReservedIds(usableSteps, completedPhaseIds)
+		? createPhasesFromStepsWithReservedIds(usableSteps, completedPhaseIds, executionProfile)
 		: previousPendingPhases.map((phase: WorkflowPhase): WorkflowPhase => ({
 			...phase,
 			allowedTools: [...phase.allowedTools],

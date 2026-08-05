@@ -9,6 +9,7 @@ import type {
 	WorkflowTodoItem
 } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
+import { getWorkflowExecutionProfile } from "./execution-profile.js";
 
 const AUTO_REPAIR_ID_PREFIX: string = "auto-repair-";
 const AUTO_VERIFY_ID_PREFIX: string = "auto-verify-";
@@ -358,12 +359,13 @@ export function insertWorkflowAutoRepairPhases(
 	if (resolvedRepairWriteTools.length === 0) {
 		return plan;
 	}
+	const executionProfile = getWorkflowExecutionProfile(plan.executionProfile);
 	const repairPhase: WorkflowPhase = {
 		id: createUniquePhaseId(plan, AUTO_REPAIR_ID_PREFIX, round),
 		title: isWriteGuardFailure(failedPhase, failedChecks) ? "重试实际修改" : "修复验证问题",
 		toolGroup: "write",
-		skillId: "file.creator",
-		promptId: "godot.assistant",
+		skillId: executionProfile.writeSkillId,
+		promptId: executionProfile.promptId,
 		toolBudget: "project_edit",
 		allowedTools: uniqueTools([...REPAIR_READ_TOOLS, ...resolvedRepairWriteTools]),
 		repairOf: failedPhase.id,

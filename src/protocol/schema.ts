@@ -3,6 +3,7 @@ import { MAX_IMAGE_BYTES, MAX_IMAGE_DATA_URL_CHARS, SUPPORTED_IMAGE_MIME_TYPES }
 
 export const promptIdSchema = z.enum([
 	"godot.assistant",
+	"workspace.assistant",
 	"gdscript.reviewer",
 	"scene.architect",
 	"backend.helper",

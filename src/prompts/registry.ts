@@ -17,6 +17,12 @@ export const promptTemplates: Record<PromptId, PromptTemplate> = {
 		description: "General Daedalus assistant with strong Godot project support",
 		path: "src/prompts/templates/base/godot-assistant.md"
 	},
+	"workspace.assistant": {
+		id: "workspace.assistant",
+		name: "Workspace Assistant",
+		description: "General assistant for non-Godot workspace workflows",
+		path: "src/prompts/templates/base/workspace-assistant.md"
+	},
 	"gdscript.reviewer": {
 		id: "gdscript.reviewer",
 		name: "GDScript Reviewer",

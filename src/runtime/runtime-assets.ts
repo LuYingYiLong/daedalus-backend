@@ -10,6 +10,7 @@ export const RUNTIME_ASSET_PATHS = {
 	"provider.providers": "src/providers/catalog/providers.json",
 	"provider.models": "src/providers/catalog/models.json",
 	"prompt.base.godotAssistant": "src/prompts/templates/base/godot-assistant.md",
+	"prompt.base.workspaceAssistant": "src/prompts/templates/base/workspace-assistant.md",
 	"prompt.base.gdscriptReviewer": "src/prompts/templates/base/gdscript-reviewer.md",
 	"prompt.base.sceneArchitect": "src/prompts/templates/base/scene-architect.md",
 	"prompt.base.backendHelper": "src/prompts/templates/base/backend-helper.md",

@@ -1,6 +1,7 @@
 import type { AdditionalContextItem, AiChatParams, ChatMessage, PromptId } from "../protocol/types.js";
 import type { SkillId } from "../skills/registry.js";
 import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
+import type { WorkflowExecutionProfileId } from "./execution-profile.js";
 
 export type WorkflowPhaseId = string;
 
@@ -78,6 +79,7 @@ export type WorkflowPlan = {
 	source?: WorkflowSource | undefined;
 	revision?: number | undefined;
 	maxRevisions?: number | undefined;
+	executionProfile?: WorkflowExecutionProfileId | undefined;
 };
 
 export type WorkflowPhaseOutput = {

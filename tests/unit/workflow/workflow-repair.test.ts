@@ -71,6 +71,33 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 	assert.equal(repairedPlan.revision, 1);
 });
 
+test("workspace repairs inherit the generic execution profile", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write", "Update workspace file", "write"),
+		allowedTools: ["mcp_workspace_write_text_file"]
+	};
+	const verify: WorkflowPhase = createPhase("verify", "Verify workspace file", "verify");
+	const plan: WorkflowPlan = {
+		id: "workspace-repair",
+		title: "Workspace repair",
+		source: "fixed",
+		executionProfile: "workspace",
+		phases: [write, verify],
+		todos: [createTodo(write, "done"), createTodo(verify, "failed")]
+	};
+	const repairedPlan: WorkflowPlan = insertWorkflowAutoRepairPhases(
+		plan,
+		2,
+		verify,
+		"Verification failed",
+		[{ code: "target_readback_failed", message: "Readback failed", artifact: "src/service.ts" }],
+		["mcp_workspace_write_text_file"]
+	);
+	const repair: WorkflowPhase | undefined = repairedPlan.phases.find((phase: WorkflowPhase): boolean => phase.repairOf === "verify");
+	assert.equal(repair?.promptId, "workspace.assistant");
+	assert.equal(repair?.skillId, undefined);
+});
+
 test("workflow repair permits two actual rounds and preserves missing target contracts", (): void => {
 	const write: WorkflowPhase = {
 		...createPhase("create-main", "Create main scene", "write"),

@@ -81,6 +81,7 @@ import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
 import { createGodotTemplateWorkflowPlan, type GodotTemplateTarget } from "../workflow/godot-template-planner.js";
+import { resolveWorkflowExecutionProfile, type WorkflowExecutionProfileId } from "../workflow/execution-profile.js";
 import { getExecutionPolicy, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
 import {
 	applyDeterministicVerificationGate,
@@ -497,9 +498,11 @@ async function createWorkflowPlanForRoute(
 	target?: GodotTemplateTarget | undefined
 ): Promise<WorkflowPlan | null> {
 	throwIfAborted(abortSignal);
+	const executionProfile: WorkflowExecutionProfileId = await resolveWorkflowExecutionProfileForWorkspace(runtimeContext?.activeWorkspace);
+	throwIfAborted(abortSignal);
 	if (params.options?.workflow !== "llm_planned" && target !== undefined) {
 		const preferredTemplate: WorkflowPlan | null = await awaitWithAbort(
-			createGodotTemplateWorkflowPlanForRuntime(params, target, runtimeContext),
+			createGodotTemplateWorkflowPlanForRuntime(params, target, executionProfile),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);
@@ -515,7 +518,7 @@ async function createWorkflowPlanForRoute(
 		);
 		throwIfAborted(abortSignal);
 		const plan: WorkflowPlan | null = await awaitWithAbort(
-			createLlmWorkflowPlan(params, plannerOptions, history, planningContext, abortSignal),
+			createLlmWorkflowPlan(params, plannerOptions, history, planningContext, abortSignal, executionProfile),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);
@@ -532,16 +535,19 @@ async function createWorkflowPlanForRoute(
 	}
 
 	throwIfAborted(abortSignal);
-	return planWorkflowAfterLlmPlannerFailure(params);
+	return planWorkflowAfterLlmPlannerFailure(params, executionProfile);
 }
 
 async function createGodotTemplateWorkflowPlanForRuntime(
 	params: AiChatParams,
 	target: GodotTemplateTarget,
-	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined
+	executionProfile: WorkflowExecutionProfileId
 ): Promise<WorkflowPlan | null> {
-	const isGodotProject: boolean = await hasGodotProjectFile(runtimeContext?.activeWorkspace);
-	return createGodotTemplateWorkflowPlan(params, target, { isGodotProject });
+	return createGodotTemplateWorkflowPlan(params, target, { isGodotProject: executionProfile === "godot" });
+}
+
+async function resolveWorkflowExecutionProfileForWorkspace(workspace: WorkspaceConfig | undefined): Promise<WorkflowExecutionProfileId> {
+	return resolveWorkflowExecutionProfile(await hasGodotProjectFile(workspace));
 }
 
 async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Promise<boolean> {
@@ -985,7 +991,10 @@ async function runHiddenAnswerExecutionWithEscalation(
 		createGodotTemplateTarget(escalationError.executionDecision)
 	);
 	if (workflowPlan === null) {
-		workflowPlan = planWorkflow(workflowParams);
+		workflowPlan = planWorkflow(
+			workflowParams,
+			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace)
+		);
 	}
 	if (workflowPlan === null) {
 		throw new Error("轻量操作超出范围，但无法创建升级后的 Workflow。");
@@ -1046,7 +1055,10 @@ export async function escalatePendingContinuationToWorkflow(params: {
 		{ activeWorkspace: params.session.activeWorkspace }
 	);
 	if (plan === null) {
-		plan = planWorkflow(workflowParams);
+		plan = planWorkflow(
+			workflowParams,
+			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace)
+		);
 	}
 	if (plan === null) {
 		throw new Error("The lightweight run exceeded its safe scope, but no executable Workflow could be created.");

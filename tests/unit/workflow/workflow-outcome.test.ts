@@ -237,6 +237,45 @@ test("verify phase without deterministic validation tool becomes blocked", (): v
 	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 
+test("verify phase accepts a post-write prose document readback", (): void => {
+	const observations: WorkflowToolObservation[] = applyEvents([{
+		type: "tool.result",
+		step: 0,
+		toolCallId: "read-readme",
+		toolName: "mcp_workspace_read_text_file",
+		resultChars: 320,
+		truncated: false,
+		ok: true,
+		validationStatus: "unknown",
+		summary: "# Daedalus Backend",
+		artifactRefs: ["README-CN.md"]
+	}]);
+	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "Document readback confirmed.", observations);
+
+	assert.equal(outcome.status, "completed");
+	assert.deepEqual(outcome.verifiedArtifacts, ["README-CN.md"]);
+	assert.equal(outcome.verificationStatus, "verified");
+});
+
+test("verify phase does not treat a source-code readback as executable validation", (): void => {
+	const observations: WorkflowToolObservation[] = applyEvents([{
+		type: "tool.result",
+		step: 0,
+		toolCallId: "read-source",
+		toolName: "mcp_workspace_read_text_file",
+		resultChars: 320,
+		truncated: false,
+		ok: true,
+		validationStatus: "unknown",
+		summary: "export const value = 1;",
+		artifactRefs: ["src/index.ts"]
+	}]);
+	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "Source readback confirmed.", observations);
+
+	assert.equal(outcome.status, "blocked");
+	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
+});
+
 test("summarize phase cannot complete with a tool-call prelude", (): void => {
 	const outcome = createWorkflowPhaseOutcome(
 		createPhase("summarize", "summarize"),

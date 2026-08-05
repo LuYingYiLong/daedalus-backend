@@ -60,6 +60,7 @@ export function createPhaseMessage(
 	const previousResults: string = phaseOutputs.length > 0
 		? phaseOutputs.map(formatPhaseOutput).join("\n\n")
 		: "（暂无上一阶段结果）";
+	const verificationGuidance: string = createVerificationGuidance(phase, phaseOutputs);
 
 	return [
 		`当前执行工作流：${plan.title}`,
@@ -76,9 +77,51 @@ export function createPhaseMessage(
 		"",
 		"## 上一阶段结果",
 		previousResults,
+		verificationGuidance,
 		"",
 		"请只完成当前阶段。不要跳过后续阶段，不要输出最终交付总结，除非当前阶段是最后一步或阶段指令明确要求总结。"
 	].join("\n");
+}
+
+const PROSE_READBACK_EXTENSIONS: readonly string[] = [".md", ".mdx", ".rst", ".txt"];
+const WORKSPACE_CODE_EXTENSIONS: readonly string[] = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"];
+
+function createVerificationGuidance(phase: WorkflowPhase, phaseOutputs: WorkflowPhaseOutput[]): string {
+	if (phase.toolGroup !== "verify") {
+		return "";
+	}
+
+	const modifiedArtifacts: string[] = [...new Set(phaseOutputs.flatMap((output: WorkflowPhaseOutput): string[] => output.modifiedArtifacts))];
+	if (modifiedArtifacts.length === 0) {
+		return "";
+	}
+
+	const normalizedArtifacts: string[] = modifiedArtifacts.map((artifact: string): string => artifact.replace(/^res:\/\//iu, "").toLowerCase());
+	const proseOnly: boolean = normalizedArtifacts.every((artifact: string): boolean => (
+		PROSE_READBACK_EXTENSIONS.some((extension: string): boolean => artifact.endsWith(extension))
+	));
+	if (proseOnly) {
+		return [
+			"## Verification target selection",
+			`The only modified artifacts are prose documents: ${modifiedArtifacts.join(", ")}.`,
+			"Re-read each changed document with a text-file read tool and confirm the requested text. That readback is the required deterministic verification.",
+			"Do not run Godot diagnostics, Godot check-only, scene validation, or workspace typecheck for these document-only changes."
+		].join("\n");
+	}
+
+	const workspaceCodeArtifacts: string[] = modifiedArtifacts.filter((artifact: string): boolean => {
+		const normalized: string = artifact.replace(/^res:\/\//iu, "").toLowerCase();
+		return WORKSPACE_CODE_EXTENSIONS.some((extension: string): boolean => normalized.endsWith(extension));
+	});
+	if (workspaceCodeArtifacts.length > 0) {
+		return [
+			"## Verification target selection",
+			`Changed workspace code: ${workspaceCodeArtifacts.join(", ")}.`,
+			"Use workspace.typecheck or another matching workspace validator. Do not use Godot check-only or scene validation for these files."
+		].join("\n");
+	}
+
+	return "";
 }
 
 export function createPhaseParams(originalParams: AiChatParams, phase: WorkflowPhase, message: string, stream: boolean): AiChatParams {

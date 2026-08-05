@@ -12,6 +12,7 @@ import type {
 const SUMMARY_TOOL_INTENT_PATTERN: RegExp = /(准备|将要|接下来|现在|马上|先).{0,20}(调用|使用|读取|运行|查询)|\b(I will|I'll|I am going to|I'm going to)\b/iu;
 const TOOL_REFERENCE_PATTERN: RegExp = /\b(mcp_[a-z0-9_]+|read_text_file|inspect_scene_tree|replace_text_in_file|query_docs|resolve_library_id|godot\.[a-z0-9_.-]+)\b/iu;
 const DIAGNOSTICS_ENVIRONMENT_ERROR_PATTERN: RegExp = /\b(godot_diagnostics_unavailable|lsp_unavailable|dap_unavailable|no active workspace|ECONNREFUSED|ETIMEDOUT|timeout|not available|not running)\b/iu;
+const CONTENT_READBACK_EXTENSIONS: readonly string[] = [".md", ".mdx", ".rst", ".txt"];
 
 export function createWorkflowPhaseRunId(phaseId: string): string {
 	return `phase-run-${phaseId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -140,6 +141,10 @@ function isVerificationObservation(observation: WorkflowToolObservation): boolea
 		return true;
 	}
 
+	if (isContentReadbackVerification(observation)) {
+		return true;
+	}
+
 	return observation.toolName === "mcp_godot_lsp_get_file_diagnostics"
 		|| observation.toolName.startsWith("mcp_godot_lsp_")
 		|| observation.toolName === "mcp_godot_dap_get_last_error"
@@ -147,6 +152,21 @@ function isVerificationObservation(observation: WorkflowToolObservation): boolea
 		|| observation.toolName === "mcp_godot_dap_get_stack_trace"
 		|| observation.toolName === "mcp_godot_inspect_scene_tree"
 		|| observation.toolName === "mcp_godot_validate_scene_script_references";
+}
+
+/** A post-write readback is the deterministic validation for prose-only files. */
+function isContentReadbackVerification(observation: WorkflowToolObservation): boolean {
+	if (
+		observation.toolName !== "mcp_workspace_read_text_file"
+		&& observation.toolName !== "mcp_godot_read_text_file"
+	) {
+		return false;
+	}
+
+	return (observation.artifactRefs ?? []).some((artifact: string): boolean => {
+		const normalized: string = artifact.replace(/^res:\/\//iu, "").toLowerCase();
+		return CONTENT_READBACK_EXTENSIONS.some((extension: string): boolean => normalized.endsWith(extension));
+	});
 }
 
 function isSuccessfulVerificationObservation(observation: WorkflowToolObservation): boolean {

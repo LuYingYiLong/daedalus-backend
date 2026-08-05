@@ -402,6 +402,7 @@ function createRouteSystemPromptV3(): string {
 		"- scope=complex: multi-file coordination, migration, destructive work, a long operation, or explicit planning.",
 		"- lane=direct for answer, read for inspect, probe for unknown mutation, lightweight for bounded mutation, workflow for complex mutation.",
 		"Requests to look up installed local Godot documentation, verify a Godot API, or inspect an exact Godot class/member use intent=inspect and lane=read.",
+		"In Agent mode with an active workspace, implementation/how-to questions are read-first when the answer could depend on the repository; if uncertain, fail closed to intent=inspect and lane=read. Reserve intent=answer and lane=direct for clearly universal concepts that do not depend on the current project.",
 		"Imperative requests to optimize, improve, or adjust the current project use intent=mutate. Questions asking how something could be optimized are advice, not mutation.",
 		"In Agent mode, a concrete defect report about the current project normally asks Daedalus to fix that defect even when phrased as a statement rather than an imperative; use intent=mutate. Use intent=inspect only when the user asks why, asks for analysis, asks to inspect/check, or explicitly says not to modify anything.",
 		"Creating, modifying, fixing, or generating something does not by itself require workflow.",
@@ -447,7 +448,16 @@ function requiresCurrentProjectRead(message: string, context: WorkflowRouteConte
 		return true;
 	}
 
-	const lowerMessage: string = message.toLowerCase();
+	const lowerMessage: string = message.normalize("NFKC").toLowerCase();
+	if (
+		isExplicitReadOnlyRequest(lowerMessage)
+		|| looksLikeImplementationQuestion(lowerMessage)
+		|| looksLikeProjectAnalysisQuestion(lowerMessage)
+		|| containsFileReference(lowerMessage)
+	) {
+		return true;
+	}
+
 	return includesAny(lowerMessage, [
 		"当前",
 		"现有",
@@ -488,6 +498,25 @@ function requiresCurrentProjectRead(message: string, context: WorkflowRouteConte
 		"react",
 		"antd"
 	]);
+}
+
+function looksLikeImplementationQuestion(message: string): boolean {
+	return [
+		/(?:^|[\s，。！？?])(?:该)?(?:怎么|如何|怎样)(?:做|实现|处理|开展|落地)?/u,
+		/(?:怎么做|如何做|怎样做|有哪些步骤|怎么落地|怎么实现|怎么规划)/u,
+		/\b(?:how(?:\s+to|\s+do)|what\s+steps|best\s+way|which\s+approach|implementation\s+plan)\b/u
+	].some((pattern: RegExp): boolean => pattern.test(message));
+}
+
+function looksLikeProjectAnalysisQuestion(message: string): boolean {
+	return [
+		/(?:评估|分析|审查|检查|梳理|确认|评审|诊断|盘点)/u,
+		/\b(?:assess|evaluate|analyze|analyse|review|audit|inspect|check)\b/u
+	].some((pattern: RegExp): boolean => pattern.test(message));
+}
+
+function containsFileReference(message: string): boolean {
+	return /(?:^|[\s"'`(/\\])[-\w./\\]+\.[a-z0-9]{1,12}(?=$|[\s"'`),，。！？?])/u.test(message);
 }
 
 export function requiresGodotDocumentationRead(message: string): boolean {

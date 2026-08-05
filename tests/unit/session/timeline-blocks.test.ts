@@ -20,13 +20,14 @@ function session(messages: StoredMessage[], events: StoredSessionEvent[]): Store
 	};
 }
 
-function event(id: string, requestId: string, eventName: string, createdAt: string, data: Record<string, unknown>): StoredSessionEvent {
+function event(id: string, requestId: string, eventName: string, createdAt: string, data: Record<string, unknown>, sequence?: number): StoredSessionEvent {
 	return {
 		id,
 		requestId,
 		event: eventName,
 		data,
-		createdAt
+		createdAt,
+		sequence
 	};
 }
 
@@ -700,6 +701,40 @@ test("canonical timeline restores final message done text after earlier workflow
 	assert.equal(markdownParts[0]?.text, "前置阶段说明。");
 	assert.equal(markdownParts[1]?.type, "markdown");
 	assert.equal(markdownParts[1]?.text, "最终总结。");
+});
+
+test("canonical timeline preserves event sequence when delta and done share a timestamp", (): void => {
+	const finalText: string = "## e2e plan\n\nRead the current project before proposing test coverage.";
+	const stored: StoredSession = session(
+		[
+			{
+				role: "user",
+				requestId: "request-same-timestamp",
+				content: "How should this project do e2e?",
+				createdAt: "2026-08-05T09:53:24.152Z"
+			},
+			{
+				role: "assistant",
+				requestId: "request-same-timestamp",
+				content: finalText,
+				createdAt: "2026-08-05T09:54:28.819Z"
+			}
+		],
+		[
+			event("event-done", "request-same-timestamp", "agent.message.done", "2026-08-05T09:54:28.860Z", {
+				text: finalText
+			}, 12),
+			event("event-delta", "request-same-timestamp", "agent.message.delta", "2026-08-05T09:54:28.860Z", {
+				text: finalText
+			}, 11)
+		]
+	);
+
+	const result = buildCanonicalTimelineBlocks(stored);
+	const assistant = assistantBlock(result.blocks[1]);
+	const markdown = assistant.bodyParts.filter((part) => part.type === "markdown").map((part) => part.text).join("");
+
+	assert.equal(markdown, finalText);
 });
 
 test("canonical timeline replaces drifted streamed markdown with final message done text", (): void => {

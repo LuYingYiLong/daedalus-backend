@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../../../src/workflow/repair.js";
+import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases, resolveRepairWriteTools } from "../../../src/workflow/repair.js";
 import type { WorkflowFailedCheck, WorkflowPhase, WorkflowPlan, WorkflowTodoItem } from "../../../src/workflow/types.js";
 
 function createPhase(id: string, title: string, toolGroup: WorkflowPhase["toolGroup"]): WorkflowPhase {
@@ -25,7 +25,10 @@ function createTodo(phase: WorkflowPhase, status: WorkflowTodoItem["status"] = "
 
 test("workflow auto repair insertion preserves current todos and adds repair plus reverify", (): void => {
 	const inspect: WorkflowPhase = createPhase("inspect", "理解上下文", "read");
-	const implement: WorkflowPhase = createPhase("implement", "实现修改", "write");
+	const implement: WorkflowPhase = {
+		...createPhase("implement", "实现修改", "write"),
+		allowedTools: ["mcp_godot_replace_text_in_file", "mcp_godot_apply_scene_patch"]
+	};
 	const verify: WorkflowPhase = createPhase("verify", "运行验证", "verify");
 	const summarize: WorkflowPhase = createPhase("summarize", "总结交付", "summarize");
 	const plan: WorkflowPlan = {
@@ -46,7 +49,8 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 		plan,
 		3,
 		verify,
-		"`%TitleLabel` 未设置 unique name，需要修复脚本或场景。"
+		"`%TitleLabel` 未设置 unique name，需要修复脚本。",
+		[{ code: "script_invalid", message: "脚本检查失败。", artifact: "scripts/game.gd" }]
 	);
 
 	assert.deepEqual(
@@ -58,7 +62,7 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 	assert.equal(repairedPlan.phases[3]?.toolGroup, "write");
 	assert.equal(repairedPlan.phases[4]?.toolGroup, "verify");
 	assert.ok(repairedPlan.phases[3]?.allowedTools.includes("mcp_godot_replace_text_in_file"));
-	assert.ok(repairedPlan.phases[3]?.allowedTools.includes("mcp_godot_apply_scene_patch"));
+	assert.equal(repairedPlan.phases[3]?.allowedTools.includes("mcp_godot_apply_scene_patch"), false);
 	assert.ok(!repairedPlan.phases[3]?.allowedTools.includes("mcp_terminal_run_write_preset"));
 	assert.ok(!repairedPlan.phases[3]?.allowedTools.includes("mcp_godot_propose_replace_text_in_file"));
 	assert.match(repairedPlan.phases[3]?.instruction ?? "", /第一步必须调用/);
@@ -70,6 +74,7 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 test("workflow repair permits two actual rounds and preserves missing target contracts", (): void => {
 	const write: WorkflowPhase = {
 		...createPhase("create-main", "Create main scene", "write"),
+		allowedTools: ["mcp_godot_create_scene"],
 		completionContract: {
 			targets: [{ kind: "artifact", path: "scenes/Main.tscn" }],
 			requireAll: true
@@ -157,6 +162,10 @@ test("workflow verification-only failures add reverify without write repair", ()
 });
 
 test("workflow auto repair narrows scene failures to scene write tools", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write-scene", "写入场景", "write"),
+		allowedTools: ["mcp_godot_attach_script_to_node", "mcp_godot_apply_scene_patch", "mcp_godot_overwrite_text_file"]
+	};
 	const verify: WorkflowPhase = createPhase("verify-scene", "验证场景引用", "verify");
 	const summarize: WorkflowPhase = createPhase("summarize", "总结交付", "summarize");
 	const plan: WorkflowPlan = {
@@ -164,8 +173,8 @@ test("workflow auto repair narrows scene failures to scene write tools", (): voi
 		title: "测试场景修复",
 		source: "godot_template",
 		revision: 0,
-		phases: [verify, summarize],
-		todos: [createTodo(verify, "failed"), createTodo(summarize)]
+		phases: [write, verify, summarize],
+		todos: [createTodo(write, "done"), createTodo(verify, "failed"), createTodo(summarize)]
 	};
 	const failedChecks: WorkflowFailedCheck[] = [
 		{
@@ -177,12 +186,12 @@ test("workflow auto repair narrows scene failures to scene write tools", (): voi
 
 	const repairedPlan: WorkflowPlan = insertWorkflowAutoRepairPhases(
 		plan,
-		1,
+		2,
 		verify,
 		"scenes/main.tscn 的 script reference 缺失，需要重新挂载脚本。",
 		failedChecks
 	);
-	const repairPhase: WorkflowPhase | undefined = repairedPlan.phases[1];
+	const repairPhase: WorkflowPhase | undefined = repairedPlan.phases[2];
 
 	assert.equal(repairPhase?.toolGroup, "write");
 	assert.equal(repairPhase?.allowedTools.includes("mcp_godot_attach_script_to_node"), true);
@@ -192,6 +201,10 @@ test("workflow auto repair narrows scene failures to scene write tools", (): voi
 });
 
 test("workflow auto repair narrows project setting failures to setting write tools", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write-settings", "写入项目设置", "write"),
+		allowedTools: ["mcp_godot_set_project_setting", "mcp_godot_unset_project_setting", "mcp_godot_apply_scene_patch"]
+	};
 	const verify: WorkflowPhase = createPhase("verify-settings", "验证项目设置", "verify");
 	const summarize: WorkflowPhase = createPhase("summarize", "总结交付", "summarize");
 	const plan: WorkflowPlan = {
@@ -199,8 +212,8 @@ test("workflow auto repair narrows project setting failures to setting write too
 		title: "测试项目设置修复",
 		source: "godot_template",
 		revision: 0,
-		phases: [verify, summarize],
-		todos: [createTodo(verify, "failed"), createTodo(summarize)]
+		phases: [write, verify, summarize],
+		todos: [createTodo(write, "done"), createTodo(verify, "failed"), createTodo(summarize)]
 	};
 	const failedChecks: WorkflowFailedCheck[] = [
 		{
@@ -212,12 +225,12 @@ test("workflow auto repair narrows project setting failures to setting write too
 
 	const repairedPlan: WorkflowPlan = insertWorkflowAutoRepairPhases(
 		plan,
-		1,
+		2,
 		verify,
 		"project.godot 中 application/config/name 仍为旧值。",
 		failedChecks
 	);
-	const repairPhase: WorkflowPhase | undefined = repairedPlan.phases[1];
+	const repairPhase: WorkflowPhase | undefined = repairedPlan.phases[2];
 
 	assert.equal(repairPhase?.toolGroup, "write");
 	assert.equal(repairPhase?.allowedTools.includes("mcp_godot_set_project_setting"), true);
@@ -225,4 +238,33 @@ test("workflow auto repair narrows project setting failures to setting write too
 	assert.equal(repairPhase?.allowedTools.includes("mcp_godot_apply_scene_patch"), false);
 	assert.equal(repairPhase?.allowedTools.includes("mcp_godot_replace_text_in_file"), false);
 	assert.match(repairPhase?.instruction ?? "", /mcp_godot_set_project_setting/);
+});
+
+test("unknown repair targets block automatic write repair", (): void => {
+	const verify: WorkflowPhase = createPhase("verify", "验证", "verify");
+	const plan: WorkflowPlan = {
+		id: "workflow-unknown-repair",
+		title: "Unknown repair",
+		phases: [verify],
+		todos: [createTodo(verify, "failed")]
+	};
+	const resolution = resolveRepairWriteTools(plan, 1, verify, [{
+		code: "unknown_target",
+		message: "The repair target cannot be identified."
+	}]);
+
+	assert.deepEqual(resolution.tools, []);
+	assert.match(resolution.reason, /No prior write phase/u);
+
+	const priorWrite: WorkflowPhase = {
+		...createPhase("write", "写入", "write"),
+		allowedTools: ["mcp_workspace_replace_text_in_file"]
+	};
+	const withPriorWrite: WorkflowPlan = { ...plan, phases: [priorWrite, verify] };
+	const unresolved = resolveRepairWriteTools(withPriorWrite, 2, verify, [{
+		code: "unknown_target",
+		message: "The repair target cannot be identified."
+	}]);
+	assert.deepEqual(unresolved.tools, []);
+	assert.match(unresolved.reason, /no structured artifact/u);
 });

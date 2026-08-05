@@ -1,4 +1,6 @@
 import type { AiChatParams } from "../protocol/types.js";
+import type { ExecutionTargetKind } from "./agent-run-state.js";
+import { getExecutionPolicy } from "./router.js";
 import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPlan } from "./types.js";
 import { createWorkflowId, createWorkflowTitle, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
@@ -16,6 +18,11 @@ export type GodotTaskClassification = {
 
 export type GodotTemplateWorkflowContext = {
 	isGodotProject?: boolean | undefined;
+};
+
+export type GodotTemplateTarget = {
+	kind: ExecutionTargetKind;
+	artifacts: readonly string[];
 };
 
 const TEXT_FILE_READ_TOOLS: string[] = [
@@ -91,80 +98,26 @@ const PROJECT_SETTING_READ_TOOLS: string[] = [
 	"mcp_godot_get_autoloads"
 ];
 
-export function classifyGodotTask(message: string, context?: GodotTemplateWorkflowContext | undefined): GodotTaskClassification {
-	const normalized: string = message.toLowerCase();
-	const scriptPath: string | undefined = findFirstPath(message, ".gd");
-	const scenePath: string | undefined = findFirstPath(message, ".tscn");
-	const scriptContent: string | undefined = extractFirstFencedBlock(message);
-	const nodePath: string = inferNodePath(message);
-	const mentionsGodot: boolean = normalized.includes("godot") || normalized.includes(".gd") || normalized.includes(".tscn") || normalized.includes("project.godot") || normalized.includes("项目设置");
-	const hasGodotWorkspaceContext: boolean = context?.isGodotProject === true;
-	const wantsWrite: boolean = wantsMutation(normalized);
-	const sceneCreationIntent: boolean = scenePath !== undefined && includesAny(normalized, [
-		"create scene", "build scene", "write scene", "创建场景", "创建主场景", "生成场景", "搭建场景", "写入场景"
-	]);
-	const setMainSceneIntent: boolean = includesAny(normalized, ["application/run/main_scene", "run/main_scene"])
-		|| (
-			includesAny(normalized, ["main scene", "主场景", "启动场景"])
-			&& includesAny(normalized, ["set", "configure", "设置", "配置", "指定", "设为"])
-		);
-
-	if ((!mentionsGodot && !hasGodotWorkspaceContext) || !wantsWrite) {
-		return { type: "general_edit" };
+export function classifyGodotTask(target: GodotTemplateTarget | undefined, context?: GodotTemplateWorkflowContext | undefined): GodotTaskClassification {
+	if (target === undefined || context?.isGodotProject !== true) return { type: "general_edit" };
+	const scriptPath: string | undefined = target.artifacts.find((artifact: string): boolean => artifact.toLowerCase().endsWith(".gd"));
+	const scenePath: string | undefined = target.artifacts.find((artifact: string): boolean => artifact.toLowerCase().endsWith(".tscn"));
+	if (target.kind === "project_setting") return { type: "project_setting_change" };
+	if (target.kind === "godot_script_scene" && scriptPath !== undefined && scenePath !== undefined) {
+		return { type: "scene_attach_script", scriptPath, scenePath, nodePath: "." };
 	}
-
-	if (
-		!sceneCreationIntent
-		&& (
-			setMainSceneIntent
-			|| includesAny(normalized, ["project.godot", "项目设置", "project setting", "inputmap", "input map", "input action", "autoload", "display/window", "application/config"])
-		)
-	) {
-		return { type: "project_setting_change" };
-	}
-
-	if (scriptPath !== undefined && scenePath !== undefined && includesAny(normalized, ["挂载", "attach", "脚本引用", "script reference"])) {
-		return {
-			type: "scene_attach_script",
-			scriptPath,
-			scenePath,
-			nodePath,
-			scriptContent
-		};
-	}
-
-	if (wantsLocalGameCreation(normalized)) {
-		return {
-			type: "local_game_create",
-			scriptPath: scriptPath ?? "scripts/tic_tac_toe_game.gd",
-			scenePath: scenePath ?? "scenes/tic_tac_toe_game.tscn"
-		};
-	}
-
-	if (scenePath !== undefined && includesAny(normalized, ["场景", "scene", "tscn", "创建", "新增", "生成"])) {
-		return {
-			type: "scene_create",
-			scenePath,
-			setAsMain: setMainSceneIntent
-		};
-	}
-
-	if (scriptPath !== undefined) {
-		return {
-			type: "script_create_or_edit",
-			scriptPath,
-			scriptContent
-		};
-	}
-
+	if (target.kind === "godot_scene" && scenePath !== undefined) return { type: "scene_create", scenePath };
+	if (target.kind === "godot_script" && scriptPath !== undefined) return { type: "script_create_or_edit", scriptPath };
 	return { type: "general_edit" };
 }
 
-export function createGodotTemplateWorkflowPlan(params: AiChatParams, context?: GodotTemplateWorkflowContext | undefined): WorkflowPlan | null {
-	if (params.mode === "ask" || params.mode === "plan") {
-		return null;
-	}
-	const classification: GodotTaskClassification = classifyGodotTask(params.message, context);
+export function createGodotTemplateWorkflowPlan(
+	params: AiChatParams,
+	target: GodotTemplateTarget | undefined,
+	context?: GodotTemplateWorkflowContext | undefined
+): WorkflowPlan | null {
+	if (params.mode === "ask" || params.mode === "plan" || getExecutionPolicy(params) === "read_only") return null;
+	const classification: GodotTaskClassification = classifyGodotTask(target, context);
 	if (classification.type === "scene_attach_script" && classification.scriptPath !== undefined && classification.scenePath !== undefined) {
 		return createScriptSceneAttachPlan(params, classification);
 	}
@@ -185,17 +138,12 @@ export function createGodotTemplateWorkflowPlan(params: AiChatParams, context?: 
 }
 
 export function narrowLlmPlannedWriteTools(phase: Pick<WorkflowPhase, "title" | "instruction" | "toolGroup">): string[] {
-	if (phase.toolGroup !== "write") {
-		return [];
-	}
-
-	return narrowWriteToolsForText(`${phase.title}\n${phase.instruction}`);
+	return phase.toolGroup === "write" ? [...TEXT_FILE_READ_TOOLS, ...SCENE_READ_TOOLS, ...WRITE_TOOLS] : [];
 }
 
 export function getAllowedToolsForLlmPlannedStep(toolGroup: WorkflowPhase["toolGroup"], title: string, instruction: string): string[] {
 	if (toolGroup === "write") {
-		const narrowedTools: string[] = narrowWriteToolsForText(`${title}\n${instruction}`);
-		return narrowedTools.length > 0 ? narrowedTools : [...TEXT_FILE_READ_TOOLS, ...SCENE_READ_TOOLS, ...WRITE_TOOLS];
+		return [...TEXT_FILE_READ_TOOLS, ...SCENE_READ_TOOLS, ...WRITE_TOOLS];
 	}
 	if (toolGroup === "verify") {
 		return [...SCENE_READ_TOOLS, "mcp_godot_lsp_get_file_diagnostics", "mcp_godot_validate_scene_script_references", "mcp_terminal_run_safe_preset"];
@@ -218,7 +166,6 @@ export function createWorkflowCompletionContract(
 	}
 
 	const text: string = [title, instruction, ...acceptanceCriteria].join("\n");
-	const normalized: string = text.toLowerCase();
 	const targets: WorkflowCompletionTarget[] = [];
 	const seen: Set<string> = new Set();
 	const artifactPattern: RegExp = /(?:res:\/\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:gd|tscn|tres|gdshader|ts|tsx|js|jsx|json|md)\b/giu;
@@ -238,30 +185,6 @@ export function createWorkflowCompletionContract(
 		if (!seen.has(key)) {
 			seen.add(key);
 			targets.push({ kind: "project_setting", key: settingKey });
-		}
-	}
-
-	if (targets.some((target: WorkflowCompletionTarget): boolean => target.kind === "project_setting")) {
-		const sceneMutationIntent: boolean = includesAny(normalized, [
-			"create scene", "build scene", "edit scene", "write scene",
-			"创建场景", "生成场景", "搭建场景", "修改场景", "写入场景"
-		]);
-		const scriptMutationIntent: boolean = includesAny(normalized, [
-			"create script", "edit script", "write script", "modify script",
-			"创建脚本", "生成脚本", "修改脚本", "写入脚本"
-		]);
-		for (let index: number = targets.length - 1; index >= 0; index -= 1) {
-			const target: WorkflowCompletionTarget | undefined = targets[index];
-			if (
-				target?.kind === "artifact"
-				&& (
-					target.path.toLowerCase() === "project.godot"
-					|| (target.path.toLowerCase().endsWith(".tscn") && !sceneMutationIntent)
-					|| (target.path.toLowerCase().endsWith(".gd") && !scriptMutationIntent)
-				)
-			) {
-				targets.splice(index, 1);
-			}
 		}
 	}
 
@@ -525,138 +448,6 @@ function createPhase(
 	};
 }
 
-function narrowWriteToolsForText(text: string): string[] {
-	const normalized: string = text.toLowerCase();
-	const tools: string[] = [];
-	const attachIntent: boolean = includesAny(normalized, ["attach", "挂载", "脚本引用"]);
-	if (attachIntent) {
-		tools.push("mcp_godot_inspect_scene_tree", "mcp_godot_read_text_file", ...SCENE_ATTACH_WRITE_TOOLS);
-	}
-	const explicitProjectSetting: boolean = includesAny(normalized, [
-		"project.godot", "项目设置", "project setting", "projectsettings", "inputmap", "input map",
-		"input action", "autoload", "display/window", "application/config", "application/run/main_scene",
-		"run/main_scene", "main_scene"
-	]);
-	const setMainScene: boolean = includesAny(normalized, ["main scene", "主场景", "启动场景"])
-		&& includesAny(normalized, ["set", "configure", "设置", "配置", "指定"]);
-	if (explicitProjectSetting || setMainScene) {
-		tools.push(...PROJECT_SETTING_READ_TOOLS, ...PROJECT_SETTING_WRITE_TOOLS);
-	}
-	const sceneAction: boolean = includesAny(normalized, [
-		"create scene", "创建场景", "build scene", "edit scene",
-		"创建主场景", "生成场景", "修改场景", "场景节点", "ui", "界面"
-	]) || (
-		!attachIntent
-		&& includesAny(normalized, ["scene root", "根节点"])
-	) || (
-		normalized.includes(".tscn")
-		&& !attachIntent
-		&& includesAny(normalized, ["create", "build", "edit", "write", "生成", "创建", "搭建", "修改", "写入"])
-	);
-	if (sceneAction) {
-		tools.push("mcp_godot_read_text_file", "mcp_godot_inspect_scene_tree", ...SCENE_CREATE_WRITE_TOOLS, ...SCENE_EDIT_WRITE_TOOLS);
-	}
-	if (!attachIntent && includesAny(normalized, [".gd", "script", "脚本", "gdscript"])) {
-		tools.push("mcp_godot_read_text_file", ...SCRIPT_WRITE_TOOLS);
-	}
-
-	return [...new Set(tools)];
-}
-
-function findFirstPath(message: string, extension: ".gd" | ".tscn"): string | undefined {
-	const pattern: RegExp = new RegExp(`(?:res://)?[A-Za-z0-9_./-]+\\${extension}`, "u");
-	const match: RegExpMatchArray | null = message.match(pattern);
-	return match?.[0] === undefined ? undefined : stripResourcePrefix(match[0]);
-}
-
-function extractFirstFencedBlock(message: string): string | undefined {
-	const match: RegExpMatchArray | null = message.match(/```(?:[A-Za-z0-9_-]+)?\r?\n([\s\S]*?)```/u);
-	const content: string | undefined = match?.[1];
-	return content === undefined ? undefined : content.replace(/\r\n/g, "\n");
-}
-
-function inferNodePath(message: string): string {
-	const rootHints: string[] = ["根节点", "root node", "node path \".\"", "node path '.'", "节点 ."];
-	return includesAny(message.toLowerCase(), rootHints) ? "." : ".";
-}
-
 function stripResourcePrefix(value: string): string {
 	return value.replace(/^res:\/\//u, "");
-}
-
-function includesAny(text: string, terms: readonly string[]): boolean {
-	return terms.some((term: string): boolean => text.includes(term));
-}
-
-function wantsLocalGameCreation(text: string): boolean {
-	return includesAny(text, [
-		"井字棋",
-		"tic tac toe",
-		"tic-tac-toe",
-		"tictactoe",
-		"本地游戏",
-		"小游戏",
-		"五子棋",
-		"gomoku",
-		"贪吃蛇",
-		"snake",
-		"扫雷",
-		"minesweeper",
-		"2048",
-		"game"
-	]);
-}
-
-function isExplicitReadOnlyRequest(text: string): boolean {
-	return includesAny(text, [
-		"只读",
-		"只看",
-		"不要写入",
-		"不要修改",
-		"不要改",
-		"不写入",
-		"不修改",
-		"禁止写入",
-		"禁止修改",
-		"无需写入",
-		"无需修改",
-		"read-only",
-		"readonly",
-		"do not write",
-		"don't write",
-		"no write",
-		"do not modify",
-		"don't modify",
-		"no modify"
-	]);
-}
-
-function wantsMutation(text: string): boolean {
-	if (isExplicitReadOnlyRequest(text)) {
-		return false;
-	}
-
-	return includesAny(text, [
-		"创建",
-		"新增",
-		"生成",
-		"修改",
-		"改一下",
-		"实现",
-		"编写",
-		"写入",
-		"写一个",
-		"写下",
-		"挂载",
-		"设置",
-		"修复",
-		"attach",
-		"create",
-		"edit",
-		"modify",
-		"update",
-		"set",
-		"unset",
-		"write"
-	]);
 }

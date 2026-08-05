@@ -339,6 +339,7 @@ test("queued chat request follows the current session model and mode", (): void 
 		mode: "agent",
 		provider: "deepseek",
 		model: "deepseek-chat",
+		executionPolicy: "read_only",
 		additionalContext: [makeContext("ctx-a", "res://scripts/a.gd")]
 	});
 
@@ -351,7 +352,8 @@ test("queued chat request follows the current session model and mode", (): void 
 	assert.equal(params.model, undefined);
 	assert.deepEqual(params.options, {
 		stream: true,
-		queueItemId: 1
+		queueItemId: 1,
+		executionPolicy: "read_only"
 	});
 });
 

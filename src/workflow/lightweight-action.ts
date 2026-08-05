@@ -1,6 +1,7 @@
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
 import { applyToolEventToWorkflowObservations } from "./outcome.js";
 import type { WorkflowToolObservation } from "./types.js";
+import type { ExecutionDecision } from "./agent-run-state.js";
 
 const GODOT_VALIDATION_PATH_PATTERN: RegExp = /\.(?:gd|tscn|tres|godot|gdshader)$/iu;
 const SOURCE_VALIDATION_PATH_PATTERN: RegExp = /\.(?:[cm]?[jt]sx?|vue|svelte)$/iu;
@@ -24,13 +25,18 @@ export type LightweightActionEscalationReason =
 
 export class LightweightActionScopeExceededError extends Error {
 	readonly reason: LightweightActionEscalationReason;
+	readonly executionDecision?: ExecutionDecision | undefined;
 
-	constructor(reason: LightweightActionEscalationReason = "write_scope_exceeded") {
+	constructor(
+		reason: LightweightActionEscalationReason = "write_scope_exceeded",
+		executionDecision?: ExecutionDecision | undefined
+	) {
 		super(reason === "write_scope_exceeded"
 			? "轻量操作需要超过两个写入步骤，已升级为完整 Workflow。"
 			: "轻量操作只完成了读取，没有完成用户要求的修改，已升级为完整 Workflow。");
 		this.name = "LightweightActionScopeExceededError";
 		this.reason = reason;
+		this.executionDecision = executionDecision;
 	}
 }
 

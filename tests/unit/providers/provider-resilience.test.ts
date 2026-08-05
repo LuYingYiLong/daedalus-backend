@@ -119,10 +119,13 @@ test("certificate and proxy authentication failures are not retried", async (): 
 });
 
 test("the inactivity watchdog reconnects an otherwise stalled request", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
 	let calls: number = 0;
 	const result: string = await runProviderRequestWithResilience({
 		providerOptions,
+		onEvent: (event: ToolEvent): void => { events.push(event); },
 		inactivityTimeoutMs: 5,
+		stallWarningMs: 1,
 		sleep: immediateSleep,
 		execute: async ({ signal }): Promise<string> => {
 			calls += 1;
@@ -135,6 +138,34 @@ test("the inactivity watchdog reconnects an otherwise stalled request", async ()
 	});
 	assert.equal(result, "recovered");
 	assert.equal(calls, 2);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.equal(reconnects[0]?.status, "waiting");
+	assert.ok(reconnects.some((event): boolean => event.status === "reconnecting"));
+	assert.equal(reconnects.at(-1)?.status, "recovered");
+});
+
+test("a silent provider stream becomes visible before its reconnect deadline and clears when activity resumes", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
+	let calls: number = 0;
+	const result: string = await runProviderRequestWithResilience({
+		providerOptions,
+		onEvent: (event: ToolEvent): void => { events.push(event); },
+		inactivityTimeoutMs: 40,
+		stallWarningMs: 5,
+		execute: async ({ onEvent }): Promise<string> => {
+			calls += 1;
+			await new Promise<void>((resolve): void => { setTimeout(resolve, 12); });
+			onEvent?.({ type: "ai.delta", text: "provider resumed" });
+			return "provider resumed";
+		}
+	});
+
+	assert.equal(result, "provider resumed");
+	assert.equal(calls, 1);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.deepEqual(reconnects.map((event): string => event.status), ["waiting", "recovered"]);
+	assert.equal(reconnects[0]?.reason, "idle_timeout");
+	assert.equal(reconnects[0]?.attempt, 1);
 });
 
 test("late output from a timed-out attempt is ignored", async (): Promise<void> => {

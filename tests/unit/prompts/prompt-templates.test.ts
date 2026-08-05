@@ -103,6 +103,18 @@ test("core prompt defines the five-part contract and severity levels", async ():
 	assert.match(corePrompt, /应该：[\s\S]*不要：/);
 });
 
+test("execution and communication anchors are CORE requirements rather than a Godot-only rule", async (): Promise<void> => {
+	const corePrompt: string = await loadCorePrompt();
+	const godotPrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/godot-assistant.md"), "utf8");
+
+	assert.match(corePrompt, /#### 执行与沟通锚点/);
+	assert.match(corePrompt, /非平凡任务开始时，用 1-3 句话/);
+	assert.match(corePrompt, /用户可见的正文消息中/);
+	assert.match(corePrompt, /不能只写在 thinking\/reasoning 中/);
+	assert.match(corePrompt, /最终回复说明实际完成内容、验证状态/);
+	assert.doesNotMatch(godotPrompt, /## 2\. 执行与沟通锚点/);
+});
+
 test("all user-facing role prompts inherit CORE before mode and custom instructions", async (): Promise<void> => {
 	for (const template of listPromptTemplates()) {
 		const prompt: string = await composeSystemPrompt(

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { chatWithDeepSeek, type DeepSeekChatOptions } from "../providers/deepseek-client.js";
+import { chatWithProvider } from "../providers/provider-chat.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
 import { promptIdSchema } from "../protocol/schema.js";
 import type { AiChatParams, ChatMessage, PromptId } from "../protocol/types.js";
@@ -51,12 +52,12 @@ type LlmPlan = z.infer<typeof llmPlanSchema>;
 
 export async function createLlmWorkflowPlan(
 	params: AiChatParams,
-	options: DeepSeekChatOptions,
+	options: ProviderChatOptions,
 	history: ChatMessage[],
 	planningContext: string,
 	abortSignal?: AbortSignal | undefined
 ): Promise<WorkflowPlan | null> {
-	const text: string = await chatWithDeepSeek(
+	const text: string = await chatWithProvider(
 		createPlannerParams(createInitialPlanMessage(params.message, planningContext)),
 		options,
 		limitPlanningHistory(history),
@@ -72,7 +73,7 @@ export async function reviseLlmWorkflowPlan(
 	completedPhaseIndex: number,
 	originalParams: AiChatParams,
 	phaseOutputs: WorkflowPhaseOutput[],
-	options: DeepSeekChatOptions,
+	options: ProviderChatOptions,
 	history: ChatMessage[],
 	planningContext: string,
 	abortSignal?: AbortSignal | undefined
@@ -87,7 +88,7 @@ export async function reviseLlmWorkflowPlan(
 		return plan;
 	}
 
-	const text: string = await chatWithDeepSeek(
+	const text: string = await chatWithProvider(
 		createPlannerParams(createRevisionMessage(plan, completedPhaseIndex, originalParams.message, phaseOutputs, planningContext)),
 		options,
 		limitPlanningHistory(history),

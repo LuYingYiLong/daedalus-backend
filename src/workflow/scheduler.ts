@@ -1,5 +1,5 @@
 import { appendPhaseOutput, updateWorkflowPhaseStatus } from "./runner.js";
-import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "./repair.js";
+import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases, resolveRepairWriteTools, shouldUseVerifyOnlyRepair } from "./repair.js";
 import { findBlockingOutcomeBeforeSummarize } from "./outcome.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState } from "./types.js";
 
@@ -110,9 +110,38 @@ export function scheduleWorkflowPhaseOutcome(
 				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
 			};
 		}
+		const repairTools = shouldUseVerifyOnlyRepair(outcome.failedChecks)
+			? { tools: [] as string[], reason: "Verification-only failure." }
+			: resolveRepairWriteTools(state.plan, state.phaseIndex + 1, phase, outcome.failedChecks);
+		if (shouldUseVerifyOnlyRepair(outcome.failedChecks)) {
+			const failedPlan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
+			const plan: WorkflowPlan = insertWorkflowAutoRepairPhases(failedPlan, state.phaseIndex + 1, phase, outcome.summary, outcome.failedChecks);
+			return {
+				type: "repair",
+				phase,
+				outcome,
+				state: {
+					...state,
+					plan,
+					phaseIndex: state.phaseIndex + 1,
+					phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, outcome)
+				}
+			};
+		}
+		if (repairTools.tools.length === 0) {
+			const message: string = `验证阶段「${phase.title}」需要写入修复，但无法在不扩大既有授权范围的前提下确定安全工具：${repairTools.reason}`;
+			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };
+			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
+			return {
+				type: "failed",
+				phase,
+				outcome: blockedOutcome,
+				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
+			};
+		}
 
 		const failedPlan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-		const plan: WorkflowPlan = insertWorkflowAutoRepairPhases(failedPlan, state.phaseIndex + 1, phase, outcome.summary, outcome.failedChecks);
+		const plan: WorkflowPlan = insertWorkflowAutoRepairPhases(failedPlan, state.phaseIndex + 1, phase, outcome.summary, outcome.failedChecks, repairTools.tools);
 		return {
 			type: "repair",
 			phase,

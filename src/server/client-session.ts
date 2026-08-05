@@ -29,6 +29,7 @@ export type QueuedMessage = {
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
+	executionPolicy?: "auto" | "read_only" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 	status: QueuedMessageStatus;
 	createdAt: string;

@@ -160,7 +160,8 @@ test("Goal evaluation preserves a structured blocked execution decision", () => 
 			disposition: "blocked",
 			summary: "A required external service is unavailable.",
 			evidenceToolCallIds: [],
-			expectedArtifacts: []
+			expectedArtifacts: [],
+			targetKind: "unknown"
 		}
 	});
 	const blockedEvaluation: GoalEvaluation = {

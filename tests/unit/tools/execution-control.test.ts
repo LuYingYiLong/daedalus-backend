@@ -106,7 +106,7 @@ test("execution control upgrades oversized lightweight decisions to workflow", a
 	);
 });
 
-test("read lanes require complete_read and only Agent-capable scopes may escalate mutation", async (): Promise<void> => {
+test("read and probe lanes accept complete_read, while mutation policy stays explicit", async (): Promise<void> => {
 	const completeReadJson: string = JSON.stringify({
 		disposition: "complete_read",
 		summary: "The disappearing line is caused by viewport-relative drawing.",
@@ -126,6 +126,31 @@ test("read lanes require complete_read and only Agent-capable scopes may escalat
 		(error: unknown): boolean => error instanceof ExecutionDecisionSignal
 			&& error.decision.disposition === "complete_read"
 			&& error.decision.summary.includes("viewport")
+	);
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(completeReadJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true } }
+		),
+		(error: unknown): boolean => error instanceof ExecutionDecisionSignal
+			&& error.decision.disposition === "complete_read"
+	);
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(completeReadJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{ executionControl: { lane: "lightweight", allowMutationEscalation: false, requireDecision: false } }
+		),
+		/complete_read is only valid in a read or probe lane/u
 	);
 
 	const mutationJson: string = JSON.stringify({

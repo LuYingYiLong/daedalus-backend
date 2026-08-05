@@ -80,8 +80,8 @@ import { classifyProviderError, createProviderStatusEvent } from "../providers/p
 import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
-import { createGodotTemplateWorkflowPlan } from "../workflow/godot-template-planner.js";
-import { applyGodotDocumentationRouteOverride, createFallbackWorkflowRoute, hasWriteIntent, resolveForcedWorkflowRoute, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
+import { createGodotTemplateWorkflowPlan, type GodotTemplateTarget } from "../workflow/godot-template-planner.js";
+import { getExecutionPolicy, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
 import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
@@ -162,7 +162,6 @@ import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, cre
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
-import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "./additional-context.js";
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "./next-step-hints.js";
@@ -322,32 +321,17 @@ function filterWebSearchFromWorkflowPlan(plan: WorkflowPlan): WorkflowPlan {
 	};
 }
 
-function createWorkflowRouteContext(session: ClientSession, mcpHost: McpHost, additionalContext: readonly AdditionalContextItem[] | undefined): WorkflowRouteContext {
-	const workspaceSummary: string = session.activeWorkspace === undefined
-		? "No active workspace."
-		: [
-			`id=${session.activeWorkspace.id}`,
-			`name=${session.activeWorkspace.name}`,
-			`kind=${session.activeWorkspace.kind}`,
-			`rootPath=${session.activeWorkspace.rootPath}`
-		].join("\n");
-	const editorSummary: string = [
-		`editorInstanceId=${session.editorInstanceId ?? "none"}`,
-		`diagnostics=${JSON.stringify(mcpHost.getDiagnosticsBridge().getCachedStatus())}`,
-		`runtime=${JSON.stringify(createGodotRuntimeStatus(session, mcpHost))}`
-	].join("\n");
-	const additionalContextSummary: string = (additionalContext ?? []).length === 0
-		? "No additional context."
-		: (additionalContext ?? []).map((item: AdditionalContextItem, index: number): string => {
-			const record: Record<string, unknown> = getAdditionalContextDataRecord(item) ?? {};
-			const title: string = getContextString(record, "title") ?? getContextString(record, "path") ?? item.kind;
-			return `${index + 1}. kind=${item.kind}; title=${clipTextByChars(title, 160)}`;
-		}).join("\n");
+function createWorkflowRouteContext(session: ClientSession): WorkflowRouteContext {
+	return { hasActiveWorkspace: session.activeWorkspace !== undefined };
+}
+
+function createGodotTemplateTarget(decision: ExecutionDecision | undefined): GodotTemplateTarget | undefined {
+	if (decision === undefined || decision.targetKind === "unknown" || decision.expectedArtifacts.length === 0) {
+		return undefined;
+	}
 	return {
-		workspaceSummary,
-		editorSummary,
-		additionalContextSummary,
-		godotDocumentationAvailable: isGodotDocumentationEnabled()
+		kind: decision.targetKind,
+		artifacts: decision.expectedArtifacts
 	};
 }
 
@@ -374,38 +358,6 @@ function filterReadOnlyAnswerToolNames(toolNames: readonly string[], workspaceId
 	});
 }
 
-function toolNamesIncludeWriteRisk(toolNames: readonly string[], workspaceId?: string | undefined): boolean {
-	return toolNames.some((toolName: string): boolean => {
-		const risk: string | undefined = getToolPolicy(toolName, workspaceId)?.risk;
-		return risk === "write" || risk === "destructive";
-	});
-}
-
-function messageLooksLikeWriteIntent(message: string): boolean {
-	return hasWriteIntent(message);
-}
-
-function applyExplicitSkillWriteRequirement(
-	decision: WorkflowRouteDecision,
-	params: AiChatParams,
-	builtinToolRestriction: readonly string[] | undefined,
-	workspaceId?: string | undefined
-): WorkflowRouteDecision {
-	if (params.mode === "ask" || builtinToolRestriction === undefined || decision.lane === "workflow" || decision.intent === "mutate") {
-		return decision;
-	}
-	if (!messageLooksLikeWriteIntent(params.message) || !toolNamesIncludeWriteRisk(builtinToolRestriction, workspaceId)) {
-		return decision;
-	}
-	return {
-		...decision,
-		intent: "mutate",
-		scope: "bounded",
-		lane: "lightweight",
-		reason: `${decision.reason} Explicit write-capable skill requires write tool access.`
-	};
-}
-
 function resolveHiddenAnswerToolNames(
 	routeDecision: WorkflowRouteDecision,
 	allowedToolNames: readonly string[] | undefined,
@@ -416,12 +368,7 @@ function resolveHiddenAnswerToolNames(
 	}
 
 	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-	if (routeDecision.safetyOverride === "godot_documentation_read") {
-		return sourceToolNames.includes("mcp_godot_search_documentation")
-			? ["mcp_godot_search_documentation"]
-			: [];
-	}
-	if (routeDecision.intent === "mutate") {
+	if (routeDecision.lane === "lightweight") {
 		return sourceToolNames;
 	}
 
@@ -435,14 +382,9 @@ function createExecutionControlContext(
 	if (routeDecision.lane !== "read" && routeDecision.lane !== "probe" && routeDecision.lane !== "lightweight") {
 		return undefined;
 	}
-	const mode: NonNullable<AiChatParams["mode"]> = params.mode ?? "agent";
-	const explicitlyReadOnly: boolean = routeDecision.safetyOverride === "explicit_read_only"
-		|| routeDecision.safetyOverride === "ask_mode_read_only"
-		|| routeDecision.safetyOverride === "godot_documentation_read";
 	return {
 		lane: routeDecision.lane,
-		allowMutationEscalation: routeDecision.lane !== "read"
-			|| (mode === "agent" && !explicitlyReadOnly),
+		allowMutationEscalation: routeDecision.lane === "probe" && getExecutionPolicy(params) === "auto",
 		requireDecision: routeDecision.lane === "read" || routeDecision.lane === "probe"
 	};
 }
@@ -455,14 +397,6 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	const options: AiChatParams["options"] & Record<string, unknown> = {
 		...(params.options ?? {})
 	};
-	if (routeDecision.safetyOverride === "godot_documentation_read") {
-		options.requireToolCallOnFirstStep = true;
-		options.toolBudget = "simple";
-		return {
-			...params,
-			options
-		};
-	}
 	if (routeDecision.lane === "read" || routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
 		options.requireToolCallOnFirstStep = true;
 		options.toolBudget = "simple";
@@ -494,10 +428,11 @@ function createHiddenAnswerSystemPrompt(
 		return [
 			fullSystemPrompt,
 			[
-				"## Daedalus bounded probe",
-				"- The user expects a mutation, but its safe scope is not known yet.",
-				"- Use only the minimum read or verify tools needed to identify the affected artifacts and scope.",
-				"- Do not write, propose a patch, or present a user-facing final answer during this probe.",
+				"## Daedalus evidence-gated probe",
+				"- This is a read-only discovery stage. It never grants mutation permission by itself.",
+				"- Use only the minimum read or verify tools needed to establish whether the request is informational, already satisfied, or needs a bounded or workflow mutation.",
+				"- If the request is informational or diagnostic, or the evidence shows no mutation is needed, choose complete_read. Put the complete user-facing answer in summary, leave expectedArtifacts empty, and use targetKind=unknown.",
+				"- Do not write or propose a patch during this probe. Only a later use_lightweight or use_workflow decision may request a mutation path.",
 				"- Finish by calling daedalus_report_execution_decision exactly once.",
 				"- Choose no_change only when successful read/verify evidence proves the requested state already exists.",
 				"- Choose use_lightweight only for one clear target and at most two logical writes.",
@@ -558,19 +493,13 @@ async function createWorkflowPlanForRoute(
 	history: ChatMessage[],
 	planningContext: string,
 	abortSignal?: AbortSignal | undefined,
-	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined
+	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined,
+	target?: GodotTemplateTarget | undefined
 ): Promise<WorkflowPlan | null> {
 	throwIfAborted(abortSignal);
-	const templateParams: AiChatParams = {
-		...params,
-		options: {
-			...(params.options ?? {}),
-			workflow: "auto"
-		}
-	};
-	if (params.options?.workflow !== "llm_planned") {
+	if (params.options?.workflow !== "llm_planned" && target !== undefined) {
 		const preferredTemplate: WorkflowPlan | null = await awaitWithAbort(
-			createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext),
+			createGodotTemplateWorkflowPlanForRuntime(params, target, runtimeContext),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);
@@ -603,34 +532,16 @@ async function createWorkflowPlanForRoute(
 	}
 
 	throwIfAborted(abortSignal);
-	const templateFallback: WorkflowPlan | null = await awaitWithAbort(
-		createGodotTemplateWorkflowPlanForRuntime(templateParams, runtimeContext),
-		abortSignal
-	);
-	throwIfAborted(abortSignal);
-	if (templateFallback !== null) {
-		return templateFallback;
-	}
-
-	if (params.options?.workflow === "multi_phase") {
-		return planWorkflow({
-			...params,
-			options: {
-				...(params.options ?? {}),
-				workflow: "multi_phase"
-			}
-		});
-	}
-
 	return planWorkflowAfterLlmPlannerFailure(params);
 }
 
 async function createGodotTemplateWorkflowPlanForRuntime(
 	params: AiChatParams,
+	target: GodotTemplateTarget,
 	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined
 ): Promise<WorkflowPlan | null> {
 	const isGodotProject: boolean = await hasGodotProjectFile(runtimeContext?.activeWorkspace);
-	return createGodotTemplateWorkflowPlan(params, { isGodotProject });
+	return createGodotTemplateWorkflowPlan(params, target, { isGodotProject });
 }
 
 async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Promise<boolean> {
@@ -854,6 +765,12 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			approvalMode: params.session.approvalGateway.getMode(),
 			authorizationScope: params.approvalGateway === params.session.approvalGateway ? "session" : "read_only"
 		});
+		if (
+			(executionDecision.disposition === "use_lightweight" || executionDecision.disposition === "use_workflow")
+			&& executionControl?.allowMutationEscalation !== true
+		) {
+			throw new LightweightActionVerificationError("This execution policy does not permit mutation escalation.");
+		}
 		if (executionDecision.disposition === "use_lightweight") {
 			logger.warn("ai", "read_execution_escalated_to_mutation", {
 				requestId: params.requestId,
@@ -882,7 +799,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			return;
 		}
 		if (executionDecision.disposition === "use_workflow") {
-			throw new LightweightActionScopeExceededError("write_scope_exceeded");
+			throw new LightweightActionScopeExceededError("write_scope_exceeded", executionDecision);
 		}
 		if (executionDecision.disposition === "blocked") {
 			throw new LightweightActionVerificationError(executionDecision.summary);
@@ -1064,7 +981,8 @@ async function runHiddenAnswerExecutionWithEscalation(
 		params.history,
 		escalationContext,
 		params.abortSignal,
-		{ activeWorkspace: params.session.activeWorkspace }
+		{ activeWorkspace: params.session.activeWorkspace },
+		createGodotTemplateTarget(escalationError.executionDecision)
 	);
 	if (workflowPlan === null) {
 		workflowPlan = planWorkflow(workflowParams);
@@ -2378,67 +2296,12 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					guidePromptSection,
 					safeRetryPromptSection
 				].filter((section: string): boolean => section.length > 0).join("\n");
-				let routeDecision: WorkflowRouteDecision;
-				const forcedRoute: WorkflowRouteDecision | null = resolveForcedWorkflowRoute(effectiveParams);
-				if (forcedRoute !== null) {
-					routeDecision = forcedRoute;
-				} else if (builtinToolRestriction !== undefined && (effectiveParams.mode !== "ask" || imageGenerationOnly)) {
-					const skillRestrictionRequiresWrite: boolean = effectiveParams.mode !== "ask"
-						&& toolNamesIncludeWriteRisk(builtinToolRestriction, session.activeWorkspace?.id);
-					routeDecision = {
-						intent: skillRestrictionRequiresWrite ? "mutate" : "inspect",
-						scope: "bounded",
-						lane: skillRestrictionRequiresWrite ? "lightweight" : "read",
-						reason: "Explicit skill tool restriction uses hidden single-turn tool execution.",
-						planningHint: ""
-					};
-				} else if (requestHasImages) {
-					routeDecision = {
-						intent: "answer",
-						scope: "bounded",
-						lane: "direct",
-						reason: "Image attachments were preprocessed before routing; answer without workflow todos.",
-						planningHint: ""
-					};
-				} else {
-					try {
-						const routerOptions: ProviderChatOptions = withProviderUsageContext(
-							(await awaitWithAbort(resolveProviderTaskModelOptions("workflowPlanner", options), abortController.signal)).options,
-							{ operation: "workflow_router" }
-						);
-						throwIfAborted(abortController.signal);
-						routeDecision = await awaitWithAbort(routeWorkflowExecution(
-							effectiveParams,
-							routerOptions,
-							history,
-							createWorkflowRouteContext(session, mcpHost, effectiveParams.additionalContext),
-							abortController.signal
-						), abortController.signal);
-						throwIfAborted(abortController.signal);
-					} catch (error: unknown) {
-						if (isCancellationError(error, abortController.signal)) {
-							throw error;
-						}
-						logger.warn("ai", "workflow_router_failed_fallback", {
-							requestId: request.id,
-							sessionId: session.sessionId,
-							message: error instanceof Error ? error.message : "Workflow router failed"
-						});
-						routeDecision = createFallbackWorkflowRoute(effectiveParams, error instanceof Error ? error.message : "Workflow router failed.");
-					}
-				}
 				throwIfAborted(abortController.signal);
-				routeDecision = applyGodotDocumentationRouteOverride(
-					routeDecision,
+				let routeDecision: WorkflowRouteDecision = routeWorkflowExecution(
 					effectiveParams,
-					isGodotDocumentationEnabled()
+					createWorkflowRouteContext(session)
 				);
-				routeDecision = applyExplicitSkillWriteRequirement(
-					routeDecision,
-					effectiveParams,
-					builtinToolRestriction,
-					session.activeWorkspace?.id
-				);
+				throwIfAborted(abortController.signal);
 				logger.info("ai", "workflow_route_decided", {
 					requestId: request.id,
 					sessionId: session.sessionId,
@@ -2465,11 +2328,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 
 				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session);
 				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.intent !== "mutate"
+				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.lane !== "lightweight"
 					? new ReadOnlyToolApprovalGateway(session.approvalGateway, hiddenAnswerToolNames)
-					: effectiveParams.mode === "ask" && !imageGenerationOnly
-						? new ReadOnlyToolApprovalGateway(session.approvalGateway, allowedToolNames ?? [])
-						: session.approvalGateway;
+					: session.approvalGateway;
 				{
 					if (routeDecision.lane === "workflow") {
 						let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
@@ -2511,58 +2372,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 								abortController.signal
 							), abortController.signal);
 						} else {
-							routeDecision = createFallbackWorkflowRoute(effectiveParams, "Workflow planner returned no executable plan.");
-							throwIfAborted(abortController.signal);
-							const fallbackParams: AiChatParams = routeDecision.lane === "workflow"
-								? {
-									...effectiveParams,
-									options: {
-										...(effectiveParams.options ?? {}),
-										workflow: "multi_phase"
-									}
-								}
-								: effectiveParams;
-							const fallbackPlan: WorkflowPlan | null = routeDecision.lane === "workflow"
-								? planWorkflow(fallbackParams)
-								: null;
-							if (fallbackPlan !== null) {
-								await awaitWithAbort(startWorkflowExecution(
-									socket,
-									request.id,
-									session,
-									mcpHost,
-									options,
-									fallbackPlan,
-									fallbackParams,
-									history,
-									historyBudgetTokens,
-									turnStartedAt,
-									planningContext,
-									guidePromptSection,
-									abortController.signal
-								), abortController.signal);
-							} else {
-								await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
-									socket,
-									requestId: request.id,
-									session,
-									mcpHost,
-									options,
-									chatParams: effectiveParams,
-									routeDecision,
-									history,
-									historyBudgetTokens,
-									fullSystemPrompt,
-									allowedToolNames: resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session),
-									mutationToolNames,
-									approvalGateway: hiddenAnswerApprovalGateway,
-									userCreatedAt: turnStartedAt,
-									abortSignal: abortController.signal,
-									planningContext,
-									guidePromptSection,
-									webSearchEnabled
-								}), abortController.signal);
-							}
+							throw new Error("Workflow routing requires an executable safe fallback plan.");
 						}
 					} else {
 						throwIfAborted(abortController.signal);

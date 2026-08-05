@@ -61,12 +61,23 @@ test("scheduler blocks summarize after an unresolved earlier outcome", (): void 
 });
 
 test("scheduler inserts repair phases for a repairable verification outcome", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write", "write"),
+		toolGroup: "write",
+		allowedTools: ["mcp_workspace_replace_text_in_file"]
+	};
 	const phase = createPhase("verify", "verify");
-	const command = scheduleWorkflowPhaseOutcome(createState([phase]), phase, createOutcome(phase, "needs_fix"), 2);
+	const state = createState([write, phase]);
+	state.phaseIndex = 1;
+	const outcome: WorkflowPhaseOutput = {
+		...createOutcome(phase, "needs_fix"),
+		failedChecks: [{ code: "artifact_invalid", message: "needs repair", artifact: "src/app.ts" }]
+	};
+	const command = scheduleWorkflowPhaseOutcome(state, phase, outcome, 2);
 
 	assert.equal(command.type, "repair");
 	if (command.type === "repair") {
-		assert.equal(command.state.phaseIndex, 1);
+		assert.equal(command.state.phaseIndex, 2);
 		assert.ok(command.state.plan.phases.length > 1);
 	}
 });

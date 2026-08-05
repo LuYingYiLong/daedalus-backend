@@ -446,6 +446,7 @@ test("task model resolver falls back to current model or resolves configured pro
 			model: "deepseek-v4-flash",
 			modelRouting: {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
+				workflowPlanner: { provider: "moonshot", model: "kimi-k2.6" },
 				gitCommit: { provider: "moonshot", model: "kimi-k2.6" }
 			}
 		});
@@ -468,6 +469,15 @@ test("task model resolver falls back to current model or resolves configured pro
 		assert.equal(titleModel.source, "current");
 		assert.equal(titleModel.provider, "deepseek");
 		assert.equal(titleModel.model, "deepseek-v4-flash");
+
+		const workflowPlanner = await resolveProviderTaskModelOptions("workflowPlanner", {
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash"
+		});
+		assert.equal(workflowPlanner.source, "configured");
+		assert.equal(workflowPlanner.provider, "moonshot");
+		assert.equal(workflowPlanner.model, "kimi-k2.6");
 
 		const gitCommitModel = await resolveProviderTaskModelOptions("gitCommit", {
 			provider: "deepseek",

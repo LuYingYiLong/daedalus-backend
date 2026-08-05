@@ -7,7 +7,10 @@ import type {
 	ProviderReconnectReason
 } from "./provider-types.js";
 
-export const PROVIDER_INACTIVITY_TIMEOUT_MS: number = 60_000;
+/** A half-open provider stream must not keep the Studio spinner running for a minute. */
+export const PROVIDER_INACTIVITY_TIMEOUT_MS: number = 30_000;
+/** Surface a pending reconnect before aborting the silent request. */
+export const PROVIDER_STALL_WARNING_MS: number = 12_000;
 export const PROVIDER_RECONNECT_ATTEMPTS: 5 = 5;
 export const PROVIDER_EXTENDED_RECONNECT_ATTEMPTS: 15 = 15;
 
@@ -107,6 +110,7 @@ export type ProviderResilienceOptions<T> = {
 	abortSignal?: AbortSignal | undefined;
 	execute: (context: ProviderAttemptContext) => Promise<T>;
 	inactivityTimeoutMs?: number | undefined;
+	stallWarningMs?: number | undefined;
 	random?: (() => number) | undefined;
 	now?: (() => number) | undefined;
 	sleep?: ((milliseconds: number, signal?: AbortSignal | undefined) => Promise<void>) | undefined;
@@ -283,6 +287,8 @@ function emitReconnectEvent(
 
 export async function runProviderRequestWithResilience<T>(options: ProviderResilienceOptions<T>): Promise<T> {
 	const inactivityTimeoutMs: number = options.inactivityTimeoutMs ?? PROVIDER_INACTIVITY_TIMEOUT_MS;
+	const configuredStallWarningMs: number = options.stallWarningMs ?? PROVIDER_STALL_WARNING_MS;
+	const stallWarningMs: number = Math.max(1, Math.min(configuredStallWarningMs, Math.max(1, inactivityTimeoutMs - 1)));
 	const random: () => number = options.random ?? Math.random;
 	const now: () => number = options.now ?? Date.now;
 	const sleep = options.sleep ?? defaultSleep;
@@ -298,11 +304,58 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 		const attemptController = new AbortController();
 		let attemptActive: boolean = true;
 		let inactivityTimer: NodeJS.Timeout | undefined;
+		let stallWarningTimer: NodeJS.Timeout | undefined;
+		let stallWarningActive: boolean = false;
 		let timedOut: boolean = false;
 		let rejectTimeout: ((reason: unknown) => void) | undefined;
 		const counters: AttemptOutputCounters = { messageCodePoints: 0, thinkingCodePoints: 0 };
+		const createReconnectBase = (): Omit<ProviderReconnectEvent, "revision" | "status" | "attempt" | "maxAttempts" | "autoExtended" | "discardedMessageCodePoints" | "discardedThinkingCodePoints"> => ({
+			schemaVersion: 1,
+			reconnectId,
+			runId: "",
+			stepRunId: "",
+			provider: options.providerOptions.provider,
+			model: options.providerOptions.model ?? options.providerOptions.modelProfile?.model ?? "",
+			reason: "idle_timeout",
+			timeoutMs: inactivityTimeoutMs
+		});
+		const clearStallWarningTimer = (): void => {
+			if (stallWarningTimer !== undefined) {
+				clearTimeout(stallWarningTimer);
+				stallWarningTimer = undefined;
+			}
+		};
+		const scheduleStallWarning = (): void => {
+			clearStallWarningTimer();
+			if (!attemptActive || stallWarningActive) return;
+			stallWarningTimer = setTimeout((): void => {
+				if (!attemptActive || stallWarningActive) return;
+				stallWarningTimer = undefined;
+				stallWarningActive = true;
+				revision += 1;
+				emitReconnectEvent(
+					options.onEvent,
+					createReconnectBase(),
+					revision,
+					"waiting",
+					currentAttempt + 1,
+					maxAttempts,
+					autoExtended,
+					counters,
+					new Date(now() + Math.max(0, inactivityTimeoutMs - stallWarningMs)).toISOString()
+				);
+			}, stallWarningMs);
+		};
 		const resetWatchdog = (): void => {
 			if (!attemptActive) return;
+			if (stallWarningActive) {
+				stallWarningActive = false;
+				revision += 1;
+				emitReconnectEvent(options.onEvent, createReconnectBase(), revision, "recovered", currentAttempt, maxAttempts, autoExtended, {
+					messageCodePoints: 0,
+					thinkingCodePoints: 0
+				});
+			}
 			if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
 			inactivityTimer = setTimeout((): void => {
 				timedOut = true;
@@ -310,6 +363,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 				attemptController.abort(timeoutError);
 				rejectTimeout?.(timeoutError);
 			}, inactivityTimeoutMs);
+			scheduleStallWarning();
 		};
 		const abortAttempt = (): void => {
 			const abortError: unknown = options.abortSignal?.reason ?? createAbortError();
@@ -322,6 +376,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 				clearTimeout(inactivityTimer);
 				inactivityTimer = undefined;
 			}
+			clearStallWarningTimer();
 			options.abortSignal?.removeEventListener("abort", abortAttempt);
 			rejectTimeout = undefined;
 		};

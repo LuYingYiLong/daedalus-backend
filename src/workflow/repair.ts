@@ -1,4 +1,4 @@
-import { READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
+import { READ_TOOLS, VERIFY_TOOLS } from "./planner.js";
 import { getToolPolicy } from "../tools/tool-policy.js";
 import type {
 	WorkflowCompletionContract,
@@ -32,33 +32,12 @@ const REPAIR_READ_TOOLS: string[] = [
 	"mcp_godot_lsp_get_status",
 	"mcp_godot_lsp_get_file_diagnostics"
 ];
-const WORKSPACE_REPAIR_WRITE_TOOLS: string[] = [
-	"mcp_workspace_create_text_file",
-	"mcp_workspace_overwrite_text_file",
-	"mcp_workspace_replace_text_in_file",
-	"mcp_workspace_replace_line_in_file"
-];
-const SCRIPT_REPAIR_WRITE_TOOLS: string[] = [
-	"mcp_godot_create_text_file",
-	"mcp_godot_overwrite_text_file",
-	"mcp_godot_replace_text_in_file"
-];
-const SCENE_REPAIR_WRITE_TOOLS: string[] = [
-	"mcp_godot_create_scene",
-	"mcp_godot_add_node_to_scene",
-	"mcp_godot_attach_script_to_node",
-	"mcp_godot_connect_signal_in_scene",
-	"mcp_godot_apply_scene_patch",
-	"mcp_godot_editor_apply_scene_patch"
-];
-const PROJECT_SETTING_REPAIR_WRITE_TOOLS: string[] = [
-	"mcp_godot_set_project_setting",
-	"mcp_godot_unset_project_setting",
-	"mcp_godot_set_input_action",
-	"mcp_godot_unset_input_action",
-	"mcp_godot_set_autoload",
-	"mcp_godot_unset_autoload"
-];
+type RepairToolFamily = "workspace" | "script" | "scene" | "project_setting";
+
+export type RepairWriteToolResolution = {
+	tools: string[];
+	reason: string;
+};
 
 function isWriteGuardFailure(failedPhase: WorkflowPhase, failedChecks: WorkflowFailedCheck[]): boolean {
 	return failedPhase.toolGroup === "write" && failedChecks.some((check: WorkflowFailedCheck): boolean => check.code === "write_tool_missing");
@@ -91,7 +70,7 @@ function rebuildTodosForPhases(plan: WorkflowPlan, phases: WorkflowPhase[]): Wor
 		.map((todo: WorkflowTodoItem): WorkflowTodoItem => existingTodos.get(todo.phaseId) ?? todo);
 }
 
-function shouldUseVerifyOnlyRepair(failedChecks: WorkflowFailedCheck[]): boolean {
+export function shouldUseVerifyOnlyRepair(failedChecks: WorkflowFailedCheck[]): boolean {
 	if (failedChecks.length === 0) {
 		return false;
 	}
@@ -120,28 +99,6 @@ function uniqueTools(tools: readonly string[]): string[] {
 	return result;
 }
 
-function collectRepairEvidence(
-	failedPhase: WorkflowPhase,
-	verifyFailureReason: string,
-	failedChecks: WorkflowFailedCheck[]
-): string {
-	const parts: string[] = [
-		failedPhase.id,
-		failedPhase.title,
-		failedPhase.instruction,
-		verifyFailureReason
-	];
-	for (const check of failedChecks) {
-		parts.push(check.code);
-		parts.push(check.message);
-		if (check.artifact !== undefined) {
-			parts.push(check.artifact);
-		}
-	}
-
-	return parts.join("\n").toLowerCase();
-}
-
 function collectActualWriteToolsFromPhase(failedPhase: WorkflowPhase): string[] {
 	return failedPhase.allowedTools.filter((toolName: string): boolean => {
 		if (toolName.startsWith("mcp_terminal_")) {
@@ -152,105 +109,93 @@ function collectActualWriteToolsFromPhase(failedPhase: WorkflowPhase): string[] 
 	});
 }
 
-function hasAny(text: string, terms: readonly string[]): boolean {
-	return terms.some((term: string): boolean => text.includes(term));
+function getRepairToolFamily(toolName: string): RepairToolFamily | undefined {
+	if (toolName.startsWith("mcp_workspace_")) {
+		return "workspace";
+	}
+	if (toolName === "mcp_godot_set_project_setting" || toolName === "mcp_godot_unset_project_setting" || toolName.includes("input_action") || toolName.includes("autoload")) {
+		return "project_setting";
+	}
+	if (toolName.includes("scene") || toolName.includes("node") || toolName.includes("signal")) {
+		return "scene";
+	}
+	if (toolName.startsWith("mcp_godot_") && (toolName.includes("text") || toolName.includes("script"))) {
+		return "script";
+	}
+	return undefined;
 }
 
-function inferRepairWriteTools(
-	failedPhase: WorkflowPhase,
-	verifyFailureReason: string,
-	failedChecks: WorkflowFailedCheck[]
-): string[] {
-	const evidence: string = collectRepairEvidence(failedPhase, verifyFailureReason, failedChecks);
-	const tools: string[] = [];
-
-	if (hasAny(evidence, [
-		".gitignore",
-		".md",
-		".json",
-		".jsonc",
-		".yaml",
-		".yml",
-		".toml",
-		".env",
-		"markdown",
-		"gitignore"
-	])) {
-		tools.push(...WORKSPACE_REPAIR_WRITE_TOOLS);
+function getTargetFamily(target: WorkflowCompletionTarget): RepairToolFamily | undefined {
+	if (target.kind === "project_setting") {
+		return "project_setting";
 	}
+	return getArtifactFamily(target.path);
+}
 
-	if (hasAny(evidence, [
-		".ts",
-		".tsx",
-		".js",
-		".jsx",
-		"typescript",
-		"javascript",
-		"electron",
-		"renderer",
-		"preload",
-		"frontend",
-		"front-end",
-		"前端",
-		"渲染进程"
-	])) {
-		tools.push(...WORKSPACE_REPAIR_WRITE_TOOLS);
+function getArtifactFamily(artifact: string): RepairToolFamily | undefined {
+	const normalized: string = normalizeCompletionTarget(artifact);
+	if (normalized.endsWith(".tscn")) return "scene";
+	if (normalized.endsWith(".gd")) return "script";
+	if (normalized.endsWith("project.godot")) return "project_setting";
+	if (/\.[a-z0-9]{1,12}$/u.test(normalized) || normalized.endsWith(".gitignore")) return "workspace";
+	return undefined;
+}
+
+function collectStructuredRepairFamilies(failedPhase: WorkflowPhase, failedChecks: WorkflowFailedCheck[]): Set<RepairToolFamily> {
+	const families: Set<RepairToolFamily> = new Set();
+	for (const target of failedPhase.completionContract?.targets ?? []) {
+		const family: RepairToolFamily | undefined = getTargetFamily(target);
+		if (family !== undefined) families.add(family);
 	}
-
-	if (hasAny(evidence, [
-		"project.godot",
-		"project setting",
-		"project_settings",
-		"项目设置",
-		"application/config",
-		"display/window",
-		"input/",
-		"autoload"
-	])) {
-		tools.push(...PROJECT_SETTING_REPAIR_WRITE_TOOLS);
-	}
-
-	if (hasAny(evidence, [
-		".tscn",
-		"scene",
-		"node",
-		"script reference",
-		"attach",
-		"signal",
-		"场景",
-		"节点",
-		"脚本引用",
-		"挂载",
-		"信号"
-	])) {
-		tools.push(...SCENE_REPAIR_WRITE_TOOLS);
-	}
-
-	if (hasAny(evidence, [
-		".gd",
-		"gdscript",
-		"diagnostic",
-		"parse error",
-		"type error",
-		"script or scene",
-		"脚本或场景",
-		"语法",
-		"诊断",
-		"类型"
-	])) {
-		tools.push(...SCRIPT_REPAIR_WRITE_TOOLS);
-	}
-
-	if (tools.length === 0) {
-		const phaseWriteTools: string[] = collectActualWriteToolsFromPhase(failedPhase);
-		if (phaseWriteTools.length > 0) {
-			return uniqueTools(phaseWriteTools);
+	for (const check of failedChecks) {
+		if (check.artifact !== undefined) {
+			const family: RepairToolFamily | undefined = getArtifactFamily(check.artifact);
+			if (family !== undefined) families.add(family);
 		}
-
-		return WRITE_TOOLS.filter((toolName: string): boolean => !toolName.includes("_propose_") && toolName !== "mcp_terminal_run_write_preset");
+		if (check.toolName !== undefined) {
+			const family: RepairToolFamily | undefined = getRepairToolFamily(check.toolName);
+			if (family !== undefined) families.add(family);
+		}
 	}
+	return families;
+}
 
-	return uniqueTools(tools);
+function collectPriorAuthorizedWriteTools(plan: WorkflowPlan, insertIndex: number, failedPhase: WorkflowPhase): string[] {
+	const failedPhaseTools: string[] = collectActualWriteToolsFromPhase(failedPhase);
+	if (failedPhaseTools.length > 0) return failedPhaseTools;
+	for (let index: number = insertIndex - 1; index >= 0; index -= 1) {
+		const phase: WorkflowPhase | undefined = plan.phases[index];
+		if (phase?.toolGroup !== "write") continue;
+		const tools: string[] = collectActualWriteToolsFromPhase(phase);
+		if (tools.length > 0) return tools;
+	}
+	return [];
+}
+
+export function resolveRepairWriteTools(
+	plan: WorkflowPlan,
+	insertIndex: number,
+	failedPhase: WorkflowPhase,
+	failedChecks: WorkflowFailedCheck[]
+): RepairWriteToolResolution {
+	const authorizedTools: string[] = collectPriorAuthorizedWriteTools(plan, insertIndex, failedPhase);
+	if (authorizedTools.length === 0) {
+		return { tools: [], reason: "No prior write phase granted a repair tool that can be safely reused." };
+	}
+	const targetFamilies: Set<RepairToolFamily> = collectStructuredRepairFamilies(failedPhase, failedChecks);
+	if (targetFamilies.size === 0) {
+		if (failedPhase.toolGroup === "write") {
+			return { tools: uniqueTools(authorizedTools), reason: "Retrying the failed write phase with its existing authorization only." };
+		}
+		return { tools: [], reason: "The verification failure has no structured artifact, completion target, or tool family for a safe repair." };
+	}
+	const tools: string[] = authorizedTools.filter((toolName: string): boolean => {
+		const family: RepairToolFamily | undefined = getRepairToolFamily(toolName);
+		return family !== undefined && targetFamilies.has(family);
+	});
+	return tools.length > 0
+		? { tools: uniqueTools(tools), reason: "Repair tools match structured failed targets and existing authorization." }
+		: { tools: [], reason: "Structured failed targets do not match any previously authorized write tool." };
 }
 
 function createRepairInstruction(
@@ -383,7 +328,8 @@ export function insertWorkflowAutoRepairPhases(
 	insertIndex: number,
 	failedPhase: WorkflowPhase,
 	verifyFailureReason: string,
-	failedChecks: WorkflowFailedCheck[] = []
+	failedChecks: WorkflowFailedCheck[] = [],
+	repairWriteTools?: readonly string[] | undefined
 ): WorkflowPlan {
 	const round: number = countWorkflowAutoRepairRounds(plan) + 1;
 	const acceptanceCriteria: string[] = failedChecks.length > 0
@@ -406,7 +352,12 @@ export function insertWorkflowAutoRepairPhases(
 		};
 	}
 
-	const repairWriteTools: string[] = inferRepairWriteTools(failedPhase, verifyFailureReason, failedChecks);
+	const resolvedRepairWriteTools: string[] = repairWriteTools === undefined
+		? resolveRepairWriteTools(plan, insertIndex, failedPhase, failedChecks).tools
+		: [...repairWriteTools];
+	if (resolvedRepairWriteTools.length === 0) {
+		return plan;
+	}
 	const repairPhase: WorkflowPhase = {
 		id: createUniquePhaseId(plan, AUTO_REPAIR_ID_PREFIX, round),
 		title: isWriteGuardFailure(failedPhase, failedChecks) ? "重试实际修改" : "修复验证问题",
@@ -414,11 +365,11 @@ export function insertWorkflowAutoRepairPhases(
 		skillId: "file.creator",
 		promptId: "godot.assistant",
 		toolBudget: "project_edit",
-		allowedTools: uniqueTools([...REPAIR_READ_TOOLS, ...repairWriteTools]),
+		allowedTools: uniqueTools([...REPAIR_READ_TOOLS, ...resolvedRepairWriteTools]),
 		repairOf: failedPhase.id,
 		repairRound: round,
 		acceptanceCriteria,
-		instruction: createRepairInstruction(failedPhase, verifyFailureReason, repairWriteTools, failedChecks),
+		instruction: createRepairInstruction(failedPhase, verifyFailureReason, resolvedRepairWriteTools, failedChecks),
 		completionContract: createRepairCompletionContract(failedPhase, failedChecks),
 		requireToolCallOnFirstStep: true
 	};

@@ -21,7 +21,6 @@ import {
 import { readAgentRunState, saveAgentRunState } from "../session/agent-run-store.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 import { getGoalCheckpointsRoot } from "../app-paths.js";
-import { createFallbackWorkflowRoute } from "../workflow/router.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
 import { listUsageMetricsLogs } from "../usage/metrics-store.js";
 import type { UsageMetricsLog } from "../usage/metrics-types.js";
@@ -226,8 +225,7 @@ function createCurrentOptions(state: AgentGoalState, apiKey: string, baseUrl?: s
 
 async function checkReadiness(state: AgentGoalState, runtime: GoalRuntime): Promise<GoalReadinessReport> {
 	const checks: GoalReadinessCheck[] = [];
-	const fallbackRoute = createFallbackWorkflowRoute({ message: state.condition, mode: "agent" });
-	const mutationGoal: boolean = fallbackRoute.intent === "mutate";
+	const mutationGoal: boolean = state.modelSnapshot.workspaceId !== null;
 	const currentWorkspaceId = runtime.session.activeWorkspace?.id ?? null;
 	const config = await loadProviderConfigWithSecret(state.modelSnapshot.provider);
 	checks.push(config?.apiKey

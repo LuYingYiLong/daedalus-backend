@@ -6,6 +6,7 @@ import {
 } from "../workflow/agent-run-state.js";
 
 export const EXECUTION_CONTROL_TOOL_NAME = "daedalus_report_execution_decision";
+const READ_COMPLETION_LANES: ReadonlySet<ExecutionControlContext["lane"]> = new Set(["read", "probe"]);
 
 export type ExecutionControlContext = {
 	lane: Extract<AgentRunLane, "read" | "probe" | "lightweight">;
@@ -17,7 +18,7 @@ export const EXECUTION_CONTROL_TOOL_DEFINITION: ChatCompletionTool = {
 	type: "function",
 	function: {
 		name: EXECUTION_CONTROL_TOOL_NAME,
-		description: "Report the evidence-backed execution decision for the current Daedalus read, probe, or lightweight action. This is an internal control signal, not a workspace tool. complete_read is the only valid completion for a read lane. evidenceToolCallIds must contain exact tool_call ids from this run (for example call_abc123), never tool names, paths, or constructed tool:path labels.",
+		description: "Report the evidence-backed execution decision for the current Daedalus read, probe, or lightweight action. This is an internal control signal, not a workspace tool. complete_read is valid for read and probe lanes when the request is informational or diagnostic and needs no mutation. For complete_read, leave expectedArtifacts empty and targetKind unknown. evidenceToolCallIds must contain exact tool_call ids from this run (for example call_abc123), never tool names, paths, or constructed tool:path labels.",
 		parameters: {
 			type: "object",
 			additionalProperties: false,
@@ -43,6 +44,11 @@ export const EXECUTION_CONTROL_TOOL_DEFINITION: ChatCompletionTool = {
 					type: "integer",
 					minimum: 0,
 					maximum: 64
+				},
+				targetKind: {
+					type: "string",
+					enum: ["workspace_file", "godot_script", "godot_scene", "godot_script_scene", "project_setting", "unknown"],
+					description: "The bounded target category inferred from successful read evidence. Use unknown when no safe category can be established."
 				}
 			}
 		}
@@ -70,8 +76,8 @@ export class ExecutionContractUnresolvedError extends Error {
 
 export function parseExecutionDecision(value: unknown, context: ExecutionControlContext): ExecutionDecision {
 	const decision: ExecutionDecision = executionDecisionToolInputSchema.parse(value);
-	if (decision.disposition === "complete_read" && context.lane !== "read") {
-		throw new Error("complete_read is only valid in a read lane.");
+	if (decision.disposition === "complete_read" && !READ_COMPLETION_LANES.has(context.lane)) {
+		throw new Error("complete_read is only valid in a read or probe lane.");
 	}
 	if (
 		(decision.disposition === "use_lightweight" || decision.disposition === "use_workflow")

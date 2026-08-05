@@ -1,4 +1,4 @@
-import type { ProviderChatOptions } from "../providers/deepseek-client.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 import { normalizeConfiguredProviderBaseUrl } from "../providers/provider-base-url.js";
 import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointTypeForModel } from "../providers/provider-registry.js";
 import type { ClientSession } from "./client-session.js";

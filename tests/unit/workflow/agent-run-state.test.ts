@@ -134,11 +134,11 @@ test("no-change decisions require successful read or verify evidence", (): void 
 			...decision,
 			evidenceToolCallIds: ["missing"]
 		}).disposition,
-		"use_workflow"
+		"blocked"
 	);
 });
 
-test("execution decisions safely normalize semantic evidence references", (): void => {
+test("execution decisions require exact evidence call ids", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",
 		requestId: "request-test",
@@ -167,10 +167,7 @@ test("execution decisions safely normalize semantic evidence references", (): vo
 		evidenceToolCallIds: ["mcp_godot_inspect_scene_tree:scenes/Main.tscn"],
 		expectedArtifacts: ["scenes/Main.tscn"]
 	});
-	assert.deepEqual(
-		validateExecutionDecisionEvidence(probing, noChange).evidenceToolCallIds,
-		["call-scene-tree"]
-	);
+	assert.equal(validateExecutionDecisionEvidence(probing, noChange).disposition, "blocked");
 
 	const workflow = executionDecisionSchema.parse({
 		disposition: "use_workflow",
@@ -181,7 +178,7 @@ test("execution decisions safely normalize semantic evidence references", (): vo
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, workflow).evidenceToolCallIds, []);
 });
 
-test("no-change tool input safely adopts successful evidence from only the current run", (): void => {
+test("no-change tool input blocks when it omits exact current-run evidence", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",
 		requestId: "request-test",
@@ -224,8 +221,67 @@ test("no-change tool input safely adopts successful evidence from only the curre
 		expectedArtifacts: ["scripts/Main.gd"]
 	}, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
 
-	assert.deepEqual(
-		validateExecutionDecisionEvidence(probing, decision).evidenceToolCallIds,
-		["current-read", "current-verify"]
+	assert.equal(validateExecutionDecisionEvidence(probing, decision).disposition, "blocked");
+});
+
+test("complete-read decisions safely close a probe without inheriting write-target constraints", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-test",
+		now: "2026-08-05T00:00:00.000Z"
+	});
+	const probing = transitionAgentRunState(initial, "probing", {
+		intent: "inspect",
+		scope: "unknown",
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: [],
+			evidence: [{
+				toolCallId: "read-workflow",
+				toolName: "mcp_workspace_read_text_file",
+				risk: "read",
+				status: "succeeded",
+				artifactRefs: ["src/workflow/router.ts"],
+				observedAt: "2026-08-05T00:00:01.000Z"
+			}]
+		}
+	});
+	const decision = executionDecisionSchema.parse({
+		disposition: "complete_read",
+		summary: "The workflow route is deterministic and the request needs no mutation.",
+		evidenceToolCallIds: ["read-workflow"],
+		expectedArtifacts: [],
+		targetKind: "unknown"
+	});
+
+	const resolved = validateExecutionDecisionEvidence(probing, decision);
+	assert.equal(resolved.disposition, "complete_read");
+	assert.deepEqual(resolved.evidenceToolCallIds, ["read-workflow"]);
+	assert.deepEqual(resolved.expectedArtifacts, []);
+	assert.equal(resolved.targetKind, "unknown");
+	assert.equal(
+		validateExecutionDecisionEvidence(probing, {
+			...decision,
+			evidenceToolCallIds: ["fabricated-read"]
+		}).disposition,
+		"blocked"
 	);
+});
+
+test("lightweight decisions require a safe evidence-backed bounded target", (): void => {
+	const initial = createAgentRunState({ sessionId: "session-test", requestId: "request-test", now: "2026-08-03T00:00:00.000Z" });
+	const probing = transitionAgentRunState(initial, "probing", {
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: [],
+			evidence: [{ toolCallId: "read-script", toolName: "mcp_godot_read_text_file", risk: "read", status: "succeeded", artifactRefs: ["scripts/Main.gd"], observedAt: "2026-08-03T00:00:01.000Z" }]
+		}
+	});
+	const valid = executionDecisionSchema.parse({
+		disposition: "use_lightweight", summary: "Update the script.", evidenceToolCallIds: ["read-script"],
+		expectedArtifacts: ["res://scripts/Main.gd"], expectedLogicalWrites: 1, targetKind: "godot_script"
+	});
+	assert.deepEqual(validateExecutionDecisionEvidence(probing, valid).expectedArtifacts, ["scripts/Main.gd"]);
+	assert.equal(validateExecutionDecisionEvidence(probing, { ...valid, expectedArtifacts: ["../outside.gd"] }).disposition, "blocked");
+	assert.equal(validateExecutionDecisionEvidence(probing, { ...valid, targetKind: "godot_scene" }).disposition, "blocked");
 });

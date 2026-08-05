@@ -1,4 +1,4 @@
-import type { ProviderChatOptions } from "./deepseek-client.js";
+import type { ProviderChatOptions } from "./provider-types.js";
 import {
 	createEmptyModelRouting,
 	getProviderConfigStatus,

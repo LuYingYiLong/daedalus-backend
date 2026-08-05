@@ -95,6 +95,7 @@ export type AgentRunStatePatch = Partial<Omit<
 >>;
 
 export type ExecutionDisposition = "complete_read" | "no_change" | "use_lightweight" | "use_workflow" | "blocked";
+export type ExecutionTargetKind = "workspace_file" | "godot_script" | "godot_scene" | "godot_script_scene" | "project_setting" | "unknown";
 
 export type ExecutionDecision = {
 	disposition: ExecutionDisposition;
@@ -102,6 +103,7 @@ export type ExecutionDecision = {
 	evidenceToolCallIds: string[];
 	expectedArtifacts: string[];
 	expectedLogicalWrites?: number | undefined;
+	targetKind: ExecutionTargetKind;
 };
 
 export const executionDecisionToolInputSchema = z.object({
@@ -109,7 +111,8 @@ export const executionDecisionToolInputSchema = z.object({
 	summary: z.string().trim().min(1).max(2000),
 	evidenceToolCallIds: z.array(z.string().trim().min(1).max(200)).max(64).default([]),
 	expectedArtifacts: z.array(z.string().trim().min(1).max(1000)).max(64).default([]),
-	expectedLogicalWrites: z.number().int().min(0).max(64).optional()
+	expectedLogicalWrites: z.number().int().min(0).max(64).optional(),
+	targetKind: z.enum(["workspace_file", "godot_script", "godot_scene", "godot_script_scene", "project_setting", "unknown"]).default("unknown")
 }).strict();
 
 export const executionDecisionSchema = executionDecisionToolInputSchema.superRefine((decision, context): void => {
@@ -125,6 +128,13 @@ export const executionDecisionSchema = executionDecisionToolInputSchema.superRef
 			code: "custom",
 			path: ["expectedLogicalWrites"],
 			message: "use_lightweight requires expectedLogicalWrites."
+		});
+	}
+	if (decision.disposition === "use_lightweight" && decision.targetKind === "unknown") {
+		context.addIssue({
+			code: "custom",
+			path: ["targetKind"],
+			message: "use_lightweight requires a concrete target kind."
 		});
 	}
 });
@@ -266,15 +276,7 @@ export function validateExecutionDecisionEvidence(
 	const resolvedIds: string[] = [];
 	for (const evidenceReference of decision.evidenceToolCallIds) {
 		const exactEvidence: ExecutionEvidence | undefined = evidenceById.get(evidenceReference);
-		const semanticMatches: ExecutionEvidence[] = exactEvidence === undefined
-			? usableEvidence.filter((evidence: ExecutionEvidence): boolean => (
-				evidence.toolName === evidenceReference
-				|| evidence.artifactRefs.some((artifactRef: string): boolean => (
-					`${evidence.toolName}:${artifactRef}` === evidenceReference
-				))
-			))
-			: [];
-		const evidence: ExecutionEvidence | undefined = exactEvidence ?? (semanticMatches.length === 1 ? semanticMatches[0] : undefined);
+		const evidence: ExecutionEvidence | undefined = exactEvidence;
 		if (
 			evidence !== undefined
 			&& evidence.status === "succeeded"
@@ -285,23 +287,92 @@ export function validateExecutionDecisionEvidence(
 		}
 	}
 
-	if (decision.disposition === "no_change" && decision.evidenceToolCallIds.length === 0) {
-		for (const evidence of usableEvidence.slice(-64)) resolvedIds.push(evidence.toolCallId);
-	}
-
-	if (decision.disposition === "no_change" && resolvedIds.length === 0) {
+	const expectedArtifacts: string[] | null = normalizeExpectedArtifacts(decision.expectedArtifacts);
+	const normalized: ExecutionDecision = {
+		...decision,
+		evidenceToolCallIds: resolvedIds,
+		expectedArtifacts: expectedArtifacts ?? decision.expectedArtifacts
+	};
+	if (normalized.disposition === "complete_read") {
+		if (expectedArtifacts === null) {
+			return createBlockedExecutionDecision(normalized, "The read completion contains an unsafe workspace path.");
+		}
+		if (decision.evidenceToolCallIds.length > 0 && resolvedIds.length !== decision.evidenceToolCallIds.length) {
+			return createBlockedExecutionDecision(normalized, "The read completion cited evidence that was not successfully observed in this run.");
+		}
 		return {
-			...decision,
-			disposition: "use_workflow",
-			evidenceToolCallIds: [],
-			expectedLogicalWrites: undefined
+			...normalized,
+			expectedArtifacts: [],
+			expectedLogicalWrites: undefined,
+			targetKind: "unknown"
 		};
 	}
+	if (expectedArtifacts === null) {
+		return createBlockedExecutionDecision(normalized, "The execution target contains an unsafe workspace path.");
+	}
+	if (normalized.targetKind !== "unknown") {
+		if (normalized.expectedArtifacts.length === 0 || inferExecutionTargetKind(normalized.expectedArtifacts) !== normalized.targetKind) {
+			return createBlockedExecutionDecision(normalized, "The declared target kind does not match the expected artifacts.");
+		}
+	}
+	if (normalized.disposition === "no_change" && resolvedIds.length === 0) {
+		return createBlockedExecutionDecision(normalized, "The no-change decision did not cite successful read or verify evidence.");
+	}
+	if (normalized.disposition !== "use_lightweight") {
+		return normalized;
+	}
+	if (resolvedIds.length === 0) {
+		return createBlockedExecutionDecision(normalized, "A lightweight write requires successful read or verify evidence.");
+	}
+	if (normalized.expectedLogicalWrites === undefined || normalized.expectedLogicalWrites < 1 || normalized.expectedLogicalWrites > 2) {
+		return createBlockedExecutionDecision(normalized, "A lightweight write must declare one or two logical writes.");
+	}
+	if (normalized.expectedArtifacts.length !== 1 || normalized.targetKind === "unknown" || normalized.targetKind === "godot_script_scene") {
+		return createBlockedExecutionDecision(normalized, "A lightweight write requires one concrete, bounded target.");
+	}
+	const inferredTargetKind: ExecutionTargetKind = inferExecutionTargetKind(normalized.expectedArtifacts);
+	if (inferredTargetKind !== normalized.targetKind) {
+		return createBlockedExecutionDecision(normalized, "The declared target kind does not match the expected artifact.");
+	}
+	return normalized;
+}
 
+function createBlockedExecutionDecision(decision: ExecutionDecision, summary: string): ExecutionDecision {
 	return {
 		...decision,
-		evidenceToolCallIds: resolvedIds
+		disposition: "blocked",
+		summary,
+		expectedLogicalWrites: undefined,
+		targetKind: "unknown"
 	};
+}
+
+export function inferExecutionTargetKind(artifacts: readonly string[]): ExecutionTargetKind {
+	const normalized: string[] = artifacts.map((artifact: string): string => artifact.replaceAll("\\", "/").toLowerCase());
+	if (normalized.some((artifact: string): boolean => artifact.endsWith("project.godot"))) return "project_setting";
+	const hasScript: boolean = normalized.some((artifact: string): boolean => artifact.endsWith(".gd"));
+	const hasScene: boolean = normalized.some((artifact: string): boolean => artifact.endsWith(".tscn"));
+	if (hasScript && hasScene) return "godot_script_scene";
+	if (hasScript) return "godot_script";
+	if (hasScene) return "godot_scene";
+	return normalized.length > 0 ? "workspace_file" : "unknown";
+}
+
+function normalizeExpectedArtifacts(artifacts: readonly string[]): string[] | null {
+	const normalized: string[] = [];
+	for (const artifact of artifacts) {
+		const value: string = artifact.trim().replaceAll("\\", "/").replace(/^res:\/\//iu, "").replace(/^\.\//u, "");
+		if (
+			value.length === 0
+			|| value.startsWith("/")
+			|| /^[a-z]:\//iu.test(value)
+			|| value.split("/").some((segment: string): boolean => segment === "..")
+		) {
+			return null;
+		}
+		normalized.push(value);
+	}
+	return normalized;
 }
 
 export function cloneAgentRunState(state: AgentRunState): AgentRunState {

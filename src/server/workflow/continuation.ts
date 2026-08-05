@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import type { AdditionalContextItem, AiChatParams } from "../../protocol/types.js";
 import type { ProviderAgentResult } from "../../providers/agent-types.js";
-import type { ProviderChatOptions } from "../../providers/deepseek-client.js";
+import type { ProviderChatOptions } from "../../providers/provider-types.js";
 import { McpHost } from "../../mcp/mcp-host.js";
 import { sendJson } from "../send-json.js";
 import { createWorkflowPhaseRunId, applyDeterministicVerificationGate, createWorkflowPhaseOutcome } from "../../workflow/outcome.js";
@@ -32,6 +32,12 @@ import { withProviderUsageContext } from "../../usage/provider-recorder.js";
 import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 
 const MAX_WORKFLOW_WRITE_GUARD_RETRY_ATTEMPTS: number = 2;
+
+/** Internal test seam for exercising the scheduler without a live provider. */
+export type WorkflowRuntimeDependencies = {
+	createPhasePrompt?: typeof createWorkflowPhasePrompt | undefined;
+	runPhase?: typeof runWorkflowPhase | undefined;
+};
 
 export function collectWorkflowCompletionStatus(
 	plan: WorkflowPlan,
@@ -224,7 +230,8 @@ export async function continueWorkflowExecution(
 	persistRequestId: string = requestId,
 	abortSignal?: AbortSignal | undefined,
 	initialToolObservations: WorkflowToolObservation[] = [],
-	initialPhaseRunResult?: WorkflowPhaseRunResult | undefined
+	initialPhaseRunResult?: WorkflowPhaseRunResult | undefined,
+	dependencies?: WorkflowRuntimeDependencies | undefined
 ): Promise<void> {
 	throwIfAborted(abortSignal);
 	let state: WorkflowRunState = workflowState;
@@ -233,6 +240,8 @@ export async function continueWorkflowExecution(
 	let agentResultOverride: ProviderAgentResult | undefined = initialAgentResult;
 	let agentResultOverrideToolObservations: WorkflowToolObservation[] = initialToolObservations;
 	let phaseRunResultOverride: WorkflowPhaseRunResult | undefined = initialPhaseRunResult;
+	const createPhasePromptForRuntime: typeof createWorkflowPhasePrompt = dependencies?.createPhasePrompt ?? createWorkflowPhasePrompt;
+	const runPhaseForRuntime: typeof runWorkflowPhase = dependencies?.runPhase ?? runWorkflowPhase;
 	const streamFinal: boolean = state.originalParams.options?.stream === true;
 	const planningContext: string = state.planningContext ?? "";
 
@@ -309,7 +318,7 @@ export async function continueWorkflowExecution(
 		].filter((section: string): boolean => section.length > 0).join("\n\n");
 		const runtimePhase: WorkflowPhase = createRuntimeWorkflowPhase(phase, mcpHost, session);
 		const fullSystemPrompt: string = await awaitWithAbort(
-			createWorkflowPhasePrompt(runtimePhase, phaseParams, mcpHost, session, requestId, guidePromptSection),
+			createPhasePromptForRuntime(runtimePhase, phaseParams, mcpHost, session, requestId, guidePromptSection),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);
@@ -342,7 +351,7 @@ export async function continueWorkflowExecution(
 				}];
 				agentResultOverrideToolObservations = [];
 			} else {
-				let phaseRunResult: WorkflowPhaseRunResult = await awaitWithAbort(runWorkflowPhase(
+				let phaseRunResult: WorkflowPhaseRunResult = await awaitWithAbort(runPhaseForRuntime(
 					socket,
 					phaseParams,
 					options,
@@ -387,7 +396,7 @@ export async function continueWorkflowExecution(
 						...(retryPhaseParams.options ?? {}),
 						requireToolCallOnFirstStep: true
 					} as AiChatParams["options"] & Record<string, unknown>;
-					phaseRunResult = await awaitWithAbort(runWorkflowPhase(
+					phaseRunResult = await awaitWithAbort(runPhaseForRuntime(
 						socket,
 						retryPhaseParams,
 						options,

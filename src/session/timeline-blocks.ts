@@ -209,6 +209,16 @@ function getEventData(event: StoredSessionEvent): Record<string, unknown> {
 }
 
 function compareEvents(left: StoredSessionEvent, right: StoredSessionEvent): number {
+	if (left.sequence !== undefined && right.sequence !== undefined && left.sequence !== right.sequence) {
+		return left.sequence - right.sequence;
+	}
+	if (left.sequence !== undefined && right.sequence === undefined) {
+		return -1;
+	}
+	if (left.sequence === undefined && right.sequence !== undefined) {
+		return 1;
+	}
+
 	const timeCompare: number = left.createdAt.localeCompare(right.createdAt);
 	if (timeCompare !== 0) {
 		return timeCompare;

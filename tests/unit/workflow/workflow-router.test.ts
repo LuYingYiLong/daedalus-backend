@@ -115,6 +115,10 @@ test("imperative optimization preserves mutation intent while optimization advic
 	assert.match(decision.reason, /safety guard/);
 });
 
+test("先不动文件 is treated as a read-only constraint", (): void => {
+	assert.equal(hasWriteIntent("实现一个端到端测试方案，先不动文件"), false);
+});
+
 test("project-specific advice is upgraded from direct to read", (): void => {
 	const decision = applyProjectContextRouteOverride({
 		intent: "answer",
@@ -134,6 +138,47 @@ test("project-specific advice is upgraded from direct to read", (): void => {
 	assert.equal(decision.intent, "inspect");
 	assert.equal(decision.lane, "read");
 	assert.equal(decision.safetyOverride, "project_context_read");
+});
+
+test("implementation questions with an active workspace are upgraded from direct to read", (): void => {
+	const decision = applyProjectContextRouteOverride({
+		intent: "answer",
+		scope: "bounded",
+		lane: "direct",
+		reason: "Generic testing advice.",
+		planningHint: ""
+	}, {
+		message: "该怎么做一个端到端测试？先不动文件",
+		mode: "agent"
+	}, {
+		workspaceSummary: "id=studio\nname=daedalus-backend\nrootPath=C:\\Users\\user\\Documents\\daedalus-backend",
+		editorSummary: "editorInstanceId=none",
+		additionalContextSummary: "No additional context."
+	});
+
+	assert.equal(decision.intent, "inspect");
+	assert.equal(decision.lane, "read");
+	assert.equal(decision.safetyOverride, "project_context_read");
+});
+
+test("pure conceptual questions stay direct even with an active workspace", (): void => {
+	const decision = applyProjectContextRouteOverride({
+		intent: "answer",
+		scope: "bounded",
+		lane: "direct",
+		reason: "Conceptual explanation.",
+		planningHint: ""
+	}, {
+		message: "What is end-to-end testing?",
+		mode: "agent"
+	}, {
+		workspaceSummary: "id=studio\nname=daedalus-backend\nrootPath=C:\\Users\\user\\Documents\\daedalus-backend",
+		editorSummary: "editorInstanceId=none",
+		additionalContextSummary: "No additional context."
+	});
+
+	assert.equal(decision.lane, "direct");
+	assert.equal(decision.safetyOverride, undefined);
 });
 
 test("installed Godot documentation lookup is upgraded from direct to a read lane", (): void => {

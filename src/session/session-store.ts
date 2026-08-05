@@ -59,6 +59,7 @@ export type StoredSessionEvent = {
 	event: string;
 	data: unknown;
 	createdAt: string;
+	sequence?: number | undefined;
 };
 
 export type StoredApprovalEvent = {
@@ -377,7 +378,7 @@ function readMessages(db: DatabaseSync, sessionId: string): StoredMessage[] {
 
 function readEvents(db: DatabaseSync, sessionId: string, channel: string = "timeline"): StoredSessionEvent[] {
 	const rows = db.prepare(`
-		SELECT event_id, request_id, event_name, data_json, created_at
+		SELECT event_id, request_id, event_name, data_json, created_at, sequence
 		FROM session_events WHERE session_id = ? AND channel = ? ORDER BY sequence
 	`).all(sessionId, channel) as Record<string, unknown>[];
 	return rows.map((row: Record<string, unknown>): StoredSessionEvent => ({
@@ -385,7 +386,8 @@ function readEvents(db: DatabaseSync, sessionId: string, channel: string = "time
 		requestId: String(row.request_id),
 		event: String(row.event_name),
 		data: parseSqlJson<unknown>(row.data_json),
-		createdAt: String(row.created_at)
+		createdAt: String(row.created_at),
+		sequence: typeof row.sequence === "number" ? row.sequence : undefined
 	}));
 }
 
@@ -594,7 +596,8 @@ function eventFromRow(row: Record<string, unknown>): StoredSessionEvent {
 		requestId: String(row.request_id),
 		event: String(row.event_name),
 		data: parseSqlJson<unknown>(row.data_json),
-		createdAt: String(row.created_at)
+		createdAt: String(row.created_at),
+		sequence: typeof row.sequence === "number" ? row.sequence : undefined
 	};
 }
 
@@ -613,7 +616,7 @@ function readLatestTimelineSnapshots(db: DatabaseSync, sessionId: string): Retur
 	];
 	const placeholders: string = snapshotEventNames.map((): string => "?").join(",");
 	const rows = db.prepare(`
-		SELECT event_id, request_id, event_name, data_json, created_at
+		SELECT event_id, request_id, event_name, data_json, created_at, sequence
 		FROM session_events
 		WHERE session_id = ? AND channel = 'timeline' AND event_name IN (${placeholders})
 		ORDER BY sequence
@@ -650,7 +653,7 @@ async function createSqlTimelinePage(sessionId: string, offset: number | null, l
 			.all(safeSessionId, ...requestIds) as Record<string, unknown>[];
 	const selectedEvents = sourceRequestIds.length === 0
 		? []
-		: db.prepare(`SELECT event_id, request_id, event_name, data_json, created_at FROM session_events WHERE session_id = ? AND channel = 'timeline' AND request_id IN (${sourceRequestIds.map((): string => "?").join(",")}) ORDER BY sequence`)
+		: db.prepare(`SELECT event_id, request_id, event_name, data_json, created_at, sequence FROM session_events WHERE session_id = ? AND channel = 'timeline' AND request_id IN (${sourceRequestIds.map((): string => "?").join(",")}) ORDER BY sequence`)
 			.all(safeSessionId, ...sourceRequestIds) as Record<string, unknown>[];
 	const messages: StoredMessage[] = selectedMessages.map((row: Record<string, unknown>): StoredMessage => parseSqlJson<StoredMessage>(row.payload_json));
 	const events: StoredSessionEvent[] = selectedEvents.map(eventFromRow);
@@ -1092,7 +1095,8 @@ async function appendEventRecord(params: {
 		requestId: params.requestId,
 		event: params.event,
 		data: params.data,
-		createdAt
+		createdAt,
+		sequence
 	};
 }
 

@@ -100,7 +100,7 @@ import {
 	updateWorkflowPhaseStatus
 } from "../workflow/runner.js";
 import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../workflow/repair.js";
-import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
+import type { WorkflowCompletionTarget, WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
 	applyToolEventToLightweightActionState,
 	collectLightweightActionCompletionStatus,
@@ -431,13 +431,10 @@ function createHiddenAnswerSystemPrompt(
 			[
 				"## Daedalus evidence-gated probe",
 				"- This is a read-only discovery stage. It never grants mutation permission by itself.",
+				"- The execution-decision tool is intentionally unavailable during this first pass. Call at least one suitable read or verify tool before giving any conclusion.",
 				"- Use only the minimum read or verify tools needed to establish whether the request is informational, already satisfied, or needs a bounded or workflow mutation.",
-				"- If the request is informational or diagnostic, or the evidence shows no mutation is needed, choose complete_read. Put the complete user-facing answer in summary, leave expectedArtifacts empty, and use targetKind=unknown.",
-				"- Do not write or propose a patch during this probe. Only a later use_lightweight or use_workflow decision may request a mutation path.",
-				"- Finish by calling daedalus_report_execution_decision exactly once.",
-				"- Choose no_change only when successful read/verify evidence proves the requested state already exists.",
-				"- Choose use_lightweight only for one clear target and at most two logical writes.",
-				"- Choose use_workflow for multi-file, destructive, migratory, long-running, or still-uncertain work."
+				"- Do not write, propose a patch, or claim that a mutation path is authorized during this probe.",
+				"- After inspection, return concise factual findings only. Daedalus will open one control-only pass that records the execution decision from the evidence."
 			].join("\n")
 		].join("\n\n");
 	}
@@ -495,7 +492,8 @@ async function createWorkflowPlanForRoute(
 	planningContext: string,
 	abortSignal?: AbortSignal | undefined,
 	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined,
-	target?: GodotTemplateTarget | undefined
+	target?: GodotTemplateTarget | undefined,
+	executionDecision?: ExecutionDecision | undefined
 ): Promise<WorkflowPlan | null> {
 	throwIfAborted(abortSignal);
 	const executionProfile: WorkflowExecutionProfileId = await resolveWorkflowExecutionProfileForWorkspace(runtimeContext?.activeWorkspace);
@@ -507,7 +505,7 @@ async function createWorkflowPlanForRoute(
 		);
 		throwIfAborted(abortSignal);
 		if (preferredTemplate !== null) {
-			return preferredTemplate;
+			return applyExecutionDecisionCompletionContract(preferredTemplate, executionDecision);
 		}
 	}
 
@@ -523,7 +521,7 @@ async function createWorkflowPlanForRoute(
 		);
 		throwIfAborted(abortSignal);
 		if (plan !== null) {
-			return plan;
+			return applyExecutionDecisionCompletionContract(plan, executionDecision);
 		}
 	} catch (error: unknown) {
 		if (isCancellationError(error, abortSignal)) {
@@ -535,7 +533,59 @@ async function createWorkflowPlanForRoute(
 	}
 
 	throwIfAborted(abortSignal);
-	return planWorkflowAfterLlmPlannerFailure(params, executionProfile);
+	const fallbackPlan: WorkflowPlan | null = planWorkflowAfterLlmPlannerFailure(params, executionProfile);
+	return fallbackPlan === null ? null : applyExecutionDecisionCompletionContract(fallbackPlan, executionDecision);
+}
+
+function applyExecutionDecisionCompletionContract(
+	plan: WorkflowPlan,
+	decision: ExecutionDecision | undefined
+): WorkflowPlan {
+	if (
+		decision === undefined
+		|| (decision.disposition !== "use_workflow" && decision.disposition !== "use_lightweight")
+		|| decision.expectedArtifacts.length === 0
+	) {
+		return plan;
+	}
+
+	const expectedTargets: WorkflowCompletionTarget[] = decision.expectedArtifacts.map((artifact: string): WorkflowCompletionTarget => (
+		decision.targetKind === "project_setting"
+			? { kind: "project_setting", key: artifact }
+			: { kind: "artifact", path: artifact }
+	));
+	const firstWritePhaseIndex: number = plan.phases.findIndex((phase: WorkflowPhase): boolean => phase.toolGroup === "write");
+	if (firstWritePhaseIndex < 0) {
+		return plan;
+	}
+
+	const firstWritePhase: WorkflowPhase = plan.phases[firstWritePhaseIndex]!;
+	const existingTargets: readonly WorkflowCompletionTarget[] = firstWritePhase.completionContract?.targets ?? [];
+	const targetKeys: Set<string> = new Set();
+	const targets: WorkflowCompletionTarget[] = [];
+	for (const target of [...existingTargets, ...expectedTargets]) {
+		const key: string = target.kind === "artifact"
+			? `artifact:${target.path.replace(/^res:\/\//iu, "").replace(/\\/g, "/").toLowerCase()}`
+			: `project_setting:${target.key.toLowerCase()}`;
+		if (targetKeys.has(key)) {
+			continue;
+		}
+		targetKeys.add(key);
+		targets.push({ ...target });
+	}
+
+	const phases: WorkflowPhase[] = plan.phases.map((phase: WorkflowPhase, index: number): WorkflowPhase => (
+		index !== firstWritePhaseIndex
+			? phase
+			: {
+				...phase,
+				completionContract: {
+					targets,
+					requireAll: true
+				}
+			}
+	));
+	return { ...plan, phases };
 }
 
 async function createGodotTemplateWorkflowPlanForRuntime(
@@ -553,9 +603,6 @@ async function resolveWorkflowExecutionProfileForWorkspace(workspace: WorkspaceC
 async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Promise<boolean> {
 	if (workspace === undefined) {
 		return false;
-	}
-	if (workspace.sourceFolders.some((source): boolean => source.capabilities.godot)) {
-		return true;
 	}
 
 	try {
@@ -638,7 +685,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
-			executionControl
+			executionControl,
+			executionControlAvailable: params.routeDecision.lane !== "probe"
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -661,6 +709,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			.map((evidence): string => [
 				`- ${evidence.toolCallId}`,
 				`tool=${evidence.toolName}`,
+				evidence.applicabilityCode === undefined ? "" : `applicabilityCode=${evidence.applicabilityCode}`,
 				evidence.summary === undefined ? "" : `summary=${evidence.summary}`,
 				evidence.artifactRefs.length === 0 ? "" : `artifacts=${evidence.artifactRefs.join(", ")}`
 			].filter((part: string): boolean => part.length > 0).join("; "))
@@ -687,7 +736,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			params.history,
 			[
 				fullSystemPrompt,
-				"## Execution contract repair\nOnly the internal daedalus_report_execution_decision tool is allowed. Submit one valid decision and no prose."
+				"## Execution contract repair\nThe read-only inspection pass is complete and the execution-decision tool is now available. Only the internal daedalus_report_execution_decision tool is allowed. Submit one valid evidence-backed decision and no prose."
 			].join("\n\n"),
 			params.mcpHost,
 			params.approvalGateway,
@@ -967,6 +1016,8 @@ async function runHiddenAnswerExecutionWithEscalation(
 		sessionId: params.session.sessionId,
 		reason: escalationError.reason
 	});
+	const escalationDecision: ExecutionDecision | undefined = escalationError.executionDecision
+		?? getAgentRun(params.session, params.requestId)?.executionDecision;
 	const workflowParams: AiChatParams = {
 		...params.chatParams,
 		options: {
@@ -988,7 +1039,8 @@ async function runHiddenAnswerExecutionWithEscalation(
 		escalationContext,
 		params.abortSignal,
 		{ activeWorkspace: params.session.activeWorkspace },
-		createGodotTemplateTarget(escalationError.executionDecision)
+		createGodotTemplateTarget(escalationDecision),
+		escalationDecision
 	);
 	if (workflowPlan === null) {
 		workflowPlan = planWorkflow(

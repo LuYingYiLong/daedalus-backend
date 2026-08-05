@@ -25,6 +25,7 @@ export type ToolExecutionContext = {
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
 	executionControl?: ExecutionControlContext | undefined;
+	executionControlAvailable?: boolean | undefined;
 	clientType?: "studio" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
 	imageRouting?: {
 		options: ProviderChatOptions;
@@ -289,7 +290,7 @@ export class WorkspaceToolCatalog {
 			.map(createStaticEntry);
 		const dynamicEntries: ToolCatalogEntry[] = getDynamicMcpToolDefinitions(this.context.workspaceId)
 			.map((definition: ChatCompletionTool): ToolCatalogEntry => createDynamicEntry(withApprovalReasonSchema(definition), this.context.workspaceId));
-		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined
+		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined || this.context.executionControlAvailable === false
 			? []
 			: [createExecutionControlEntry()];
 		return [...staticEntries, ...dynamicEntries, ...executionControlEntries];
@@ -301,7 +302,7 @@ export class WorkspaceToolCatalog {
 
 	getDefinitionsForNames(toolNames: readonly string[]): ChatCompletionTool[] {
 		const allowedNames: Set<string> = new Set(toolNames);
-		if (this.context.executionControl !== undefined) {
+		if (this.context.executionControl !== undefined && this.context.executionControlAvailable !== false) {
 			allowedNames.add(EXECUTION_CONTROL_TOOL_NAME);
 		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);

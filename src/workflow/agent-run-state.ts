@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { ToolApplicabilityCode } from "../tools/tool-applicability.js";
 import type { WorkflowTodoSnapshot } from "./types.js";
 
 export const AGENT_RUN_STATE_SCHEMA_VERSION = 1 as const;
@@ -51,6 +52,7 @@ export type ExecutionEvidence = {
 	summary?: string | undefined;
 	validationStatus?: "passed" | "failed" | "not_applicable" | undefined;
 	environmentIssue?: boolean | undefined;
+	applicabilityCode?: ToolApplicabilityCode | undefined;
 	resultExcerpt?: string | undefined;
 	observedAt: string;
 };
@@ -272,15 +274,25 @@ export function validateExecutionDecisionEvidence(
 	const usableEvidence: ExecutionEvidence[] = currentRunEvidence.filter((evidence: ExecutionEvidence): boolean => (
 		evidence.status === "succeeded"
 		&& (evidence.risk === "read" || evidence.risk === "verify")
+		&& evidence.environmentIssue !== true
+		&& evidence.validationStatus !== "not_applicable"
 	));
+	// 部分 provider 会沿用数组默认值，在成功检查后仍省略 no_change 的证据 ID。
+	// 只恢复这一种安全遗漏；伪造或过期 ID 仍按失败关闭。
+	const evidenceReferences: string[] = decision.disposition === "no_change"
+		&& decision.evidenceToolCallIds.length === 0
+		? usableEvidence.slice(-64).map((evidence: ExecutionEvidence): string => evidence.toolCallId)
+		: decision.evidenceToolCallIds;
 	const resolvedIds: string[] = [];
-	for (const evidenceReference of decision.evidenceToolCallIds) {
+	for (const evidenceReference of evidenceReferences) {
 		const exactEvidence: ExecutionEvidence | undefined = evidenceById.get(evidenceReference);
 		const evidence: ExecutionEvidence | undefined = exactEvidence;
 		if (
 			evidence !== undefined
 			&& evidence.status === "succeeded"
 			&& (evidence.risk === "read" || evidence.risk === "verify")
+			&& evidence.environmentIssue !== true
+			&& evidence.validationStatus !== "not_applicable"
 			&& !resolvedIds.includes(evidence.toolCallId)
 		) {
 			resolvedIds.push(evidence.toolCallId);

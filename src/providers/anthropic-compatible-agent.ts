@@ -208,7 +208,7 @@ async function readAssistantMessage(
 ): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
-		onEvent: streamAssistant ? onEvent : undefined,
+		onEvent,
 		abortSignal,
 		execute: async (attempt): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> => readAssistantMessageAttempt(
 			params,

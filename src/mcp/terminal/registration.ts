@@ -30,6 +30,8 @@ import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { CommandPreset, CommandRunInput, PresetRunInput, TerminalCommandResult, TerminalJobRecord } from "./types.js";
 import { logger } from "../../logger.js";
 import { consumeTerminalCommandAuthorization, type TerminalCommandAuthorization } from "./authorization.js";
+import { resolvePresetApplicability } from "./applicability.js";
+import type { ToolApplicabilityCode } from "../../tools/tool-applicability.js";
 
 const TERMINAL_PROGRESS_FLUSH_MS: number = 80;
 const MAX_TERMINAL_PROGRESS_BATCH_CHARS: number = 8192;
@@ -180,6 +182,10 @@ function createMissingGodotProjectResult(presetName: string, context?: { godotPr
 	return asJsonTextResult({
 		preset: presetName,
 		ok: false,
+		validationStatus: "not_applicable",
+		environmentIssue: true,
+		applicabilityCode: "godot_project_missing",
+		notApplicableReason: `${presetName} is not applicable because no Godot project is configured for this workspace.`,
 		error: "GODOT_PROJECT_PATH is not configured for the terminal MCP server. Configure the Godot project path in the client and restart or reconnect the backend workspace before running Godot presets.",
 		godotProjectPath: (context?.godotProjectPath ?? GODOT_PROJECT) || null,
 		godotExecutablePath: context?.godotExecutablePath ?? GODOT_EXECUTABLE
@@ -287,7 +293,7 @@ function resolveTerminalContext(input: TerminalInternalInput): {
 	const workspaceHasGodotProject: boolean = workspaceRoot.length > 0 && fs.existsSync(path.join(workspaceRoot, "project.godot"));
 	const workspaceGodotProjectPath: string = workspace === undefined
 		? GODOT_PROJECT
-		: (workspaceHasGodotProject || workspace.godotExecutablePath !== undefined ? workspaceRoot : "");
+		: (workspaceHasGodotProject ? workspaceRoot : "");
 
 	return {
 		workspaceId,
@@ -296,6 +302,36 @@ function resolveTerminalContext(input: TerminalInternalInput): {
 		godotProjectPath: workspaceGodotProjectPath,
 		godotExecutablePath: workspace?.godotExecutablePath ?? GODOT_EXECUTABLE
 	};
+}
+
+function createNotApplicablePresetResult(
+	presetName: string,
+	applicabilityCode: ToolApplicabilityCode,
+	reason: string,
+	cwd: string
+): Record<string, unknown> {
+	return {
+		preset: presetName,
+		status: "not_applicable",
+		validationStatus: "not_applicable",
+		environmentIssue: true,
+		applicabilityCode,
+		notApplicableReason: reason,
+		summary: reason,
+		cwd
+	};
+}
+
+function annotateTerminalApplicability(result: Record<string, unknown>): Record<string, unknown> {
+	if (String(result.preset ?? "").startsWith("godot.") && result.status === "spawn_error") {
+		return {
+			...result,
+			validationStatus: "failed",
+			environmentIssue: true,
+			applicabilityCode: "godot_runtime_unavailable"
+		};
+	}
+	return result;
 }
 
 function createCommandLineEnv(inputEnv: Record<string, string> | undefined, trusted: boolean): Record<string, string> | undefined {
@@ -446,7 +482,7 @@ async function runCommand(
 			sandboxMode: executableInvocation.sandboxMode,
 			durationMs: Date.now() - startedAtMs
 		});
-		return createJobStartedResult(record);
+		return annotateTerminalApplicability(createJobStartedResult(record));
 	}
 
 	const result: TerminalCommandResult = await runCommandInvocationWait({
@@ -496,15 +532,6 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 		};
 	}
 
-	if (preset.requiresGodotProject && context.godotProjectPath.length === 0) {
-		logger.warn("terminal", "godot_project_missing", {
-			preset: input.presetName,
-			workspaceId: context.workspace?.id ?? context.workspaceId,
-			godotExecutablePath: context.godotExecutablePath
-		});
-		return JSON.parse(createMissingGodotProjectResult(input.presetName, context).content[0]!.text) as Record<string, unknown>;
-	}
-
 	let cwd: string;
 	try {
 		cwd = resolveWorkingDirectory(input.workingDirectory, preset, {
@@ -523,6 +550,23 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 			ok: false,
 			error: error instanceof Error ? error.message : "Invalid working directory"
 		};
+	}
+
+	const applicability = resolvePresetApplicability({
+		presetName: input.presetName,
+		workingDirectory: cwd,
+		requiresGodotProject: preset.requiresGodotProject,
+		godotProjectPath: context.godotProjectPath
+	});
+	if (!applicability.applicable) {
+		logger.info("terminal", "preset_not_applicable", {
+			preset: input.presetName,
+			cwd,
+			workspaceId: context.workspace?.id ?? context.workspaceId,
+			applicabilityCode: applicability.applicabilityCode,
+			reason: applicability.notApplicableReason
+		});
+		return createNotApplicablePresetResult(input.presetName, applicability.applicabilityCode, applicability.notApplicableReason, cwd);
 	}
 
 	let command: string[];
@@ -605,7 +649,7 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 		stderrChars: result.stderr.length,
 		truncated: result.truncated
 	});
-	return result as unknown as Record<string, unknown>;
+	return annotateTerminalApplicability(result as unknown as Record<string, unknown>);
 }
 
 const presetRunSchema = z.object({
@@ -718,7 +762,9 @@ export function registerTerminalTools(server: McpServer): void {
 		},
 		async ({ jobId }) => {
 			const record: TerminalJobRecord | null = await terminalJobStore.get(jobId);
-			return asJsonTextResult(record ?? { ok: false, status: "missing", jobId, error: `Terminal job not found: ${jobId}` });
+			return asJsonTextResult(record === null
+				? { ok: false, status: "missing", jobId, error: `Terminal job not found: ${jobId}` }
+				: annotateTerminalApplicability(record as unknown as Record<string, unknown>));
 		}
 	);
 
@@ -791,7 +837,13 @@ export function registerTerminalTools(server: McpServer): void {
 			const context = resolveTerminalContext(input);
 			const godotProject: string = context.godotProjectPath;
 			const godotExecutable: string = context.godotExecutablePath;
-			if (godotProject.length === 0) {
+			const applicability = resolvePresetApplicability({
+				presetName: "godot.scene_script",
+				workingDirectory: context.workspaceRoot,
+				requiresGodotProject: true,
+				godotProjectPath: godotProject
+			});
+			if (!applicability.applicable) {
 				return createMissingGodotProjectResult("godot.scene_script", context);
 			}
 			const command: string[] = [

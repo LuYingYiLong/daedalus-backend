@@ -208,7 +208,7 @@ export function updateWorkflowPhaseToolStats(stats: WorkflowPhaseToolStats, even
 	}
 
 	if (event.type === "tool.result") {
-		if (event.validationStatus === "failed" || event.ok === false) {
+		if (event.validationStatus === "not_applicable" || event.validationStatus === "failed" || event.ok === false) {
 			return;
 		}
 		const resultRisk: string | undefined = stats.toolCallRisks[event.toolCallId] ?? getToolPolicy(toolName)?.risk;

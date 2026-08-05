@@ -5,7 +5,15 @@ import type { ExecutionDecision } from "./agent-run-state.js";
 
 const GODOT_VALIDATION_PATH_PATTERN: RegExp = /\.(?:gd|tscn|tres|godot|gdshader)$/iu;
 const SOURCE_VALIDATION_PATH_PATTERN: RegExp = /\.(?:[cm]?[jt]sx?|vue|svelte)$/iu;
-const ENVIRONMENT_ERROR_PATTERN: RegExp = /\b(?:unavailable|not available|not running|econnrefused|etimedout|timeout)\b/iu;
+const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
+	"git_repository_missing",
+	"package_manifest_missing",
+	"typecheck_script_missing",
+	"godot_project_missing",
+	"godot_runtime_unavailable",
+	"diagnostics_unavailable",
+	"workspace_unavailable"
+]);
 const MAX_LIGHTWEIGHT_WRITE_CALLS: number = 2;
 
 export type LightweightActionState = {
@@ -214,11 +222,11 @@ function isSuccessfulWriteObservation(observation: WorkflowToolObservation | und
 }
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
-	if (observation.parsedResult?.environmentIssue === true) {
+	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
 		return true;
 	}
-	const summary: string = summarizeObservationFailure(observation);
-	return ENVIRONMENT_ERROR_PATTERN.test(summary);
+	const applicabilityCode: unknown = observation.parsedResult?.applicabilityCode;
+	return typeof applicabilityCode === "string" && ENVIRONMENT_APPLICABILITY_CODES.has(applicabilityCode);
 }
 
 function isRelevantVerificationObservation(

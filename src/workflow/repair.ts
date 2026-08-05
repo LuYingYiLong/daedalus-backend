@@ -10,6 +10,7 @@ import type {
 } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getWorkflowExecutionProfile } from "./execution-profile.js";
+import { isValidWorkflowCompletionTarget, normalizeProjectSettingKey, normalizeWorkspaceRelativeArtifactPath } from "./completion-contract.js";
 
 const AUTO_REPAIR_ID_PREFIX: string = "auto-repair-";
 const AUTO_VERIFY_ID_PREFIX: string = "auto-verify-";
@@ -279,7 +280,9 @@ function createAutoVerifyPhase(
 }
 
 function normalizeCompletionTarget(value: string): string {
-	return value.replace(/^res:\/\//iu, "").replace(/\\/g, "/").toLowerCase();
+	return (normalizeWorkspaceRelativeArtifactPath(value)
+		?? normalizeProjectSettingKey(value)
+		?? value.replace(/^res:\/\//iu, "").replace(/\\/g, "/")).toLowerCase();
 }
 
 function completionTargetValue(target: WorkflowCompletionTarget): string {
@@ -305,7 +308,8 @@ function createRepairCompletionContract(
 		.map(normalizeCompletionTarget));
 	const inheritedTargets: WorkflowCompletionTarget[] = failedPhase.completionContract?.targets
 		.filter((target: WorkflowCompletionTarget): boolean => (
-			missingTargets.size === 0 || missingTargets.has(normalizeCompletionTarget(completionTargetValue(target)))
+			isValidWorkflowCompletionTarget(target)
+			&& (missingTargets.size === 0 || missingTargets.has(normalizeCompletionTarget(completionTargetValue(target))))
 		))
 		.map((target: WorkflowCompletionTarget): WorkflowCompletionTarget => ({ ...target }))
 		?? [];
@@ -321,7 +325,8 @@ function createRepairCompletionContract(
 			? [{ kind: "project_setting", key: check.artifact }]
 			: [{ kind: "artifact", path: check.artifact }];
 	});
-	return targets.length > 0 ? { targets, requireAll: true } : undefined;
+	const validTargets: WorkflowCompletionTarget[] = targets.filter(isValidWorkflowCompletionTarget);
+	return validTargets.length > 0 ? { targets: validTargets, requireAll: true } : undefined;
 }
 
 export function insertWorkflowAutoRepairPhases(

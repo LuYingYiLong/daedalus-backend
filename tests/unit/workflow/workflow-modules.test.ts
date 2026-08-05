@@ -7,10 +7,10 @@ import { planWorkflow, planWorkflowAfterLlmPlannerFailure } from "../../../src/w
 import {
 	classifyGodotTask,
 	createGodotTemplateWorkflowPlan,
-	createWorkflowCompletionContract,
 	getAllowedToolsForLlmPlannedStep,
 	narrowLlmPlannedWriteTools
 } from "../../../src/workflow/godot-template-planner.js";
+import { createStructuredWorkflowCompletionContract } from "../../../src/workflow/completion-contract.js";
 import {
 	createEmptyWorkflowPhaseToolStats,
 	didWorkflowWritePhaseExecute,
@@ -23,6 +23,8 @@ test("workflow planner uses the neutral provider chat gateway", async (): Promis
 	const source = await readFile(new URL("../../../src/workflow/llm-planner.ts", import.meta.url), "utf8");
 	assert.match(source, /chatWithProvider/u);
 	assert.equal(source.includes("chatWithDeepSeek"), false);
+	assert.match(source, /completionTargets/u);
+	assert.equal(source.includes("createWorkflowCompletionContract"), false);
 });
 
 test("fixed fallback is a safe workflow and respects read-only policy", (): void => {
@@ -84,11 +86,15 @@ test("LLM planned write tools are generic and do not depend on phase prose", ():
 	assert.equal(one.includes("mcp_godot_create_text_file"), true);
 });
 
-test("completion contracts extract explicit artifacts without intent keywords", (): void => {
-	assert.deepEqual(createWorkflowCompletionContract("write", "Any", "Update scenes/Main.tscn and application/run/main_scene.")?.targets, [
+test("LLM completion contracts only accept structured, exact targets", (): void => {
+	assert.deepEqual(createStructuredWorkflowCompletionContract("write", {
+		artifacts: ["scenes/Main.tscn", "index.html（rewrite result）", "../outside.py"],
+		projectSettings: ["application/run/main_scene", "a prose setting"]
+	})?.targets, [
 		{ kind: "artifact", path: "scenes/Main.tscn" },
 		{ kind: "project_setting", key: "application/run/main_scene" }
 	]);
+	assert.equal(createStructuredWorkflowCompletionContract("write", { artifacts: ["index.html rewritten"] }), undefined);
 });
 
 test("workflow tool stats track writes and keep retry tools narrow", (): void => {

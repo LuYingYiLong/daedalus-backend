@@ -81,7 +81,90 @@ test("Godot terminal spawn errors are marked as environment issues", (): void =>
 	assert.equal(summary.ok, false);
 	assert.equal(summary.validationStatus, "failed");
 	assert.equal(summary.environmentIssue, true);
+	assert.equal(summary.applicabilityCode, "godot_runtime_unavailable");
 	assert.match(summary.failedChecks?.[0] ?? "", /spawn godot ENOENT/);
+});
+
+test("Git checks in a non-Git workspace are not applicable, not failed", (): void => {
+	const summary = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "git.status" },
+		JSON.stringify({
+			preset: "git.status",
+			ok: false,
+			exitCode: 128,
+			stderr: "fatal: not a git repository (or any of the parent directories): .git"
+		})
+	);
+
+	assert.equal(summary.validationStatus, "not_applicable");
+	assert.equal(summary.environmentIssue, true);
+	assert.deepEqual(summary.failedChecks, undefined);
+	assert.equal(summary.applicabilityCode, "git_repository_missing");
+	assert.match(summary.notApplicableReason ?? "", /not a Git repository/);
+});
+
+test("workspace typecheck without a package script is not applicable", (): void => {
+	const summary = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "workspace.typecheck" },
+		JSON.stringify({
+			preset: "workspace.typecheck",
+			ok: false,
+			exitCode: 1,
+			stderr: "npm error code ENOENT\nnpm error syscall open\nnpm error path C:\\test2\\package.json"
+		})
+	);
+
+	assert.equal(summary.validationStatus, "not_applicable");
+	assert.equal(summary.environmentIssue, true);
+	assert.deepEqual(summary.failedChecks, undefined);
+	assert.equal(summary.applicabilityCode, "package_manifest_missing");
+});
+
+test("legacy applicability requires the exact preset and exit code", (): void => {
+	const wrongExitCode = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "git.status" },
+		JSON.stringify({ preset: "git.status", ok: false, exitCode: 1, stderr: "fatal: not a git repository" })
+	);
+	assert.equal(wrongExitCode.validationStatus, "failed");
+	assert.equal(wrongExitCode.applicabilityCode, undefined);
+
+	const ordinaryTypecheckFailure = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "workspace.typecheck" },
+		JSON.stringify({ preset: "workspace.typecheck", ok: false, exitCode: 1, stderr: "typecheck failed: missing dependency" })
+	);
+	assert.equal(ordinaryTypecheckFailure.validationStatus, "failed");
+	assert.equal(ordinaryTypecheckFailure.applicabilityCode, undefined);
+
+	const genericEnoent = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "workspace.typecheck" },
+		JSON.stringify({ preset: "workspace.typecheck", ok: false, exitCode: 1, stderr: "Error: ENOENT while reading cache" })
+	);
+	assert.equal(genericEnoent.validationStatus, "failed");
+	assert.equal(genericEnoent.applicabilityCode, undefined);
+});
+
+test("structured applicability wins over legacy text and never creates failed checks", (): void => {
+	const summary = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "workspace.typecheck" },
+		JSON.stringify({
+			preset: "workspace.typecheck",
+			ok: false,
+			exitCode: 1,
+			validationStatus: "not_applicable",
+			applicabilityCode: "typecheck_script_missing",
+			notApplicableReason: "No typecheck script",
+			failedChecks: ["this must not enter repair"]
+		})
+	);
+	assert.equal(summary.validationStatus, "not_applicable");
+	assert.equal(summary.applicabilityCode, "typecheck_script_missing");
+	assert.equal(summary.failedChecks, undefined);
 });
 
 test("LSP diagnostics result counts errors and marks validation failed", (): void => {
@@ -140,6 +223,7 @@ test("LSP status preserves unavailable workspace as environment issue", (): void
 	assert.equal(summary.ok, false);
 	assert.equal(summary.validationStatus, "failed");
 	assert.equal(summary.environmentIssue, true);
+	assert.equal(summary.applicabilityCode, "diagnostics_unavailable");
 	assert.match(summary.summary ?? "", /no active workspace/);
 	assert.match(summary.failedChecks?.[0] ?? "", /no active workspace/);
 });
@@ -160,6 +244,27 @@ test("LSP diagnostics unavailable keeps error text instead of reporting zero cle
 	assert.equal(summary.ok, false);
 	assert.equal(summary.validationStatus, "failed");
 	assert.equal(summary.environmentIssue, true);
+	assert.equal(summary.applicabilityCode, "diagnostics_unavailable");
 	assert.match(summary.summary ?? "", /unavailable/);
 	assert.match(summary.failedChecks?.[0] ?? "", /no active workspace/);
+});
+
+test("diagnostic timeout and ordinary Godot not-found text remain ordinary failures", (): void => {
+	const timeout = parseToolResultSummary(
+		"mcp_godot_lsp_get_status",
+		{},
+		JSON.stringify({ ok: false, error: { message: "request timeout while checking a script" } })
+	);
+	assert.equal(timeout.validationStatus, "failed");
+	assert.equal(timeout.environmentIssue, undefined);
+	assert.equal(timeout.applicabilityCode, undefined);
+
+	const notFound = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ presetName: "godot.check_only" },
+		JSON.stringify({ ok: false, status: "failed", exitCode: 1, stderr: "Project reported resource not found" })
+	);
+	assert.equal(notFound.validationStatus, "failed");
+	assert.equal(notFound.environmentIssue, undefined);
+	assert.equal(notFound.applicabilityCode, undefined);
 });

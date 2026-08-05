@@ -70,6 +70,68 @@ test("verify phase with failed terminal validation becomes needs_fix", (): void 
 	assert.deepEqual(outcome.requiredFixes, ["修复：Parser Error"]);
 });
 
+test("not-applicable workspace checks complete verification with an explicit warning", (): void => {
+	const observations: WorkflowToolObservation[] = applyEvents([
+		{
+			type: "tool.result",
+			step: 0,
+			toolCallId: "git-status",
+			toolName: "mcp_terminal_run_safe_preset",
+			resultChars: 120,
+			truncated: false,
+			validationStatus: "not_applicable",
+			environmentIssue: true,
+			applicabilityCode: "git_repository_missing",
+			summary: "git.status is not applicable because the workspace is not a Git repository",
+			failedChecks: ["fatal: not a git repository"]
+		}
+	]);
+
+	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-not-applicable", "", observations);
+
+	assert.equal(outcome.status, "completed");
+	assert.equal(outcome.verificationStatus, "unverified");
+	assert.deepEqual(outcome.failedChecks, []);
+	assert.match(outcome.warnings?.[0] ?? "", /\[git_repository_missing\].*not applicable/);
+});
+
+test("environment gaps do not hide a real verification failure", (): void => {
+	const observations: WorkflowToolObservation[] = applyEvents([
+		{
+			type: "tool.result",
+			step: 0,
+			toolCallId: "runtime-gap",
+			toolName: "mcp_terminal_run_safe_preset",
+			resultChars: 80,
+			truncated: false,
+			ok: false,
+			validationStatus: "failed",
+			environmentIssue: true,
+			applicabilityCode: "godot_runtime_unavailable",
+			summary: "Godot runtime unavailable",
+			failedChecks: ["spawn godot ENOENT"]
+		},
+		{
+			type: "tool.result",
+			step: 0,
+			toolCallId: "real-failure",
+			toolName: "mcp_terminal_run_safe_preset",
+			resultChars: 100,
+			truncated: false,
+			ok: false,
+			validationStatus: "failed",
+			summary: "Parser Error",
+			failedChecks: ["Parser Error at scripts/game.gd:4"]
+		}
+	]);
+
+	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-mixed-failure", "", observations);
+	assert.equal(outcome.status, "needs_fix");
+	assert.equal(outcome.failedChecks.length, 1);
+	assert.match(outcome.failedChecks[0]?.message ?? "", /Parser Error/);
+	assert.match(outcome.warnings?.[0] ?? "", /godot_runtime_unavailable/);
+});
+
 test("failed write phase summary prefers failed checks over prior read summaries", (): void => {
 	const observations: WorkflowToolObservation[] = applyEvents([
 		{
@@ -920,6 +982,47 @@ test("write completion contract accepts the actual target artifact", (): void =>
 	]);
 
 	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-main", "", observations);
+	assert.equal(outcome.status, "completed");
+	assert.deepEqual(outcome.failedChecks, []);
+});
+
+test("write completion contract ignores malformed legacy prose targets", (): void => {
+	const phase: WorkflowPhase = {
+		...createPhase("rewrite-index", "write"),
+		completionContract: {
+			targets: [{ kind: "artifact", path: "index.html（rewritten game implementation）" }],
+			requireAll: true
+		}
+	};
+	const observations: WorkflowToolObservation[] = applyEvents([
+		{
+			type: "tool.call",
+			step: 0,
+			toolCallId: "rewrite-index",
+			toolName: "mcp_workspace_overwrite_text_file",
+			args: { relativePath: "index.html", content: "<main>updated</main>" },
+			serverId: "workspace",
+			serverName: "Workspace",
+			category: "write",
+			title: "Rewrite index",
+			summary: "index.html",
+			target: { kind: "file", path: "index.html", label: "index.html" }
+		},
+		{
+			type: "tool.result",
+			step: 0,
+			toolCallId: "rewrite-index",
+			toolName: "mcp_workspace_overwrite_text_file",
+			resultChars: 40,
+			truncated: false,
+			ok: true,
+			validationStatus: "passed",
+			summary: "File overwritten.",
+			artifactRefs: ["index.html"]
+		}
+	]);
+
+	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-index", "", observations);
 	assert.equal(outcome.status, "completed");
 	assert.deepEqual(outcome.failedChecks, []);
 });

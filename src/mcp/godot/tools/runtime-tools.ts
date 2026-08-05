@@ -135,6 +135,7 @@ async function startRuntimeJob(params: {
 			ok: false,
 			code: "godot_executable_unavailable",
 			environmentIssue: true,
+			applicabilityCode: "godot_runtime_unavailable",
 			error: availability.error,
 			godotExecutablePath: GODOT_EXECUTABLE
 		};
@@ -230,6 +231,7 @@ export function registerRuntimeTools(server: McpServer): void {
 				godotExecutableVersion: availability.version,
 				error: availability.error,
 				environmentIssue: availability.status !== "ready",
+				applicabilityCode: availability.status !== "ready" ? "godot_runtime_unavailable" : undefined,
 				godotProjectPath: projectRoot,
 				capabilities: {
 					runtimeLifecycle: availability.status === "ready",
@@ -256,6 +258,7 @@ export function registerRuntimeTools(server: McpServer): void {
 				version: result.version ?? "",
 				error: result.error,
 				environmentIssue: result.status !== "ready",
+				applicabilityCode: result.status !== "ready" ? "godot_runtime_unavailable" : undefined,
 				godotExecutablePath: GODOT_EXECUTABLE
 			});
 		}

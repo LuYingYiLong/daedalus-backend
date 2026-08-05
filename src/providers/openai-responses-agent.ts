@@ -367,7 +367,7 @@ async function readResponsesAssistantMessage(
 ): Promise<ResponsesAssistantMessage> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
-		onEvent: streamAssistant ? onEvent : undefined,
+		onEvent,
 		abortSignal,
 		execute: async (attempt): Promise<ResponsesAssistantMessage> => readResponsesAssistantMessageAttempt(
 			params,

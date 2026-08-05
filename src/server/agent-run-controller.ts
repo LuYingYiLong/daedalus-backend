@@ -3,6 +3,7 @@ import type WebSocket from "ws";
 import { logger } from "../logger.js";
 import { saveAgentRunState } from "../session/agent-run-store.js";
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
+import { isToolApplicabilityCode } from "../tools/tool-applicability.js";
 import { getEffectiveToolPolicy, type ToolRisk } from "../tools/tool-policy.js";
 import {
 	cloneAgentRunState,
@@ -146,7 +147,11 @@ export function recordAgentRunToolEvent(
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
 		risk,
-		status: event.type === "tool.error" || eventRecord.ok === false ? "failed" : "succeeded",
+		status: event.type === "tool.error"
+			? "failed"
+			: eventRecord.validationStatus === "not_applicable"
+				? "succeeded"
+				: eventRecord.ok === false ? "failed" : "succeeded",
 		artifactRefs,
 		summary: typeof eventRecord.summary === "string"
 			? eventRecord.summary
@@ -159,6 +164,9 @@ export function recordAgentRunToolEvent(
 			? eventRecord.validationStatus
 			: undefined,
 		environmentIssue: eventRecord.environmentIssue === true,
+		applicabilityCode: isToolApplicabilityCode(eventRecord.applicabilityCode)
+			? eventRecord.applicabilityCode
+			: undefined,
 		observedAt: new Date().toISOString()
 	};
 	if (

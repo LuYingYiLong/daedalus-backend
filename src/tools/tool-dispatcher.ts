@@ -20,6 +20,7 @@ import {
 	parseExecutionDecision
 } from "./execution-control.js";
 import type { ProviderReconnectEvent } from "../providers/provider-types.js";
+import type { ToolApplicabilityCode } from "./tool-applicability.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -60,6 +61,12 @@ export type ToolResultEnricher = (input: {
 }) => Promise<IdempotentToolExecutionResult>;
 
 type RuntimeCapabilityKind = "godot_cli" | "godot_lsp" | "godot_dap";
+
+function getRuntimeCapabilityApplicabilityCode(kind: RuntimeCapabilityKind | null): ToolApplicabilityCode | undefined {
+	if (kind === "godot_cli") return "godot_runtime_unavailable";
+	if (kind === "godot_lsp" || kind === "godot_dap") return "diagnostics_unavailable";
+	return undefined;
+}
 
 const unavailableRuntimeCapabilities: Map<string, Map<RuntimeCapabilityKind, { reason: string; expiresAt: number }>> = new Map();
 const RUNTIME_CAPABILITY_CACHE_TTL_MS: number = 30 * 60 * 1000;
@@ -287,10 +294,12 @@ async function executeSingleToolCall(
 	const runtimeCapabilityKind: RuntimeCapabilityKind | null = getRuntimeCapabilityKind(functionName, executionArgs);
 	const cachedCapabilityFailure: string | null = getCachedRuntimeCapabilityFailure(toolContext?.requestId, runtimeCapabilityKind);
 	if (cachedCapabilityFailure !== null) {
+		const applicabilityCode: ToolApplicabilityCode | undefined = getRuntimeCapabilityApplicabilityCode(runtimeCapabilityKind);
 		const content: string = JSON.stringify({
 			ok: false,
 			code: "runtime_capability_unavailable_cached",
 			environmentIssue: true,
+			applicabilityCode,
 			error: cachedCapabilityFailure,
 			cached: true
 		});
@@ -305,6 +314,7 @@ async function executeSingleToolCall(
 			ok: false,
 			validationStatus: "failed",
 			environmentIssue: true,
+			applicabilityCode,
 			summary: cachedCapabilityFailure,
 			failedChecks: [cachedCapabilityFailure],
 			artifactRefs: []
@@ -502,7 +512,7 @@ export async function dispatchToolCalls(
 		if (controlCalls.length !== 1 || toolCalls.length !== 1) {
 			throw new Error("Execution control cannot be mixed with workspace tool calls in one assistant batch.");
 		}
-		if (toolContext?.executionControl === undefined) {
+		if (toolContext?.executionControl === undefined || toolContext.executionControlAvailable === false) {
 			throw new Error("Execution control is not available in the current agent lane.");
 		}
 		const controlCall: ChatCompletionMessageToolCall = controlCalls[0] as ChatCompletionMessageToolCall;

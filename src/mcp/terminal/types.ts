@@ -1,4 +1,5 @@
 import type { ChildProcess } from "node:child_process";
+import type { ToolApplicabilityCode } from "../../tools/tool-applicability.js";
 
 export type CommandRisk = "read" | "verify" | "write" | "destructive";
 
@@ -55,6 +56,10 @@ export type TerminalCommandResult = {
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
 	authorizationSource?: "model" | "policy" | "user" | undefined;
+	validationStatus?: "passed" | "failed" | "not_applicable" | "unknown" | undefined;
+	applicabilityCode?: ToolApplicabilityCode | undefined;
+	notApplicableReason?: string | undefined;
+	environmentIssue?: boolean | undefined;
 	stdout: string;
 	stderr: string;
 	stdoutOmittedChars?: number | undefined;

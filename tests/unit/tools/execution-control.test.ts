@@ -77,6 +77,21 @@ test("execution decisions are isolated control calls and return structured signa
 		),
 		/not available/u
 	);
+	await assert.rejects(
+		dispatchToolCalls(
+			{} as McpHost,
+			[controlToolCall(decisionJson)],
+			1,
+			{} as ApprovalGateway,
+			undefined,
+			undefined,
+			{
+				executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true },
+				executionControlAvailable: false
+			}
+		),
+		/not available/u
+	);
 });
 
 test("execution control upgrades oversized lightweight decisions to workflow", async (): Promise<void> => {

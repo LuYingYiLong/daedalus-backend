@@ -418,6 +418,7 @@ function createContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunS
 			toolName: evidence.toolName,
 			status: evidence.status,
 			validationStatus: evidence.validationStatus,
+			applicabilityCode: evidence.applicabilityCode,
 			artifacts: evidence.artifactRefs.slice(0, 12),
 			summary: evidence.summary?.slice(0, 800)
 		}));
@@ -683,6 +684,7 @@ function createProgressFingerprint(runs: AgentRunState[], evaluation: GoalEvalua
 			toolName: item.toolName,
 			risk: item.risk,
 			validationStatus: item.validationStatus,
+			applicabilityCode: item.applicabilityCode,
 			artifacts: [...item.artifactRefs].sort(),
 			summary: item.summary ?? ""
 		})))].sort();

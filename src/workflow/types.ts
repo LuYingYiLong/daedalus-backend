@@ -31,6 +31,8 @@ export type WorkflowToolObservation = {
 	parsedResult?: Record<string, unknown> | undefined;
 	error?: string | undefined;
 	artifactRefs?: string[] | undefined;
+	/** 成功写入且内容实际变化的文件指纹，仅用于自动修复进展判定。 */
+	fileEditFingerprints?: string[] | undefined;
 };
 
 export type WorkflowCompletionTarget =

@@ -7,7 +7,8 @@ import type { AiChatParams, ChatMessage, PromptId } from "../protocol/types.js";
 import { isSkillId, type SkillId } from "../skills/registry.js";
 import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
 import { createWorkflowId, createWorkflowTitle, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
-import { createWorkflowCompletionContract, getAllowedToolsForLlmPlannedStep } from "./godot-template-planner.js";
+import { getAllowedToolsForLlmPlannedStep } from "./godot-template-planner.js";
+import { createStructuredWorkflowCompletionContract } from "./completion-contract.js";
 import type {
 	WorkflowPhase,
 	WorkflowPhaseOutput,
@@ -39,6 +40,10 @@ const llmPlanStepSchema = z.object({
 	instruction: z.string().min(1).max(2000),
 	toolGroup: toolGroupSchema,
 	acceptanceCriteria: z.array(z.string().min(1).max(240)).max(8).optional(),
+	completionTargets: z.object({
+		artifacts: z.array(z.string().min(1).max(260)).max(8).optional(),
+		projectSettings: z.array(z.string().min(1).max(180)).max(8).optional()
+	}).strict().optional(),
 	skillId: z.string().nullable().optional(),
 	promptId: normalizedPromptIdSchema
 }).strict();
@@ -124,9 +129,10 @@ function createPlannerSystemPrompt(executionProfile: WorkflowExecutionProfileId)
 function createWorkspacePlannerSystemPrompt(): string {
 	return [
 		"You are a workflow planner. Return one JSON object only; do not call tools or write explanatory prose.",
-		"Schema: { title?: string, steps: [{ id?: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[] }] }.",
+		"Schema: { title?: string, steps: [{ id?: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[], completionTargets?: { artifacts?: string[], projectSettings?: string[] } }] }.",
 		"Use read only for evidence gathering, write only for approval-gated workspace changes, verify only for non-mutating checks, and summarize for the final user-facing delivery.",
 		"Plan concrete, minimal steps. Complex mutations normally use read, write, verify, summarize. The final step must be summarize. Do not name tools; the server selects the safe tool set.",
+		"For a write step, completionTargets is optional and may contain only exact workspace-relative paths or project setting keys. Do not derive targets from prose, descriptions, or expected behavior.",
 		"This is a general workspace. Do not assume Godot, scenes, GDScript, editor state, or Godot-specific validation."
 	].join("\\n");
 }
@@ -306,7 +312,7 @@ function createPhaseFromStep(
 			: getAllowedToolsForLlmPlannedStep(toolGroup, step.title, step.instruction),
 		instruction: clipText(step.instruction, MAX_PHASE_INSTRUCTION_CHARS),
 		acceptanceCriteria: normalizeAcceptanceCriteria(step.acceptanceCriteria, toolGroup),
-		completionContract: createWorkflowCompletionContract(toolGroup, step.title, step.instruction, step.acceptanceCriteria),
+		completionContract: createStructuredWorkflowCompletionContract(toolGroup, step.completionTargets),
 		requireToolCallOnFirstStep: toolGroup === "write" || toolGroup === "verify" ? true : undefined
 	};
 }

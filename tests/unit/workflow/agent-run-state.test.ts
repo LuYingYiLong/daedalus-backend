@@ -178,7 +178,7 @@ test("execution decisions require exact evidence call ids", (): void => {
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, workflow).evidenceToolCallIds, []);
 });
 
-test("no-change tool input blocks when it omits exact current-run evidence", (): void => {
+test("no-change tool input binds successful current-run evidence when ids are omitted", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",
 		requestId: "request-test",
@@ -219,6 +219,42 @@ test("no-change tool input blocks when it omits exact current-run evidence", ():
 		summary: "The requested state is already present and verified.",
 		evidenceToolCallIds: [],
 		expectedArtifacts: ["scripts/Main.gd"]
+	}, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
+
+	const resolved = validateExecutionDecisionEvidence(probing, decision);
+	assert.equal(resolved.disposition, "no_change");
+	assert.deepEqual(resolved.evidenceToolCallIds, ["current-read", "current-verify"]);
+});
+
+test("no-change still blocks when no usable read or verify evidence exists", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-test",
+		now: "2026-08-02T05:00:38.000Z"
+	});
+	const probing = transitionAgentRunState(initial, "probing", {
+		intent: "mutate",
+		scope: "unknown",
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: [],
+			evidence: [{
+				toolCallId: "unavailable-check",
+				toolName: "mcp_terminal_run_safe_preset",
+				risk: "verify",
+				status: "succeeded",
+				validationStatus: "not_applicable",
+				environmentIssue: true,
+				artifactRefs: [],
+				observedAt: "2026-08-02T05:00:51.819Z"
+			}]
+		}
+	});
+	const decision = parseExecutionDecision({
+		disposition: "no_change",
+		summary: "The requested state is already present.",
+		evidenceToolCallIds: [],
+		expectedArtifacts: []
 	}, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
 
 	assert.equal(validateExecutionDecisionEvidence(probing, decision).disposition, "blocked");

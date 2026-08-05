@@ -292,3 +292,32 @@ test("terminal capabilities do not treat ordinary workspaces as Godot projects",
 		}
 	});
 });
+
+test("terminal verification presets return not_applicable before running unsupported workspace checks", async (): Promise<void> => {
+	await withAppData(async (): Promise<void> => {
+		const server: FakeMcpServer = createFakeTerminalServer();
+		registerTerminalTools(server as never);
+		const workspaceRoot: string = await mkdtemp(join(tmpdir(), "terminal-empty-workspace-"));
+		const workspace = upsertRuntimeWorkspace(createRuntimeWorkspace(workspaceRoot));
+
+		try {
+			const gitResult: Record<string, unknown> = await callTerminalTool(server, "run_safe_preset", {
+				presetName: "git.status",
+				__daedalusWorkspaceId: workspace.id
+			});
+			const typecheckResult: Record<string, unknown> = await callTerminalTool(server, "run_safe_preset", {
+				presetName: "workspace.typecheck",
+				__daedalusWorkspaceId: workspace.id
+			});
+
+			assert.equal(gitResult.validationStatus, "not_applicable");
+			assert.equal(typecheckResult.validationStatus, "not_applicable");
+			assert.equal(gitResult.applicabilityCode, "git_repository_missing");
+			assert.equal(typecheckResult.applicabilityCode, "package_manifest_missing");
+			assert.equal(gitResult.status, "not_applicable");
+			assert.equal(typecheckResult.status, "not_applicable");
+		} finally {
+			await rm(workspaceRoot, { recursive: true, force: true });
+		}
+	});
+});

@@ -38,14 +38,26 @@ function createFailureSignature(outcome: WorkflowPhaseOutput): string {
 	return checks.length > 0 ? checks.join("|") : outcome.summary.trim().toLowerCase();
 }
 
-function hasRepeatedRepairFailure(state: WorkflowRunState, outcome: WorkflowPhaseOutput): boolean {
-	if (countWorkflowAutoRepairRounds(state.plan) < 1) {
+function hasFileMutationProgress(outputs: readonly WorkflowPhaseOutput[], afterIndex: number): boolean {
+	return outputs.slice(afterIndex + 1).some((output: WorkflowPhaseOutput): boolean => (
+		output.toolObservations.some((observation): boolean => (observation.fileEditFingerprints?.length ?? 0) > 0)
+	));
+}
+
+function hasRepeatedRepairFailure(state: WorkflowRunState, phase: WorkflowPhase, outcome: WorkflowPhaseOutput): boolean {
+	if (phase.toolGroup !== "verify" || phase.repairRound === undefined || countWorkflowAutoRepairRounds(state.plan) < 1) {
 		return false;
 	}
 	const signature: string = createFailureSignature(outcome);
-	return state.phaseOutputs.some((previous: WorkflowPhaseOutput): boolean => (
-		previous.status === "needs_fix" && createFailureSignature(previous) === signature
-	));
+	let previousFailureIndex: number = -1;
+	for (let index: number = state.phaseOutputs.length - 1; index >= 0; index -= 1) {
+		const previous: WorkflowPhaseOutput = state.phaseOutputs[index]!;
+		if (previous.status === "needs_fix" && createFailureSignature(previous) === signature) {
+			previousFailureIndex = index;
+			break;
+		}
+	}
+	return previousFailureIndex >= 0 && !hasFileMutationProgress(state.phaseOutputs, previousFailureIndex);
 }
 
 export function scheduleWorkflowPhaseStart(state: WorkflowRunState, phaseRunId: string): WorkflowSchedulerCommand {
@@ -88,7 +100,7 @@ export function scheduleWorkflowPhaseOutcome(
 	maxAutoRepairRounds: number
 ): WorkflowSchedulerCommand {
 	if (outcome.status === "needs_fix") {
-		if (hasRepeatedRepairFailure(state, outcome)) {
+		if (hasRepeatedRepairFailure(state, phase, outcome)) {
 			const message: string = `验证阶段「${phase.title}」重复出现相同失败且没有修复进展，已停止自动修复。`;
 			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };
 			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");

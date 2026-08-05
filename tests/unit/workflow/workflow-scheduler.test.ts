@@ -166,6 +166,40 @@ test("scheduler stops when auto repair repeats the same failure without progress
 	}
 });
 
+test("scheduler permits a repeated verification failure after a real file mutation", (): void => {
+	const writePhase: WorkflowPhase = {
+		...createPhase("implement", "write"),
+		allowedTools: ["mcp_workspace_overwrite_text_file"]
+	};
+	const phase = createPhase("auto-verify-1", "verify");
+	phase.repairRound = 1;
+	const previousPhase = createPhase("verify", "verify");
+	const repairPhase = createPhase("auto-repair-1", "write");
+	const repairOutcome: WorkflowPhaseOutput = {
+		...createOutcome(repairPhase, "completed"),
+		toolObservations: [{
+			toolCallId: "rewrite-index",
+			toolName: "mcp_workspace_overwrite_text_file",
+			risk: "write",
+			status: "succeeded",
+			fileEditFingerprints: ["index.html:before:after"]
+		}]
+	};
+	const previousOutcome: WorkflowPhaseOutput = {
+		...createOutcome(previousPhase, "needs_fix"),
+		failedChecks: [{ code: "check", message: "needs repair", artifact: "index.html" }]
+	};
+	const state = createState([writePhase, phase], [previousOutcome, repairOutcome]);
+	state.phaseIndex = 1;
+
+	const repeatedOutcome: WorkflowPhaseOutput = {
+		...createOutcome(phase, "needs_fix"),
+		failedChecks: [{ code: "check", message: "needs repair", artifact: "index.html" }]
+	};
+	const command = scheduleWorkflowPhaseOutcome(state, phase, repeatedOutcome, 2);
+	assert.equal(command.type, "repair");
+});
+
 test("scheduler completes a successful phase without executing effects", (): void => {
 	const phase = createPhase("inspect");
 	const command = scheduleWorkflowPhaseOutcome(createState([phase]), phase, createOutcome(phase, "completed"), 2);

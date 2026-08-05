@@ -18,7 +18,7 @@ export const EXECUTION_CONTROL_TOOL_DEFINITION: ChatCompletionTool = {
 	type: "function",
 	function: {
 		name: EXECUTION_CONTROL_TOOL_NAME,
-		description: "Report the evidence-backed execution decision for the current Daedalus read, probe, or lightweight action. This is an internal control signal, not a workspace tool. complete_read is valid for read and probe lanes when the request is informational or diagnostic and needs no mutation. For complete_read, leave expectedArtifacts empty and targetKind unknown. evidenceToolCallIds must contain exact tool_call ids from this run (for example call_abc123), never tool names, paths, or constructed tool:path labels.",
+		description: "Report the evidence-backed execution decision for the current Daedalus read, probe, or lightweight action. This is an internal control signal, not a workspace tool. complete_read is valid for read and probe lanes when the request is informational or diagnostic and needs no mutation. For complete_read, leave expectedArtifacts empty and targetKind unknown. For no_change, evidenceToolCallIds is mandatory: include one or more exact successful read or verify tool_call ids from this run. Never use [] for no_change. Never use tool names, paths, or constructed tool:path labels.",
 		parameters: {
 			type: "object",
 			additionalProperties: false,
@@ -31,7 +31,7 @@ export const EXECUTION_CONTROL_TOOL_DEFINITION: ChatCompletionTool = {
 				summary: { type: "string", minLength: 1, maxLength: 2000 },
 				evidenceToolCallIds: {
 					type: "array",
-					description: "Exact tool_call ids returned by successful read or verify calls in this run. Use [] unless evidence is needed. Never construct ids from a tool name or artifact path.",
+					description: "Exact tool_call ids returned by successful read or verify calls in this run. Required for no_change; use [] only for complete_read or decisions that do not claim an already-satisfied state. Never construct ids from a tool name or artifact path.",
 					maxItems: 64,
 					items: { type: "string", minLength: 1, maxLength: 200 }
 				},

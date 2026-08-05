@@ -65,6 +65,7 @@ export async function runCommandWait(params: {
 			resolve({
 				preset: params.preset.name,
 				ok: false,
+				status: "spawn_error",
 				exitCode: null,
 				command: params.command,
 				commandLine: describePresetCommand(params.command),

@@ -4,6 +4,7 @@ import { clearDynamicMcpToolsForWorkspace, clearGlobalDynamicMcpTools, replaceDy
 import { createWorkspaceToolCatalog } from "../../../src/tools/tool-catalog.js";
 import { filterToolNamesForWorkspace, getDefaultWorkflowToolNames, getNoWorkspaceToolNames } from "../../../src/tools/tool-catalog.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../../../src/tools/tool-sentinels.js";
+import { EXECUTION_CONTROL_TOOL_NAME } from "../../../src/tools/execution-control.js";
 
 function getFunctionToolName(tool: { type: string; function?: { name: string } | undefined }): string {
 	assert.equal(tool.type, "function");
@@ -96,6 +97,22 @@ test("workspace tool catalog exposes approval reason schema for write tools", ()
 	} finally {
 		clearDynamicMcpToolsForWorkspace("catalog-approval");
 	}
+});
+
+test("probe discovery defers execution control until evidence has been collected", (): void => {
+	const context = {
+		workspaceId: "workspace-probe",
+		executionControl: { lane: "probe" as const, allowMutationEscalation: true, requireDecision: true }
+	};
+	const discoveryTools = createWorkspaceToolCatalog({
+		...context,
+		executionControlAvailable: false
+	}).getDefinitionsForNames(["mcp_workspace_read_text_file"]);
+	const decisionTools = createWorkspaceToolCatalog(context).getDefinitionsForNames([]);
+
+	assert.equal(discoveryTools.some((tool) => getFunctionToolName(tool) === EXECUTION_CONTROL_TOOL_NAME), false);
+	assert.equal(discoveryTools.some((tool) => getFunctionToolName(tool) === "mcp_workspace_read_text_file"), true);
+	assert.equal(decisionTools.some((tool) => getFunctionToolName(tool) === EXECUTION_CONTROL_TOOL_NAME), true);
 });
 
 test("image generation tool accepts custom aspect ratios", (): void => {

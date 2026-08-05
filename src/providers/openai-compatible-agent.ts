@@ -1265,6 +1265,7 @@ async function runAgentLoop(
 			try {
 				completion = await runProviderRequestWithResilience({
 					providerOptions: options,
+					onEvent,
 					abortSignal,
 					execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 				});

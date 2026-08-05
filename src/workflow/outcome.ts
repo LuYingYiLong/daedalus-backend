@@ -1,5 +1,6 @@
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
 import { getEffectiveToolPolicy, getToolPolicy } from "../tools/tool-policy.js";
+import { isValidWorkflowCompletionTarget, normalizeWorkspaceRelativeArtifactPath } from "./completion-contract.js";
 import type {
 	WorkflowCompletionTarget,
 	WorkflowFailedCheck,
@@ -11,8 +12,16 @@ import type {
 
 const SUMMARY_TOOL_INTENT_PATTERN: RegExp = /(准备|将要|接下来|现在|马上|先).{0,20}(调用|使用|读取|运行|查询)|\b(I will|I'll|I am going to|I'm going to)\b/iu;
 const TOOL_REFERENCE_PATTERN: RegExp = /\b(mcp_[a-z0-9_]+|read_text_file|inspect_scene_tree|replace_text_in_file|query_docs|resolve_library_id|godot\.[a-z0-9_.-]+)\b/iu;
-const DIAGNOSTICS_ENVIRONMENT_ERROR_PATTERN: RegExp = /\b(godot_diagnostics_unavailable|lsp_unavailable|dap_unavailable|no active workspace|ECONNREFUSED|ETIMEDOUT|timeout|not available|not running)\b/iu;
 const CONTENT_READBACK_EXTENSIONS: readonly string[] = [".md", ".mdx", ".rst", ".txt"];
+const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
+	"git_repository_missing",
+	"package_manifest_missing",
+	"typecheck_script_missing",
+	"godot_project_missing",
+	"godot_runtime_unavailable",
+	"diagnostics_unavailable",
+	"workspace_unavailable"
+]);
 
 export function createWorkflowPhaseRunId(phaseId: string): string {
 	return `phase-run-${phaseId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -37,7 +46,7 @@ function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 
 function parsedResultFromToolEvent(event: Extract<ToolEvent, { type: "tool.result" }>): Record<string, unknown> {
 	const parsedResult: Record<string, unknown> = {};
-	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "environmentIssue", "artifactRefs"]) {
+	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs"]) {
 		const value: unknown = event[key as keyof typeof event];
 		if (value !== undefined) {
 			parsedResult[key] = value;
@@ -65,7 +74,8 @@ function upsertObservation(
 		...nextObservations[existingIndex],
 		...observation,
 		argsSummary: observation.argsSummary ?? nextObservations[existingIndex]?.argsSummary,
-		artifactRefs: observation.artifactRefs ?? nextObservations[existingIndex]?.artifactRefs
+		artifactRefs: observation.artifactRefs ?? nextObservations[existingIndex]?.artifactRefs,
+		fileEditFingerprints: observation.fileEditFingerprints ?? nextObservations[existingIndex]?.fileEditFingerprints
 	};
 	return nextObservations;
 }
@@ -104,10 +114,15 @@ export function applyToolEventToWorkflowObservations(
 		const parsedResult: Record<string, unknown> = parsedResultFromToolEvent(event);
 		const validationStatus: unknown = parsedResult.validationStatus;
 		const ok: unknown = parsedResult.ok;
-		const failed: boolean = validationStatus === "failed" || ok === false;
+		const failed: boolean = validationStatus !== "not_applicable" && (validationStatus === "failed" || ok === false);
 		const artifactRefs: string[] | undefined = Array.isArray(event.artifactRefs)
 			? event.artifactRefs.map((value: unknown): string => String(value))
 			: previous?.artifactRefs;
+		const fileEditFingerprints: string[] | undefined = event.fileEditDraft === undefined
+			? previous?.fileEditFingerprints
+			: event.fileEditDraft.edits
+				.filter((edit): boolean => edit.beforeSha256 !== edit.afterSha256)
+				.map((edit): string => `${edit.path}:${edit.beforeSha256 ?? "new"}:${edit.afterSha256 ?? "deleted"}`);
 		return upsertObservation(observations, {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
@@ -115,7 +130,8 @@ export function applyToolEventToWorkflowObservations(
 			status: failed ? "failed" : "succeeded",
 			argsSummary: previous?.argsSummary,
 			parsedResult,
-			artifactRefs
+			artifactRefs,
+			fileEditFingerprints
 		});
 	}
 
@@ -170,27 +186,17 @@ function isContentReadbackVerification(observation: WorkflowToolObservation): bo
 }
 
 function isSuccessfulVerificationObservation(observation: WorkflowToolObservation): boolean {
-	return observation.status === "succeeded" && isVerificationObservation(observation);
-}
-
-function isDiagnosticsObservation(observation: WorkflowToolObservation): boolean {
-	return observation.toolName.startsWith("mcp_godot_lsp_") || observation.toolName.startsWith("mcp_godot_dap_");
+	return observation.status === "succeeded"
+		&& observation.parsedResult?.validationStatus !== "not_applicable"
+		&& isVerificationObservation(observation);
 }
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
-	if (observation.parsedResult?.environmentIssue === true) {
+	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
 		return true;
 	}
-	if (!isDiagnosticsObservation(observation)) {
-		return false;
-	}
-
-	const text: string = [
-		observation.error,
-		observation.parsedResult?.summary,
-		observation.parsedResult?.failedChecks
-	].map((value: unknown): string => Array.isArray(value) ? value.join("\n") : String(value ?? "")).join("\n");
-	return DIAGNOSTICS_ENVIRONMENT_ERROR_PATTERN.test(text);
+	return typeof observation.parsedResult?.applicabilityCode === "string"
+		&& ENVIRONMENT_APPLICABILITY_CODES.has(observation.parsedResult.applicabilityCode);
 }
 
 function hasEnvironmentIssueObservation(observations: WorkflowToolObservation[]): boolean {
@@ -200,11 +206,15 @@ function hasEnvironmentIssueObservation(observations: WorkflowToolObservation[])
 function collectEnvironmentWarnings(observations: WorkflowToolObservation[]): string[] {
 	return uniqueStrings(observations
 		.filter(isEnvironmentIssueObservation)
-		.map((observation: WorkflowToolObservation): string => (
-			observation.error
-			?? String(observation.parsedResult?.summary ?? "")
-			?? `${observation.toolName} verification environment is unavailable`
-		)))
+		.map((observation: WorkflowToolObservation): string => {
+			const applicabilityCode: string = String(observation.parsedResult?.applicabilityCode ?? "");
+			const notApplicableReason: string = String(observation.parsedResult?.notApplicableReason ?? "");
+			const reason: string = notApplicableReason.length > 0
+				? notApplicableReason
+				: observation.error
+					?? (String(observation.parsedResult?.summary ?? "") || `${observation.toolName} verification environment is unavailable`);
+			return applicabilityCode.length > 0 ? `[${applicabilityCode}] ${reason}` : reason;
+		}))
 		.map((warning: string): string => warning.length > 0
 			? warning
 			: "Godot verification environment is unavailable.");
@@ -359,7 +369,8 @@ const COMPLETION_FAILURE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function normalizeTargetValue(value: string): string {
-	return value.replace(/^res:\/\//iu, "").replace(/\\/g, "/").replace(/^\.\//u, "").toLowerCase();
+	return (normalizeWorkspaceRelativeArtifactPath(value)
+		?? value.replace(/^res:\/\//iu, "").replace(/\\/g, "/").replace(/^\.\//u, "")).toLowerCase();
 }
 
 function observationTargetValues(observation: WorkflowToolObservation): string[] {
@@ -406,9 +417,13 @@ function collectCompletionContractFailedChecks(
 	if (phase.toolGroup !== "write" || contract === undefined || contract.targets.length === 0) {
 		return [];
 	}
+	const validTargets: WorkflowCompletionTarget[] = contract.targets.filter(isValidWorkflowCompletionTarget);
+	if (validTargets.length === 0) {
+		return [];
+	}
 
 	const failedChecks: WorkflowFailedCheck[] = [];
-	for (const target of contract.targets) {
+	for (const target of validTargets) {
 		const matchingMutations: WorkflowToolObservation[] = observations.filter((observation: WorkflowToolObservation): boolean => (
 			isSuccessfulMutation(observation) && observationMatchesCompletionTarget(observation, target)
 		));
@@ -584,7 +599,9 @@ export function createWorkflowPhaseOutcome(
 }
 
 function observationMatchesTool(observation: WorkflowToolObservation, toolName: string): boolean {
-	return observation.toolName === toolName && observation.status === "succeeded";
+	return observation.toolName === toolName
+		&& observation.status === "succeeded"
+		&& observation.parsedResult?.validationStatus !== "not_applicable";
 }
 
 function observationPresetName(observation: WorkflowToolObservation): string {

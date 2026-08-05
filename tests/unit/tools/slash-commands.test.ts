@@ -61,6 +61,7 @@ test("slash command list hides test commands outside development mode", async ()
 			"/approvals",
 			"/ask",
 			"/agent",
+			"/workflow",
 			"/plan",
 			"/goal",
 			"/skills",
@@ -93,6 +94,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/test-todo-list",
 			"/ask",
 			"/agent",
+			"/workflow",
 			"/plan",
 			"/goal",
 			"/skills",
@@ -301,6 +303,39 @@ test("mode slash commands strip their prefix and forward the requested chat mode
 			...request.params,
 			mode: "plan",
 			message: "重构认证流程"
+		}
+	});
+});
+
+test("workflow slash command strips its prefix and opts into the explicit workflow lane", async (): Promise<void> => {
+	const socket = createSocketMock();
+	const session: ClientSession = createClientSession(undefined);
+	const request: ClientRequest = {
+		type: "request",
+		id: "slash-workflow",
+		method: "ai.chat",
+		params: {
+			message: "/workflow Refactor the authentication flow",
+			mode: "ask",
+			options: { stream: true, workflow: "single" }
+		}
+	} as ClientRequest;
+
+	const result = await handleSlashCommand({
+		socket,
+		request,
+		session,
+		mcpHost: {} as McpHost,
+		createSessionInfo: (): Record<string, unknown> => ({ ok: true })
+	});
+
+	assert.deepEqual(result, {
+		type: "ai",
+		params: {
+			...request.params,
+			mode: "agent",
+			message: "Refactor the authentication flow",
+			options: { stream: true, workflow: "multi_phase" }
 		}
 	});
 });

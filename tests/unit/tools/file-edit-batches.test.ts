@@ -53,6 +53,7 @@ test("persists full file edit snapshots while returning lightweight summaries", 
 
 		const summary = batches.persistFileEditBatch(metadata.id, "request-a", "tool-a", "mcp_godot_overwrite_text_file", draft);
 		assert.ok(summary);
+		assert.equal(summary.sessionId, metadata.id);
 		assert.equal(summary.editedFileCount, 1);
 		assert.equal(summary.editedFiles[0]?.path, "scripts/player.gd");
 		assert.equal(JSON.stringify(summary).includes("secret text"), false);

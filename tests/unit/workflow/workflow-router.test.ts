@@ -24,7 +24,7 @@ test("explicit read-only policy wins over workflow options", (): void => {
 	assert.equal(route.safetyOverride, "execution_read_only");
 });
 
-test("agent auto requests with a workspace always probe independent of prose", (): void => {
+test("agent auto requests with a workspace use tool-assisted chat independent of prose", (): void => {
 	const messages = [
 		"Explain e2e testing; do not edit files.",
 		"Refactor multiple files and migrate configuration.",
@@ -32,9 +32,9 @@ test("agent auto requests with a workspace always probe independent of prose", (
 	];
 	for (const message of messages) {
 		const route = routeWorkflowExecution({ message, mode: "agent", options: { executionPolicy: "auto" } }, workspaceContext);
-		assert.equal(route.intent, "inspect");
-		assert.equal(route.scope, "unknown");
-		assert.equal(route.lane, "probe");
+		assert.equal(route.intent, "answer");
+		assert.equal(route.scope, "bounded");
+		assert.equal(route.lane, "tool_assisted");
 	}
 });
 
@@ -47,9 +47,9 @@ test("explicit multi-phase and llm-planned options start workflows only with a w
 	}
 });
 
-test("single does not bypass the agent probe policy", (): void => {
+test("single keeps the bounded tool-assisted policy", (): void => {
 	const route = routeWorkflowExecution({ message: "Change a file", mode: "agent", options: { workflow: "single" } }, workspaceContext);
-	assert.equal(route.lane, "probe");
+	assert.equal(route.lane, "tool_assisted");
 });
 
 test("missing execution policy is explicitly auto", (): void => {

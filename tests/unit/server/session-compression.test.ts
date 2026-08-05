@@ -50,6 +50,7 @@ test("session compression retries an empty provider response without enabling re
 			oldMessageCount: 4,
 			keptMessageCount: 2,
 			summaryLength: 31,
+			summary: "- Compressed conversation state",
 			source: "llm_retry"
 		});
 		assert.equal(callCount, 2);

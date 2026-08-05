@@ -73,6 +73,14 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		examples: ["/agent 修复这个错误"]
 	},
 	{
+		command: "/workflow",
+		usage: "/workflow [Task]",
+		insertText: "/workflow ",
+		description: "以完整多阶段 Workflow 执行当前工作区任务。",
+		requiresArgument: true,
+		examples: ["/workflow 重构认证模块并补齐测试"]
+	},
+	{
 		command: "/plan",
 		usage: "/plan [Message]",
 		insertText: "/plan ",
@@ -519,6 +527,25 @@ export async function handleSlashCommand(params: {
 				...request.params,
 				mode: chatMode,
 				message: restText
+			}
+		};
+	}
+
+	if (command === "/workflow") {
+		if (restText.length === 0) {
+			await sendChatText(socket, request, "请在 `/workflow` 后提供要执行的任务。", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		return {
+			type: "ai",
+			params: {
+				...request.params,
+				mode: "agent",
+				message: restText,
+				options: {
+					...(request.params.options ?? {}),
+					workflow: "multi_phase"
+				}
 			}
 		};
 	}

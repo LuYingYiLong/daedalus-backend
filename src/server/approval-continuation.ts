@@ -475,9 +475,7 @@ export async function sendContinuedAgentResult(
 	}
 	const completionStatus = pendingContinuation.lightweightActionState === undefined
 		? {
-			resultStatus: "completed" as const,
-			verificationStatus: undefined,
-			warnings: [] as string[],
+			...collectContinuationCompletionStatus(session, pendingContinuation.requestId),
 			failureMessage: undefined
 		}
 		: collectLightweightActionCompletionStatus(pendingContinuation.lightweightActionState);
@@ -546,4 +544,34 @@ export async function sendContinuedAgentResult(
 			}
 		}
 	});
+}
+
+function collectContinuationCompletionStatus(
+	session: ClientSession,
+	requestId: string
+): {
+	resultStatus: "completed" | "completed_with_warnings";
+	verificationStatus?: "verified" | "unverified" | undefined;
+	warnings: string[];
+} {
+	const run: AgentRunState | undefined = getAgentRun(session, requestId);
+	if (run?.lane !== "tool_assisted") {
+		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+	}
+	const changedWorkspace: boolean = run.checkpoint.evidence.some((item): boolean => (
+		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
+	));
+	if (!changedWorkspace) {
+		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+	}
+	const verified: boolean = run.checkpoint.evidence.some((item): boolean => (
+		item.status === "succeeded" && item.risk === "verify" && item.validationStatus !== "not_applicable"
+	));
+	return verified
+		? { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
+		: {
+			resultStatus: "completed_with_warnings",
+			verificationStatus: "unverified",
+			warnings: ["The approved change completed without a successful verification step."]
+		};
 }

@@ -52,10 +52,10 @@ export function routeWorkflowExecution(
 
 	if (context.hasActiveWorkspace && (params.mode ?? "agent") === "agent") {
 		return {
-			intent: "inspect",
-			scope: "unknown",
-			lane: "probe",
-			reason: "Agent requests with an active workspace must collect evidence before any mutation.",
+			intent: "answer",
+			scope: "bounded",
+			lane: "tool_assisted",
+			reason: "Workspace Agent requests use tool-assisted chat until a structural execution boundary requires workflow.",
 			planningHint: ""
 		};
 	}

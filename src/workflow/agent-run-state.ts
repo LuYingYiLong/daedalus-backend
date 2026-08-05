@@ -7,7 +7,8 @@ export const AGENT_RUN_STATE_SCHEMA_VERSION = 1 as const;
 
 export type AgentRunIntent = "answer" | "inspect" | "mutate";
 export type AgentRunScope = "bounded" | "unknown" | "complex";
-export type AgentRunLane = "direct" | "read" | "probe" | "lightweight" | "workflow";
+/** Normal workspace chat: tools are optional and no workflow control signal is required. */
+export type AgentRunLane = "direct" | "read" | "tool_assisted" | "probe" | "lightweight" | "workflow";
 export type AgentRunStage =
 	| "routing"
 	| "probing"
@@ -53,6 +54,8 @@ export type ExecutionEvidence = {
 	validationStatus?: "passed" | "failed" | "not_applicable" | undefined;
 	environmentIssue?: boolean | undefined;
 	applicabilityCode?: ToolApplicabilityCode | undefined;
+	/** A completed, approval-governed terminal command may support complete_read only. */
+	terminalObservation?: boolean | undefined;
 	resultExcerpt?: string | undefined;
 	observedAt: string;
 };
@@ -271,12 +274,7 @@ export function validateExecutionDecisionEvidence(
 	const evidenceById: Map<string, ExecutionEvidence> = new Map(
 		currentRunEvidence.map((item: ExecutionEvidence): [string, ExecutionEvidence] => [item.toolCallId, item])
 	);
-	const usableEvidence: ExecutionEvidence[] = currentRunEvidence.filter((evidence: ExecutionEvidence): boolean => (
-		evidence.status === "succeeded"
-		&& (evidence.risk === "read" || evidence.risk === "verify")
-		&& evidence.environmentIssue !== true
-		&& evidence.validationStatus !== "not_applicable"
-	));
+	const usableEvidence: ExecutionEvidence[] = currentRunEvidence.filter(isReadOrVerifyEvidence);
 	// 部分 provider 会沿用数组默认值，在成功检查后仍省略 no_change 的证据 ID。
 	// 只恢复这一种安全遗漏；伪造或过期 ID 仍按失败关闭。
 	const evidenceReferences: string[] = decision.disposition === "no_change"
@@ -287,14 +285,7 @@ export function validateExecutionDecisionEvidence(
 	for (const evidenceReference of evidenceReferences) {
 		const exactEvidence: ExecutionEvidence | undefined = evidenceById.get(evidenceReference);
 		const evidence: ExecutionEvidence | undefined = exactEvidence;
-		if (
-			evidence !== undefined
-			&& evidence.status === "succeeded"
-			&& (evidence.risk === "read" || evidence.risk === "verify")
-			&& evidence.environmentIssue !== true
-			&& evidence.validationStatus !== "not_applicable"
-			&& !resolvedIds.includes(evidence.toolCallId)
-		) {
+		if (evidence !== undefined && isEvidenceEligibleForDecision(evidence, decision.disposition) && !resolvedIds.includes(evidence.toolCallId)) {
 			resolvedIds.push(evidence.toolCallId);
 		}
 	}
@@ -347,6 +338,26 @@ export function validateExecutionDecisionEvidence(
 		return createBlockedExecutionDecision(normalized, "The declared target kind does not match the expected artifact.");
 	}
 	return normalized;
+}
+
+function isReadOrVerifyEvidence(evidence: ExecutionEvidence): boolean {
+	return evidence.status === "succeeded"
+		&& (evidence.risk === "read" || evidence.risk === "verify")
+		&& evidence.environmentIssue !== true
+		&& evidence.validationStatus !== "not_applicable";
+}
+
+function isEvidenceEligibleForDecision(evidence: ExecutionEvidence, disposition: ExecutionDisposition): boolean {
+	if (isReadOrVerifyEvidence(evidence)) {
+		return true;
+	}
+	return disposition === "complete_read"
+		&& evidence.terminalObservation === true
+		&& evidence.toolName === "mcp_terminal_run_command"
+		&& evidence.risk === "write"
+		&& evidence.status === "succeeded"
+		&& evidence.environmentIssue !== true
+		&& evidence.validationStatus !== "not_applicable";
 }
 
 function createBlockedExecutionDecision(decision: ExecutionDecision, summary: string): ExecutionDecision {

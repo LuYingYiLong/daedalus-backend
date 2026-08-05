@@ -136,6 +136,29 @@ test("provider reconnect events discard only failed attempt text and update one 
 	assert.equal(reconnectParts[0]?.revision, 2);
 });
 
+test("context compression events replace one persistent part and retain the generated summary", (): void => {
+	const stored: StoredSession = session([], [
+		event("compression-start", "request-compression", "agent.context.compression", "2026-08-06T00:00:00.000Z", {
+			compressionId: "context-compression:request-compression",
+			status: "running"
+		}),
+		event("compression-done", "request-compression", "agent.context.compression", "2026-08-06T00:00:01.000Z", {
+			compressionId: "context-compression:request-compression",
+			status: "completed",
+			summary: "- 已完成的工作：实现时间线\n- 当前约束：保持只读"
+		})
+	]);
+
+	const assistant: TimelineAssistantBlock = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const compressionParts = assistant.bodyParts.filter((part) => part.type === "compression");
+	assert.equal(compressionParts.length, 1);
+	assert.equal(compressionParts[0]?.type, "compression");
+	if (compressionParts[0]?.type === "compression") {
+		assert.equal(compressionParts[0].status, "completed");
+		assert.match(compressionParts[0].summary, /当前约束/u);
+	}
+});
+
 test("canonical timeline ignores orphan persisted turns when session events identify another conversation", (): void => {
 	const stored: StoredSession = session(
 		[

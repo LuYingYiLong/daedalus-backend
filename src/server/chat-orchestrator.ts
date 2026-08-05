@@ -227,7 +227,9 @@ import { attachGoalRun, continueAgentGoal, createAgentGoal, getCurrentAgentGoal,
 import { getGoalRunBinding } from "./goal-run-observer.js";
 import {
 	validateExecutionDecisionEvidence,
+	type AgentRunLane,
 	type AgentRunState,
+	type ExecutionEvidence,
 	type ExecutionDecision
 } from "../workflow/agent-run-state.js";
 
@@ -361,6 +363,7 @@ function filterReadOnlyAnswerToolNames(toolNames: readonly string[], workspaceId
 
 function resolveHiddenAnswerToolNames(
 	routeDecision: WorkflowRouteDecision,
+	params: AiChatParams,
 	allowedToolNames: readonly string[] | undefined,
 	session: ClientSession
 ): readonly string[] {
@@ -369,24 +372,32 @@ function resolveHiddenAnswerToolNames(
 	}
 
 	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-	if (routeDecision.lane === "lightweight") {
+	if (routeDecision.lane === "lightweight" || routeDecision.lane === "tool_assisted") {
 		return sourceToolNames;
 	}
 
-	return filterReadOnlyAnswerToolNames(sourceToolNames, session.activeWorkspace?.id);
+	const readOnlyToolNames: readonly string[] = filterReadOnlyAnswerToolNames(sourceToolNames, session.activeWorkspace?.id);
+	if (
+		routeDecision.lane === "probe"
+		&& getExecutionPolicy(params) === "auto"
+		&& sourceToolNames.includes("mcp_terminal_run_command")
+	) {
+		return [...readOnlyToolNames, "mcp_terminal_run_command"];
+	}
+	return readOnlyToolNames;
 }
 
 function createExecutionControlContext(
 	params: AiChatParams,
 	routeDecision: WorkflowRouteDecision
 ): ExecutionControlContext | undefined {
-	if (routeDecision.lane !== "read" && routeDecision.lane !== "probe" && routeDecision.lane !== "lightweight") {
+	if (routeDecision.lane !== "lightweight") {
 		return undefined;
 	}
 	return {
 		lane: routeDecision.lane,
-		allowMutationEscalation: routeDecision.lane === "probe" && getExecutionPolicy(params) === "auto",
-		requireDecision: routeDecision.lane === "read" || routeDecision.lane === "probe"
+		allowMutationEscalation: false,
+		requireDecision: false
 	};
 }
 
@@ -399,11 +410,22 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 		...(params.options ?? {})
 	};
 	if (routeDecision.lane === "read" || routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
-		options.requireToolCallOnFirstStep = true;
+		// A workspace-bound agent may still receive general-knowledge questions.
+		// Tool evidence is required only when the answer depends on runtime facts.
+		delete options.requireToolCallOnFirstStep;
 		options.toolBudget = "simple";
 		return {
 			...params,
 			options
+		};
+	}
+	if (routeDecision.lane === "tool_assisted") {
+		return {
+			...params,
+			options: {
+				...options,
+				toolBudget: params.options?.toolBudget ?? "normal"
+			}
 		};
 	}
 
@@ -431,10 +453,25 @@ function createHiddenAnswerSystemPrompt(
 			[
 				"## Daedalus evidence-gated probe",
 				"- This is a read-only discovery stage. It never grants mutation permission by itself.",
-				"- The execution-decision tool is intentionally unavailable during this first pass. Call at least one suitable read or verify tool before giving any conclusion.",
-				"- Use only the minimum read or verify tools needed to establish whether the request is informational, already satisfied, or needs a bounded or workflow mutation.",
+				"- The execution-decision tool is intentionally unavailable during this first pass.",
+				"- Use the minimum read or verify tools when the answer depends on current workspace or runtime facts. For general knowledge that does not depend on this workspace, answer directly without inventing inspection results.",
+				"- mcp_terminal_run_command is available only for a needed general command. It follows the configured terminal approval policy: auto-safe commands are reviewed before execution; a denied or uncertain review is returned to you as a tool error. Do not use it when a read or verify tool can establish the answer.",
 				"- Do not write, propose a patch, or claim that a mutation path is authorized during this probe.",
 				"- After inspection, return concise factual findings only. Daedalus will open one control-only pass that records the execution decision from the evidence."
+			].join("\n")
+		].join("\n\n");
+	}
+
+	if (routeDecision.lane === "tool_assisted") {
+		return [
+			fullSystemPrompt,
+			[
+				"## Daedalus tool-assisted chat",
+				"- Answer normally when tools are unnecessary. Never invent workspace observations.",
+				"- Use the smallest relevant tool call when current workspace facts are needed.",
+				"- Read, verify, write, destructive, and terminal tools retain their normal policy and approval checks.",
+				"- A single bounded approved change may be completed here. If more work is needed, Daedalus will safely continue it as a workflow.",
+				"- Verification is optional in this chat lane. If no verifier is run after a change, state that the result is unverified."
 			].join("\n")
 		].join("\n\n");
 	}
@@ -472,7 +509,7 @@ function createHiddenAnswerSystemPrompt(
 			"- You must finish by calling daedalus_report_execution_decision exactly once; ordinary prose is not a valid completion.",
 			"- Choose complete_read and put the complete user-facing answer in summary only when the request is genuinely informational or diagnostic.",
 			canEscalateMutation
-				? "- If current-project evidence shows the user expects a fix, choose use_lightweight for at most two logical writes or use_workflow for broader work. Do not promise a future modification in prose."
+				? "- If current-project evidence shows the user expects a fix, choose use_lightweight for at most two logical writes or use_workflow for broader work. Do not promise a future modification in prose. A terminal command alone does not grant file-mutation permission."
 				: "- Mutation escalation is forbidden in this Ask, Plan, documentation-only, or explicitly read-only context."
 		].join("\n"),
 		[
@@ -548,7 +585,6 @@ function applyExecutionDecisionCompletionContract(
 	) {
 		return plan;
 	}
-
 	const expectedTargets: WorkflowCompletionTarget[] = decision.expectedArtifacts.map((artifact: string): WorkflowCompletionTarget => (
 		decision.targetKind === "project_setting"
 			? { kind: "project_setting", key: artifact }
@@ -651,6 +687,16 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		params.mcpHost
 	);
 	const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
+		if (event.type === "tool.call" && params.routeDecision.lane === "tool_assisted") {
+			const risk: string | undefined = getToolPolicy(event.toolName, params.session.activeWorkspace?.id)?.risk;
+			const hasSuccessfulMutation: boolean = (getAgentRun(params.session, runId)?.checkpoint.evidence ?? [])
+				.some((item: ExecutionEvidence): boolean => (
+					item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
+				));
+			if (hasSuccessfulMutation && (risk === "write" || risk === "destructive")) {
+				throw new LightweightActionScopeExceededError("write_scope_exceeded");
+			}
+		}
 		if (lightweightActionState !== undefined) {
 			applyToolEventToLightweightActionState(lightweightActionState, event, true);
 		}
@@ -786,6 +832,9 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		return;
 	}
 	if (agentResult.status === "tool_budget_required") {
+		if (params.routeDecision.lane === "tool_assisted") {
+			throw new LightweightActionScopeExceededError("write_scope_exceeded");
+		}
 		const pendingBudget = createPendingToolBudget({
 			agentResult,
 			chatParams: persistedChatParams,
@@ -915,9 +964,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	}
 	const completionStatus = lightweightActionState === undefined
 		? {
-			resultStatus: "completed" as const,
-			verificationStatus: undefined,
-			warnings: [] as string[],
+			...collectToolAssistedCompletionStatus(params.session, runId, params.routeDecision.lane),
 			failureMessage: undefined
 		}
 		: collectLightweightActionCompletionStatus(lightweightActionState);
@@ -926,6 +973,39 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	}
 
 	await completeHiddenAnswerExecution(params, persistedChatParams, agentResult.text, completionStatus);
+}
+
+function collectToolAssistedCompletionStatus(
+	session: ClientSession,
+	runId: string,
+	lane: AgentRunLane
+): {
+	resultStatus: "completed" | "completed_with_warnings";
+	verificationStatus?: "verified" | "unverified" | undefined;
+	warnings: string[];
+} {
+	if (lane !== "tool_assisted") {
+		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+	}
+	const evidence: readonly ExecutionEvidence[] = getAgentRun(session, runId)?.checkpoint.evidence ?? [];
+	const changedWorkspace: boolean = evidence.some((item: ExecutionEvidence): boolean => (
+		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
+	));
+	if (!changedWorkspace) {
+		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+	}
+	const verified: boolean = evidence.some((item: ExecutionEvidence): boolean => (
+		item.status === "succeeded"
+			&& item.risk === "verify"
+			&& item.validationStatus !== "not_applicable"
+	));
+	return verified
+		? { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
+		: {
+			resultStatus: "completed_with_warnings",
+			verificationStatus: "unverified",
+			warnings: ["The approved change completed without a successful verification step."]
+		};
 }
 
 async function completeHiddenAnswerExecution(
@@ -1006,6 +1086,27 @@ async function runHiddenAnswerExecutionWithEscalation(
 		return;
 	} catch (error: unknown) {
 		if (!(error instanceof LightweightActionScopeExceededError)) {
+			if (
+				(params.routeDecision.lane === "tool_assisted" || params.routeDecision.lane === "read")
+				&& !isCancellationError(error, params.abortSignal)
+			) {
+				logger.warn("ai", "tool_assisted_execution_recovered", {
+					requestId: params.requestId,
+					sessionId: params.session.sessionId,
+					message: error instanceof Error ? error.message : "Unknown provider execution failure"
+				});
+				await completeHiddenAnswerExecution(
+					params,
+					params.chatParams,
+					"本轮模型响应未能完整恢复，已安全停止；未执行任何未获批准的操作。请直接重试该请求。",
+					{
+						resultStatus: "completed_with_warnings",
+						verificationStatus: undefined,
+						warnings: ["The model response ended before a safe completion could be produced."]
+					}
+				);
+				return;
+			}
 			throw error;
 		}
 		escalationError = error;
@@ -1222,23 +1323,36 @@ async function maybeAutoCompressContextBeforeRun(
 ): Promise<ContextUsageEstimate> {
 	let estimate: ContextUsageEstimate = await estimateFullContextUsage(session, requestId, options, params, systemPrompt, contextPrompt, abortSignal);
 	if (estimate.percent >= 85 && session.messages.length > 8) {
-		sendSessionEvent(socket, requestId, session, "ai.status", {
-			stage: "context_compress",
-			title: "Compressing context",
-			details: "Compressing conversation history",
-			message: "Compressing conversation history",
+		const compressionId: string = `context-compression:${requestId}`;
+		sendSessionEvent(socket, requestId, session, "agent.context.compression", {
+			compressionId,
+			status: "running",
 			percent: estimate.percent,
 			usedTokens: estimate.usedTokens,
 			contextWindowTokens: estimate.contextWindowTokens
 		});
-		const compression = await compressSessionHistory(session, apiKey, 8, requestId);
-		sendSessionEvent(socket, requestId, session, "ai.status", {
-			stage: "context_compress_done",
-			title: compression.compressed ? "Context compressed" : "Context compression skipped",
-			details: compression.compressed ? "Conversation history compressed" : compression.reason,
-			message: compression.compressed ? "Conversation history compressed" : compression.reason,
-			compressed: compression.compressed
-		});
+		try {
+			const compression = await compressSessionHistory(session, apiKey, 8, requestId);
+			sendSessionEvent(socket, requestId, session, "agent.context.compression", compression.compressed ? {
+				compressionId,
+				status: "completed",
+				summary: compression.summary,
+				source: compression.source,
+				oldMessageCount: compression.oldMessageCount,
+				keptMessageCount: compression.keptMessageCount
+			} : {
+				compressionId,
+				status: "skipped",
+				reason: compression.reason
+			});
+		} catch (error: unknown) {
+			sendSessionEvent(socket, requestId, session, "agent.context.compression", {
+				compressionId,
+				status: "failed",
+				reason: error instanceof Error ? error.message : "Context compression failed"
+			});
+			throw error;
+		}
 		estimate = await estimateFullContextUsage(session, requestId, options, params, systemPrompt, contextPrompt, abortSignal);
 	}
 
@@ -2390,10 +2504,14 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					);
 				}
 
-				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, allowedToolNames, session);
+				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, effectiveParams, allowedToolNames, session);
 				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.lane !== "lightweight"
-					? new ReadOnlyToolApprovalGateway(session.approvalGateway, hiddenAnswerToolNames)
+				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.lane !== "lightweight" && routeDecision.lane !== "tool_assisted"
+					? new ReadOnlyToolApprovalGateway(session.approvalGateway, hiddenAnswerToolNames, {
+					delegatedToolNames: routeDecision.lane === "probe" && getExecutionPolicy(effectiveParams) === "auto"
+							? ["mcp_terminal_run_command"]
+							: []
+					})
 					: session.approvalGateway;
 				{
 					if (routeDecision.lane === "workflow") {

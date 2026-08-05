@@ -167,6 +167,12 @@ export function recordAgentRunToolEvent(
 		applicabilityCode: isToolApplicabilityCode(eventRecord.applicabilityCode)
 			? eventRecord.applicabilityCode
 			: undefined,
+		terminalObservation: event.type === "tool.result"
+			&& current.lane === "probe"
+			&& event.toolName === "mcp_terminal_run_command"
+			&& eventRecord.ok !== false
+			&& eventRecord.validationStatus !== "not_applicable"
+			&& eventRecord.terminalJobStatus !== "running",
 		observedAt: new Date().toISOString()
 	};
 	if (

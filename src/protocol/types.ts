@@ -62,6 +62,7 @@ export type CanonicalServerEventName =
 	| "agent.thinking.delta"
 	| "agent.thinking.done"
 	| "agent.provider.reconnect"
+	| "agent.context.compression"
 	| "agent.tool.call"
 	| "agent.tool.reviewed"
 	| "agent.tool.progress"

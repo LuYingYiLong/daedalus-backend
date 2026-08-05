@@ -99,7 +99,7 @@ test("generated title is cleaned and clipped", (): void => {
 	assert.equal(clipped.length, 28);
 });
 
-test("title generation retries with a larger budget when reasoning consumes the first response", async (): Promise<void> => {
+test("title generation retries after an empty response with reasoning disabled", async (): Promise<void> => {
 	await withSessionTitleMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
 		const options: ProviderChatOptions = {
 			provider: "deepseek",
@@ -113,7 +113,9 @@ test("title generation retries with a larger budget when reasoning consumes the 
 		assert.equal(title, "本地井字棋");
 		assert.equal(requests.length, 2);
 		assert.equal(requests[0]?.body.max_tokens, 40);
-		assert.equal(requests[1]?.body.max_tokens, 256);
+		assert.equal(requests[1]?.body.max_tokens, 64);
+		assert.deepEqual(requests[0]?.body.thinking, { type: "disabled" });
+		assert.deepEqual(requests[1]?.body.thinking, { type: "disabled" });
 		assert.match(JSON.stringify(requests[1]?.body.messages), /直接输出标题/);
 	});
 });

@@ -97,6 +97,14 @@ export type TimelineSummaryStartPart = {
 	foldTitle: string;
 };
 
+export type TimelineCompressionPart = {
+	type: "compression";
+	compressionId: string;
+	status: "running" | "completed" | "skipped" | "failed";
+	summary: string;
+	reason: string;
+};
+
 export type TimelineStatusPart = {
 	type: "status";
 	status: string;
@@ -146,6 +154,7 @@ export type TimelineBodyPart =
 	| TimelineProviderReconnectPart
 	| TimelineToolPart
 	| TimelineSummaryStartPart
+	| TimelineCompressionPart
 	| TimelineStatusPart
 	| TimelinePlanPart
 	| TimelineInlineDiffPart
@@ -595,6 +604,30 @@ function appendSummaryStartPart(parts: TimelineBodyPart[], eventData: Record<str
 	});
 }
 
+function appendCompressionPart(parts: TimelineBodyPart[], eventData: Record<string, unknown>): void {
+	const compressionId: string = asString(eventData.compressionId);
+	if (compressionId.length === 0) return;
+	const statusValue: string = asString(eventData.status);
+	const status: TimelineCompressionPart["status"] = statusValue === "completed" || statusValue === "skipped" || statusValue === "failed"
+		? statusValue
+		: "running";
+	const nextPart: TimelineCompressionPart = {
+		type: "compression",
+		compressionId,
+		status,
+		summary: asString(eventData.summary),
+		reason: asString(eventData.reason)
+	};
+	const existingIndex: number = parts.findIndex((part: TimelineBodyPart): boolean => (
+		part.type === "compression" && part.compressionId === compressionId
+	));
+	if (existingIndex < 0) {
+		parts.push(nextPart);
+		return;
+	}
+	parts[existingIndex] = nextPart;
+}
+
 function appendStatusPart(parts: TimelineBodyPart[], statusData: Partial<TimelineStatusPart>): void {
 	const nextPart: TimelineStatusPart = {
 		type: "status",
@@ -943,6 +976,8 @@ function buildAssistantBodyParts(
 			appendFileEditBatch(fileEditBatches, normalizedToolEvent);
 		} else if (event.event === "agent.summary.started") {
 			appendSummaryStartPart(parts, eventData);
+		} else if (event.event === "agent.context.compression") {
+			appendCompressionPart(parts, eventData);
 		} else if (event.event === "ai.thinking.delta" || event.event === "agent.thinking.delta") {
 			appendThinkingPart(parts, asString(eventData.text), false);
 		} else if (event.event === "ai.thinking.done" || event.event === "agent.thinking.done") {

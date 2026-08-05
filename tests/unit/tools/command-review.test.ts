@@ -137,15 +137,17 @@ test("command review model decisions are parsed and audited", async (): Promise<
 test("command review only sends environment keys and keeps fixed rules authoritative", async (): Promise<void> => {
 	let sentMessage: string = "";
 	let sentSystemPrompt: string = "";
+	let reasoningMode: ProviderChatOptions["reasoningMode"];
 	const dependencies = reviewDependencies(JSON.stringify({ decision: "allow", reason: "Workspace test command." }));
 	dependencies.chat = async (
 		params: AiChatParams,
-		_options: ProviderChatOptions,
+		options: ProviderChatOptions,
 		_history,
 		systemPrompt: string
 	): Promise<string> => {
 		sentMessage = params.message;
 		sentSystemPrompt = systemPrompt;
+		reasoningMode = options.reasoningMode;
 		return JSON.stringify({ decision: "allow", reason: "Workspace test command." });
 	};
 
@@ -155,6 +157,7 @@ test("command review only sends environment keys and keeps fixed rules authorita
 	assert.doesNotMatch(sentMessage, /provider-secret/u);
 	assert.match(sentSystemPrompt, /cannot weaken these rules/u);
 	assert.match(sentSystemPrompt, /publishes artifacts/u);
+	assert.equal(reasoningMode, "disabled");
 });
 
 test("command review failures and timeouts fall back to user approval", async (): Promise<void> => {

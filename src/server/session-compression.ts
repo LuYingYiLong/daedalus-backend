@@ -25,6 +25,7 @@ export type SessionCompressionResult =
 		oldMessageCount: number;
 		keptMessageCount: number;
 		summaryLength: number;
+		summary: string;
 		source: SessionCompressionSource;
 	}
 	| {
@@ -92,6 +93,7 @@ export async function compressSessionHistory(
 		oldMessageCount: oldMessages.length,
 		keptMessageCount: recentMessages.length,
 		summaryLength: summary.content.length,
+		summary: summary.content,
 		source: summary.source
 	};
 }

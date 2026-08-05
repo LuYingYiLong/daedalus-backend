@@ -26,7 +26,7 @@ export async function handleFileEditRequest(socket: WebSocket, request: ClientRe
 				type: "response",
 				id: request.id,
 				ok: true,
-				result: createFileEditBatchResponse(batch)
+				result: createFileEditBatchResponse(batch, request.params.sessionId)
 			});
 			return;
 		}

@@ -304,6 +304,49 @@ test("complete-read decisions safely close a probe without inheriting write-targ
 	);
 });
 
+test("a completed probe terminal observation supports only complete-read evidence", (): void => {
+	const initial = createAgentRunState({
+		sessionId: "session-test",
+		requestId: "request-test",
+		now: "2026-08-06T00:00:00.000Z"
+	});
+	const probing = transitionAgentRunState(initial, "probing", {
+		intent: "inspect",
+		scope: "unknown",
+		lane: "probe",
+		checkpoint: {
+			successfulWriteFingerprints: ["terminal-command"],
+			evidence: [{
+				toolCallId: "terminal-version",
+				toolName: "mcp_terminal_run_command",
+				risk: "write",
+				status: "succeeded",
+				terminalObservation: true,
+				artifactRefs: [],
+				observedAt: "2026-08-06T00:00:01.000Z"
+			}]
+		}
+	});
+	const completeRead = executionDecisionSchema.parse({
+		disposition: "complete_read",
+		summary: "Node and npm versions were read from the completed terminal command.",
+		evidenceToolCallIds: ["terminal-version"],
+		expectedArtifacts: [],
+		targetKind: "unknown"
+	});
+	assert.deepEqual(validateExecutionDecisionEvidence(probing, completeRead).evidenceToolCallIds, ["terminal-version"]);
+
+	const lightweight = executionDecisionSchema.parse({
+		disposition: "use_lightweight",
+		summary: "Update one file.",
+		evidenceToolCallIds: ["terminal-version"],
+		expectedArtifacts: ["src/version.ts"],
+		expectedLogicalWrites: 1,
+		targetKind: "workspace_file"
+	});
+	assert.equal(validateExecutionDecisionEvidence(probing, lightweight).disposition, "blocked");
+});
+
 test("lightweight decisions require a safe evidence-backed bounded target", (): void => {
 	const initial = createAgentRunState({ sessionId: "session-test", requestId: "request-test", now: "2026-08-03T00:00:00.000Z" });
 	const probing = transitionAgentRunState(initial, "probing", {

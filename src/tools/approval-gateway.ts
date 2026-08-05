@@ -5,7 +5,7 @@ import { isPlanSafeDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { executeLlmToolWithIdempotency, getLlmToolExecutionIdentity } from "./tool-idempotency.js";
 import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
-import { commandRequiresUserApproval, isBoundedWorkspaceVerificationCommand, reviewWorkspaceCommand } from "./command-review.js";
+import { commandRequiresUserApproval, reviewWorkspaceCommand } from "./command-review.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
 import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
@@ -143,25 +143,10 @@ export class ApprovalGateway {
 			if (review.decision === "allow") {
 				return { action: "allow", review: review.audit };
 			}
-			if (review.decision === "deny") {
+			if (review.decision === "deny" || review.decision === "ask_user") {
 				return { action: "deny", reason: review.reason, review: review.audit };
 			}
-			if (isBoundedWorkspaceVerificationCommand(reviewInput)) {
-				const reason: string = typeof args.reason === "string" && args.reason.trim().length > 0
-					? args.reason.trim()
-					: "Run a bounded headless Godot verification inside the active workspace.";
-				return {
-					action: "allow",
-					review: {
-						source: "policy",
-						decision: "allow",
-						reason,
-						provider: review.audit.provider,
-						model: review.audit.model
-					}
-				};
-			}
-			return { action: "request_approval", reason: review.reason, review: review.audit };
+			return { action: "deny", reason: review.reason, review: review.audit };
 		}
 		return evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 	}
@@ -259,17 +244,23 @@ export class ApprovalGateway {
 
 export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 	private readonly allowedToolNames: ReadonlySet<string>;
+	private readonly delegatedToolNames: ReadonlySet<string>;
 	private readonly baseGateway: ApprovalGateway;
 	readonly scope: ApprovalScope;
 
-	constructor(baseGateway: ApprovalGateway, allowedToolNames: readonly string[]) {
+	constructor(
+		baseGateway: ApprovalGateway,
+		allowedToolNames: readonly string[],
+		options: { delegatedToolNames?: readonly string[] | undefined } = {}
+	) {
 		super(baseGateway.getMode());
 		this.baseGateway = baseGateway;
 		this.allowedToolNames = new Set(allowedToolNames);
+		this.delegatedToolNames = new Set(options.delegatedToolNames ?? []);
 		this.scope = {
 			allowedToolNames: this.allowedToolNames,
 			maximumRisk: "verify",
-			allowApproval: false,
+			allowApproval: this.delegatedToolNames.size > 0,
 			baseGateway
 		};
 	}
@@ -305,14 +296,22 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 	override async evaluate(
 		llmToolName: string,
 		args: Record<string, unknown>,
-		_toolCallId: string,
-		workspaceId?: string | undefined
+		toolCallId: string,
+		workspaceId?: string | undefined,
+		context: {
+			requestId?: string | undefined;
+			sessionId?: string | undefined;
+			activeScenePath?: string | undefined;
+		} = {}
 	): Promise<ApprovalDecision> {
 		if (!this.allowedToolNames.has(llmToolName)) {
 			return {
 				action: "deny",
 				reason: `只读上下文只允许显式授权的 read/verify 工具: ${llmToolName}`
 			};
+		}
+		if (this.delegatedToolNames.has(llmToolName)) {
+			return this.baseGateway.evaluate(llmToolName, args, toolCallId, workspaceId, context);
 		}
 		if (isPlanSafeDynamicMcpToolName(llmToolName, workspaceId)) {
 			return { action: "allow" };
@@ -330,16 +329,29 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 	}
 
 	override requestApproval(
-		_llmToolName: string,
-		_args: Record<string, unknown>,
-		_toolCallId: string,
-		_reason: string,
-		_workspaceId?: string | undefined,
-		_editorInstanceId?: string | undefined,
-		_sessionId?: string | undefined,
-		_requiredConsent?: ToolRequiredConsent | undefined,
-		_requestId?: string | undefined
+		llmToolName: string,
+		args: Record<string, unknown>,
+		toolCallId: string,
+		reason: string,
+		workspaceId?: string | undefined,
+		editorInstanceId?: string | undefined,
+		sessionId?: string | undefined,
+		requiredConsent?: ToolRequiredConsent | undefined,
+		requestId?: string | undefined
 	): PendingApproval {
+		if (this.delegatedToolNames.has(llmToolName) && this.allowedToolNames.has(llmToolName)) {
+			return this.baseGateway.requestApproval(
+				llmToolName,
+				args,
+				toolCallId,
+				reason,
+				workspaceId,
+				editorInstanceId,
+				sessionId,
+				requiredConsent,
+				requestId
+			);
+		}
 		throw new Error("只读上下文不允许触发人工审批。");
 	}
 }

@@ -19,6 +19,7 @@ export type FileEditSummaryItem = {
 
 export type FileEditBatchSummary = {
 	batchId: string;
+	sessionId: string;
 	workspaceId: string;
 	workspaceRoot: string;
 	editedFileCount: number;
@@ -52,7 +53,7 @@ function getBatchCacheKey(sessionId: string, batchId: string): string {
 	return `${sessionId}\n${batchId}`;
 }
 
-function summarizeBatch(batch: PersistedFileEditBatch): FileEditBatchSummary {
+function summarizeBatch(batch: PersistedFileEditBatch, sessionId: string): FileEditBatchSummary {
 	const editedFiles: FileEditSummaryItem[] = batch.edits.map((edit: FileEditSnapshot): FileEditSummaryItem => ({
 		path: edit.path,
 		absolutePath: edit.absolutePath,
@@ -69,6 +70,7 @@ function summarizeBatch(batch: PersistedFileEditBatch): FileEditBatchSummary {
 
 	return {
 		batchId: batch.batchId,
+		sessionId,
 		workspaceId: batch.workspaceId,
 		workspaceRoot: batch.workspaceRoot,
 		editedFileCount: editedFiles.length,
@@ -161,7 +163,7 @@ export function persistFileEditBatch(
 	inMemoryBatches.set(getBatchCacheKey(sessionId, batch.batchId), publicBatch);
 	enqueueGoalFileEditDraft(requestId, draft);
 	enqueueBatchWrite(sessionId, batch);
-	return summarizeBatch(batch);
+	return summarizeBatch(batch, sessionId);
 }
 
 function isPersistedFileEditBatch(value: unknown): value is PersistedFileEditBatch {
@@ -207,10 +209,10 @@ export async function readFileEditBatch(sessionId: string, batchId: string): Pro
 	return parsed;
 }
 
-export function createFileEditBatchResponse(batch: PersistedFileEditBatch): Record<string, unknown> {
+export function createFileEditBatchResponse(batch: PersistedFileEditBatch, sessionId: string): Record<string, unknown> {
 	return {
 		fileEditBatch: {
-			...summarizeBatch(batch),
+			...summarizeBatch(batch, sessionId),
 			edits: batch.edits
 		}
 	};

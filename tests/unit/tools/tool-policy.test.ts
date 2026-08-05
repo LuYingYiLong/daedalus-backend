@@ -121,6 +121,32 @@ test("read-only gateway allows only read, verify and plan-safe dynamic MCP tools
 	clearDynamicMcpToolsForWorkspace(WORKSPACE_ID);
 });
 
+test("probe gateway delegates a free terminal to the configured approval policy", async (): Promise<void> => {
+	const baseGateway = new ApprovalGateway("manual");
+	const gateway = new ReadOnlyToolApprovalGateway(baseGateway, [
+		readTool,
+		"mcp_terminal_run_command"
+	], {
+		delegatedToolNames: ["mcp_terminal_run_command"]
+	});
+
+	const decision = await gateway.evaluate("mcp_terminal_run_command", {
+		commandLine: "python --version",
+		cwd: "."
+	}, "terminal-call", WORKSPACE_ID);
+	assert.equal(decision.action, "request_approval");
+	assert.equal(gateway.scope.allowApproval, true);
+
+	const pending = gateway.requestApproval(
+		"mcp_terminal_run_command",
+		{ commandLine: "python --version", cwd: "." },
+		"terminal-call",
+		"Inspect Python version",
+		WORKSPACE_ID
+	);
+	assert.equal(baseGateway.getPending(pending.approvalId)?.toolName, "mcp_terminal_run_command");
+});
+
 test("full-trust mode allows every known tool risk", (): void => {
 	assert.equal(evaluateToolCall("full-trust", readTool, {}).action, "allow");
 	assert.equal(evaluateToolCall("full-trust", writeTool, {}).action, "allow");

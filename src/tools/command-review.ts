@@ -191,12 +191,15 @@ export async function reviewWorkspaceCommand(
 				try {
 					const text: string = await chat(
 						createReviewParams(input),
-						withProviderUsageContext(resolved.options, {
+					{
+						...withProviderUsageContext(resolved.options, {
 							requestId: input.requestId ?? input.toolCallId,
 							sessionId: input.sessionId,
 							workspaceId: input.workspaceId,
 							operation: "command_review"
 						}),
+						reasoningMode: "disabled"
+					},
 						[],
 						createSystemPrompt(basePrompt, promptConfig.commandReviewPrompt),
 						controller.signal

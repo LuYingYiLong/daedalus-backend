@@ -9,6 +9,16 @@ import { sendSessionEvent, sendTransientSessionEvent } from "../session-events.j
 import { scheduleTerminalJobWakeup } from "../terminal-job-wakeup.js";
 import type { WorkflowPhaseToolStats } from "./shared-types.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
+import { EXECUTION_CONTROL_TOOL_NAME } from "../../tools/execution-control.js";
+
+const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"mcp_skills_load",
+	EXECUTION_CONTROL_TOOL_NAME
+]);
+
+function isInternalToolEvent(toolName: string): boolean {
+	return INTERNAL_TOOL_NAMES.has(toolName);
+}
 
 export function createAgentToolEventForwarder(
 	socket: WebSocket,
@@ -59,7 +69,7 @@ export function createAgentToolEventForwarder(
 			return;
 		}
 		if (event.type === "tool.preparing") {
-			if (event.toolName === "mcp_skills_load") {
+			if (isInternalToolEvent(event.toolName)) {
 				return;
 			}
 			sendSessionEvent(socket, requestId, session, "agent.thinking.done", {
@@ -78,7 +88,7 @@ export function createAgentToolEventForwarder(
 			return;
 		}
 		if (event.type === "tool.call") {
-			if (event.toolName === "mcp_skills_load") {
+			if (isInternalToolEvent(event.toolName)) {
 				return;
 			}
 			if (event.toolName === "mcp_skills_create" && typeof event.args.scope === "string" && typeof event.args.slug === "string") {
@@ -104,7 +114,7 @@ export function createAgentToolEventForwarder(
 			return;
 		}
 		if (event.type === "tool.progress") {
-			if (event.toolName === "mcp_skills_load") {
+			if (isInternalToolEvent(event.toolName)) {
 				return;
 			}
 			const sendProgress = event.code === "terminal_output"
@@ -120,7 +130,7 @@ export function createAgentToolEventForwarder(
 			return;
 		}
 		if (event.type === "tool.result") {
-			if (event.toolName === "mcp_skills_load") {
+			if (isInternalToolEvent(event.toolName)) {
 				return;
 			}
 			const createdSkillRef: string | undefined = createdSkillRefsByToolCallId.get(event.toolCallId);
@@ -174,7 +184,7 @@ export function createAgentToolEventForwarder(
 			return;
 		}
 		if (event.type === "tool.error") {
-			if (event.toolName === "mcp_skills_load") {
+			if (isInternalToolEvent(event.toolName)) {
 				return;
 			}
 			sendSessionEvent(socket, requestId, session, "agent.tool.error", {

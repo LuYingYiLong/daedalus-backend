@@ -1,9 +1,10 @@
 import type { AiChatParams, ChatMessage } from "../protocol/types.js";
-import { chatWithDeepSeek, type DeepSeekChatOptions } from "../providers/deepseek-client.js";
+import { chatWithProvider } from "../providers/provider-chat.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 
 const TITLE_MAX_CHARS: number = 28;
 const TITLE_INITIAL_MAX_TOKENS: number = 40;
-const TITLE_RETRY_MAX_TOKENS: number = 256;
+const TITLE_RETRY_MAX_TOKENS: number = 64;
 
 function clipText(text: string, maxChars: number): string {
 	const normalized: string = text.replace(/\s+/g, " ").trim();
@@ -86,16 +87,25 @@ function createTitleParams(userMessage: string, maxTokens: number): AiChatParams
 	};
 }
 
+function createTitleOptions(options: ProviderChatOptions): ProviderChatOptions {
+	return {
+		...options,
+		// 标题是短文本分类任务；推理会抢占极小的输出预算并造成空标题。
+		reasoningMode: "disabled"
+	};
+}
+
 export async function generateSessionTitle(
 	userMessage: string,
-	options: DeepSeekChatOptions,
+	options: ProviderChatOptions,
 	abortSignal?: AbortSignal | undefined
 ): Promise<string> {
+	const titleOptions: ProviderChatOptions = createTitleOptions(options);
 	let text: string;
 	try {
-		text = await chatWithDeepSeek(
+		text = await chatWithProvider(
 			createTitleParams(userMessage, TITLE_INITIAL_MAX_TOKENS),
-			options,
+			titleOptions,
 			[] satisfies ChatMessage[],
 			createTitlePrompt(false),
 			abortSignal
@@ -106,9 +116,9 @@ export async function generateSessionTitle(
 		}
 
 		try {
-			text = await chatWithDeepSeek(
+			text = await chatWithProvider(
 				createTitleParams(userMessage, TITLE_RETRY_MAX_TOKENS),
-				options,
+				titleOptions,
 				[] satisfies ChatMessage[],
 				createTitlePrompt(true),
 				abortSignal

@@ -352,6 +352,27 @@ test("documentation branch refresh accepts GitHub 304 without a Location header"
 	}
 });
 
+test("documentation branch list falls back to safe branch names when GitHub rejects the request", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const previousFetch: typeof globalThis.fetch = globalThis.fetch;
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-branch-fallback-"));
+	process.env.USERPROFILE = root;
+	try {
+		globalThis.fetch = async (): Promise<Response> => new Response("rate limited", { status: 403 });
+
+		const result = await listGodotDocumentationBranches(true);
+		assert.equal(result.stale, true);
+		assert.match(result.error ?? "", /403/u);
+		assert.equal(result.recommendedBranch, "4.7");
+		assert.deepEqual(result.branches.slice(0, 3).map((branch): string => branch.name), ["4.7", "4.6", "4.5"]);
+	} finally {
+		globalThis.fetch = previousFetch;
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("invalid v2 documentation records are normalized without trusting persisted health", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-doc-v2-normalize-"));

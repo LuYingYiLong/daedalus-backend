@@ -47,6 +47,7 @@ import type {
 
 const GITHUB_API_ORIGIN: string = "https://api.github.com";
 const GITHUB_REPOSITORY: string = "godotengine/godot-docs";
+const FALLBACK_BRANCH_NAMES: readonly string[] = ["4.7", "4.6", "4.5", "4.4", "4.3", "4.2", "master"];
 const BRANCH_CACHE_TTL_MS: number = 15 * 60 * 1000;
 const MAX_DOWNLOAD_BYTES: number = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: number = 2 * 1024 * 1024 * 1024;
@@ -446,6 +447,23 @@ function mapBranchList(cache: BranchCache, stale: boolean, error?: string): Bran
 	};
 }
 
+function mapFallbackBranchList(error: string): BranchListResult {
+	const installedBranches: Set<string> = new Set(
+		Object.values(getGodotDocumentationSnapshot().documents).map((record: GodotDocumentationRecord): string => record.branch)
+	);
+	const branches: GodotDocumentationBranch[] = FALLBACK_BRANCH_NAMES.map((name: string): GodotDocumentationBranch => ({
+		name,
+		commitSha: "",
+		installed: installedBranches.has(name)
+	}));
+	return {
+		branches,
+		recommendedBranch: "4.7",
+		stale: true,
+		error
+	};
+}
+
 export async function listGodotDocumentationBranches(refresh: boolean = false): Promise<BranchListResult> {
 	const cached: BranchCache | null = await readBranchCache();
 	const cacheAge: number = cached === null ? Number.POSITIVE_INFINITY : Date.now() - Date.parse(cached.fetchedAt);
@@ -466,10 +484,11 @@ export async function listGodotDocumentationBranches(refresh: boolean = false): 
 		await writeBranchCache(fetched.cache);
 		return mapBranchList(fetched.cache, false);
 	} catch (error: unknown) {
+		const message: string = error instanceof Error ? error.message : "Failed to refresh branches.";
 		if (cached !== null) {
-			return mapBranchList(cached, true, error instanceof Error ? error.message : "Failed to refresh branches.");
+			return mapBranchList(cached, true, message);
 		}
-		throw error;
+		return mapFallbackBranchList(message);
 	}
 }
 

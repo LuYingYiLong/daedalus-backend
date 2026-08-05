@@ -94,14 +94,6 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 			error: error instanceof Error ? error.message : String(error)
 		});
 	}
-	try {
-		await mcpHost.connectAll();
-	} catch (error: unknown) {
-		logger.warn("mcp", "connect_all_failed", {
-			error: error instanceof Error ? error.message : error
-		}, "Server will start without MCP support");
-	}
-
 	const server: WebSocketServer = createServer(port, mcpHost, {
 		host: "127.0.0.1",
 		authToken: process.env.DAEDALUS_BACKEND_AUTH_TOKEN
@@ -148,6 +140,13 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 			throw error;
 		}
 	}
+	// 自定义 MCP 可能受代理、DNS 或其自身启动状态影响。监听与运行时连接已经就绪后再连接，
+	// 避免一个可选服务阻塞 Studio 的后端健康检查。
+	void mcpHost.connectAll().catch((error: unknown): void => {
+		logger.warn("mcp", "connect_all_failed", {
+			error: error instanceof Error ? error.message : error
+		}, "Server started without all MCP services available");
+	});
 	startSessionSearchPrebuildScheduler();
 	let closePromise: Promise<void> | null = null;
 	const close = async (reason: string = "requested"): Promise<void> => {

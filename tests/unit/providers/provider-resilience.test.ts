@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
-import { createOpenAICompatibleClient } from "../../../src/providers/provider-chat-completions-client.js";
+import { createOpenAICompatibleClient, createTransportActivityFetch } from "../../../src/providers/provider-chat-completions-client.js";
 import { createOpenAIResponsesClient } from "../../../src/providers/openai-responses-client.js";
 import {
 	createProviderReconnectState,
@@ -149,6 +149,62 @@ test("the inactivity watchdog reconnects an otherwise stalled request", async ()
 	assert.equal(reconnects[0]?.status, "waiting");
 	assert.ok(reconnects.some((event): boolean => event.status === "reconnecting"));
 	assert.equal(reconnects.at(-1)?.status, "recovered");
+});
+
+test("the first streamed byte has a longer allowance than later stream gaps", async (): Promise<void> => {
+	let calls: number = 0;
+	const result = await runProviderRequestWithResilience({
+		providerOptions,
+		inactivityTimeoutMs: 5,
+		firstActivityTimeoutMs: 30,
+		stallWarningMs: 1,
+		execute: async ({ markActivity }): Promise<string> => {
+			calls += 1;
+			await new Promise<void>((resolve): void => { setTimeout(resolve, 12); });
+			markActivity();
+			return "first byte arrived";
+		}
+	});
+
+	assert.equal(result, "first byte arrived");
+	assert.equal(calls, 1);
+});
+
+test("non-streaming requests use the provider request deadline instead of the stream inactivity watchdog", async (): Promise<void> => {
+	const result = await runProviderRequestWithResilience({
+		providerOptions,
+		inactivityTimeoutMs: 5,
+		watchInactivity: false,
+		execute: async (): Promise<string> => {
+			await new Promise<void>((resolve): void => { setTimeout(resolve, 12); });
+			return "completed";
+		}
+	});
+
+	assert.equal(result, "completed");
+});
+
+test("transport activity fetch reports raw response bytes before SDK event parsing", async (): Promise<void> => {
+	const encoder = new TextEncoder();
+	let activityCount: number = 0;
+	const source = new ReadableStream<Uint8Array>({
+		start(controller: ReadableStreamDefaultController<Uint8Array>): void {
+			controller.enqueue(encoder.encode(": heartbeat\\n\\n"));
+			controller.enqueue(encoder.encode("data: {\\\"choices\\\":[]}\\n\\n"));
+			controller.close();
+		}
+	});
+	const fetchWithActivity = createTransportActivityFetch(
+		async (): Promise<Response> => new Response(source, { status: 200 }),
+		(): void => { activityCount += 1; }
+	);
+	const response: Response = await fetchWithActivity("https://provider.test/stream");
+	const reader: ReadableStreamDefaultReader<Uint8Array> = response.body!.getReader();
+	while (!(await reader.read()).done) {
+		// Drain the stream exactly as an SDK parser would.
+	}
+
+	assert.equal(activityCount, 2);
 });
 
 test("a repeatedly silent provider stream stops after the bounded idle reconnect budget", async (): Promise<void> => {

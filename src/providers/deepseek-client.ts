@@ -14,8 +14,8 @@ export type DeepSeekChatOptions = ProviderChatOptions;
 
 export { applyChatOptions, chatWithProvider, createMessages, createProviderClient, resolveChatModel, streamChatWithProvider };
 
-export function createDeepSeekClient(options: ProviderChatOptions): OpenAI {
-	return createProviderClient(options);
+export function createDeepSeekClient(options: ProviderChatOptions, onTransportActivity?: (() => void) | undefined): OpenAI {
+	return createProviderClient(options, onTransportActivity);
 }
 
 export async function chatWithDeepSeek(

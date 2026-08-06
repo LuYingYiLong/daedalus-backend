@@ -17,8 +17,9 @@ import type { ProviderChatOptions } from "./deepseek-client.js";
 import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIResponsesUsage } from "../usage/usage-parser.js";
+import { createTransportActivityFetch, type ProviderTransportActivity } from "./provider-chat-completions-client.js";
 
-export function createOpenAIResponsesClient(options: ProviderChatOptions): OpenAI {
+export function createOpenAIResponsesClient(options: ProviderChatOptions, onTransportActivity?: ProviderTransportActivity | undefined): OpenAI {
 	const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
 		apiKey: options.apiKey,
 		maxRetries: 0,
@@ -27,6 +28,9 @@ export function createOpenAIResponsesClient(options: ProviderChatOptions): OpenA
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(options.baseUrl);
 	if (normalizedBaseUrl !== undefined) {
 		clientOptions.baseURL = normalizedBaseUrl;
+	}
+	if (onTransportActivity !== undefined) {
+		clientOptions.fetch = createTransportActivityFetch(globalThis.fetch, onTransportActivity);
 	}
 	return new OpenAI(clientOptions);
 }

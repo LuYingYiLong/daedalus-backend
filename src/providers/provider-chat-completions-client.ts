@@ -16,13 +16,72 @@ import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
 
-export function createOpenAICompatibleClient(options: ProviderChatOptions): OpenAI {
+export type ProviderTransportActivity = () => void;
+
+/**
+ * The OpenAI SDK intentionally drops SSE comments and other keep-alive frames.
+ * Wrap its fetch response before parsing so the resilience layer sees raw body
+ * bytes instead of treating parser output as the transport heartbeat.
+ */
+export function createTransportActivityFetch(
+	fetchImplementation: typeof fetch,
+	onActivity: ProviderTransportActivity
+): typeof fetch {
+	return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+		const response: Response = await fetchImplementation(input, init);
+		if (response.body === null) {
+			return response;
+		}
+		const reader: ReadableStreamDefaultReader<Uint8Array> = response.body.getReader();
+		let released: boolean = false;
+		const releaseReader = (): void => {
+			if (!released) {
+				released = true;
+				reader.releaseLock();
+			}
+		};
+		const trackedBody = new ReadableStream<Uint8Array>({
+			async pull(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+				try {
+					const result: ReadableStreamReadResult<Uint8Array> = await reader.read();
+					if (result.done) {
+						releaseReader();
+						controller.close();
+						return;
+					}
+					onActivity();
+					controller.enqueue(result.value);
+				} catch (error: unknown) {
+					releaseReader();
+					controller.error(error);
+				}
+			},
+			async cancel(reason: unknown): Promise<void> {
+				try {
+					await reader.cancel(reason);
+				} finally {
+					releaseReader();
+				}
+			}
+		});
+		return new Response(trackedBody, {
+			status: response.status,
+			statusText: response.statusText,
+			headers: response.headers
+		});
+	};
+}
+
+export function createOpenAICompatibleClient(options: ProviderChatOptions, onTransportActivity?: ProviderTransportActivity | undefined): OpenAI {
 	const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
 		apiKey: options.apiKey,
 		baseURL: normalizeConfiguredProviderBaseUrl(options.baseUrl) ?? resolveProviderBaseUrl(options.provider, undefined),
 		maxRetries: 0,
 		timeout: 60_000
 	};
+	if (onTransportActivity !== undefined) {
+		clientOptions.fetch = createTransportActivityFetch(globalThis.fetch, onTransportActivity);
+	}
 	return new OpenAI(clientOptions);
 }
 

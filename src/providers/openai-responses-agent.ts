@@ -235,7 +235,7 @@ async function readResponsesAssistantMessageAttempt(
 	abortSignal?: AbortSignal | undefined,
 	markActivity?: (() => void) | undefined
 ): Promise<ResponsesAssistantMessage> {
-	const client = createOpenAIResponsesClient(options);
+	const client = createOpenAIResponsesClient(options, markActivity);
 	if (!streamAssistant) {
 		const requestBody: ResponseCreateParamsNonStreaming = createRequestBody(params, options, instructions, inputItems, tools, requireToolCall);
 		const startedAtMs: number = Date.now();
@@ -378,6 +378,7 @@ async function readResponsesAssistantMessage(
 		onEvent,
 		abortSignal,
 		reconnectState,
+		watchInactivity: streamAssistant,
 		execute: async (attempt): Promise<ResponsesAssistantMessage> => readResponsesAssistantMessageAttempt(
 			params,
 			options,
@@ -416,6 +417,7 @@ async function createFinalAnswer(
 		response = await runProviderRequestWithResilience({
 			providerOptions: options,
 			abortSignal,
+			watchInactivity: false,
 			execute: async (attempt): Promise<Response> => client.responses.create(
 				requestBody,
 				{ signal: attempt.signal }

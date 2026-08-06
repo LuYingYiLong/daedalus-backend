@@ -29,3 +29,15 @@ test("approval.approve accepts consent text for cross-workspace approvals", (): 
 		}
 	}).success, true);
 });
+
+test("plan.clarify has an explicit structured skip path", (): void => {
+	const base = {
+		type: "request",
+		id: "plan-clarify-skip",
+		method: "plan.clarify",
+		params: { planId: "plan-123" }
+	};
+	assert.equal(clientRequestSchema.safeParse({ ...base, params: { ...base.params, skip: true } }).success, true);
+	assert.equal(clientRequestSchema.safeParse({ ...base, params: { ...base.params, reply: "Use the existing API." } }).success, true);
+	assert.equal(clientRequestSchema.safeParse(base).success, false);
+});

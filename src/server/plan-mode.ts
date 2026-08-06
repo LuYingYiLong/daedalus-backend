@@ -9,6 +9,7 @@ import {
 	createPlanEventPayload,
 	createPlanMetadata,
 	type PlanRecommendedReply,
+	type PlanSkippedClarification,
 	type StoredPlan,
 	type StoredPlanMetadata,
 	updateStoredPlan,
@@ -52,6 +53,10 @@ export type PlanDecision =
 		planMarkdown: string;
 		assumptions: string[];
 	};
+
+export type PlanClarificationInput =
+	| { kind: "reply"; reply: string }
+	| { kind: "skip" };
 
 export function sendPlanMessageDelta(
 	socket: WebSocket,
@@ -304,6 +309,7 @@ export async function createPlannerSystemPrompt(): Promise<string> {
 		"最终决策必须是 JSON object。工具前预告和澄清前预告可以是普通正文，但最终 JSON 不要包在 markdown fence 中。",
 		"先判断用户目标是否足够明确；如果直接做容易偏离真实需求，必须要求澄清。",
 		"关键缺失信息会影响整体设计时必须问；不关键的信息可以写入 assumptions。",
+		"A structured clarification skip is authoritative. When one is present, do not ask that question again and do not cancel planning. Treat it as missing information, make the narrowest reasonable assumptions from verified context, record those assumptions and their risk in the plan, and return decision:\"plan_ready\". The user can later revise the plan with additional information.",
 		"不要臆测技术栈、协议或测试框架；如果缺少关键信息，优先要求澄清，或把不关键的不确定点写为假设。",
 		"当前 daedalus-backend 仓库事实：后端是 TypeScript WebSocket/RPC 服务，协议边界使用 zod schema，测试使用 Node 内置 test runner（node:test / node --import tsx --test），常用命令是 npm run typecheck、npm test、npm run check。",
 		"除非用户明确要求或目标仓库已有证据，不要在计划中写 Vitest、Jest、gRPC、protobuf 等未确认技术。",
@@ -314,9 +320,10 @@ export async function createPlannerSystemPrompt(): Promise<string> {
 	].join("\n");
 }
 
-function createPlannerMessage(
+export function createPlannerMessage(
 	originalMessage: string,
 	clarifications: readonly string[],
+	skippedClarifications: readonly PlanSkippedClarification[],
 	revisions: readonly string[],
 	currentPlanMarkdown?: string | undefined,
 	extraInstruction?: string | undefined
@@ -329,6 +336,12 @@ function createPlannerMessage(
 		lines.push("\n用户澄清：");
 		for (const clarification of clarifications) {
 			lines.push(`- ${clarification}`);
+		}
+	}
+	if (skippedClarifications.length > 0) {
+		lines.push("\n用户跳过的澄清（以下信息未提供，必须继续规划并把假设与风险写入计划）：");
+		for (const clarification of skippedClarifications) {
+			lines.push(`- ${clarification.question}`);
 		}
 	}
 	if (currentPlanMarkdown !== undefined && currentPlanMarkdown.trim().length > 0) {
@@ -399,16 +412,60 @@ export function normalizePlanDecision(raw: unknown, fallbackTitle: string): Plan
 	throw new Error(`Unknown plan decision: ${decision}`);
 }
 
+function createSkippedClarificationFallback(
+	params: AiChatParams,
+	skippedClarifications: readonly PlanSkippedClarification[]
+): Extract<PlanDecision, { decision: "plan_ready" }> {
+	const title: string = "基于现有上下文的计划";
+	const assumptions: string[] = skippedClarifications.map((clarification: PlanSkippedClarification): string => (
+		`未提供“${clarification.question}”；计划仅基于现有上下文采用最小假设，核心需求、架构、平台或数据格式可能需要后续调整。`
+	));
+	const goal: string = params.message.trim() || "完成用户请求";
+	const planMarkdown: string = [
+		`# ${title}`,
+		"",
+		"## Summary",
+		`在缺少部分澄清信息的情况下，为“${goal}”制定可调整的实施计划。`,
+		"",
+		"## Key Changes",
+		"- 先检查现有工作区结构、约束和可复用实现，确认实际边界。",
+		"- 在已验证事实范围内实现最小闭环，并将不确定项隔离为可替换决策。",
+		"- 对涉及核心需求、架构、平台或数据格式的假设保持显式记录。",
+		"",
+		"## Public Interfaces",
+		"- 仅在检查现有接口和数据格式后决定是否需要新增或调整公开接口。",
+		"",
+		"## Test Plan",
+		"- 针对实际改动运行项目已有的相关检查和测试。",
+		"- 对被跳过信息相关的行为补充针对性验证或请求后续修订。",
+		"",
+		"## Assumptions",
+		...assumptions.map((assumption: string): string => `- ${assumption}`)
+	].join("\n");
+	return {
+		decision: "plan_ready",
+		title,
+		planMarkdown: ensurePlanMarkdown(title, planMarkdown, assumptions),
+		assumptions
+	};
+}
+
 export async function createPlanDecision(
 	params: AiChatParams,
 	options: ProviderChatOptions,
 	clarifications: readonly string[] = [],
+	skippedClarifications: readonly PlanSkippedClarification[] = [],
 	revisions: readonly string[] = [],
 	currentPlanMarkdown?: string | undefined,
 	runtime?: PlanDecisionRuntime | undefined,
 	abortSignal?: AbortSignal | undefined
 ): Promise<PlanDecision> {
-	if (clarifications.length === 0 && revisions.length === 0 && isBroadGodotPluginGoal(params.message)) {
+	if (
+		clarifications.length === 0
+		&& skippedClarifications.length === 0
+		&& revisions.length === 0
+		&& isBroadGodotPluginGoal(params.message)
+	) {
 		return createGodotPluginClarification(params.message);
 	}
 
@@ -432,6 +489,7 @@ export async function createPlanDecision(
 				params,
 				options,
 				clarifications,
+				skippedClarifications,
 				revisions,
 				currentPlanMarkdown,
 				runtime,
@@ -450,6 +508,13 @@ export async function createPlanDecision(
 			continue;
 		}
 		formatRetryInstruction = undefined;
+		if (skippedClarifications.length > 0 && result.decision.decision === "needs_clarification") {
+			if (attempt + 1 < PLAN_RUNNER_MAX_ATTEMPTS) {
+				formatRetryInstruction = "The user explicitly skipped the outstanding clarification. Continue now with documented assumptions and return decision:\"plan_ready\"; do not ask another clarification question.";
+				continue;
+			}
+			return createSkippedClarificationFallback(params, skippedClarifications);
+		}
 		if (result.decision.decision !== "plan_ready" || !requireToolInspection || result.toolCallCount > 0) {
 			return result.decision;
 		}
@@ -474,6 +539,7 @@ async function runPlanAgentDecision(
 	params: AiChatParams,
 	options: ProviderChatOptions,
 	clarifications: readonly string[],
+	skippedClarifications: readonly PlanSkippedClarification[],
 	revisions: readonly string[],
 	currentPlanMarkdown: string | undefined,
 	runtime: PlanDecisionRuntime,
@@ -481,7 +547,7 @@ async function runPlanAgentDecision(
 	abortSignal?: AbortSignal | undefined
 ): Promise<{ decision: PlanDecision; toolCallCount: number }> {
 	const plannerParams: AiChatParams = {
-		message: createPlannerMessage(params.message, clarifications, revisions, currentPlanMarkdown, extraInstruction),
+		message: createPlannerMessage(params.message, clarifications, skippedClarifications, revisions, currentPlanMarkdown, extraInstruction),
 		mode: "plan",
 		options: {
 			temperature: 0.2,
@@ -581,7 +647,7 @@ export async function createInitialPlan(
 	if (!session.sessionId) {
 		throw new Error("Plan mode requires an active session.");
 	}
-	const decision: PlanDecision = await createPlanDecision(params, options, [], [], undefined, {
+	const decision: PlanDecision = await createPlanDecision(params, options, [], [], [], undefined, {
 		socket,
 		requestId,
 		operationRequestId: requestId,
@@ -646,16 +712,23 @@ export async function createInitialPlan(
 
 export async function applyPlanClarification(
 	plan: StoredPlan,
-	reply: string,
+	input: PlanClarificationInput,
 	options: ProviderChatOptions,
 	runtime: PlanDecisionRuntime,
 	abortSignal?: AbortSignal | undefined
 ): Promise<StoredPlan> {
-	const nextClarifications: string[] = [...plan.metadata.clarifications, reply.trim()];
+	const nextClarifications: string[] = input.kind === "reply"
+		? [...plan.metadata.clarifications, input.reply.trim()]
+		: [...plan.metadata.clarifications];
+	const skippedQuestion: string = plan.metadata.clarificationQuestion?.trim() || "当前计划澄清问题";
+	const nextSkippedClarifications: PlanSkippedClarification[] = input.kind === "skip"
+		? [...plan.metadata.skippedClarifications, { question: skippedQuestion, skippedAt: new Date().toISOString() }]
+		: [...plan.metadata.skippedClarifications];
 	const decision: PlanDecision = await createPlanDecision(
 		{ message: plan.metadata.originalMessage, mode: "plan" },
 		options,
 		nextClarifications,
+		nextSkippedClarifications,
 		plan.metadata.revisions,
 		plan.markdown,
 		{
@@ -675,7 +748,8 @@ export async function applyPlanClarification(
 					title: decision.title,
 					clarificationQuestion: decision.question,
 					recommendedReplies: decision.recommendedReplies,
-					clarifications: nextClarifications
+					clarifications: nextClarifications,
+					skippedClarifications: nextSkippedClarifications
 				},
 				markdown: ""
 			};
@@ -689,7 +763,8 @@ export async function applyPlanClarification(
 				previewMarkdown: createPlanPreview(markdown),
 				clarificationQuestion: undefined,
 				recommendedReplies: [],
-				clarifications: nextClarifications
+				clarifications: nextClarifications,
+				skippedClarifications: nextSkippedClarifications
 			},
 			markdown
 		};
@@ -708,6 +783,7 @@ export async function applyPlanRevision(
 		{ message: plan.metadata.originalMessage, mode: "plan" },
 		options,
 		plan.metadata.clarifications,
+		plan.metadata.skippedClarifications,
 		nextRevisions,
 		plan.markdown,
 		{

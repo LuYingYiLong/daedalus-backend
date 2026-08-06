@@ -1509,7 +1509,18 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("plan.clarify"),
 		params: z.object({
 			planId: z.string().min(1),
-			reply: z.string().min(1).max(8000),
+			reply: z.string().min(1).max(8000).optional(),
+			/** A structured decision to continue planning without this answer. */
+			skip: z.literal(true).optional(),
+		}).superRefine((value, context): void => {
+			if (value.skip === true || value.reply !== undefined) {
+				return;
+			}
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["reply"],
+				message: "plan.clarify requires either reply or skip: true."
+			});
 		}),
 	}),
 	z.object({

@@ -22,8 +22,8 @@ export type ProviderChat = (
 	abortSignal?: AbortSignal | undefined
 ) => Promise<string>;
 
-export function createProviderClient(options: ProviderChatOptions): OpenAI {
-	return createOpenAICompatibleClient(options);
+export function createProviderClient(options: ProviderChatOptions, onTransportActivity?: (() => void) | undefined): OpenAI {
+	return createOpenAICompatibleClient(options, onTransportActivity);
 }
 
 export const chatWithProvider: ProviderChat = async (
@@ -37,6 +37,7 @@ export const chatWithProvider: ProviderChat = async (
 	return await runProviderRequestWithResilience({
 		providerOptions: options,
 		abortSignal,
+		watchInactivity: false,
 		execute: async (attempt): Promise<string> => await adapter.chat(
 			params,
 			options,

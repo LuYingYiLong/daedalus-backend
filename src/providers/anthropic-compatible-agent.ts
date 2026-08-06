@@ -172,6 +172,7 @@ async function createFinalAnswer(
 	const message = await runProviderRequestWithResilience({
 		providerOptions: options,
 		abortSignal,
+		watchInactivity: false,
 		execute: async (attempt) => createAnthropicMessage(params, options, finalMessages, systemPrompt, undefined, attempt.signal)
 	});
 	const text: string = extractAnthropicText(message.content);
@@ -233,6 +234,7 @@ async function readAssistantMessage(
 		onEvent,
 		abortSignal,
 		reconnectState,
+		watchInactivity: streamAssistant,
 		execute: async (attempt): Promise<{ text: string; toolUseBlocks: AnthropicToolUseBlock[] }> => readAssistantMessageAttempt(
 			params,
 			options,

@@ -161,6 +161,7 @@ import {
 	restorePendingContinuationForApproval,
 	validatePendingApprovalBeforeExecution,
 	createApprovedWorkflowToolObservation,
+	cancelAgentRunForRejectedApproval,
 	sendAgentPaused,
 	sendContinuedAgentResult,
 	waitForPendingApprovalContinuationRegistration
@@ -771,6 +772,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const continuationRequestId: string = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
 			const queueItemId: number | undefined = pendingContinuation?.params.options?.queueItemId;
 			const rejected = session.approvalGateway.reject(request.params.approvalId);
+			const cancelledRun = pendingContinuation === undefined
+				? undefined
+				: cancelAgentRunForRejectedApproval(socket, session, continuationRequestId);
 			session.pendingAiContinuations.delete(request.params.approvalId);
 			await removeAgentRunContinuation(continuationRequestId);
 			if (session.sessionId !== undefined) {
@@ -800,6 +804,15 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				approvalId: request.params.approvalId,
 				toolName: rejected.llmToolName
 			}, continuationRequestId);
+			if (pendingContinuation !== undefined) {
+				sendAgentCancelled(
+					socket,
+					continuationRequestId,
+					session,
+					cancelledRun?.runId ?? continuationRequestId,
+					"approval_rejected"
+				);
+			}
 		} catch (error: unknown) {
 			sendJson(socket, {
 				type: "response",

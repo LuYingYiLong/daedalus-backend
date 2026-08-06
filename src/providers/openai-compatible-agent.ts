@@ -1105,7 +1105,6 @@ async function readStreamingAssistantMessageAttempt(
 }
 
 async function readStreamingAssistantMessage(
-	client: OpenAI,
 	params: AiChatParams,
 	options: DeepSeekChatOptions,
 	messages: ChatCompletionMessageParam[],
@@ -1125,7 +1124,7 @@ async function readStreamingAssistantMessage(
 		abortSignal,
 		reconnectState,
 		execute: async (attempt): Promise<StreamedAssistantMessage> => readStreamingAssistantMessageAttempt(
-			client,
+			createDeepSeekClient(options, attempt.markActivity),
 			params,
 			options,
 			messages,
@@ -1199,6 +1198,7 @@ async function createFinalAnswer(
 			providerOptions: options,
 			abortSignal,
 			reconnectState,
+			watchInactivity: false,
 			execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 		});
 	} catch (error: unknown) {
@@ -1281,7 +1281,6 @@ async function runAgentLoop(
 			let streamedMessage: StreamedAssistantMessage;
 			try {
 				streamedMessage = await readStreamingAssistantMessage(
-					client,
 					params,
 					options,
 					providerMessages,
@@ -1332,6 +1331,7 @@ async function runAgentLoop(
 					onEvent,
 					abortSignal,
 					reconnectState: stepReconnectState,
+					watchInactivity: false,
 					execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 				});
 			} catch (error: unknown) {

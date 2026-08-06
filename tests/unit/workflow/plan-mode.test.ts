@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createApprovedPlanExecutionParams, createPlanDecision, createPlannerSystemPrompt, createPlanVisibleDeltaFilter, normalizePlanDecision } from "../../../src/server/plan-mode.js";
+import { createApprovedPlanExecutionParams, createPlanDecision, createPlannerMessage, createPlannerSystemPrompt, createPlanVisibleDeltaFilter, normalizePlanDecision } from "../../../src/server/plan-mode.js";
 import { createPlanMetadata } from "../../../src/server/plan-store.js";
 import type { StoredPlan } from "../../../src/server/plan-store.js";
 import type { ProviderChatOptions } from "../../../src/providers/deepseek-client.js";
@@ -24,6 +24,20 @@ test("broad Godot AI plugin goal requires clarification with at most three repli
 	assert.ok(decision.recommendedReplies.length > 0);
 	assert.ok(decision.recommendedReplies.length <= 3);
 	assert.ok(decision.recommendedReplies.some((reply): boolean => reply.text.includes("前端")));
+});
+
+test("a skipped clarification is explicit planner input rather than a synthetic user reply", (): void => {
+	const message = createPlannerMessage(
+		"Make the feature",
+		[],
+		[{ question: "Which platform should be supported?", skippedAt: "2026-08-06T00:00:00.000Z" }],
+		[]
+	);
+
+	assert.match(message, /信息未提供/u);
+	assert.match(message, /Which platform should be supported\?/u);
+	assert.match(message, /必须继续规划/u);
+	assert.doesNotMatch(message, /Continue with the current assumptions/u);
 });
 
 test("plan clarification normalization accepts common reply aliases", (): void => {

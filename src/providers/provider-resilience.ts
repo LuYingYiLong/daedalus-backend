@@ -9,6 +9,8 @@ import type {
 
 /** A half-open provider stream must not keep the Studio spinner running for a minute. */
 export const PROVIDER_INACTIVITY_TIMEOUT_MS: number = 30_000;
+/** A provider can legitimately need longer before its first streamed byte. */
+export const PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS: number = 75_000;
 /** Surface a pending reconnect before aborting the silent request. */
 export const PROVIDER_STALL_WARNING_MS: number = 12_000;
 /**
@@ -151,6 +153,13 @@ export type ProviderResilienceOptions<T> = {
 	abortSignal?: AbortSignal | undefined;
 	execute: (context: ProviderAttemptContext) => Promise<T>;
 	inactivityTimeoutMs?: number | undefined;
+	/**
+	 * First-byte allowance for a new stream. Once any transport or semantic
+	 * activity is observed, the normal inter-byte inactivity timeout applies.
+	 */
+	firstActivityTimeoutMs?: number | undefined;
+	/** Non-streaming requests rely on the provider client's request timeout. */
+	watchInactivity?: boolean | undefined;
 	stallWarningMs?: number | undefined;
 	/**
 	 * A reconnect that only yields one fragment is not healthy progress. Keep
@@ -336,6 +345,9 @@ function emitReconnectEvent(
 
 export async function runProviderRequestWithResilience<T>(options: ProviderResilienceOptions<T>): Promise<T> {
 	const inactivityTimeoutMs: number = options.inactivityTimeoutMs ?? PROVIDER_INACTIVITY_TIMEOUT_MS;
+	const firstActivityTimeoutMs: number = Math.max(1, options.firstActivityTimeoutMs
+		?? (options.inactivityTimeoutMs === undefined ? PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS : inactivityTimeoutMs));
+	const watchInactivity: boolean = options.watchInactivity !== false;
 	const configuredStallWarningMs: number = options.stallWarningMs ?? PROVIDER_STALL_WARNING_MS;
 	const stallWarningMs: number = Math.max(1, Math.min(configuredStallWarningMs, Math.max(1, inactivityTimeoutMs - 1)));
 	const postReconnectInactivityTimeoutMs: number = Math.max(1, Math.min(
@@ -358,6 +370,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 	let revision: number = Math.max(0, Math.trunc(reconnectState?.revision ?? 0));
 	let lastReason: ProviderReconnectReason = "transport";
 	let reconnectedDuringInvocation: boolean = false;
+	let hasObservedProviderActivity: boolean = false;
 
 	const syncReconnectState = (): void => {
 		if (reconnectState === undefined) return;
@@ -384,11 +397,14 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 		let rejectTimeout: ((reason: unknown) => void) | undefined;
 		let receivedProgressAfterReconnect: boolean = false;
 		const counters: AttemptOutputCounters = { messageCodePoints: 0, thinkingCodePoints: 0 };
-		const getAttemptInactivityTimeoutMs = (): number => (
-			reconnectedDuringInvocation && receivedProgressAfterReconnect
+		const getAttemptInactivityTimeoutMs = (): number => {
+			if (!hasObservedProviderActivity && currentAttempt === 0) {
+				return firstActivityTimeoutMs;
+			}
+			return reconnectedDuringInvocation && receivedProgressAfterReconnect
 				? postReconnectInactivityTimeoutMs
-				: inactivityTimeoutMs
-		);
+				: inactivityTimeoutMs;
+		};
 		const createReconnectBase = (): Omit<ProviderReconnectEvent, "revision" | "status" | "attempt" | "maxAttempts" | "autoExtended" | "discardedMessageCodePoints" | "discardedThinkingCodePoints"> => ({
 			schemaVersion: 1,
 			reconnectId,
@@ -407,7 +423,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 		};
 		const scheduleStallWarning = (): void => {
 			clearStallWarningTimer();
-			if (!attemptActive || stallWarningActive || currentAttempt >= maxAttempts) return;
+			if (!watchInactivity || !attemptActive || stallWarningActive || currentAttempt >= maxAttempts) return;
 			const attemptInactivityTimeoutMs: number = getAttemptInactivityTimeoutMs();
 			const attemptStallWarningMs: number = Math.max(1, Math.min(stallWarningMs, Math.max(1, attemptInactivityTimeoutMs - 1)));
 			stallWarningTimer = setTimeout((): void => {
@@ -429,7 +445,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 			}, attemptStallWarningMs);
 		};
 		const resetWatchdog = (): void => {
-			if (!attemptActive) return;
+			if (!watchInactivity || !attemptActive) return;
 			if (stallWarningActive) {
 				stallWarningActive = false;
 				revision += 1;
@@ -464,19 +480,24 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 			rejectTimeout = undefined;
 		};
 		options.abortSignal?.addEventListener("abort", abortAttempt, { once: true });
-		resetWatchdog();
-		const timeoutPromise = new Promise<never>((_resolve, reject): void => { rejectTimeout = reject; });
+		if (watchInactivity) {
+			resetWatchdog();
+		}
+		const timeoutPromise: Promise<never> | undefined = watchInactivity
+			? new Promise<never>((_resolve, reject): void => { rejectTimeout = reject; })
+			: undefined;
 		const markProviderActivity = (): void => {
+			hasObservedProviderActivity = true;
 			if (reconnectedDuringInvocation) receivedProgressAfterReconnect = true;
 			resetWatchdog();
 		};
 		const attemptEvent = createAttemptEventForwarder(options.onEvent, counters, markProviderActivity, (): boolean => attemptActive);
 
 		try {
-			const result: T = await Promise.race([
-				options.execute({ signal: attemptController.signal, markActivity: markProviderActivity, onEvent: attemptEvent }),
-				timeoutPromise
-			]);
+			const execution: Promise<T> = options.execute({ signal: attemptController.signal, markActivity: markProviderActivity, onEvent: attemptEvent });
+			const result: T = timeoutPromise === undefined
+				? await execution
+				: await Promise.race([execution, timeoutPromise]);
 			if (reconnectedDuringInvocation) {
 				revision += 1;
 				emitReconnectEvent(options.onEvent, {
@@ -494,7 +515,9 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 			return result;
 		} catch (caught: unknown) {
 			clearAttemptResources();
-			const error: unknown = timedOut ? new ProviderIdleTimeoutError(inactivityTimeoutMs) : caught;
+			const error: unknown = timedOut
+				? (caught instanceof ProviderIdleTimeoutError ? caught : new ProviderIdleTimeoutError(getAttemptInactivityTimeoutMs()))
+				: caught;
 			if (Boolean(options.abortSignal?.aborted)) throw createAbortError();
 			const classification: ProviderRetryClassification = classifyProviderRetry(error, now());
 			lastReason = classification.reason;

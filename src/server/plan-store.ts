@@ -13,6 +13,11 @@ export type PlanRecommendedReply = {
 	description?: string | undefined;
 };
 
+export type PlanSkippedClarification = {
+	question: string;
+	skippedAt: string;
+};
+
 export type StoredPlanMetadata = {
 	schemaVersion: 1;
 	planId: string;
@@ -25,6 +30,7 @@ export type StoredPlanMetadata = {
 	clarificationQuestion?: string | undefined;
 	recommendedReplies?: PlanRecommendedReply[] | undefined;
 	clarifications: string[];
+	skippedClarifications: PlanSkippedClarification[];
 	revisions: string[];
 	createdAt: string;
 	updatedAt: string;
@@ -63,6 +69,7 @@ export function createPlanMetadata(params: {
 	clarificationQuestion?: string | undefined;
 	recommendedReplies?: PlanRecommendedReply[] | undefined;
 	clarifications?: string[] | undefined;
+	skippedClarifications?: PlanSkippedClarification[] | undefined;
 	revisions?: string[] | undefined;
 	now?: string | undefined;
 }): StoredPlanMetadata {
@@ -80,6 +87,7 @@ export function createPlanMetadata(params: {
 		clarificationQuestion: params.clarificationQuestion,
 		recommendedReplies: params.recommendedReplies,
 		clarifications: params.clarifications ?? [],
+		skippedClarifications: params.skippedClarifications ?? [],
 		revisions: params.revisions ?? [],
 		createdAt: timestamp,
 		updatedAt: timestamp,
@@ -122,7 +130,24 @@ export async function readStoredPlan(sessionId: string, planId: string): Promise
 	if (row === undefined) {
 		throw new Error(`Plan not found: ${planId}`);
 	}
-	const metadata: StoredPlanMetadata = parseSqlJson<StoredPlanMetadata>(row.metadata_json);
+	const parsedMetadata: StoredPlanMetadata = parseSqlJson<StoredPlanMetadata>(row.metadata_json);
+	const metadata: StoredPlanMetadata = {
+		...parsedMetadata,
+		clarifications: Array.isArray(parsedMetadata.clarifications)
+			? parsedMetadata.clarifications.filter((item: unknown): item is string => typeof item === "string")
+			: [],
+		skippedClarifications: Array.isArray(parsedMetadata.skippedClarifications)
+			? parsedMetadata.skippedClarifications.filter((item: unknown): item is PlanSkippedClarification => (
+				typeof item === "object"
+				&& item !== null
+				&& typeof (item as Record<string, unknown>).question === "string"
+				&& typeof (item as Record<string, unknown>).skippedAt === "string"
+			))
+			: [],
+		revisions: Array.isArray(parsedMetadata.revisions)
+			? parsedMetadata.revisions.filter((item: unknown): item is string => typeof item === "string")
+			: []
+	};
 	if (metadata.sessionId !== sessionId || metadata.planId !== planId) {
 		throw new Error("Plan metadata does not match requested session or plan id.");
 	}

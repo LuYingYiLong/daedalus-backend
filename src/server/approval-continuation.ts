@@ -212,6 +212,35 @@ export async function cancelPendingApprovalsForRequest(session: ClientSession, r
 	return cancelledApprovalIds;
 }
 
+/**
+ * A rejected approval is a terminal user decision for its paused turn.  Do
+ * not leave the corresponding AgentRun resumable after its continuation was
+ * discarded, otherwise Studio continues to render that turn as running.
+ */
+export function cancelAgentRunForRejectedApproval(
+	socket: WebSocket,
+	session: ClientSession,
+	requestId: string
+): AgentRunState | undefined {
+	const currentRun: AgentRunState | undefined = getAgentRun(session, requestId);
+	if (
+		currentRun === undefined
+		|| currentRun.terminal !== null
+		|| currentRun.stage !== "awaiting_approval"
+	) {
+		return undefined;
+	}
+
+	return updateAgentRun(socket, session, currentRun.runId, "cancelled", {
+		pause: null,
+		terminal: {
+			resultStatus: "cancelled",
+			message: "Approval was rejected; this turn stopped before the tool was executed.",
+			completedAt: new Date().toISOString()
+		}
+	});
+}
+
 export async function loadHydratedPendingApprovalStates(
 	session: ClientSession,
 	apiKey?: string | undefined

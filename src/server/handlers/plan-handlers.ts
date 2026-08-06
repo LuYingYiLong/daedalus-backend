@@ -17,7 +17,8 @@ import {
 	applyPlanClarification,
 	applyPlanRevision,
 	createApprovedPlanExecutionParams,
-	sendPlanMessageDone
+	sendPlanMessageDone,
+	type PlanClarificationInput
 } from "../plan-mode.js";
 import { sendSessionEvent } from "../session-events.js";
 import { handleChatRequest } from "../chat-orchestrator.js";
@@ -222,9 +223,12 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 					operation: "plan_clarify"
 				});
 				try {
+					const clarificationInput: PlanClarificationInput = request.params.skip === true
+						? { kind: "skip" }
+						: { kind: "reply", reply: request.params.reply! };
 					const updatedPlan: StoredPlan = await applyPlanClarification(
 						plan,
-						request.params.reply,
+						clarificationInput,
 						options,
 						{
 							socket,

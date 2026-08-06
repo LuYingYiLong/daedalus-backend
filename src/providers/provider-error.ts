@@ -1,5 +1,5 @@
 export type ProviderErrorInfo = {
-	code: "provider_error" | "provider_quota_exhausted" | "provider_connection_interrupted";
+	code: "provider_error" | "provider_quota_exhausted" | "provider_connection_interrupted" | "provider_response_stalled";
 	message: string;
 };
 
@@ -16,6 +16,7 @@ const RETRYABLE_TRANSPORT_ERROR_CODES: ReadonlySet<string> = new Set([
 ]);
 const RETRYABLE_TRANSPORT_MESSAGE_PATTERN: RegExp = /\bterminated\b|socket hang up|premature(?:ly)? closed|other side closed|network connection was lost/iu;
 const PROVIDER_CONNECTION_INTERRUPTED_MESSAGE: string = "The connection to the model provider ended unexpectedly. Daedalus could not complete the response. Check your network or the provider service, then try again.";
+const PROVIDER_RESPONSE_STALLED_MESSAGE: string = "The model provider stopped producing data before the response completed. Daedalus saved the unfinished run so it can be retried from a safe checkpoint.";
 
 function collectErrorSignals(error: unknown, signals: string[], seen: Set<object>, depth: number = 0): void {
 	if (depth > 5 || error === null || error === undefined) {
@@ -102,6 +103,12 @@ export function classifyProviderError(error: unknown): ProviderErrorInfo {
 			message: PROVIDER_CONNECTION_INTERRUPTED_MESSAGE
 		};
 	}
+	if (errorCode === "provider_response_stalled") {
+		return {
+			code: "provider_response_stalled",
+			message: PROVIDER_RESPONSE_STALLED_MESSAGE
+		};
+	}
 
 	return {
 		code: "provider_error",
@@ -125,6 +132,14 @@ export function createProviderStatusEvent(error: unknown): Record<string, string
 		return {
 			status: "error",
 			title: "Model Connection Interrupted",
+			details: info.message,
+			code: info.code
+		};
+	}
+	if (info.code === "provider_response_stalled") {
+		return {
+			status: "warning",
+			title: "Model Response Paused",
 			details: info.message,
 			code: info.code
 		};

@@ -31,10 +31,20 @@ export function filterLlmContextMessages(messages: readonly ChatMessage[]): Chat
 	return messages.filter(isLlmContextMessage);
 }
 
-const ABANDONED_AGENT_RUN_STAGES: ReadonlySet<AgentRunState["stage"]> = new Set([
-	"failed",
-	"cancelled"
-]);
+const HIDDEN_AGENT_RUN_STAGES: ReadonlySet<AgentRunState["stage"]> = new Set(["failed"]);
+const CONTEXT_PRESERVING_INTERRUPTION_REASONS: ReadonlySet<string> = new Set(["provider_response_stalled"]);
+
+function createUnfinishedTurnContextMarker(requestId: string): ChatMessage {
+	return {
+		role: "system",
+		requestId,
+		content: [
+			"[Previous turn state]",
+			"The preceding user request did not complete before the assistant response ended.",
+			"It remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result."
+		].join("\n")
+	};
+}
 
 export function filterSessionLlmContextMessages(
 	session: ClientSession,
@@ -46,20 +56,43 @@ export function filterSessionLlmContextMessages(
 			.filter((run: AgentRunState): boolean => run.stage === "completed" && run.retryOfRunId !== undefined)
 			.map((run: AgentRunState): string => run.rootRequestId)
 	);
-	const abandonedRequestIds: Set<string> = new Set(
+	const hiddenRequestIds: Set<string> = new Set(
 		runs
 			.filter((run: AgentRunState): boolean => (
-				ABANDONED_AGENT_RUN_STAGES.has(run.stage)
+				HIDDEN_AGENT_RUN_STAGES.has(run.stage)
 				|| (
 					run.stage === "interrupted"
+					&& !CONTEXT_PRESERVING_INTERRUPTION_REASONS.has(run.interruptedReason ?? "")
 					&& !completedRetryRootRequestIds.has(run.rootRequestId)
 				)
 			))
 			.map((run: AgentRunState): string => run.requestId)
 	);
-	return filterLlmContextMessages(messages).filter((message: ChatMessage): boolean => (
-		message.requestId === undefined || !abandonedRequestIds.has(message.requestId)
-	));
+	const unfinishedRequestIds: Set<string> = new Set(
+		runs
+			.filter((run: AgentRunState): boolean => (
+				(run.stage === "cancelled"
+					|| (run.stage === "interrupted" && CONTEXT_PRESERVING_INTERRUPTION_REASONS.has(run.interruptedReason ?? "")))
+				&& !completedRetryRootRequestIds.has(run.rootRequestId)
+			))
+			.map((run: AgentRunState): string => run.requestId)
+	);
+	const context: ChatMessage[] = [];
+	for (const message of messages) {
+		const requestId: string | undefined = message.requestId;
+		if (requestId !== undefined && unfinishedRequestIds.has(requestId)) {
+			if (message.role === "user") {
+				// Older cancelled runs were persisted with this flag. The user's
+				// request remains valid context even though its execution stopped.
+				const { excludeFromLlmContext: _excluded, ...userMessage } = message;
+				context.push(userMessage, createUnfinishedTurnContextMarker(requestId));
+			}
+			continue;
+		}
+		if (requestId !== undefined && hiddenRequestIds.has(requestId)) continue;
+		if (isLlmContextMessage(message)) context.push(message);
+	}
+	return context;
 }
 
 export async function appendFailedChatTurnToSession(

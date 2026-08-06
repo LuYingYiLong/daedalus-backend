@@ -3,8 +3,10 @@ import test from "node:test";
 import WebSocket from "ws";
 import { McpHost } from "../../../src/mcp/mcp-host.js";
 import type { ProviderChatOptions } from "../../../src/providers/provider-types.js";
+import { ProviderResponseStalledError } from "../../../src/providers/provider-resilience.js";
 import { createClientSession } from "../../../src/server/client-session.js";
 import { continueWorkflowExecution } from "../../../src/server/workflow/continuation.js";
+import { hasProviderResponseStalledError, WorkflowExecutionError } from "../../../src/server/workflow/workflow-error.js";
 import { createEmptyWorkflowPhaseToolStats } from "../../../src/server/workflow/tool-events.js";
 import type { WorkflowPhase, WorkflowRunState } from "../../../src/workflow/types.js";
 
@@ -99,4 +101,12 @@ test("workflow runtime seam never calls a provider after cancellation", async ()
 	));
 
 	assert.equal(phaseCalls, 0);
+});
+
+test("workflow preserves a nested provider stall as a recoverable interruption", (): void => {
+	const original = new ProviderResponseStalledError(new Error("silent stream"));
+	const wrapped = new WorkflowExecutionError("Workflow phase failed", createSummaryState().plan, original);
+
+	assert.equal(hasProviderResponseStalledError(wrapped), true);
+	assert.equal(hasProviderResponseStalledError(new WorkflowExecutionError("ordinary failure", createSummaryState().plan, new Error("failed"))), false);
 });

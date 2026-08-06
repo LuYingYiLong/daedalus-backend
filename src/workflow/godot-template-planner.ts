@@ -4,6 +4,7 @@ import { getExecutionPolicy } from "./router.js";
 import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPlan } from "./types.js";
 import { createWorkflowId, createWorkflowTitle, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./planner.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
+import { applyWorkflowVerificationPolicy } from "./verification-policy.js";
 
 export type GodotTaskType = "script_create_or_edit" | "scene_create" | "scene_attach_script" | "project_setting_change" | "general_edit";
 
@@ -127,7 +128,7 @@ export function createGodotTemplateWorkflowPlan(
 				: classification.type === "project_setting_change"
 					? createProjectSettingPlan(params)
 					: null;
-	return plan === null ? null : applyTemplateSemantics(plan, classification);
+	return plan === null ? null : applyWorkflowVerificationPolicy(applyTemplateSemantics(plan, classification), params);
 }
 
 function applyTemplateSemantics(plan: WorkflowPlan, classification: GodotTaskClassification): WorkflowPlan {
@@ -174,7 +175,7 @@ export function getAllowedToolsForLlmPlannedStep(toolGroup: WorkflowPhase["toolG
 		return [...TEXT_FILE_READ_TOOLS, ...SCENE_READ_TOOLS, ...WRITE_TOOLS];
 	}
 	if (toolGroup === "verify") {
-		return [...SCENE_READ_TOOLS, "mcp_godot_lsp_get_file_diagnostics", "mcp_godot_validate_scene_script_references", "mcp_terminal_run_safe_preset"];
+		return [...SCENE_READ_TOOLS, "mcp_godot_validate_scene_script_references", "mcp_terminal_run_safe_preset"];
 	}
 	if (toolGroup === "summarize") {
 		return [];
@@ -271,7 +272,7 @@ function createScriptWritePlan(params: AiChatParams, classification: GodotTaskCl
 			[`实际创建或修改脚本 ${scriptPath}。`, "必须调用脚本写入工具并按审批流程暂停。"].join("\n"),
 			[`脚本 ${scriptPath} 已由实际写入工具创建或更新。`]
 		),
-		createPhase("verify-script", "验证脚本", "verify", ["mcp_godot_lsp_get_file_diagnostics", "mcp_terminal_run_safe_preset"], `验证脚本 ${scriptPath}。`, ["脚本验证没有阻塞失败。"]),
+		createPhase("verify-script", "验证脚本", "verify", ["mcp_terminal_run_safe_preset"], `验证脚本 ${scriptPath}。`, ["脚本验证没有阻塞失败。"]),
 		createPhase("summarize", "总结交付", "summarize", [], "总结完成内容和验证状态，不调用工具。", ["已总结交付。"])
 	];
 	return createPlan(params, "Godot 脚本写入", phases);

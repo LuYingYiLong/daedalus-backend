@@ -76,7 +76,7 @@ import { hydrateImageAttachmentContexts } from "../session/session-attachments.j
 import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, isProviderId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
-import { classifyProviderError, createProviderStatusEvent } from "../providers/provider-error.js";
+import { classifyProviderError, createProviderStatusEvent, type ProviderErrorInfo } from "../providers/provider-error.js";
 import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
@@ -168,7 +168,7 @@ import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataR
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "./next-step-hints.js";
 import type { NextStepHint } from "./next-step-hints.js";
-import { WorkflowExecutionError } from "./workflow/workflow-error.js";
+import { hasProviderResponseStalledError, WorkflowExecutionError } from "./workflow/workflow-error.js";
 import type { WorkflowPhaseToolStats, WorkflowPhaseRunResult } from "./workflow/shared-types.js";
 import { MAX_WORKFLOW_AUTO_REPAIR_ROUNDS } from "./workflow/limits.js";
 import {
@@ -1595,6 +1595,58 @@ export async function finishQueueItemForRun(
 	await removeQueueItemForCompletedRun(socket, requestId, session, queueItemId);
 }
 
+function getProviderResponseStall(error: unknown): ProviderErrorInfo | null {
+	if (!hasProviderResponseStalledError(error)) {
+		return null;
+	}
+	return classifyProviderError({ code: "provider_response_stalled" });
+}
+
+async function pauseProviderResponseStalledRun(params: {
+	socket: WebSocket;
+	requestId: string;
+	session: ClientSession;
+	providerError: ProviderErrorInfo;
+	userMessage: string;
+	userCreatedAt: string;
+	additionalContext?: readonly AdditionalContextItem[] | undefined;
+}): Promise<boolean> {
+	const currentRun: AgentRunState | undefined = getAgentRun(params.session, params.requestId);
+	if (currentRun === undefined || currentRun.terminal !== null) {
+		return false;
+	}
+	// A stalled workflow can stop before its final summary persists the turn.
+	// Save the user request first so the retry RPC and a later “continue” both
+	// have one authoritative source request after reconnecting or reopening.
+	await appendUserMessageToSession(
+		params.session,
+		params.userMessage,
+		params.requestId,
+		params.userCreatedAt,
+		params.additionalContext
+	);
+	if (currentRun.stage !== "interrupted") {
+		updateAgentRun(params.socket, params.session, currentRun.runId, "interrupted", {
+			pause: null,
+			interruptedReason: params.providerError.code
+		});
+	}
+	await waitForSessionEventPersistence(params.session);
+	sendJson(params.socket, {
+		type: "response",
+		id: params.requestId,
+		ok: true,
+		result: {
+			interrupted: true,
+			retryable: true,
+			runId: currentRun.runId,
+			reason: params.providerError.code,
+			message: params.providerError.message
+		}
+	});
+	return true;
+}
+
 function createQueueRunRequestId(queueItemId: number): string {
 	return `queue-${queueItemId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -2707,6 +2759,24 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							cancelled: true,
 							requestId: request.id
 						}
+					});
+					break;
+				}
+				const stalledProviderError: ProviderErrorInfo | null = getProviderResponseStall(error);
+				if (stalledProviderError !== null && await pauseProviderResponseStalledRun({
+					socket,
+					requestId: request.id,
+					session,
+					providerError: stalledProviderError,
+					userMessage: persistedParams.message,
+					userCreatedAt: turnStartedAt,
+					additionalContext: persistedParams.additionalContext
+				})) {
+					logger.warn("ai", "provider_response_stalled", {
+						requestId: request.id,
+						sessionId: runSessionId,
+						workspaceId: session.activeWorkspace?.id,
+						durationMs: Date.now() - runStartedAtMs
 					});
 					break;
 				}

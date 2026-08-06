@@ -6,6 +6,7 @@ import { createOpenAIResponsesClient } from "../../../src/providers/openai-respo
 import {
 	createProviderReconnectState,
 	ProviderConnectionInterruptedError,
+	ProviderResponseStalledError,
 	ProviderHttpError,
 	classifyProviderRetry,
 	runProviderRequestWithResilience
@@ -147,6 +148,66 @@ test("the inactivity watchdog reconnects an otherwise stalled request", async ()
 	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
 	assert.equal(reconnects[0]?.status, "waiting");
 	assert.ok(reconnects.some((event): boolean => event.status === "reconnecting"));
+	assert.equal(reconnects.at(-1)?.status, "recovered");
+});
+
+test("a repeatedly silent provider stream stops after the bounded idle reconnect budget", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
+	let calls: number = 0;
+	await assert.rejects(
+		runProviderRequestWithResilience({
+			providerOptions,
+			onEvent: (event: ToolEvent): void => { events.push(event); },
+			inactivityTimeoutMs: 5,
+			stallWarningMs: 1,
+			sleep: immediateSleep,
+			execute: async ({ signal }): Promise<string> => {
+				calls += 1;
+				await new Promise<void>((_resolve, reject): void => {
+					signal.addEventListener("abort", (): void => reject(signal.reason), { once: true });
+				});
+				return "unreachable";
+			}
+		}),
+		ProviderResponseStalledError
+	);
+
+	assert.equal(calls, 3);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.ok(reconnects.length > 0);
+	assert.ok(reconnects.some((event): boolean => event.maxAttempts === 2));
+	assert.ok(reconnects.every((event): boolean => event.maxAttempts !== 15 && event.autoExtended === false));
+	assert.equal(reconnects.at(-1)?.status, "failed");
+	assert.equal(reconnects.at(-1)?.attempt, 2);
+});
+
+test("a reconnect with one fragment and then silence uses the short recovery watchdog", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
+	let calls: number = 0;
+	const result: string = await runProviderRequestWithResilience({
+		providerOptions,
+		onEvent: (event: ToolEvent): void => { events.push(event); },
+		inactivityTimeoutMs: 50,
+		stallWarningMs: 10,
+		postReconnectInactivityTimeoutMs: 5,
+		sleep: immediateSleep,
+		execute: async ({ signal, onEvent }): Promise<string> => {
+			calls += 1;
+			if (calls === 1) throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+			if (calls === 2) {
+				onEvent?.({ type: "ai.thinking.delta", text: "partial recovery" });
+				await new Promise<void>((_resolve, reject): void => {
+					signal.addEventListener("abort", (): void => reject(signal.reason), { once: true });
+				});
+			}
+			return "completed after the second recovery";
+		}
+	});
+
+	assert.equal(result, "completed after the second recovery");
+	assert.equal(calls, 3);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.ok(reconnects.some((event): boolean => event.status === "waiting" && event.attempt === 2));
 	assert.equal(reconnects.at(-1)?.status, "recovered");
 });
 

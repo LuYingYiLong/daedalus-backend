@@ -141,7 +141,7 @@ test("title generation is scheduled before plan and agent execution branch", asy
 	));
 	const scheduleIndex: number = source.indexOf("maybeScheduleSessionTitleGeneration(socket, request.id");
 	const planBranchIndex: number = source.indexOf('if (effectiveParams.mode === "plan")');
-	const userPersistenceIndex: number = source.indexOf("await appendUserMessageToSession(");
+	const userPersistenceIndex: number = source.indexOf("await appendUserMessageToSession(", scheduleIndex);
 
 	assert.ok(scheduleIndex >= 0);
 	assert.ok(planBranchIndex > scheduleIndex);

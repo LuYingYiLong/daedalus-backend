@@ -318,6 +318,18 @@ test("GodotDiagnosticsBridge reads fake LSP diagnostics and symbols", async () =
 	}
 });
 
+test("GodotDiagnosticsBridge exposes an offline LSP as structured non-applicability", async (): Promise<void> => {
+	const bridge: GodotDiagnosticsBridge = new GodotDiagnosticsBridge();
+	const result: Record<string, unknown> = asJsonText(await bridge.callTool("lsp_get_file_diagnostics", {
+		resourcePath: "scripts/player.gd"
+	}));
+	assert.equal(result.ok, false);
+	assert.equal(result.validationStatus, "not_applicable");
+	assert.equal(result.environmentIssue, true);
+	assert.equal(result.applicabilityCode, "workspace_unavailable");
+	assert.equal(result.notApplicableReason, "godot_diagnostics_unavailable: no active workspace");
+});
+
 test("GodotDiagnosticsBridge reads fake DAP stack and variables", async () => {
 	const lspServer: FakeLspServer = await startFakeLspServer();
 	const dapServer: FakeDapServer = await startFakeDapServer();

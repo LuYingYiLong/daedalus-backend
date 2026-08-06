@@ -64,6 +64,37 @@ test("writes without a later verify phase finish as unverified with warnings", (
 	assert.equal(result.warnings.length, 1);
 });
 
+test("a structured skip policy never reports missing verification as a workflow failure", (): void => {
+	const plan: WorkflowPlan = {
+		id: "workflow-main",
+		title: "Create main scene",
+		phases: [phase("write", "write"), phase("summarize", "summarize")],
+		todos: [],
+		verificationPolicy: "skip"
+	};
+	const result = collectWorkflowCompletionStatus(plan, [
+		output("write", [{
+			toolCallId: "write-main",
+			toolName: "mcp_godot_create_scene",
+			risk: "write",
+			status: "succeeded"
+		}]),
+		output("summarize", [])
+	]);
+	assert.equal(result.resultStatus, "completed_with_warnings");
+	assert.equal(result.verificationStatus, "unverified");
+	assert.deepEqual(result.warnings, ["验证已按本次请求的结构化策略跳过。"]);
+	assert.match(createFinalSummaryVerificationContext(plan, [
+		output("write", [{
+			toolCallId: "write-main",
+			toolName: "mcp_godot_create_scene",
+			risk: "write",
+			status: "succeeded"
+		}]),
+		output("summarize", [])
+	]), /结构化执行策略/u);
+});
+
 test("only a successful verify after the latest write produces verified completion", (): void => {
 	const writeObservation: WorkflowToolObservation = {
 		toolCallId: "write-main",

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCanonicalTimelineBlocks, type TimelineAssistantBlock, type TimelineBlock } from "../../../src/session/timeline-blocks.js";
+import {
+	buildCanonicalTimelineBlocks,
+	getVisibleAssistantMarkdownSegments,
+	type TimelineAssistantBlock,
+	type TimelineBlock,
+	type TimelineBodyPart
+} from "../../../src/session/timeline-blocks.js";
 import type { StoredMessage, StoredSession, StoredSessionEvent, SessionMetadata } from "../../../src/session/session-store.js";
 
 function metadata(): SessionMetadata {
@@ -35,6 +41,25 @@ function assistantBlock(block: TimelineBlock | undefined): TimelineAssistantBloc
 	assert.equal(block?.type, "assistant");
 	return block as TimelineAssistantBlock;
 }
+
+test("timeline recovery ignores malformed legacy body part slots", (): void => {
+	const legacyParts: TimelineBodyPart[] = [
+		{ type: "markdown", text: "hidden" },
+		undefined as unknown as TimelineBodyPart,
+		{
+			type: "summary_start",
+			runId: "run-1",
+			stepId: "summarize",
+			stepRunId: "step-run-1",
+			title: "Summary",
+			foldTitle: "Before summary"
+		},
+		undefined as unknown as TimelineBodyPart,
+		{ type: "markdown", text: "visible" }
+	];
+
+	assert.deepEqual(getVisibleAssistantMarkdownSegments(legacyParts), ["visible"]);
+});
 
 test("canonical timeline keeps request order when older assistant messages are persisted late", (): void => {
 	const stored: StoredSession = session(
@@ -1349,4 +1374,21 @@ test("canonical timeline restores v3 failed and interrupted run states", (): voi
 	assert.equal(interruptedStatus?.type, "status");
 	assert.equal(interruptedStatus?.actionId, "retry_agent_run:run-v3-interrupted");
 	assert.equal(interruptedStatus?.actionLabel, "Retry from checkpoint");
+});
+
+test("canonical timeline presents a stalled provider response as a recoverable pause", (): void => {
+	const result = buildCanonicalTimelineBlocks(session([], [
+		event("event-provider-stalled", "request-stalled", "agent.run.state", "2026-08-06T00:00:03.000Z", {
+			runId: "run-provider-stalled",
+			requestId: "request-stalled",
+			stage: "interrupted",
+			interruptedReason: "provider_response_stalled",
+			terminal: null
+		})
+	]));
+	const assistant = assistantBlock(result.blocks[0]);
+	const status = assistant.bodyParts.find((part) => part.type === "status" && part.code === "agent_run_interrupted");
+	assert.equal(status?.type, "status");
+	assert.equal(status?.title, "Model response paused");
+	assert.match(status?.type === "status" ? status.details : "", /stopped producing data/i);
 });

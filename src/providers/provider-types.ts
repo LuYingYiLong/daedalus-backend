@@ -108,7 +108,7 @@ export type ProviderReconnectEvent = {
 	status: "waiting" | "reconnecting" | "recovered" | "failed";
 	reason: ProviderReconnectReason;
 	attempt: number;
-	maxAttempts: 5 | 15;
+	maxAttempts: 2 | 5 | 15;
 	timeoutMs: number;
 	retryAt?: string | undefined;
 	autoExtended: boolean;

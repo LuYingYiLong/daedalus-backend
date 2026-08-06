@@ -203,7 +203,7 @@ function sessionRpcError(
 	fallbackMessage: string
 ): { code: string; message: string } {
 	const candidate = error as Error & { code?: string };
-	if (candidate.code === "session_storage_unavailable") {
+	if (candidate.code === "session_storage_unavailable" || candidate.code === "session_not_found") {
 		return {
 			code: candidate.code,
 			message: candidate.message
@@ -850,7 +850,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: sessionRpcError(error, "session_not_found", "Session not found")
+					error: sessionRpcError(error, "session_open_failed", "Failed to open session")
 				});
 			}
 			break;

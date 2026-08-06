@@ -22,6 +22,7 @@ export type QueueMessageInput = {
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
 	executionPolicy?: "auto" | "read_only" | undefined;
+	verificationPolicy?: "required" | "best_effort" | "skip" | undefined;
 	outputTarget?: "chat" | "workspace" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 };
@@ -54,6 +55,7 @@ function normalizeQueueInput(input: QueueMessageInput, existing?: QueuedMessage 
 		model: input.model ?? existing?.model,
 		reasoningEffort: input.reasoningEffort ?? existing?.reasoningEffort,
 		executionPolicy: input.executionPolicy ?? existing?.executionPolicy,
+		verificationPolicy: input.verificationPolicy ?? existing?.verificationPolicy,
 		outputTarget: input.outputTarget ?? existing?.outputTarget,
 		skillRefs: cloneSkillRefs(input.skillRefs ?? existing?.skillRefs)
 	};
@@ -90,6 +92,10 @@ function readMode(value: unknown): "agent" | "ask" | "plan" | "goal" | undefined
 
 function readExecutionPolicy(value: unknown): "auto" | "read_only" | undefined {
 	return value === "auto" || value === "read_only" ? value : undefined;
+}
+
+function readVerificationPolicy(value: unknown): "required" | "best_effort" | "skip" | undefined {
+	return value === "required" || value === "best_effort" || value === "skip" ? value : undefined;
 }
 
 function readOutputTarget(value: unknown): "chat" | "workspace" | undefined {
@@ -134,6 +140,7 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 		model: readString(record.model),
 		reasoningEffort: readString(record.reasoningEffort),
 		executionPolicy: readExecutionPolicy(record.executionPolicy),
+		verificationPolicy: readVerificationPolicy(record.verificationPolicy),
 		outputTarget: readOutputTarget(record.outputTarget),
 		skillRefs: readSkillRefs(record.skillRefs),
 		status: normalizeHydratedStatus(readStatus(record.status)),
@@ -171,6 +178,7 @@ export function serializeQueuedMessage(message: QueuedMessage): Record<string, u
 		model: message.model ?? null,
 		reasoningEffort: message.reasoningEffort ?? null,
 		executionPolicy: message.executionPolicy ?? null,
+		verificationPolicy: message.verificationPolicy ?? null,
 		outputTarget: message.outputTarget ?? null,
 		skillRefs: message.skillRefs ?? [],
 		status: message.status,
@@ -277,6 +285,7 @@ export function enqueueMessage(session: ClientSession, input: QueueMessageInput)
 		model: normalized.model,
 		reasoningEffort: normalized.reasoningEffort,
 		executionPolicy: normalized.executionPolicy,
+		verificationPolicy: normalized.verificationPolicy,
 		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
@@ -330,6 +339,7 @@ export function updateQueuedMessage(
 		&& existing.model === normalized.model
 		&& existing.reasoningEffort === normalized.reasoningEffort
 		&& existing.executionPolicy === normalized.executionPolicy
+		&& existing.verificationPolicy === normalized.verificationPolicy
 		&& existing.outputTarget === normalized.outputTarget
 		&& JSON.stringify(existing.skillRefs ?? []) === JSON.stringify(normalized.skillRefs ?? [])
 	) {
@@ -345,6 +355,7 @@ export function updateQueuedMessage(
 		model: normalized.model,
 		reasoningEffort: normalized.reasoningEffort,
 		executionPolicy: normalized.executionPolicy,
+		verificationPolicy: normalized.verificationPolicy,
 		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
@@ -438,6 +449,9 @@ export function createQueuedChatRequest(queueItem: QueuedMessage, requestId: str
 	}
 	if (queueItem.executionPolicy !== undefined) {
 		options.executionPolicy = queueItem.executionPolicy;
+	}
+	if (queueItem.verificationPolicy !== undefined) {
+		options.verificationPolicy = queueItem.verificationPolicy;
 	}
 	if (queueItem.outputTarget !== undefined) {
 		options.outputTarget = queueItem.outputTarget;

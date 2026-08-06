@@ -83,6 +83,19 @@ type ConfigEntry = {
 	valueExpression: string;
 };
 
+type DiagnosticsUnavailableCode = "diagnostics_unavailable" | "workspace_unavailable";
+
+/** Keeps live-editor transport gaps out of the generic tool-error path. */
+class DiagnosticsUnavailableError extends Error {
+	readonly applicabilityCode: DiagnosticsUnavailableCode;
+
+	constructor(applicabilityCode: DiagnosticsUnavailableCode, message: string) {
+		super(message);
+		this.name = "DiagnosticsUnavailableError";
+		this.applicabilityCode = applicabilityCode;
+	}
+}
+
 function jsonTextResult(value: unknown): ToolTextResult {
 	return {
 		content: [
@@ -869,6 +882,19 @@ export class GodotDiagnosticsBridge {
 					throw new Error(`Unknown godot_diagnostics tool: ${name}`);
 			}
 		} catch (error: unknown) {
+			if (error instanceof DiagnosticsUnavailableError) {
+				return jsonTextResult({
+					ok: false,
+					validationStatus: "not_applicable",
+					environmentIssue: true,
+					applicabilityCode: error.applicabilityCode,
+					notApplicableReason: error.message,
+					error: {
+						code: error.applicabilityCode,
+						message: error.message
+					}
+				});
+			}
 			return jsonTextResult({
 				ok: false,
 				error: {
@@ -1173,7 +1199,10 @@ export class GodotDiagnosticsBridge {
 			return { config, peer };
 		} catch (error: unknown) {
 			this.markStatus("lsp", config.lsp, false, error instanceof Error ? error.message : "lsp_unavailable");
-			throw new Error(`lsp_unavailable: ${error instanceof Error ? error.message : "Godot LSP is not available"}`);
+			throw new DiagnosticsUnavailableError(
+				"diagnostics_unavailable",
+				`lsp_unavailable: ${error instanceof Error ? error.message : "Godot LSP is not available"}`
+			);
 		}
 	}
 
@@ -1200,7 +1229,10 @@ export class GodotDiagnosticsBridge {
 			return { config, peer };
 		} catch (error: unknown) {
 			this.markStatus("dap", config.dap, false, error instanceof Error ? error.message : "dap_unavailable");
-			throw new Error(`dap_unavailable: ${error instanceof Error ? error.message : "Godot DAP is not available"}`);
+			throw new DiagnosticsUnavailableError(
+				"diagnostics_unavailable",
+				`dap_unavailable: ${error instanceof Error ? error.message : "Godot DAP is not available"}`
+			);
 		}
 	}
 
@@ -1272,7 +1304,7 @@ export class GodotDiagnosticsBridge {
 
 	private requireWorkspace(): WorkspaceConfig {
 		if (this.workspace === undefined) {
-			throw new Error("godot_diagnostics_unavailable: no active workspace");
+			throw new DiagnosticsUnavailableError("workspace_unavailable", "godot_diagnostics_unavailable: no active workspace");
 		}
 
 		return this.workspace;

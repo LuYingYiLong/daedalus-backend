@@ -274,7 +274,7 @@ async function pathExists(path: string): Promise<boolean> {
 
 function rowMetadata(row: Record<string, unknown> | undefined, sessionId: string): SessionMetadata {
 	if (row === undefined) {
-		throw new Error(`Session not found: ${sessionId}`);
+		throw Object.assign(new Error(`Session not found: ${sessionId}`), { code: "session_not_found" });
 	}
 	return parseSqlJson<SessionMetadata>(row.metadata_json);
 }
@@ -285,7 +285,7 @@ async function readSessionMetadata(sessionId: string, archived?: boolean): Promi
 	const archivedClause: string = archived === undefined ? "" : archived ? " AND archived_at IS NOT NULL" : " AND archived_at IS NULL";
 	const row = db.prepare(`SELECT metadata_json FROM sessions WHERE session_id = ?${archivedClause}`).get(safeSessionId) as Record<string, unknown> | undefined;
 	if (row === undefined) {
-		throw new Error(`${archived ? "Archived session" : "Session"} not found: ${safeSessionId}`);
+		throw Object.assign(new Error(`${archived ? "Archived session" : "Session"} not found: ${safeSessionId}`), { code: "session_not_found" });
 	}
 	return rowMetadata(row, safeSessionId);
 }

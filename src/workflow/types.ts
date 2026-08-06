@@ -4,6 +4,7 @@ import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
 import type { WorkflowExecutionProfileId } from "./execution-profile.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
 import type { WorkflowTargetKind, WorkflowValidationCapability } from "./tool-semantics.js";
+import type { WorkflowVerificationPolicy } from "./verification-policy.js";
 
 export type WorkflowPhaseId = string;
 
@@ -101,6 +102,7 @@ export type WorkflowPlan = {
 	revision?: number | undefined;
 	maxRevisions?: number | undefined;
 	executionProfile?: WorkflowExecutionProfileId | undefined;
+	verificationPolicy?: WorkflowVerificationPolicy | undefined;
 	semanticsVersion?: 2 | undefined;
 };
 

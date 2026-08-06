@@ -44,7 +44,12 @@ export function getWorkflowToolsForProfile(
 ): string[] {
 	if (toolGroup === "summarize") return [];
 	const tools: readonly string[] = getDefaultWorkflowToolNames(toolGroup);
-	return executionProfile === "godot"
-		? [...tools]
+	const profileTools: readonly string[] = executionProfile === "godot"
+		? tools
 		: tools.filter((toolName: string): boolean => !toolName.startsWith("mcp_godot_"));
+	// LSP is an optional live-editor diagnostic. A workflow verifier must remain
+	// runnable when the editor is closed, so only explicit diagnostic requests expose it.
+	return toolGroup === "verify"
+		? profileTools.filter((toolName: string): boolean => toolName !== "mcp_godot_lsp_get_file_diagnostics")
+		: [...profileTools];
 }

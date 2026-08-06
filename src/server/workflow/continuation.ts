@@ -76,7 +76,9 @@ export function collectWorkflowCompletionStatus(
 		return plan.phases.find((phase: WorkflowPhase): boolean => phase.id === output.phaseId)?.toolGroup === "verify";
 	});
 	if (lastWriteOutputIndex >= 0 && !hasSuccessfulVerifyAfterWrite) {
-		warnings.push("修改已完成，但最后一次写入后没有成功的验证阶段。");
+		warnings.push(plan.verificationPolicy === "skip"
+			? "验证已按本次请求的结构化策略跳过。"
+			: "修改已完成，但最后一次写入后没有成功的验证阶段。");
 	}
 
 	const uniqueWarnings: string[] = [...new Set(warnings)];
@@ -98,7 +100,7 @@ export function createFinalSummaryVerificationContext(plan: WorkflowPlan, output
 
 	return [
 		"## 最终交付的验证限制",
-		"以下验证限制来自已执行的工具结果。必须在最终总结中用自然、简洁的语言如实说明；不要声称验证已经通过，也不要把这段原文作为系统状态块复述。",
+		"以下验证限制来自已执行的工具结果或本次请求的结构化执行策略。必须在最终总结中用自然、简洁的语言如实说明；不要声称验证已经通过，也不要把这段原文作为系统状态块复述。",
 		...completionStatus.warnings.map((warning: string): string => `- ${warning}`)
 	].join("\n");
 }

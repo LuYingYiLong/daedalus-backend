@@ -31,6 +31,7 @@ export type QueuedMessage = {
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
 	executionPolicy?: "auto" | "read_only" | undefined;
+	verificationPolicy?: "required" | "best_effort" | "skip" | undefined;
 	outputTarget?: "chat" | "workspace" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 	status: QueuedMessageStatus;

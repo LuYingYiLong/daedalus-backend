@@ -92,8 +92,8 @@ function upsertAgentRunState(db: DatabaseSync, state: AgentRunState): void {
 		);
 }
 
-function excludeTerminalRunMessagesFromLlmContext(db: DatabaseSync, state: AgentRunState): void {
-	if (state.stage !== "failed" && state.stage !== "cancelled") {
+function excludeFailedRunMessagesFromLlmContext(db: DatabaseSync, state: AgentRunState): void {
+	if (state.stage !== "failed") {
 		return;
 	}
 	const rows = db.prepare(`
@@ -124,7 +124,7 @@ export async function saveAgentRunState(state: AgentRunState): Promise<void> {
 		if (persisted?.revision !== state.revision || persisted.stage !== state.stage) {
 			return;
 		}
-		excludeTerminalRunMessagesFromLlmContext(db, state);
+		excludeFailedRunMessagesFromLlmContext(db, state);
 		if (state.stage !== "awaiting_approval" && state.stage !== "awaiting_tool_budget") {
 			db.prepare("DELETE FROM agent_run_continuations WHERE run_id = ?").run(state.runId);
 		}

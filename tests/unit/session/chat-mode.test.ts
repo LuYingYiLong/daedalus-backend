@@ -43,6 +43,17 @@ test("ai.chat schema accepts ask and plan modes and rejects unknown modes", (): 
 	assert.equal(unknownResult.success, false);
 });
 
+test("ai.chat schema accepts only explicit verification policies", (): void => {
+	assert.equal(aiChatParamsSchema.safeParse({
+		message: "Implement feature",
+		options: { verificationPolicy: "skip" }
+	}).success, true);
+	assert.equal(aiChatParamsSchema.safeParse({
+		message: "Implement feature",
+		options: { verificationPolicy: "never" }
+	}).success, false);
+});
+
 test("ask mode normalizes workflow and tool budget without mutating agent mode", (): void => {
 	const askParams: AiChatParams = {
 		message: "直接帮我修一下",

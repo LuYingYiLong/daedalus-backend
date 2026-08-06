@@ -92,13 +92,14 @@ test("failed transcript-only turns persist but stay out of LLM context", async (
 	});
 });
 
-test("session history excludes failed, cancelled and interrupted run requests", async (): Promise<void> => {
+test("session history preserves cancelled and provider-stalled user intent with an unfinished-turn marker", async (): Promise<void> => {
 	const transcriptHistory = await import("../../../src/server/transcript-history.js");
 	const session: ClientSession = createClientSession(undefined);
 	session.messages = [
 		{ role: "user", content: "failed task", requestId: "request-failed" },
-		{ role: "user", content: "cancelled task", requestId: "request-cancelled" },
+		{ role: "user", content: "cancelled task", requestId: "request-cancelled", excludeFromLlmContext: true },
 		{ role: "user", content: "interrupted task", requestId: "request-interrupted" },
+		{ role: "user", content: "stalled task", requestId: "request-stalled", excludeFromLlmContext: true },
 		{ role: "user", content: "completed task", requestId: "request-completed" },
 		{ role: "assistant", content: "completed answer", requestId: "request-completed" },
 		{ role: "user", content: "current task", requestId: "request-current" }
@@ -129,6 +130,12 @@ test("session history excludes failed, cancelled and interrupted run requests", 
 	}), "interrupted", {
 		interruptedReason: "backend_restart"
 	});
+	const stalled = transitionAgentRunState(createAgentRunState({
+		sessionId: "session-history",
+		requestId: "request-stalled"
+	}), "interrupted", {
+		interruptedReason: "provider_response_stalled"
+	});
 	const completed = transitionAgentRunState(
 		transitionAgentRunState(createAgentRunState({
 			sessionId: "session-history",
@@ -142,13 +149,21 @@ test("session history excludes failed, cancelled and interrupted run requests", 
 			}
 		}
 	);
-	for (const run of [failed, cancelled, interrupted, completed]) {
+	for (const run of [failed, cancelled, interrupted, stalled, completed]) {
 		session.agentRuns.set(run.runId, run);
 	}
 
 	assert.deepEqual(
 		transcriptHistory.filterSessionLlmContextMessages(session).map((message: ChatMessage): string => message.content),
-		["completed task", "completed answer", "current task"]
+		[
+			"cancelled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
+			"stalled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
+			"completed task",
+			"completed answer",
+			"current task"
+		]
 	);
 	assert.equal(session.messages.some((message: ChatMessage): boolean => message.content === "interrupted task"), true);
 
@@ -176,7 +191,11 @@ test("session history excludes failed, cancelled and interrupted run requests", 
 	assert.deepEqual(
 		transcriptHistory.filterSessionLlmContextMessages(session).map((message: ChatMessage): string => message.content),
 		[
+			"cancelled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"interrupted task",
+			"stalled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"completed task",
 			"completed answer",
 			"current task",

@@ -11,6 +11,7 @@ import {
 	narrowLlmPlannedWriteTools
 } from "../../../src/workflow/godot-template-planner.js";
 import { createStructuredWorkflowCompletionContract } from "../../../src/workflow/completion-contract.js";
+import { applyWorkflowVerificationPolicy } from "../../../src/workflow/verification-policy.js";
 import {
 	createEmptyWorkflowPhaseToolStats,
 	didWorkflowWritePhaseExecute,
@@ -31,6 +32,31 @@ test("fixed fallback is a safe workflow and respects read-only policy", (): void
 	const fallback = planWorkflowAfterLlmPlannerFailure({ message: "Anything", mode: "agent", options: { workflow: "llm_planned" } });
 	assert.deepEqual(fallback?.phases.map((phase: WorkflowPhase): WorkflowPhase["toolGroup"] => phase.toolGroup), ["read", "write", "verify", "summarize"]);
 	assert.equal(planWorkflow({ message: "Anything", mode: "agent", options: { executionPolicy: "read_only" } }), null);
+});
+
+test("verification policy is applied structurally after Godot template planning", (): void => {
+	const target = { kind: "godot_script" as const, artifacts: ["scripts/player.gd"] };
+	const skipPlan = createGodotTemplateWorkflowPlan({
+		message: "Any prose is irrelevant to policy",
+		mode: "agent",
+		options: { verificationPolicy: "skip" }
+	}, target, { isGodotProject: true });
+	assert.equal(skipPlan?.verificationPolicy, "skip");
+	assert.equal(skipPlan?.phases.some((phase: WorkflowPhase): boolean => phase.toolGroup === "verify"), false);
+	assert.equal(skipPlan?.phases.some((phase: WorkflowPhase): boolean => phase.allowedTools.includes("mcp_godot_lsp_get_file_diagnostics")), false);
+
+	const requiredPlan = applyWorkflowVerificationPolicy({
+		id: "workflow-required",
+		title: "write then summarize",
+		phases: [
+			{ id: "write", title: "Write", toolGroup: "write", toolBudget: "project_edit", allowedTools: [], instruction: "Write" },
+			{ id: "summarize", title: "Summarize", toolGroup: "summarize", toolBudget: "simple", allowedTools: [], instruction: "Summarize" }
+		],
+		todos: [],
+		executionProfile: "godot"
+	}, { message: "Any prose", options: { verificationPolicy: "required" } });
+	assert.deepEqual(requiredPlan.phases.map((phase: WorkflowPhase): string | undefined => phase.toolGroup), ["write", "verify", "summarize"]);
+	assert.equal(requiredPlan.phases[1]?.allowedTools.includes("mcp_godot_lsp_get_file_diagnostics"), false);
 });
 
 test("workspace workflow profile overrides Godot prompt and skill defaults", (): void => {

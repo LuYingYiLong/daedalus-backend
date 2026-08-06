@@ -340,6 +340,7 @@ test("queued chat request follows the current session model and mode", (): void 
 		provider: "deepseek",
 		model: "deepseek-chat",
 		executionPolicy: "read_only",
+		verificationPolicy: "skip",
 		outputTarget: "chat",
 		additionalContext: [makeContext("ctx-a", "res://scripts/a.gd")]
 	});
@@ -355,6 +356,7 @@ test("queued chat request follows the current session model and mode", (): void 
 		stream: true,
 		queueItemId: 1,
 		executionPolicy: "read_only",
+		verificationPolicy: "skip",
 		outputTarget: "chat"
 	});
 });

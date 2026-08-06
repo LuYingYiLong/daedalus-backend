@@ -7,7 +7,7 @@ import { isCancellationError, throwIfAborted } from "../request-lifecycle.js";
 import { markRemainingWorkflowTodos } from "../../workflow/runner.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan } from "../../workflow/types.js";
 import { canWriteToWorkspace } from "../../workflow/router.js";
-import { WorkflowExecutionError } from "./workflow-error.js";
+import { hasProviderResponseStalledError, WorkflowExecutionError } from "./workflow-error.js";
 import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./events.js";
 import { continueWorkflowExecution } from "./continuation.js";
 
@@ -60,6 +60,11 @@ export async function startWorkflowExecution(
 		const latestPlan: WorkflowPlan = error instanceof WorkflowExecutionError ? error.plan : plan;
 		const latestPhaseOutputs: WorkflowPhaseOutput[] = error instanceof WorkflowExecutionError ? error.phaseOutputs : [];
 		if (isCancellationError(error instanceof WorkflowExecutionError ? error.originalError : error, abortSignal)) {
+			const pausedPlan: WorkflowPlan = markRemainingWorkflowTodos(latestPlan, "paused");
+			sendWorkflowTodoSnapshot(socket, requestId, session, pausedPlan, requestId, latestPhaseOutputs);
+			throw error;
+		}
+		if (hasProviderResponseStalledError(error)) {
 			const pausedPlan: WorkflowPlan = markRemainingWorkflowTodos(latestPlan, "paused");
 			sendWorkflowTodoSnapshot(socket, requestId, session, pausedPlan, requestId, latestPhaseOutputs);
 			throw error;

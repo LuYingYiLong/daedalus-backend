@@ -58,7 +58,7 @@ export type TimelineProviderReconnectPart = {
 	status: "waiting" | "reconnecting" | "recovered" | "failed";
 	reason: "transport" | "idle_timeout" | "gateway" | "rate_limit" | "server";
 	attempt: number;
-	maxAttempts: 5 | 15;
+	maxAttempts: 2 | 5 | 15;
 	timeoutMs: number;
 	retryAt?: string | undefined;
 	autoExtended: boolean;
@@ -176,13 +176,13 @@ export type TimelineBodyPart =
  */
 export function getVisibleAssistantMarkdownSegments(parts: readonly TimelineBodyPart[]): string[] {
 	const summaryStartIndex: number = parts.findIndex(
-		(part: TimelineBodyPart): boolean => part.type === "summary_start"
+		(part: TimelineBodyPart): boolean => isTimelineBodyPart(part) && part.type === "summary_start"
 	);
 	const visibleParts: readonly TimelineBodyPart[] = summaryStartIndex < 0
 		? parts
 		: parts.slice(summaryStartIndex + 1);
 	return visibleParts
-		.filter((part): part is TimelineMarkdownPart => part.type === "markdown")
+		.filter((part): part is TimelineMarkdownPart => isTimelineBodyPart(part) && part.type === "markdown")
 		.map((part: TimelineMarkdownPart): string => part.text)
 		.filter((text: string): boolean => text.length > 0);
 }
@@ -204,6 +204,38 @@ type RequestEvents = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Timeline parts are reconstructed from append-only historical events. A
+ * malformed legacy event must never make an otherwise valid session
+ * impossible to open, so tolerate an invalid slot and omit it from the
+ * derived UI projection. Persisted events themselves remain untouched.
+ */
+function isTimelineBodyPart(value: unknown): value is TimelineBodyPart {
+	return isRecord(value) && typeof value.type === "string";
+}
+
+function getTimelineBodyPartAt(parts: readonly TimelineBodyPart[], index: number): TimelineBodyPart | undefined {
+	const candidate: unknown = parts[index];
+	return isTimelineBodyPart(candidate) ? candidate : undefined;
+}
+
+function removeInvalidTimelineBodyParts(parts: TimelineBodyPart[]): void {
+	let destinationIndex: number = 0;
+	for (let sourceIndex: number = 0; sourceIndex < parts.length; sourceIndex += 1) {
+		const part: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, sourceIndex);
+		if (part === undefined) {
+			continue;
+		}
+		if (destinationIndex !== sourceIndex) {
+			parts[destinationIndex] = part;
+		}
+		destinationIndex += 1;
+	}
+	if (destinationIndex !== parts.length) {
+		parts.length = destinationIndex;
+	}
 }
 
 function asString(value: unknown): string {
@@ -321,7 +353,7 @@ function appendMarkdownPart(parts: TimelineBodyPart[], text: string): void {
 		return;
 	}
 
-	const lastPart: TimelineBodyPart | undefined = parts[parts.length - 1];
+	const lastPart: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, parts.length - 1);
 	if (lastPart?.type === "markdown") {
 		lastPart.text += text;
 		return;
@@ -344,15 +376,15 @@ function appendFinalMarkdownPart(parts: TimelineBodyPart[], text: string): void 
 	}
 
 	if (lastMarkdownIndex >= 0) {
-		const lastMarkdownPart: TimelineBodyPart = parts[lastMarkdownIndex]!;
-		if (lastMarkdownPart.type === "markdown" && shouldReplaceMarkdownWithFinalText(lastMarkdownPart.text, text)) {
+		const lastMarkdownPart: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, lastMarkdownIndex);
+		if (lastMarkdownPart?.type === "markdown" && shouldReplaceMarkdownWithFinalText(lastMarkdownPart.text, text)) {
 			lastMarkdownPart.text = text;
 			return;
 		}
 	}
 
 	const existingMarkdown: string = parts
-		.filter((part): part is TimelineMarkdownPart => part.type === "markdown")
+		.filter((part): part is TimelineMarkdownPart => isTimelineBodyPart(part) && part.type === "markdown")
 		.map((part: TimelineMarkdownPart): string => part.text)
 		.join("");
 	if (existingMarkdown === text || existingMarkdown.endsWith(text)) {
@@ -409,7 +441,7 @@ function getActivityMetadata(data: Record<string, unknown>): {
 }
 
 function appendThinkingPart(parts: TimelineBodyPart[], text: string, done: boolean, metadata: ReturnType<typeof getActivityMetadata> = {}): void {
-	const lastPart: TimelineBodyPart | undefined = parts.at(-1);
+	const lastPart: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, parts.length - 1);
 	if (text.length > 0 && lastPart?.type === "thinking" && !lastPart.done) {
 		lastPart.text += text;
 		Object.assign(lastPart, metadata);
@@ -418,8 +450,8 @@ function appendThinkingPart(parts: TimelineBodyPart[], text: string, done: boole
 
 	if (done) {
 		for (let index: number = parts.length - 1; index >= 0; index -= 1) {
-			const part: TimelineBodyPart = parts[index]!;
-			if (part.type !== "thinking" || part.done) {
+			const part: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, index);
+			if (part?.type !== "thinking" || part.done) {
 				continue;
 			}
 
@@ -444,8 +476,8 @@ function truncateTextByCodePoints(text: string, count: number): { text: string; 
 function discardAttemptText(parts: TimelineBodyPart[], type: "markdown" | "thinking", count: number): void {
 	let remaining: number = Math.max(0, Math.trunc(count));
 	for (let index: number = parts.length - 1; index >= 0 && remaining > 0; index -= 1) {
-		const part: TimelineBodyPart = parts[index]!;
-		if (part.type !== type) continue;
+		const part: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, index);
+		if (part?.type !== type) continue;
 		const truncated = truncateTextByCodePoints(part.text, remaining);
 		part.text = truncated.text;
 		remaining -= truncated.removed;
@@ -458,7 +490,7 @@ function appendProviderReconnectPart(parts: TimelineBodyPart[], eventData: Recor
 	const revision: number = asNumber(eventData.revision);
 	if (reconnectId.length === 0 || revision <= 0) return;
 	const existingIndex: number = parts.findIndex((part: TimelineBodyPart): boolean => (
-		part.type === "provider_reconnect" && part.reconnectId === reconnectId
+		isTimelineBodyPart(part) && part.type === "provider_reconnect" && part.reconnectId === reconnectId
 	));
 	const existing: TimelineProviderReconnectPart | undefined = existingIndex >= 0
 		? parts[existingIndex] as TimelineProviderReconnectPart
@@ -478,8 +510,15 @@ function appendProviderReconnectPart(parts: TimelineBodyPart[], eventData: Recor
 		model: asString(eventData.model),
 		status: statusValue === "reconnecting" || statusValue === "recovered" || statusValue === "failed" ? statusValue : "waiting",
 		reason: reasonValue === "idle_timeout" || reasonValue === "gateway" || reasonValue === "rate_limit" || reasonValue === "server" ? reasonValue : "transport",
-		attempt: Math.max(0, Math.trunc(asNumber(eventData.attempt))),
-		maxAttempts: maxAttemptsValue === 15 ? 15 : 5,
+		attempt: Math.min(
+			maxAttemptsValue === 15 ? 15 : maxAttemptsValue === 2 ? 2 : 5,
+			Math.max(0, Math.trunc(asNumber(eventData.attempt)))
+		),
+		maxAttempts: maxAttemptsValue === 15
+			? 15
+			: maxAttemptsValue === 2
+				? 2
+				: 5,
 		timeoutMs: Math.max(0, Math.trunc(asNumber(eventData.timeoutMs))),
 		autoExtended: eventData.autoExtended === true,
 		...(asString(eventData.retryAt).length === 0 ? {} : { retryAt: asString(eventData.retryAt) })
@@ -551,7 +590,11 @@ function mergeToolActivityMetadata(part: TimelineToolPart, metadata: ReturnType<
 
 function appendToolPart(parts: TimelineBodyPart[], eventData: Record<string, unknown>, requestId: string): void {
 	const toolCallKey: string = getToolCallKey(eventData, requestId);
-	for (const part of parts) {
+	for (const candidate of parts) {
+		if (!isTimelineBodyPart(candidate)) {
+			continue;
+		}
+		const part: TimelineBodyPart = candidate;
 		if (part.type === "tool" && toolPartMatchesEvent(part, toolCallKey, eventData)) {
 			const eventRecordId: string = asString(eventData._eventRecordId);
 			if (eventRecordId.length > 0 && part.events.some((event: Record<string, unknown>): boolean => event._eventRecordId === eventRecordId)) {
@@ -633,8 +676,8 @@ function appendImageGenerationPart(parts: TimelineBodyPart[], eventData: Record<
 	}
 
 	for (let index: number = parts.length - 1; index >= 0; index -= 1) {
-		const part: TimelineBodyPart = parts[index]!;
-		if (part.type === "image_generation" && part.toolCallId === toolCallId) {
+		const part: TimelineBodyPart | undefined = getTimelineBodyPartAt(parts, index);
+		if (part?.type === "image_generation" && part.toolCallId === toolCallId) {
 			if (nextPart.prompt.length === 0) {
 				nextPart.prompt = part.prompt;
 			}
@@ -653,7 +696,7 @@ function appendSummaryStartPart(parts: TimelineBodyPart[], eventData: Record<str
 	if (runId.length === 0 || stepRunId.length === 0) {
 		return;
 	}
-	if (parts.some((part: TimelineBodyPart): boolean => part.type === "summary_start" && part.stepRunId === stepRunId)) {
+	if (parts.some((part: TimelineBodyPart): boolean => isTimelineBodyPart(part) && part.type === "summary_start" && part.stepRunId === stepRunId)) {
 		return;
 	}
 
@@ -682,7 +725,7 @@ function appendCompressionPart(parts: TimelineBodyPart[], eventData: Record<stri
 		reason: asString(eventData.reason)
 	};
 	const existingIndex: number = parts.findIndex((part: TimelineBodyPart): boolean => (
-		part.type === "compression" && part.compressionId === compressionId
+		isTimelineBodyPart(part) && part.type === "compression" && part.compressionId === compressionId
 	));
 	if (existingIndex < 0) {
 		parts.push(nextPart);
@@ -705,7 +748,7 @@ function appendStatusPart(parts: TimelineBodyPart[], statusData: Partial<Timelin
 		recommendedReplies: statusData.recommendedReplies
 	};
 	if (nextPart.status === "error" && nextPart.details.length > 0 && parts.some((part: TimelineBodyPart): boolean => {
-		return part.type === "status" && part.status === "error" && part.details === nextPart.details;
+		return isTimelineBodyPart(part) && part.type === "status" && part.status === "error" && part.details === nextPart.details;
 	})) {
 		return;
 	}
@@ -714,7 +757,11 @@ function appendStatusPart(parts: TimelineBodyPart[], statusData: Partial<Timelin
 }
 
 function markRunningImageGenerationFailed(parts: TimelineBodyPart[], error: string): void {
-	for (const part of parts) {
+	for (const candidate of parts) {
+		if (!isTimelineBodyPart(candidate)) {
+			continue;
+		}
+		const part: TimelineBodyPart = candidate;
 		if (part.type === "image_generation" && part.status === "running") {
 			part.status = "failed";
 			part.error = error;
@@ -782,7 +829,7 @@ function createPlanPart(eventData: Record<string, unknown>): TimelinePlanPart | 
 
 function replaceOrAppendPlanPart(parts: TimelineBodyPart[], planPart: TimelinePlanPart): void {
 	const existingIndex: number = parts.findIndex((part: TimelineBodyPart): boolean => {
-		return part.type === "plan" && part.planId === planPart.planId;
+		return isTimelineBodyPart(part) && part.type === "plan" && part.planId === planPart.planId;
 	});
 
 	if (existingIndex < 0) {
@@ -1081,11 +1128,15 @@ function buildAssistantBodyParts(
 				const reason: string = asString(terminal.message) || "The request was cancelled.";
 				markRunningImageGenerationFailed(parts, reason);
 			} else if (stage === "interrupted") {
-				const reason: string = "The backend stopped before this run reached a terminal state.";
+				const interruptedReason: string = asString(eventData.interruptedReason);
+				const providerResponseStalled: boolean = interruptedReason === "provider_response_stalled";
+				const reason: string = providerResponseStalled
+					? "The model provider stopped producing data before the response completed."
+					: "The backend stopped before this run reached a terminal state.";
 				markRunningImageGenerationFailed(parts, reason);
 				appendStatusPart(parts, {
 					status: "warning",
-					title: "Run interrupted",
+					title: providerResponseStalled ? "Model response paused" : "Run interrupted",
 					details: `${reason} Retry it from its safe checkpoint.`,
 					code: "agent_run_interrupted",
 					actionLabel: "Retry from checkpoint",
@@ -1126,6 +1177,7 @@ function buildAssistantBodyParts(
 		}
 	}
 
+	removeInvalidTimelineBodyParts(parts);
 	return parts;
 }
 
@@ -1449,7 +1501,11 @@ function createRenderHints(block: TimelineBlock): TimelineRenderHints {
 
 	let contentChars: number = block.content.length;
 	let heavyPartCount: number = 0;
-	for (const part of block.bodyParts) {
+	for (const candidate of block.bodyParts) {
+		if (!isTimelineBodyPart(candidate)) {
+			continue;
+		}
+		const part: TimelineBodyPart = candidate;
 		if (part.type === "markdown" || part.type === "thinking") {
 			contentChars += part.text.length;
 		}

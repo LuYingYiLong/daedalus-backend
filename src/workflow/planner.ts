@@ -5,6 +5,7 @@ import type { WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } f
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getExecutionPolicy } from "./router.js";
 import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowExecutionProfileId } from "./execution-profile.js";
+import { applyWorkflowVerificationPolicy } from "./verification-policy.js";
 
 type FixedWorkflowPhaseId = "inspect" | "implement" | "review" | "verify" | "summarize";
 
@@ -180,7 +181,7 @@ export function planWorkflow(params: AiChatParams, executionProfile: WorkflowExe
 		return null;
 	}
 	const title: string = createWorkflowTitle(params.message);
-	return createPlan(title, ["inspect", "implement", "verify", "summarize"], executionProfile);
+	return applyWorkflowVerificationPolicy(createPlan(title, ["inspect", "implement", "verify", "summarize"], executionProfile), params);
 }
 
 export function planWorkflowAfterLlmPlannerFailure(
@@ -188,5 +189,5 @@ export function planWorkflowAfterLlmPlannerFailure(
 	executionProfile: WorkflowExecutionProfileId = "godot"
 ): WorkflowPlan | null {
 	if (params.mode === "ask" || params.mode === "plan" || getExecutionPolicy(params) === "read_only") return null;
-	return createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"], executionProfile);
+	return applyWorkflowVerificationPolicy(createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"], executionProfile), params);
 }

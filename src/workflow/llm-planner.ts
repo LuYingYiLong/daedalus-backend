@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowExecutionProfileId } from "./execution-profile.js";
+import { applyWorkflowVerificationPolicy, getWorkflowVerificationPolicy, type WorkflowVerificationPolicy } from "./verification-policy.js";
 
 const MAX_LLM_WORKFLOW_STEPS: number = 8;
 const MAX_LLM_WORKFLOW_REVISIONS: number = 3;
@@ -69,11 +70,11 @@ export async function createLlmWorkflowPlan(
 		createPlannerParams(createInitialPlanMessage(params.message, planningContext)),
 		options,
 		limitPlanningHistory(history),
-		createPlannerSystemPrompt(executionProfile),
+		createPlannerSystemPrompt(executionProfile, getWorkflowVerificationPolicy(params)),
 		abortSignal
 	);
 	const rawPlan: LlmPlan = parseLlmPlan(text);
-	return createWorkflowPlanFromLlmPlan(rawPlan, params.message, executionProfile);
+	return createWorkflowPlanFromLlmPlan(rawPlan, params, executionProfile);
 }
 
 export async function reviseLlmWorkflowPlan(
@@ -101,11 +102,11 @@ export async function reviseLlmWorkflowPlan(
 		createPlannerParams(createRevisionMessage(plan, completedPhaseIndex, originalParams.message, phaseOutputs, planningContext)),
 		options,
 		limitPlanningHistory(history),
-		createPlannerSystemPrompt(executionProfile),
+		createPlannerSystemPrompt(executionProfile, getWorkflowVerificationPolicy(originalParams)),
 		abortSignal
 	);
 	const rawPlan: LlmPlan = parseLlmPlan(text);
-	return mergeRevisedPendingSteps(plan, completedPhaseIndex + 1, rawPlan, executionProfile);
+	return mergeRevisedPendingSteps(plan, completedPhaseIndex + 1, rawPlan, originalParams, executionProfile);
 }
 
 function createPlannerParams(message: string): AiChatParams {
@@ -120,25 +121,26 @@ function createPlannerParams(message: string): AiChatParams {
 	};
 }
 
-function createPlannerSystemPrompt(executionProfile: WorkflowExecutionProfileId): string {
+function createPlannerSystemPrompt(executionProfile: WorkflowExecutionProfileId, verificationPolicy: WorkflowVerificationPolicy): string {
 	if (executionProfile === "workspace") {
-		return createWorkspacePlannerSystemPrompt();
+		return createWorkspacePlannerSystemPrompt(verificationPolicy);
 	}
-	return createGodotPlannerSystemPrompt();
+	return createGodotPlannerSystemPrompt(verificationPolicy);
 }
 
-function createWorkspacePlannerSystemPrompt(): string {
+function createWorkspacePlannerSystemPrompt(verificationPolicy: WorkflowVerificationPolicy): string {
 	return [
 		"You are a workflow planner. Return one JSON object only; do not call tools or write explanatory prose.",
 		"Schema: { title?: string, steps: [{ id: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[], completionTargets?: { sourceFolderId?: string, artifacts?: [{ path: string, targetKind: 'workspace_file'|'godot_script'|'godot_scene' }], projectSettings?: string[] } }] }.",
 		"Use read only for evidence gathering, write only for approval-gated workspace changes, verify only for non-mutating checks, and summarize for the final user-facing delivery.",
 		"Plan concrete, minimal steps. Complex mutations normally use read, write, verify, summarize. The final step must be summarize. Do not name tools; the server selects the safe tool set.",
 		"For a write step, completionTargets is optional and may contain only exact workspace-relative paths or project setting keys. When a target is present in a multi-source workspace, include its sourceFolderId. Do not derive targets from prose, descriptions, or expected behavior.",
-		"This is a general workspace. Do not assume Godot, scenes, GDScript, editor state, or Godot-specific validation."
+		"This is a general workspace. Do not assume Godot, scenes, GDScript, editor state, or Godot-specific validation.",
+		createPlannerVerificationPolicyInstruction(verificationPolicy)
 	].join("\\n");
 }
 
-function createGodotPlannerSystemPrompt(): string {
+function createGodotPlannerSystemPrompt(verificationPolicy: WorkflowVerificationPolicy): string {
 	return [
 		"你是 Godot Daedalus 的任务调度器，只负责输出 JSON 计划，不调用工具，不写解释文本。",
 		"输出必须是一个 JSON object，格式为：",
@@ -160,8 +162,19 @@ function createGodotPlannerSystemPrompt(): string {
 		"- 如果用户询问 Godot 编辑器设置、主题、字体、最近项目、当前打开场景/脚本或 .godot/editor 状态，read 步骤应收集编辑器配置摘要；除非用户明确要求原始路径/原文，否则保持脱敏读取。",
 		"- 修改 GDScript 的任务应包含 verify 步骤；LSP diagnostics 仅在可用时作为辅助检查，不是强制前置条件，Godot check-only 或其它可用验证足以继续流程。运行时报错排查应优先尝试 DAP last error / stack trace，失败后再回退项目日志。",
 		"- 修订计划时不能删除未解决 failedChecks，除非后续 verify/reverify 已证明修复完成。",
-		"- 不要输出 tool 名称，后端会根据 toolGroup 决定安全工具集合。"
+		"- 不要输出 tool 名称，后端会根据 toolGroup 决定安全工具集合。",
+		createPlannerVerificationPolicyInstruction(verificationPolicy)
 	].join("\n");
+}
+
+function createPlannerVerificationPolicyInstruction(verificationPolicy: WorkflowVerificationPolicy): string {
+	if (verificationPolicy === "skip") {
+		return "The structured verification policy is skip. Do not emit verify steps; the final delivery must state that verification was intentionally skipped.";
+	}
+	if (verificationPolicy === "required") {
+		return "The structured verification policy is required. Any plan with writes must include a non-mutating verify step after its last write.";
+	}
+	return "The structured verification policy is best_effort. Include applicable non-mutating checks when available; unavailable diagnostics are warnings, not a reason to write a repair.";
 }
 
 function createInitialPlanMessage(userMessage: string, planningContext: string): string {
@@ -219,7 +232,7 @@ function parseJsonObject(text: string): unknown {
 
 function createWorkflowPlanFromLlmPlan(
 	rawPlan: LlmPlan,
-	userMessage: string,
+	params: AiChatParams,
 	executionProfile: WorkflowExecutionProfileId
 ): WorkflowPlan | null {
 	const phases: WorkflowPhase[] = createPhasesFromSteps(rawPlan.steps, executionProfile);
@@ -227,9 +240,9 @@ function createWorkflowPlanFromLlmPlan(
 		return null;
 	}
 
-	return {
+	return applyWorkflowVerificationPolicy({
 		id: createWorkflowId(),
-		title: rawPlan.title ?? createWorkflowTitle(userMessage),
+		title: rawPlan.title ?? createWorkflowTitle(params.message),
 		phases,
 		todos: createTodos(phases),
 		source: "llm",
@@ -237,7 +250,7 @@ function createWorkflowPlanFromLlmPlan(
 		maxRevisions: MAX_LLM_WORKFLOW_REVISIONS,
 		executionProfile,
 		semanticsVersion: 2
-	};
+	}, params);
 }
 
 function createPhasesFromSteps(steps: LlmPlanStep[], executionProfile: WorkflowExecutionProfileId): WorkflowPhase[] {
@@ -325,6 +338,7 @@ function mergeRevisedPendingSteps(
 	plan: WorkflowPlan,
 	firstPendingIndex: number,
 	rawPlan: LlmPlan,
+	params: AiChatParams,
 	executionProfile: WorkflowExecutionProfileId
 ): WorkflowPlan {
 	const completedPhases: WorkflowPhase[] = plan.phases.slice(0, firstPendingIndex);
@@ -349,7 +363,7 @@ function mergeRevisedPendingSteps(
 	const completedTodos: WorkflowTodoItem[] = plan.todos.filter((todo: WorkflowTodoItem): boolean => completedPhaseIds.has(todo.phaseId));
 	const revisedPendingPhaseIds: Set<string> = new Set(revisedPendingPhases.map((phase: WorkflowPhase): string => phase.id));
 
-	return {
+	return applyWorkflowVerificationPolicy({
 		...plan,
 		title: plan.title,
 		phases,
@@ -360,7 +374,7 @@ function mergeRevisedPendingSteps(
 			): boolean => revisedPendingPhaseIds.has(todo.phaseId))
 		],
 		revision: (plan.revision ?? 0) + 1
-	};
+	}, params);
 }
 
 function doesStepRepeatCompletedPhase(step: LlmPlanStep, index: number, completedPhaseIds: Set<string>): boolean {

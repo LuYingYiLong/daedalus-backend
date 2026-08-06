@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyProviderError, createProviderStatusEvent, isRetryableProviderTransportError } from "../../../src/providers/provider-error.js";
+import { ProviderResponseStalledError } from "../../../src/providers/provider-resilience.js";
 
 test("provider quota errors are classified by status and message", (): void => {
 	assert.equal(classifyProviderError({ status: 402, message: "Payment Required" }).code, "provider_quota_exhausted");
@@ -40,4 +41,15 @@ test("interrupted provider status event names the connection failure", (): void 
 	assert.equal(event.status, "error");
 	assert.equal(event.code, "provider_connection_interrupted");
 	assert.equal(event.title, "Model Connection Interrupted");
+});
+
+test("silent provider streams are recoverable pauses, not network failures", (): void => {
+	const error = new ProviderResponseStalledError(new Error("stream silent"));
+	const result = classifyProviderError(error);
+
+	assert.equal(result.code, "provider_response_stalled");
+	assert.match(result.message, /stopped producing data/i);
+	const event = createProviderStatusEvent(error);
+	assert.equal(event.status, "warning");
+	assert.equal(event.title, "Model Response Paused");
 });

@@ -166,6 +166,23 @@ test("scheduler stops when auto repair repeats the same failure without progress
 	}
 });
 
+test("scheduler never creates a write repair for a read-stage failure", (): void => {
+	const phase = createPhase("inspect", "read");
+	const command = scheduleWorkflowPhaseOutcome(
+		createState([phase]),
+		phase,
+		createOutcome(phase, "needs_fix"),
+		2
+	);
+
+	assert.equal(command.type, "failed");
+	if (command.type === "failed") {
+		assert.equal(command.outcome.status, "blocked");
+		assert.match(command.outcome.summary, /不能通过自动写入修复/);
+		assert.equal(command.state.plan.phases.some((item: WorkflowPhase): boolean => item.repairOf === phase.id), false);
+	}
+});
+
 test("scheduler permits a repeated verification failure after a real file mutation", (): void => {
 	const writePhase: WorkflowPhase = {
 		...createPhase("implement", "write"),

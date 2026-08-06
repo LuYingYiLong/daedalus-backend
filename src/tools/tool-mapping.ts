@@ -18,6 +18,7 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 	"mcp_workspace_list_files": { serverId: "workspace", toolName: "list_files" },
 	"mcp_workspace_list_source_folders": { serverId: "workspace", toolName: "list_source_folders" },
 	"mcp_workspace_get_source_context": { serverId: "workspace", toolName: "get_source_context" },
+	"mcp_workspace_get_git_history": { serverId: "workspace", toolName: "get_git_history" },
 	"mcp_workspace_read_text_file": { serverId: "workspace", toolName: "read_text_file" },
 	"mcp_workspace_search_text": { serverId: "workspace", toolName: "search_text" },
 	"mcp_workspace_propose_create_text_file": { serverId: "workspace", toolName: "propose_create_text_file" },

@@ -18,6 +18,7 @@ export type TerminalExecutionMode = "wait" | "job";
 
 export type PresetRunInput = {
 	presetName: string;
+	sourceFolderId?: string | undefined;
 	workingDirectory?: string | undefined;
 	resourcePath?: string | undefined;
 	executionMode?: TerminalExecutionMode | undefined;
@@ -30,6 +31,7 @@ export type TerminalSandboxMode = "os-sandbox" | "approved-unsandboxed" | "full-
 
 export type CommandRunInput = {
 	commandLine: string;
+	sourceFolderId?: string | undefined;
 	cwd?: string | undefined;
 	env?: Record<string, string> | undefined;
 	executionMode?: TerminalExecutionMode | undefined;

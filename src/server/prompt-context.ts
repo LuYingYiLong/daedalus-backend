@@ -340,6 +340,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 
 		if (session.activeWorkspace !== undefined && session.activeWorkspace.sourceFolders.length > 1) {
 			sections.push("- Multi-source rules: omit sourceFolderId for list_files/search_text to inspect all source folders; include sourceFolderId for writes, terminal commands, Godot/editor operations, and any operation targeting one source.");
+			sections.push("- For terminal commands in a multi-source workspace, use the exact sourceFolderId from mcp_workspace_list_source_folders and keep cwd inside that source. If a terminal call returns source_required, inspect source folders and retry the same command with sourceFolderId; do not stop the request or put another source's absolute path into git -C.");
 			sections.push("- read_text_file without sourceFolderId is allowed only when the relative path exists in exactly one source folder; multiple matches return structured ambiguous_source and must not be guessed.");
 			sections.push("- scope all is read/list/search only. Never use it for create, overwrite, replace, delete, terminal, Godot, or workflow writes.");
 			sections.push("- Treat sourceFolderId plus relativePath as the complete file identity. Never match evidence, approvals, diffs, or repair targets by relativePath alone.");

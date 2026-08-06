@@ -4,6 +4,8 @@ import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointTypeForModel } from "../providers/provider-registry.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 import type { PendingAiContinuation } from "./pending-continuation.js";
+import type { ExecutionControlContext } from "../tools/execution-control.js";
+import type { ChatCompletionContext } from "../tools/chat-completion-control.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { cloneLightweightActionState, type LightweightActionState } from "../workflow/lightweight-action.js";
 import type { WorkflowRunState } from "../workflow/types.js";
@@ -27,6 +29,8 @@ export type PersistedPendingAiContinuation = {
 	lightweightActionState?: LightweightActionState | undefined;
 	agentRunState?: WorkflowRunState | undefined;
 	workflowState?: WorkflowRunState | undefined;
+	executionControl?: ExecutionControlContext | undefined;
+	chatCompletion?: ChatCompletionContext | undefined;
 };
 
 export type PersistedApprovalRequestedData = {
@@ -108,6 +112,12 @@ export function createRuntimePendingContinuation(
 	if (persistedRunState !== undefined) {
 		continuation.agentRunState = persistedRunState;
 		continuation.workflowState = persistedRunState;
+	}
+	if (isExecutionControlContext(persisted.executionControl)) {
+		continuation.executionControl = { ...persisted.executionControl };
+	}
+	if (isChatCompletionContext(persisted.chatCompletion)) {
+		continuation.chatCompletion = { ...persisted.chatCompletion };
 	}
 
 	return continuation;
@@ -246,6 +256,12 @@ function createPersistedPendingContinuation(continuation: PendingAiContinuation)
 			originalParams: sanitizeAiChatParamsForPersistence(runState.originalParams)
 		};
 	}
+	if (continuation.executionControl !== undefined) {
+		persisted.executionControl = { ...continuation.executionControl };
+	}
+	if (continuation.chatCompletion !== undefined) {
+		persisted.chatCompletion = { ...continuation.chatCompletion };
+	}
 
 	return persisted;
 }
@@ -315,6 +331,19 @@ function isPersistedContinuation(value: unknown): value is PersistedPendingAiCon
 		&& typeof value.requestId === "string"
 		&& typeof value.userCreatedAt === "string"
 		&& typeof value.stream === "boolean";
+}
+
+function isExecutionControlContext(value: unknown): value is ExecutionControlContext {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return (value.lane === "read" || value.lane === "probe" || value.lane === "lightweight")
+		&& typeof value.allowMutationEscalation === "boolean"
+		&& typeof value.requireDecision === "boolean";
+}
+
+function isChatCompletionContext(value: unknown): value is ChatCompletionContext {
+	return isRecord(value) && typeof value.requireSubmission === "boolean";
 }
 
 function isPendingApproval(value: unknown): value is PendingApproval {

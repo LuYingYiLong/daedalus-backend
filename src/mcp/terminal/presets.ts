@@ -68,6 +68,10 @@ const WORKSPACE_PRESET_NAMES: ReadonlySet<string> = new Set([
 	"git.init"
 ]);
 
+export function presetRequiresWorkspaceSource(presetName: string): boolean {
+	return WORKSPACE_PRESET_NAMES.has(presetName) || presetName.startsWith("godot.");
+}
+
 export const COMMAND_PRESETS: CommandPreset[] = [
 	{
 		name: "backend.typecheck",

@@ -19,6 +19,11 @@ import {
 	ExecutionDecisionSignal,
 	parseExecutionDecision
 } from "./execution-control.js";
+import {
+	CHAT_COMPLETION_CONTROL_TOOL_NAME,
+	ChatAnswerSignal,
+	parseChatAnswer
+} from "./chat-completion-control.js";
 import type { ProviderReconnectEvent } from "../providers/provider-types.js";
 import type { ToolApplicabilityCode } from "./tool-applicability.js";
 import { WorkspaceSourceResolutionError } from "../workspace/source-context.js";
@@ -510,17 +515,36 @@ export async function dispatchToolCalls(
 	toolContext?: ToolExecutionContext | undefined,
 	abortSignal?: AbortSignal | undefined
 ): Promise<DispatchedToolResult[]> {
-	const controlCalls: ChatCompletionMessageToolCall[] = toolCalls.filter((
+	const executionControlCalls: ChatCompletionMessageToolCall[] = toolCalls.filter((
 		toolCall: ChatCompletionMessageToolCall
 	): boolean => toolCall.type === "function" && toolCall.function.name === EXECUTION_CONTROL_TOOL_NAME);
-	if (controlCalls.length > 0) {
-		if (controlCalls.length !== 1 || toolCalls.length !== 1) {
-			throw new Error("Execution control cannot be mixed with workspace tool calls in one assistant batch.");
+	const chatCompletionCalls: ChatCompletionMessageToolCall[] = toolCalls.filter((
+		toolCall: ChatCompletionMessageToolCall
+	): boolean => toolCall.type === "function" && toolCall.function.name === CHAT_COMPLETION_CONTROL_TOOL_NAME);
+	if (executionControlCalls.length > 0 || chatCompletionCalls.length > 0) {
+		if (toolCalls.length !== 1 || executionControlCalls.length + chatCompletionCalls.length !== 1) {
+			throw new Error("Internal control calls cannot be mixed with workspace tool calls in one assistant batch.");
+		}
+		if (chatCompletionCalls.length === 1) {
+			if (toolContext?.chatCompletion === undefined || toolContext.chatCompletionAvailable === false) {
+				throw new Error("Chat completion control is not available in the current agent lane.");
+			}
+			const chatCompletionCall: ChatCompletionMessageToolCall = chatCompletionCalls[0] as ChatCompletionMessageToolCall;
+			if (chatCompletionCall.type !== "function") {
+				throw new Error("Chat completion control must be a function tool call.");
+			}
+			let rawAnswer: unknown;
+			try {
+				rawAnswer = JSON.parse(chatCompletionCall.function.arguments);
+			} catch {
+				throw new Error("Chat completion control arguments must be valid JSON.");
+			}
+			throw new ChatAnswerSignal(parseChatAnswer(rawAnswer));
 		}
 		if (toolContext?.executionControl === undefined || toolContext.executionControlAvailable === false) {
 			throw new Error("Execution control is not available in the current agent lane.");
 		}
-		const controlCall: ChatCompletionMessageToolCall = controlCalls[0] as ChatCompletionMessageToolCall;
+		const controlCall: ChatCompletionMessageToolCall = executionControlCalls[0] as ChatCompletionMessageToolCall;
 		if (controlCall.type !== "function") {
 			throw new Error("Execution control must be a function tool call.");
 		}

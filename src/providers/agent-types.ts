@@ -3,6 +3,7 @@ import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { AnthropicMessageParam } from "./anthropic-compatible-client.js";
 import type { ExecutionDecision } from "../workflow/agent-run-state.js";
 import type { ProviderToolImageReference } from "./tool-image-reference.js";
+import type { ChatAnswer } from "../tools/chat-completion-control.js";
 
 export type ChatCompletionsAgentContinuation = {
 	kind?: "chat_completions";
@@ -44,6 +45,7 @@ export type ProviderAgentResult =
 	| { status: "completed"; text: string }
 	| { status: "protocol_violation"; text: string; reason: string }
 	| { status: "execution_decision"; decision: ExecutionDecision }
+	| { status: "chat_answer"; answer: ChatAnswer }
 	| {
 		status: "approval_required";
 		approvalId: string;

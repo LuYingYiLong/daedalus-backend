@@ -15,8 +15,8 @@ import type { McpHost } from "../mcp/mcp-host.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
 import { ExecutionDecisionSignal } from "../tools/execution-control.js";
+import { ChatAnswerSignal } from "../tools/chat-completion-control.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
-import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import type { ApprovedToolResult, ProviderAgentResult, ResponsesAgentContinuation } from "./agent-types.js";
 import type { ProviderChatOptions } from "./deepseek-client.js";
 import {
@@ -33,6 +33,7 @@ import {
 	getContinuedMaxSteps,
 	getContinuedToolResultCharLimit,
 	getInitialMaxToolSteps,
+	getInitialToolResultCharLimit,
 	shouldPauseForToolBudget
 } from "./agent-tool-budget.js";
 import type { NormalizedLlmUsage } from "../usage/metrics-types.js";
@@ -71,7 +72,8 @@ type AppendToolResultItemsResult = {
 
 function shouldRequireToolCallOnStep(params: AiChatParams, step: number, startStep: number): boolean {
 	const options: Record<string, unknown> | undefined = params.options as Record<string, unknown> | undefined;
-	return startStep === 0 && step === 0 && options?.requireToolCallOnFirstStep === true;
+	return options?.requireChatCompletionTool === true
+		|| (startStep === 0 && step === 0 && options?.requireToolCallOnFirstStep === true);
 }
 
 function convertToolDefinition(tool: ChatCompletionTool): FunctionTool | null {
@@ -586,6 +588,12 @@ async function runResponsesAgentLoop(
 				return { status: "completed", text: finalText };
 			}
 		} catch (error: unknown) {
+			if (error instanceof ChatAnswerSignal) {
+				return {
+					status: "chat_answer",
+					answer: error.answer
+				};
+			}
 			if (error instanceof ExecutionDecisionSignal) {
 				return {
 					status: "execution_decision",
@@ -723,7 +731,7 @@ export async function runOpenAIResponsesAgent(
 		0,
 		maxSteps,
 		0,
-		MAX_TOTAL_TOOL_RESULT_CHARS,
+		getInitialToolResultCharLimit(params),
 		false,
 		onEvent,
 		abortSignal,
@@ -762,7 +770,7 @@ export async function runOpenAIResponsesAgentStreaming(
 		0,
 		maxSteps,
 		0,
-		MAX_TOTAL_TOOL_RESULT_CHARS,
+		getInitialToolResultCharLimit(params),
 		true,
 		onEvent,
 		abortSignal,

@@ -100,6 +100,22 @@ export function scheduleWorkflowPhaseOutcome(
 	maxAutoRepairRounds: number
 ): WorkflowSchedulerCommand {
 	if (outcome.status === "needs_fix") {
+		if (phase.toolGroup !== "write" && phase.toolGroup !== "verify") {
+			const message: string = `阶段「${phase.title}」不是写入或验证阶段，不能通过自动写入修复其失败。`;
+			const blockedOutcome: WorkflowPhaseOutput = {
+				...outcome,
+				status: "blocked",
+				summary: message,
+				blockedReason: message
+			};
+			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
+			return {
+				type: "failed",
+				phase,
+				outcome: blockedOutcome,
+				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
+			};
+		}
 		if (hasRepeatedRepairFailure(state, phase, outcome)) {
 			const message: string = `验证阶段「${phase.title}」重复出现相同失败且没有修复进展，已停止自动修复。`;
 			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };

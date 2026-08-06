@@ -31,7 +31,7 @@ const listFilesSchema = z.object({
 	subdir: z.string().optional().describe("Workspace relative directory to list."),
 	extensions: z.array(z.string()).optional().describe("Optional extension filter, for example ['.ts', '.tsx']."),
 	includeIgnored: z.boolean().optional().describe("Include normally ignored heavy/internal directories."),
-	limit: z.number().int().positive().max(10000).optional().describe("Maximum file count.")
+	limit: z.number().int().positive().max(500).optional().describe("Maximum file count. Results are paged; use continuationToken for more.")
 });
 
 const readFileSchema = z.object({

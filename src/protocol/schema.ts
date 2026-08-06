@@ -219,6 +219,7 @@ export const aiChatParamsSchema = z.object({
 		stream: z.boolean().optional(),
 		toolBudget: z.enum(["simple", "normal", "codegen", "project_edit"]).optional(),
 		executionPolicy: z.enum(["auto", "read_only"]).optional(),
+		outputTarget: z.enum(["chat", "workspace"]).optional(),
 		workflow: z.enum(["auto", "single", "multi_phase", "llm_planned"]).optional(),
 		queueItemId: z.number().int().positive().optional(),
 	}).optional()
@@ -240,6 +241,7 @@ const queuedMessageSnapshotShape = {
 	model: z.string().min(1).optional(),
 	reasoningEffort: z.string().min(1).max(32).optional(),
 	executionPolicy: z.enum(["auto", "read_only"]).optional(),
+	outputTarget: z.enum(["chat", "workspace"]).optional(),
 	skillRefs: z.array(skillRefSchema).max(4).optional(),
 	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
 };

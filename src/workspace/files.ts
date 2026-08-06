@@ -7,14 +7,30 @@ export const DEFAULT_WORKSPACE_NEW_FILE_BYTES: number = 64 * 1024;
 
 const DEFAULT_IGNORED_DIRECTORIES: ReadonlySet<string> = new Set([
 	".git",
-	".daedalus",
-	".godot",
-	"node_modules"
+".daedalus",
+".godot",
+	"node_modules",
+	".cache",
+	".next",
+	".nuxt",
+	".turbo",
+	"coverage",
+	"dist",
+	"out"
 ]);
 
 const PROTECTED_WRITE_DIRECTORIES: ReadonlySet<string> = new Set([
 	".git",
 	".daedalus"
+]);
+
+// These are repository metadata, generated artifacts, or local caches. General
+// workspace reads use dedicated structured tools instead of raw internal files.
+const PROTECTED_READ_DIRECTORIES: ReadonlySet<string> = new Set([
+	".git",
+	".daedalus",
+	".cache",
+	"node_modules"
 ]);
 
 export type WorkspaceFileValidation = {
@@ -30,6 +46,7 @@ export type WorkspaceFileServiceOptions = {
 	newFileMaxBytes?: number | undefined;
 	writeMaxBytes?: number | undefined;
 	ignoredDirectories?: ReadonlySet<string> | undefined;
+	protectedReadDirectories?: ReadonlySet<string> | undefined;
 	protectedWriteDirectories?: ReadonlySet<string> | undefined;
 	validateContent?: ((input: { relativePath: string; content: string; operation: "create" | "overwrite" | "replace" | "replace-line" }) => string[]) | undefined;
 	validateWritablePath?: ((relativePath: string) => Promise<string> | string) | undefined;
@@ -85,14 +102,20 @@ function normalizeRelativePath(inputPath: string): string {
 	return trimmedPath;
 }
 
-function assertNoProtectedSegment(relativePath: string, protectedDirectories: ReadonlySet<string>): void {
+function assertNoProtectedSegment(
+	relativePath: string,
+	protectedDirectories: ReadonlySet<string>,
+	operation: "Reading" | "Writing" = "Writing"
+): void {
 	const segments: string[] = relativePath.split("/").filter((segment: string): boolean => segment.length > 0);
 	for (const segment of segments) {
 		if (segment === ".." || segment === ".") {
 			throw new Error(`Path traversal denied: ${relativePath}`);
 		}
 		if (protectedDirectories.has(segment)) {
-			throw new Error(`Writing to ${segment}/ is not allowed`);
+			throw new Error(operation === "Reading"
+				? `Reading from ${segment}/ is not allowed`
+				: `Writing to ${segment}/ is not allowed`);
 		}
 	}
 }
@@ -140,6 +163,7 @@ async function assertNoSymlinkEscape(rootPath: string, absolutePath: string): Pr
 export function createWorkspaceFileService(options: WorkspaceFileServiceOptions) {
 	const rootPath: string = path.resolve(options.rootPath);
 	const ignoredDirectories: ReadonlySet<string> = options.ignoredDirectories ?? DEFAULT_IGNORED_DIRECTORIES;
+	const protectedReadDirectories: ReadonlySet<string> = options.protectedReadDirectories ?? PROTECTED_READ_DIRECTORIES;
 	const protectedWriteDirectories: ReadonlySet<string> = options.protectedWriteDirectories ?? PROTECTED_WRITE_DIRECTORIES;
 	const readMaxBytes: number = options.readMaxBytes ?? DEFAULT_WORKSPACE_TEXT_FILE_BYTES;
 	const newFileMaxBytes: number = options.newFileMaxBytes ?? DEFAULT_WORKSPACE_NEW_FILE_BYTES;
@@ -147,6 +171,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 
 	async function resolveReadPath(relativePath: string): Promise<ResolvedWorkspacePath> {
 		const normalizedPath: string = normalizeRelativePath(relativePath);
+		assertNoProtectedSegment(normalizedPath, protectedReadDirectories, "Reading");
 		const absolutePath: string = path.resolve(rootPath, normalizedPath);
 		if (!isPathInsideRoot(absolutePath, rootPath)) {
 			throw new Error(`Path traversal denied: ${relativePath}`);
@@ -242,7 +267,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		const extensions: Set<string> | undefined = input?.extensions !== undefined && input.extensions.length > 0
 			? new Set(input.extensions.map((extension: string): string => extension.startsWith(".") ? extension : `.${extension}`))
 			: undefined;
-		const limit: number = input?.limit ?? 2000;
+		const limit: number = input?.limit ?? 200;
 		const results: string[] = [];
 
 		async function walk(directoryPath: string): Promise<void> {

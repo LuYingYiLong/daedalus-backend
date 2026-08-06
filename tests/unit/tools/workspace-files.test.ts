@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -47,6 +47,11 @@ test("workspace file service rejects path escape, protected writes and line drif
 			() => service.readTextFile("../outside.txt"),
 			/Path traversal denied/u
 		);
+		await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
+		await assert.rejects(
+			() => service.readTextFile(".git/HEAD"),
+			/Reading from \.git\/ is not allowed/u
+		);
 		await assert.rejects(
 			() => service.createTextFile(".git/config", "unsafe"),
 			/Writing to \.git\/ is not allowed/u
@@ -79,6 +84,25 @@ test("workspace file listing treats an uncreated child directory as empty", asyn
 			() => service.listFilesDetailed({ subdir: "assets/existing.txt" }),
 			/Not a directory/u
 		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("workspace file listing is bounded and omits generated caches by default", async (): Promise<void> => {
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-workspace-files-bounded-"));
+	try {
+		const service = createWorkspaceFileService({ rootPath: root });
+		for (let index: number = 0; index < 210; index += 1) {
+			await service.createTextFile(`src/file-${index}.txt`, "ok\n");
+		}
+		await mkdir(join(root, ".cache"), { recursive: true });
+		await writeFile(join(root, ".cache", "generated.txt"), "ignored\n", "utf8");
+
+		const result = await service.listFilesDetailed();
+		assert.equal(result.files.length, 200);
+		assert.equal(result.files.some((file: string): boolean => file.startsWith(".cache/")), false);
+		assert.equal((await service.listFilesDetailed({ includeIgnored: true, limit: 500 })).files.includes(".cache/generated.txt"), true);
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}

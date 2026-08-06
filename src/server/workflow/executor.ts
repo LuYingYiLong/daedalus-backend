@@ -6,6 +6,7 @@ import type { ClientSession } from "../client-session.js";
 import { isCancellationError, throwIfAborted } from "../request-lifecycle.js";
 import { markRemainingWorkflowTodos } from "../../workflow/runner.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan } from "../../workflow/types.js";
+import { canWriteToWorkspace } from "../../workflow/router.js";
 import { WorkflowExecutionError } from "./workflow-error.js";
 import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./events.js";
 import { continueWorkflowExecution } from "./continuation.js";
@@ -26,6 +27,9 @@ export async function startWorkflowExecution(
 	abortSignal?: AbortSignal | undefined
 ): Promise<void> {
 	throwIfAborted(abortSignal);
+	if (!canWriteToWorkspace(originalParams)) {
+		throw new Error("Workspace workflow requires structured outputTarget=workspace authorization.");
+	}
 	sendWorkflowEvent(socket, requestId, session, "workflow.started", {
 		workflowId: plan.id,
 		requestId,

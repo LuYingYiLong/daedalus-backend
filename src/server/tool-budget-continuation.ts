@@ -26,6 +26,7 @@ export function createPendingToolBudget(
 		workflowPhaseToolStats?: PendingToolBudgetPhaseStats | undefined;
 		workflowToolObservations?: WorkflowToolObservation[] | undefined;
 		executionControl?: PendingAiContinuation["executionControl"];
+		chatCompletion?: PendingAiContinuation["chatCompletion"];
 	}
 ): PendingToolBudget {
 	const continuation: PendingAiContinuation = createPendingAiContinuation(
@@ -39,7 +40,8 @@ export function createPendingToolBudget(
 		params.stream,
 		params.workflowState,
 		params.lightweightActionState,
-		params.executionControl
+		params.executionControl,
+		params.chatCompletion
 	);
 	return {
 		budgetId: params.agentResult.budgetId,

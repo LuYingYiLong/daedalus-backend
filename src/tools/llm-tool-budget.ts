@@ -40,5 +40,7 @@ export function resolveToolBudget(
 
 export const MAX_TOOL_RESULT_CHARS: number = 24000;
 export const MAX_TOTAL_TOOL_RESULT_CHARS: number = 128000;
+/** Chat answers need room for history, system prompts, and finalization. */
+export const CHAT_TOOL_RESULT_CHAR_LIMIT: number = 48000;
 export const TOOL_BUDGET_CONTINUE_STEPS: number = 16;
 export const TOOL_RESULT_CONTINUE_CHARS: number = 64000;

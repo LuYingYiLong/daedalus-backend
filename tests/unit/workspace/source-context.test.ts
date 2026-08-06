@@ -6,6 +6,7 @@ import test from "node:test";
 import {
 	resolveWorkspaceReadSource,
 	resolveWorkspaceSources,
+	resolveWorkspaceTerminalSource,
 	WorkspaceSourceResolutionError
 } from "../../../src/workspace/source-context.js";
 import { WorkspaceSourceIndex } from "../../../src/workspace/source-index.js";
@@ -68,6 +69,39 @@ test("multi-source file reads auto-select unique paths and reject ambiguous path
 		assert.throws(
 			() => resolveWorkspaceReadSource(workspace, "src/shared.ts", {}),
 			(error: unknown) => error instanceof WorkspaceSourceResolutionError && error.code === "ambiguous_source"
+		);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("terminal source resolution only auto-selects a unique cwd or preset capability", async (): Promise<void> => {
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-terminal-source-"));
+	const first: string = join(root, "frontend");
+	const second: string = join(root, "backend");
+	await mkdir(join(first, "scripts"), { recursive: true });
+	await mkdir(second, { recursive: true });
+	const workspace: WorkspaceConfig = {
+		...createWorkspace(first, second),
+		sourceFolders: [
+			{ id: "frontend", path: first, capabilities: { git: false, godot: false, terminalPresets: ["workspace.typecheck"] } },
+			{ id: "backend", path: second, capabilities: { git: false, godot: false, terminalPresets: [] } }
+		]
+	};
+	try {
+		const cwdResolved = resolveWorkspaceTerminalSource(workspace, { pathHint: "scripts" });
+		assert.equal(cwdResolved.kind, "source");
+		if (cwdResolved.kind === "source") assert.equal(cwdResolved.source.id, "frontend");
+
+		const presetResolved = resolveWorkspaceTerminalSource(workspace, { presetName: "workspace.typecheck" });
+		assert.equal(presetResolved.kind, "source");
+		if (presetResolved.kind === "source") assert.equal(presetResolved.source.id, "frontend");
+
+		assert.throws(
+			() => resolveWorkspaceTerminalSource(workspace, {}),
+			(error: unknown) => error instanceof WorkspaceSourceResolutionError
+				&& error.code === "source_required"
+				&& error.candidates.length === 2
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });

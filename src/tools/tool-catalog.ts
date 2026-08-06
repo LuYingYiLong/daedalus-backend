@@ -16,6 +16,11 @@ import {
 	EXECUTION_CONTROL_TOOL_NAME,
 	type ExecutionControlContext
 } from "./execution-control.js";
+import {
+	CHAT_COMPLETION_CONTROL_TOOL_DEFINITION,
+	CHAT_COMPLETION_CONTROL_TOOL_NAME,
+	type ChatCompletionContext
+} from "./chat-completion-control.js";
 import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
 
@@ -26,6 +31,8 @@ export type ToolExecutionContext = {
 	requestId?: string | undefined;
 	executionControl?: ExecutionControlContext | undefined;
 	executionControlAvailable?: boolean | undefined;
+	chatCompletion?: ChatCompletionContext | undefined;
+	chatCompletionAvailable?: boolean | undefined;
 	clientType?: "studio" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
 	imageRouting?: {
 		options: ProviderChatOptions;
@@ -46,6 +53,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_list_files",
 		"mcp_workspace_list_source_folders",
 		"mcp_workspace_get_source_context",
+		"mcp_workspace_get_git_history",
 		"mcp_workspace_read_text_file",
 		"mcp_workspace_search_text",
 		"mcp_godot_get_runtime_status",
@@ -269,6 +277,16 @@ function createExecutionControlEntry(): ToolCatalogEntry {
 	};
 }
 
+function createChatCompletionControlEntry(): ToolCatalogEntry {
+	return {
+		id: CHAT_COMPLETION_CONTROL_TOOL_NAME,
+		definition: CHAT_COMPLETION_CONTROL_TOOL_DEFINITION,
+		mapping: { serverId: "internal", toolName: "chat_answer" },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -295,7 +313,10 @@ export class WorkspaceToolCatalog {
 		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined || this.context.executionControlAvailable === false
 			? []
 			: [createExecutionControlEntry()];
-		return [...staticEntries, ...dynamicEntries, ...executionControlEntries];
+		const chatCompletionEntries: ToolCatalogEntry[] = this.context.chatCompletion === undefined || this.context.chatCompletionAvailable === false
+			? []
+			: [createChatCompletionControlEntry()];
+		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -306,6 +327,9 @@ export class WorkspaceToolCatalog {
 		const allowedNames: Set<string> = new Set(toolNames);
 		if (this.context.executionControl !== undefined && this.context.executionControlAvailable !== false) {
 			allowedNames.add(EXECUTION_CONTROL_TOOL_NAME);
+		}
+		if (this.context.chatCompletion !== undefined && this.context.chatCompletionAvailable !== false) {
+			allowedNames.add(CHAT_COMPLETION_CONTROL_TOOL_NAME);
 		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()

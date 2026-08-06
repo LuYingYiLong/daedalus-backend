@@ -22,6 +22,7 @@ export type QueueMessageInput = {
 	model?: string | undefined;
 	reasoningEffort?: string | undefined;
 	executionPolicy?: "auto" | "read_only" | undefined;
+	outputTarget?: "chat" | "workspace" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
 };
 
@@ -53,6 +54,7 @@ function normalizeQueueInput(input: QueueMessageInput, existing?: QueuedMessage 
 		model: input.model ?? existing?.model,
 		reasoningEffort: input.reasoningEffort ?? existing?.reasoningEffort,
 		executionPolicy: input.executionPolicy ?? existing?.executionPolicy,
+		outputTarget: input.outputTarget ?? existing?.outputTarget,
 		skillRefs: cloneSkillRefs(input.skillRefs ?? existing?.skillRefs)
 	};
 }
@@ -88,6 +90,10 @@ function readMode(value: unknown): "agent" | "ask" | "plan" | "goal" | undefined
 
 function readExecutionPolicy(value: unknown): "auto" | "read_only" | undefined {
 	return value === "auto" || value === "read_only" ? value : undefined;
+}
+
+function readOutputTarget(value: unknown): "chat" | "workspace" | undefined {
+	return value === "chat" || value === "workspace" ? value : undefined;
 }
 
 function readString(value: unknown): string | undefined {
@@ -128,6 +134,7 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 		model: readString(record.model),
 		reasoningEffort: readString(record.reasoningEffort),
 		executionPolicy: readExecutionPolicy(record.executionPolicy),
+		outputTarget: readOutputTarget(record.outputTarget),
 		skillRefs: readSkillRefs(record.skillRefs),
 		status: normalizeHydratedStatus(readStatus(record.status)),
 		createdAt,
@@ -164,6 +171,7 @@ export function serializeQueuedMessage(message: QueuedMessage): Record<string, u
 		model: message.model ?? null,
 		reasoningEffort: message.reasoningEffort ?? null,
 		executionPolicy: message.executionPolicy ?? null,
+		outputTarget: message.outputTarget ?? null,
 		skillRefs: message.skillRefs ?? [],
 		status: message.status,
 		createdAt: message.createdAt,
@@ -269,6 +277,7 @@ export function enqueueMessage(session: ClientSession, input: QueueMessageInput)
 		model: normalized.model,
 		reasoningEffort: normalized.reasoningEffort,
 		executionPolicy: normalized.executionPolicy,
+		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
 		createdAt: now,
@@ -321,6 +330,7 @@ export function updateQueuedMessage(
 		&& existing.model === normalized.model
 		&& existing.reasoningEffort === normalized.reasoningEffort
 		&& existing.executionPolicy === normalized.executionPolicy
+		&& existing.outputTarget === normalized.outputTarget
 		&& JSON.stringify(existing.skillRefs ?? []) === JSON.stringify(normalized.skillRefs ?? [])
 	) {
 		return { item: existing, changed: false };
@@ -335,6 +345,7 @@ export function updateQueuedMessage(
 		model: normalized.model,
 		reasoningEffort: normalized.reasoningEffort,
 		executionPolicy: normalized.executionPolicy,
+		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
 		status: "pending",
 		updatedAt: new Date().toISOString()
@@ -427,6 +438,9 @@ export function createQueuedChatRequest(queueItem: QueuedMessage, requestId: str
 	}
 	if (queueItem.executionPolicy !== undefined) {
 		options.executionPolicy = queueItem.executionPolicy;
+	}
+	if (queueItem.outputTarget !== undefined) {
+		options.outputTarget = queueItem.outputTarget;
 	}
 	return {
 		type: "request",

@@ -543,7 +543,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					);
 				}
 				recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, event);
-				forwardToolEvent(event);
+				if (!(pendingContinuation.chatCompletion?.requireSubmission === true && event.type === "ai.delta")) {
+					forwardToolEvent(event);
+				}
 			};
 			const continuationParams: AiChatParams = await awaitWithAbort(
 				hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
@@ -575,7 +577,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
-						executionControl: pendingContinuation.executionControl
+						executionControl: pendingContinuation.executionControl,
+						chatCompletion: pendingContinuation.chatCompletion
 					}
 				)
 				: continueProviderAgent(
@@ -596,7 +599,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
-						executionControl: pendingContinuation.executionControl
+						executionControl: pendingContinuation.executionControl,
+						chatCompletion: pendingContinuation.chatCompletion
 					}
 				);
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);

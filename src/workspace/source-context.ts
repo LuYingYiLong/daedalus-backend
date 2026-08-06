@@ -26,6 +26,7 @@ export type WorkspaceSourceSelection =
 export type WorkspaceSourceErrorCode =
 	| "ambiguous_source"
 	| "source_required"
+	| "source_boundary"
 	| "source_not_found"
 	| "source_unavailable"
 	| "invalid_scope";
@@ -198,6 +199,76 @@ export function resolveWorkspaceSources(
 		`sourceFolderId is required for ${input.operation} operations in a multi-source workspace.`,
 		workspace.sourceFolders.map(describeWorkspaceSource)
 	);
+}
+
+function isPathInsideSource(source: WorkspaceSourceFolder, candidatePath: string): boolean {
+	const relativePath: string = relative(resolve(source.path), resolve(candidatePath));
+	return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+function terminalPathMatchesSource(source: WorkspaceSourceFolder, pathHint: string): boolean {
+	const trimmedHint: string = pathHint.trim();
+	if (trimmedHint.length === 0) return false;
+	if (isAbsolute(trimmedHint)) {
+		return isPathInsideSource(source, trimmedHint);
+	}
+
+	const candidatePath: string = resolve(source.path, trimmedHint);
+	if (!isPathInsideSource(source, candidatePath)) return false;
+	try {
+		return existsSync(candidatePath) && statSync(candidatePath).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Resolve a terminal source without falling back to primary in a multi-source workspace.
+ * A missing source id may only be completed from a unique, structural cwd or preset match.
+ */
+export function resolveWorkspaceTerminalSource(
+	workspace: WorkspaceConfig,
+	input: {
+		sourceFolderId?: string | undefined;
+		pathHint?: string | undefined;
+		presetName?: string | undefined;
+	}
+): WorkspaceSourceSelection {
+	const explicitSourceFolderId: string | undefined = input.sourceFolderId?.trim() || undefined;
+	if (explicitSourceFolderId !== undefined || workspace.sourceFolders.length === 1) {
+		return resolveWorkspaceSources(workspace, {
+			sourceFolderId: explicitSourceFolderId,
+			operation: "terminal"
+		});
+	}
+
+	const pathMatches: WorkspaceSourceFolder[] = input.pathHint?.trim()
+		? workspace.sourceFolders.filter((source): boolean => terminalPathMatchesSource(source, input.pathHint!))
+		: [];
+	const presetMatches: WorkspaceSourceFolder[] = input.presetName?.trim()
+		? workspace.sourceFolders.filter((source): boolean => source.capabilities.terminalPresets?.includes(input.presetName!.trim()) === true)
+		: [];
+
+	if (pathMatches.length === 1) {
+		const pathSource: WorkspaceSourceFolder = pathMatches[0]!;
+		if (presetMatches.length === 1 && presetMatches[0]!.id !== pathSource.id) {
+			throw new WorkspaceSourceResolutionError(
+				"source_boundary",
+				workspace,
+				`The terminal cwd and preset identify different source folders: ${pathSource.id} vs ${presetMatches[0]!.id}.`,
+				[pathSource, presetMatches[0]!].map(describeWorkspaceSource)
+			);
+		}
+		assertSourceAvailable(workspace, pathSource);
+		return { kind: "source", workspace, source: pathSource };
+	}
+
+	if (presetMatches.length === 1 && (pathMatches.length === 0 || pathMatches.some((source): boolean => source.id === presetMatches[0]!.id))) {
+		assertSourceAvailable(workspace, presetMatches[0]!);
+		return { kind: "source", workspace, source: presetMatches[0]! };
+	}
+
+	return resolveWorkspaceSources(workspace, { operation: "terminal" });
 }
 
 export function resolveWorkspaceReadSource(

@@ -81,7 +81,9 @@ function createPendingContinuation(): PendingAiContinuation {
 				argsSummary: { relativePath: "test_approval.md" },
 				artifactRefs: []
 			}]
-		}
+		},
+		executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true },
+		chatCompletion: { requireSubmission: true }
 	};
 }
 
@@ -142,6 +144,8 @@ test("approval persistence folds pending, interrupted, and executed states", ():
 	assert.equal(runtimeContinuation.options.provider, "deepseek");
 	assert.equal(runtimeContinuation.options.model, "deepseek-v4-flash");
 	assert.equal(runtimeContinuation.lightweightActionState?.observations[0]?.toolCallId, "call-test");
+	assert.deepEqual(runtimeContinuation.executionControl, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
+	assert.deepEqual(runtimeContinuation.chatCompletion, { requireSubmission: true });
 });
 
 test("hydrated approval states keep in-memory approvals created during continuation races", (): void => {

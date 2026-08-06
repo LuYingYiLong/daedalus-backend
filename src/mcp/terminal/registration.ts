@@ -259,6 +259,7 @@ function createJobStartedResult(record: TerminalJobRecord): Record<string, unkno
 }
 
 type TerminalInternalInput = {
+	sourceFolderId?: string | undefined;
 	__daedalusWorkspaceId?: string | undefined;
 	__daedalusSourceFolderId?: string | undefined;
 	__daedalusApprovalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
@@ -654,6 +655,7 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 
 const presetRunSchema = z.object({
 	presetName: z.string().min(1).describe("预设名称"),
+	sourceFolderId: z.string().min(1).optional().describe("源目录 ID；多源工作区的终端预设必须显式提供，除非后端能从唯一 cwd 或预设能力安全确定。"),
 	resourcePath: z.string().optional().describe("Godot 资源路径，可用 res://、项目相对路径或项目内绝对路径。"),
 	workingDirectory: z.string().optional().describe("覆盖默认工作目录"),
 	executionMode: z.enum(["wait", "job"]).optional().describe("wait 为默认同步等待；job 为长任务，立即返回 jobId。"),
@@ -664,6 +666,7 @@ const presetRunSchema = z.object({
 
 const commandRunSchema = z.object({
 	commandLine: z.string().min(1).describe("要运行的命令行"),
+	sourceFolderId: z.string().min(1).optional().describe("源目录 ID；多源工作区的终端命令必须显式提供，并且 cwd 必须位于该源目录内。"),
 	cwd: z.string().optional().describe("workspace 相对工作目录；Full Trust 下可传绝对路径"),
 	env: z.record(z.string(), z.string()).optional().describe("附加环境变量"),
 	executionMode: z.enum(["wait", "job"]).optional().describe("wait 为默认同步等待；job 为长任务"),
@@ -679,11 +682,20 @@ export function registerTerminalTools(server: McpServer): void {
 		{
 			title: "Get Terminal Capabilities",
 			description: "返回当前终端 MCP 支持的所有预设命令列表及其风险等级。",
-			inputSchema: z.object({}).passthrough()
+			inputSchema: z.object({
+				sourceFolderId: z.string().min(1).optional().describe("可选源目录 ID；多源工作区用于查看指定源的终端能力。")
+			}).passthrough()
 		},
 		async (input: TerminalInternalInput) => {
 			const context = resolveTerminalContext(input);
 			return asJsonTextResult({
+				workspaceId: context.workspace?.id ?? context.workspaceId ?? null,
+				selectedSourceFolderId: input.__daedalusSourceFolderId ?? context.workspace?.primarySourceFolderId ?? null,
+				sourceFolders: context.workspace?.sourceFolders.map((source) => ({
+					sourceFolderId: source.id,
+					sourceName: path.basename(source.path) || source.id,
+					capabilities: source.capabilities
+				})) ?? [],
 				commandRunner: {
 					sandboxModes: ["os-sandbox", "full-trust"],
 					normalModeRequiresSandbox: true,

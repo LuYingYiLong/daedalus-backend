@@ -373,7 +373,14 @@ export async function createAgentGoal(params: {
 		session: params.session,
 		mcpHost: params.mcpHost,
 		runChat: params.runChat,
-		initialParams: { ...params.chatParams, mode: "agent" },
+		initialParams: {
+			...params.chatParams,
+			mode: "agent",
+			options: {
+				...(params.chatParams.options ?? {}),
+				outputTarget: "workspace"
+			}
+		},
 		lastRunId: null,
 		cycleStartedAt: null,
 		evaluationInFlight: false,

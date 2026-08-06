@@ -20,9 +20,9 @@ import {
 import type { McpHost } from "../mcp/mcp-host.js";
 import { createWorkspaceToolCatalog, type ToolExecutionContext } from "../tools/tool-catalog.js";
 import { describeToolEvent } from "../tools/tool-event-describer.js";
-import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import { dispatchToolCalls, ToolApprovalRequiredError, type OnToolEvent, type ToolResultEnricher } from "../tools/tool-dispatcher.js";
 import { ExecutionDecisionSignal } from "../tools/execution-control.js";
+import { ChatAnswerSignal } from "../tools/chat-completion-control.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { containsDsmlToolCalls } from "./deepseek-dsml-tools.js";
 import { containsLooseToolCalls, isKnownLooseToolTagName, isPotentialLooseToolTagName, normalizeKnownToolName } from "./deepseek-loose-tools.js";
@@ -36,6 +36,7 @@ import {
 	getContinuedMaxSteps,
 	getContinuedToolResultCharLimit,
 	getInitialMaxToolSteps,
+	getInitialToolResultCharLimit,
 	shouldPauseForToolBudget
 } from "./agent-tool-budget.js";
 import type { NormalizedLlmUsage } from "../usage/metrics-types.js";
@@ -85,7 +86,8 @@ type ToolNameAliasContext = {
 
 function shouldRequireToolCallOnStep(params: AiChatParams, step: number, startStep: number): boolean {
 	const options: Record<string, unknown> | undefined = params.options as Record<string, unknown> | undefined;
-	return startStep === 0 && step === 0 && options?.requireToolCallOnFirstStep === true;
+	return options?.requireChatCompletionTool === true
+		|| (startStep === 0 && step === 0 && options?.requireToolCallOnFirstStep === true);
 }
 
 export function shouldSkipRequiredToolChoice(options: DeepSeekChatOptions): boolean {
@@ -1496,6 +1498,12 @@ async function runAgentLoop(
 			}
 			toolResults = await dispatchToolCalls(mcpHost, toolCalls, step, gateway, onEvent, toolResultEnricher, toolContext, abortSignal);
 		} catch (error: unknown) {
+			if (error instanceof ChatAnswerSignal) {
+				return {
+					status: "chat_answer",
+					answer: error.answer
+				};
+			}
 			if (error instanceof ExecutionDecisionSignal) {
 				return {
 					status: "execution_decision",
@@ -1659,7 +1667,7 @@ export async function runOpenAICompatibleAgent(
 
 	const messages: ChatCompletionMessageParam[] = createMessages(params, history, systemPrompt);
 
-	return runAgentLoop(client, params, options, messages, mcpHost, gateway, tools, 0, maxSteps, 0, MAX_TOTAL_TOOL_RESULT_CHARS, false, onEvent, abortSignal, toolResultEnricher, toolContext);
+	return runAgentLoop(client, params, options, messages, mcpHost, gateway, tools, 0, maxSteps, 0, getInitialToolResultCharLimit(params), false, onEvent, abortSignal, toolResultEnricher, toolContext);
 }
 
 export async function runOpenAICompatibleAgentStreaming(
@@ -1685,7 +1693,7 @@ export async function runOpenAICompatibleAgentStreaming(
 
 	const messages: ChatCompletionMessageParam[] = createMessages(params, history, systemPrompt);
 
-	return runAgentLoop(client, params, options, messages, mcpHost, gateway, tools, 0, maxSteps, 0, MAX_TOTAL_TOOL_RESULT_CHARS, true, onEvent, abortSignal, toolResultEnricher, toolContext);
+	return runAgentLoop(client, params, options, messages, mcpHost, gateway, tools, 0, maxSteps, 0, getInitialToolResultCharLimit(params), true, onEvent, abortSignal, toolResultEnricher, toolContext);
 }
 
 export async function continueOpenAICompatibleAgent(

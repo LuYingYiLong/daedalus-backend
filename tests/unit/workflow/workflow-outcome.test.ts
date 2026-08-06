@@ -70,6 +70,22 @@ test("verify phase with failed terminal validation becomes needs_fix", (): void 
 	assert.deepEqual(outcome.requiredFixes, ["修复：Parser Error"]);
 });
 
+test("read phase failure blocks without requesting a workspace repair", (): void => {
+	const observations: WorkflowToolObservation[] = [{
+		toolCallId: "read-failed",
+		toolName: "mcp_workspace_read_text_file",
+		risk: "read",
+		status: "failed",
+		error: "The requested file is unavailable.",
+		artifactRefs: []
+	}];
+
+	const outcome = createWorkflowPhaseOutcome(createPhase("inspect", "read"), "phase-run-read", "", observations);
+
+	assert.equal(outcome.status, "blocked");
+	assert.equal(outcome.failedChecks[0]?.code, "tool_error");
+});
+
 test("not-applicable workspace checks complete verification with an explicit warning", (): void => {
 	const observations: WorkflowToolObservation[] = applyEvents([
 		{

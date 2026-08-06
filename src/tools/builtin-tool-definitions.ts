@@ -224,6 +224,16 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		[]
 	),
 	createSceneToolDefinition(
+		"mcp_workspace_get_git_history",
+		"Read a bounded Git commit history between two explicit refs in one workspace source folder. Use this for release notes, changelogs, and commit summaries instead of listing .git files or running a free terminal command. This never changes the repository. If status is reference_unavailable, the requested baseline does not exist locally: answer with that fact and its returned availableRefs; never guess another tag, retry spelling variants, or inspect .git files.",
+		{
+			fromRef: { type: "string", description: "Required starting Git ref or tag, for example 'v1.0.8'. The start commit itself is excluded." },
+			toRef: { type: "string", description: "Optional ending Git ref or tag. Defaults to HEAD." },
+			limit: { type: "integer", minimum: 1, maximum: 200, description: "Maximum commits to return; use a bounded value." }
+		},
+		["fromRef"]
+	),
+	createSceneToolDefinition(
 		"mcp_workspace_list_files",
 		"列出当前 workspace 中的文件。仅在会话已绑定 workspace 时可用；普通项目文件任务优先使用 workspace 工具，Godot 场景/运行时任务再使用 Godot 专属工具。",
 		{
@@ -1579,7 +1589,12 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			description: "查询终端 MCP 支持的预设命令及风险等级。它不会运行命令、检查项目或验证任何修改；仅在需要选择预设命令时调用。",
 			parameters: {
 				type: "object",
-				properties: {},
+				properties: {
+					sourceFolderId: {
+						type: "string",
+						description: "可选源目录 ID。多源工作区可传入它查看该源的终端上下文；不传只查看主源。"
+					}
+				},
 				required: []
 			}
 		}
@@ -1592,6 +1607,10 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
+					sourceFolderId: {
+						type: "string",
+						description: "源目录 ID。单源工作区可省略；多源工作区必须传入，并且必须来自 mcp_workspace_list_source_folders。终端命令的 cwd 必须位于该源目录内。"
+					},
 					commandLine: {
 						type: "string",
 						description: "要运行的命令行，例如 npm test 或 git status --short"
@@ -1639,6 +1658,10 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
+					sourceFolderId: {
+						type: "string",
+						description: "源目录 ID。单源工作区可省略；多源工作区必须传入，并且必须来自 mcp_workspace_list_source_folders。可安全省略的情况仅限后端能从唯一 cwd 或预设能力确定目标源。"
+					},
 					presetName: {
 						type: "string",
 						description: "安全预设名称，如 'workspace.typecheck'、'backend.typecheck'、'git.status'、'git.diff'、'godot.check_only'、'godot.validate_scene'"
@@ -1677,6 +1700,10 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
+					sourceFolderId: {
+						type: "string",
+						description: "源目录 ID。Godot 项目操作在多源工作区必须显式传入，不能根据文件名猜测。"
+					},
 					operationJson: {
 						type: "string",
 						description: "JSON 格式的场景操作。create_scene: {\"operation\":\"create_scene\",\"path\":\"scenes/foo.tscn\",\"root_type\":\"Node2D\",\"root_name\":\"Main\"}。add_node: {\"operation\":\"add_node\",\"scene_path\":\"...\",\"parent_path\":\".\",\"node_type\":\"Label\",\"node_name\":\"Hello\",\"properties\":{}}。attach_script: {\"operation\":\"attach_script\",\"scene_path\":\"...\",\"node_path\":\"Main\",\"script_path\":\"res://scripts/main.gd\"}。connect_signal: {\"operation\":\"connect_signal\",\"scene_path\":\"...\",\"signal\":\"pressed\",\"from\":\"Button\",\"to\":\".\",\"method\":\"_on_pressed\"}。inspect: {\"operation\":\"inspect\",\"scene_path\":\"...\"}"
@@ -1694,6 +1721,10 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 			parameters: {
 				type: "object",
 				properties: {
+					sourceFolderId: {
+						type: "string",
+						description: "源目录 ID。单源工作区可省略；多源工作区必须传入，并且必须来自 mcp_workspace_list_source_folders。"
+					},
 					presetName: {
 						type: "string",
 						description: "预设名称，如 'git.init'、'workspace.typecheck'、'backend.typecheck'、'git.status'、'git.diff'、'godot.check_only'、'godot.validate_scene'"

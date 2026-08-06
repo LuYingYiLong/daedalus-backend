@@ -2,6 +2,7 @@ import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 
 const FINAL_ANSWER_HEADROOM_CHARS: number = 2000;
 const MIN_TRUNCATED_TOOL_CHARS: number = 240;
+const MAX_SINGLE_TOOL_RESULT_CHARS: number = 24_000;
 
 export type BudgetedToolResult = {
 	content: string;
@@ -17,11 +18,11 @@ export function createToolResultLimitReason(totalChars: number, maxChars: number
 
 export function createToolResultLimitFallback(reason: string): string {
 	return [
-		"工具结果已经达到后端安全上限，我已停止继续调用工具。",
+		"当前请求的读取范围已达到安全上限，已停止继续调用工具。",
 		"",
 		`收束原因：${reason}。`,
 		"",
-		"请基于上方已经展示的工具结果继续判断；如果信息仍不完整，请缩小检查范围，优先读取更具体的文件片段或关键词结果。"
+		"已有结果可能不完整；请缩小检查范围，优先指定版本、目录或文件，避免继续读取整个项目。"
 	].join("\n");
 }
 
@@ -45,7 +46,16 @@ export function fitToolResultContent(
 		};
 	}
 
-	if (content.length <= remainingBeforeFinalize) {
+	// One unbounded list or log must not consume the whole conversation budget.
+	// Reserve at least three comparable reads after the first result for correction,
+	// verification, and the final structured answer.
+	const perResultLimit: number = Math.max(
+		MIN_TRUNCATED_TOOL_CHARS,
+		Math.min(MAX_SINGLE_TOOL_RESULT_CHARS, Math.floor(maxTotalChars / 4))
+	);
+	const contentLimit: number = Math.min(remainingBeforeFinalize, perResultLimit);
+
+	if (content.length <= contentLimit) {
 		const totalChars: number = currentTotalChars + content.length;
 		return {
 			content,
@@ -57,14 +67,15 @@ export function fitToolResultContent(
 	}
 
 	const suffix: string = `\n\n[工具结果已按累计预算截断，原始长度 ${content.length} 字符。请缩小后续读取范围。]`;
-	const availableContentChars: number = Math.max(MIN_TRUNCATED_TOOL_CHARS, remainingBeforeFinalize - suffix.length);
+	const availableContentChars: number = Math.max(MIN_TRUNCATED_TOOL_CHARS, contentLimit - suffix.length);
 	const clippedContent: string = `${content.slice(0, availableContentChars)}${suffix}`;
 	const totalChars: number = currentTotalChars + clippedContent.length;
+	const limitReached: boolean = totalChars >= targetLimit;
 	return {
 		content: clippedContent,
 		chars: clippedContent.length,
 		truncated: true,
-		limitReached: true,
-		reason: createToolResultLimitReason(totalChars, maxTotalChars)
+		limitReached,
+		reason: limitReached ? createToolResultLimitReason(totalChars, maxTotalChars) : null
 	};
 }

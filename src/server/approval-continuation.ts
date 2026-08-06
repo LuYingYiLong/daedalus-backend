@@ -42,7 +42,8 @@ export function createPendingAiContinuation(
 	stream: boolean,
 	workflowState?: WorkflowRunState | undefined,
 	lightweightActionState?: LightweightActionState | undefined,
-	executionControl?: PendingAiContinuation["executionControl"]
+	executionControl?: PendingAiContinuation["executionControl"],
+	chatCompletion?: PendingAiContinuation["chatCompletion"]
 ): PendingAiContinuation {
 	const pendingContinuation: PendingAiContinuation = {
 		params,
@@ -62,6 +63,9 @@ export function createPendingAiContinuation(
 	}
 	if (executionControl !== undefined) {
 		pendingContinuation.executionControl = { ...executionControl };
+	}
+	if (chatCompletion !== undefined) {
+		pendingContinuation.chatCompletion = { ...chatCompletion };
 	}
 
 	if (workflowState !== undefined) {
@@ -407,7 +411,8 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.stream,
 			pendingContinuation.workflowState,
 			pendingContinuation.lightweightActionState,
-			pendingContinuation.executionControl
+			pendingContinuation.executionControl,
+			pendingContinuation.chatCompletion
 		);
 		await pauseRunForApproval({
 			socket,
@@ -433,21 +438,27 @@ export async function sendContinuedAgentResult(
 			stream: pendingContinuation.stream,
 			workflowState: pendingContinuation.workflowState,
 			lightweightActionState: pendingContinuation.lightweightActionState,
-			executionControl: pendingContinuation.executionControl
+			executionControl: pendingContinuation.executionControl,
+			chatCompletion: pendingContinuation.chatCompletion
 		});
 		registerPendingToolBudget(session, pendingBudget);
 		sendToolBudgetRequired(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, pendingBudget, pendingContinuation.requestId);
 		return;
 	}
 
-	if (agentResult.status === "protocol_violation") {
-		throw new Error(agentResult.reason);
-	}
-
 	const runId: string = pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId;
 	const stepRunId: string = pendingContinuation.workflowState?.activePhaseRunId ?? pendingContinuation.requestId;
+	const chatCompletionProtocolFailed: boolean = agentResult.status === "protocol_violation"
+		&& pendingContinuation.chatCompletion?.requireSubmission === true;
+	if (agentResult.status === "protocol_violation" && !chatCompletionProtocolFailed) {
+		throw new Error(agentResult.reason);
+	}
 	let text: string;
-	if (agentResult.status === "execution_decision") {
+	if (chatCompletionProtocolFailed) {
+		text = "模型没有完成结构化聊天收束，已安全停止；未执行任何工作区写入。请重试，或切换支持工具调用的模型。";
+	} else if (agentResult.status === "chat_answer") {
+		text = agentResult.answer.answer;
+	} else if (agentResult.status === "execution_decision") {
 		const latestRun: AgentRunState | undefined = getAgentRun(session, pendingContinuation.requestId);
 		if (latestRun === undefined) {
 			throw new Error(`Execution decision received for unknown run ${pendingContinuation.requestId}.`);
@@ -473,12 +484,22 @@ export async function sendContinuedAgentResult(
 			throw new LightweightActionScopeExceededError("write_intent_not_completed");
 		}
 	}
-	const completionStatus = pendingContinuation.lightweightActionState === undefined
+	const baseCompletionStatus = pendingContinuation.lightweightActionState === undefined
 		? {
 			...collectContinuationCompletionStatus(session, pendingContinuation.requestId),
 			failureMessage: undefined
 		}
 		: collectLightweightActionCompletionStatus(pendingContinuation.lightweightActionState);
+	const completionStatus = chatCompletionProtocolFailed
+		? {
+			...baseCompletionStatus,
+			resultStatus: "completed_with_warnings" as const,
+			warnings: [
+				...baseCompletionStatus.warnings,
+				"The provider did not submit the required structured chat answer."
+			]
+		}
+		: baseCompletionStatus;
 	if (completionStatus.failureMessage !== undefined) {
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}

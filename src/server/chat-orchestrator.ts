@@ -121,6 +121,7 @@ import { isPlanSafeDynamicMcpToolName } from "../tools/dynamic-mcp-tools.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace, getNoWorkspaceToolNames } from "../tools/tool-catalog.js";
 import { ApprovalGateway, ReadOnlyToolApprovalGateway, type PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError, type ExecutionControlContext } from "../tools/execution-control.js";
+import { CHAT_COMPLETION_CONTROL_TOOL_NAME, type ChatCompletionContext } from "../tools/chat-completion-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
 import {
@@ -372,7 +373,10 @@ function resolveHiddenAnswerToolNames(
 	}
 
 	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-	if (routeDecision.lane === "lightweight" || routeDecision.lane === "tool_assisted") {
+	if (routeDecision.lane === "lightweight") {
+		return sourceToolNames;
+	}
+	if (routeDecision.lane === "tool_assisted" && routeDecision.outputTarget === "workspace") {
 		return sourceToolNames;
 	}
 
@@ -401,6 +405,13 @@ function createExecutionControlContext(
 	};
 }
 
+function createChatCompletionContext(routeDecision: WorkflowRouteDecision): ChatCompletionContext | undefined {
+	// Native completion tools are useful when a provider supports them, but they
+	// must not be a mandatory chat boundary: several otherwise capable providers
+	// return their synthesized answer as normal text after a read tool call.
+	return undefined;
+}
+
 function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: WorkflowRouteDecision): AiChatParams {
 	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return params;
@@ -409,6 +420,7 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	const options: AiChatParams["options"] & Record<string, unknown> = {
 		...(params.options ?? {})
 	};
+	options.outputTarget = routeDecision.outputTarget;
 	if (routeDecision.lane === "read" || routeDecision.lane === "probe" || routeDecision.lane === "lightweight") {
 		// A workspace-bound agent may still receive general-knowledge questions.
 		// Tool evidence is required only when the answer depends on runtime facts.
@@ -424,7 +436,9 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 			...params,
 			options: {
 				...options,
-				toolBudget: params.options?.toolBudget ?? "normal"
+				toolBudget: routeDecision.outputTarget === "chat"
+					? "simple"
+					: (params.options?.toolBudget ?? "normal")
 			}
 		};
 	}
@@ -463,6 +477,18 @@ function createHiddenAnswerSystemPrompt(
 	}
 
 	if (routeDecision.lane === "tool_assisted") {
+		if (routeDecision.outputTarget === "chat") {
+			return [
+				fullSystemPrompt,
+				[
+					"## Read-only chat output contract",
+					"- The requested output target is chat. You may read or verify workspace facts when necessary, but you must not create, modify, delete, or otherwise mutate workspace files.",
+					"- After any needed tool results, return the complete user-facing answer as normal visible assistant text. Do not leave the answer only in thinking/reasoning content or a progress announcement.",
+					"- If the user wants a file changed, stop and explain that the request must be resent with outputTarget=workspace. Do not infer that authorization from prose.",
+					"- Code, configuration, or changelog content may be presented in the response without writing it to disk."
+				].join("\n")
+			].join("\n\n");
+		}
 		return [
 			fullSystemPrompt,
 			[
@@ -471,6 +497,7 @@ function createHiddenAnswerSystemPrompt(
 				"- Use the smallest relevant tool call when current workspace facts are needed.",
 				"- Read, verify, write, destructive, and terminal tools retain their normal policy and approval checks.",
 				"- A single bounded approved change may be completed here. If more work is needed, Daedalus will safely continue it as a workflow.",
+				"- This request explicitly targets the workspace. Do not finish with a progress announcement or a promise to make a change later. After inspection, either perform the bounded authorized change, or clearly state that no workspace change was made and why.",
 				"- Verification is optional in this chat lane. If no verifier is run after a change, state that the result is unverified."
 			].join("\n")
 		].join("\n\n");
@@ -673,6 +700,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const stepRunId: string = `${params.requestId}:answer`;
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
 	const executionControl: ExecutionControlContext | undefined = createExecutionControlContext(chatParams, params.routeDecision);
+	const chatCompletion: ChatCompletionContext | undefined = createChatCompletionContext(params.routeDecision);
 	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision, executionControl);
 	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.intent === "mutate"
 		? createLightweightActionState()
@@ -701,7 +729,10 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			applyToolEventToLightweightActionState(lightweightActionState, event, true);
 		}
 		recordAgentRunToolEvent(params.socket, params.session, runId, event);
-		if (!(executionControl?.requireDecision === true && event.type === "ai.delta")) {
+		if (
+			!(executionControl?.requireDecision === true && event.type === "ai.delta")
+			&& !(chatCompletion?.requireSubmission === true && event.type === "ai.delta")
+		) {
 			forwardToolEvent(event);
 		}
 	};
@@ -732,7 +763,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
 			executionControl,
-			executionControlAvailable: params.routeDecision.lane !== "probe"
+			executionControlAvailable: params.routeDecision.lane !== "probe",
+			chatCompletion
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -818,7 +850,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			true,
 			undefined,
 			lightweightActionState,
-			executionControl
+			executionControl,
+			chatCompletion
 		);
 		await pauseRunForApproval({
 			socket: params.socket,
@@ -832,9 +865,6 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		return;
 	}
 	if (agentResult.status === "tool_budget_required") {
-		if (params.routeDecision.lane === "tool_assisted") {
-			throw new LightweightActionScopeExceededError("write_scope_exceeded");
-		}
 		const pendingBudget = createPendingToolBudget({
 			agentResult,
 			chatParams: persistedChatParams,
@@ -847,10 +877,24 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			userCreatedAt: params.userCreatedAt,
 			stream: true,
 			lightweightActionState,
-			executionControl
+			executionControl,
+			chatCompletion
 		});
 		registerPendingToolBudget(params.session, pendingBudget);
 		sendToolBudgetRequired(params.socket, params.requestId, params.session, runId, pendingBudget);
+		return;
+	}
+	if (agentResult.status === "chat_answer") {
+		await completeHiddenAnswerExecution(
+			params,
+			persistedChatParams,
+			agentResult.answer.answer,
+			{
+				resultStatus: "completed",
+				verificationStatus: undefined,
+				warnings: []
+			}
+		);
 		return;
 	}
 	if (agentResult.status === "execution_decision") {
@@ -948,6 +992,20 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		return;
 	}
 	if (agentResult.status === "protocol_violation") {
+		if (chatCompletion?.requireSubmission === true) {
+			await completeHiddenAnswerExecution(
+				params,
+				persistedChatParams,
+				"模型没有完成结构化聊天收束，已安全停止；未执行任何工作区写入。请重试，或切换支持工具调用的模型。",
+				{
+					resultStatus: "completed_with_warnings",
+					verificationStatus: undefined,
+					warnings: ["The provider did not submit the required structured chat answer."],
+					failureMessage: undefined
+				}
+			);
+			return;
+		}
 		throw new Error(agentResult.reason);
 	}
 	if (executionControl?.requireDecision === true) {
@@ -964,7 +1022,12 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	}
 	const completionStatus = lightweightActionState === undefined
 		? {
-			...collectToolAssistedCompletionStatus(params.session, runId, params.routeDecision.lane),
+			...collectToolAssistedCompletionStatus(
+				params.session,
+				runId,
+				params.routeDecision.lane,
+				params.routeDecision.outputTarget
+			),
 			failureMessage: undefined
 		}
 		: collectLightweightActionCompletionStatus(lightweightActionState);
@@ -978,7 +1041,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 function collectToolAssistedCompletionStatus(
 	session: ClientSession,
 	runId: string,
-	lane: AgentRunLane
+	lane: AgentRunLane,
+	outputTarget: WorkflowRouteDecision["outputTarget"]
 ): {
 	resultStatus: "completed" | "completed_with_warnings";
 	verificationStatus?: "verified" | "unverified" | undefined;
@@ -992,7 +1056,13 @@ function collectToolAssistedCompletionStatus(
 		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
 	));
 	if (!changedWorkspace) {
-		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+		return outputTarget === "workspace"
+			? {
+				resultStatus: "completed_with_warnings",
+				verificationStatus: undefined,
+				warnings: ["The workspace output target completed without a successful write or destructive tool result; no workspace change was recorded."]
+			}
+			: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const verified: boolean = evidence.some((item: ExecutionEvidence): boolean => (
 		item.status === "succeeded"
@@ -1688,7 +1758,9 @@ async function runToolBudgetDecisionContinuation(params: {
 				);
 			}
 			recordAgentRunToolEvent(socket, session, pending.requestId, event);
-			forwardToolEvent(event);
+			if (!(pendingContinuation.chatCompletion?.requireSubmission === true && event.type === "ai.delta")) {
+				forwardToolEvent(event);
+			}
 		};
 
 		const toolContext = {
@@ -1697,7 +1769,8 @@ async function runToolBudgetDecisionContinuation(params: {
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
 			clientType: getClientConnection(socket)?.clientType,
-			executionControl: pendingContinuation.executionControl
+			executionControl: pendingContinuation.executionControl,
+			chatCompletion: pendingContinuation.chatCompletion
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2486,6 +2559,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					intent: routeDecision.intent,
 					scope: routeDecision.scope,
 					lane: routeDecision.lane,
+					outputTarget: routeDecision.outputTarget,
 					reason: routeDecision.reason,
 					forcedByOption: routeDecision.forcedByOption ?? null,
 					safetyOverride: routeDecision.safetyOverride ?? null

@@ -556,6 +556,11 @@ function createOutcomeStatus(
 	}
 
 	if (failedChecks.length > 0) {
+		if (phase.toolGroup === "read") {
+			// Discovery cannot safely repair workspace state. Preserve the failed
+			// evidence for the user instead of turning a read problem into write work.
+			return "blocked";
+		}
 		if (
 			phase.toolGroup === "write"
 			&& failedChecks.every((check: WorkflowFailedCheck): boolean => COMPLETION_FAILURE_CODES.has(check.code))

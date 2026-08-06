@@ -557,6 +557,9 @@ async function runPlanAgentDecision(
 	if (agentResult.status === "execution_decision") {
 		throw new Error("Execution control is not available while generating a plan.");
 	}
+	if (agentResult.status === "chat_answer") {
+		throw new Error("Structured chat completion is not available while generating a plan.");
+	}
 
 	const rawDecision: unknown = parseJsonObjectLoose(agentResult.text);
 	return {

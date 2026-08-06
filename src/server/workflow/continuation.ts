@@ -33,6 +33,13 @@ import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 
 const MAX_WORKFLOW_WRITE_GUARD_RETRY_ATTEMPTS: number = 2;
 
+function getCompletedAgentText(agentResult: ProviderAgentResult): string {
+	if (agentResult.status !== "completed") {
+		throw new Error(`Expected completed workflow phase result, received ${agentResult.status}.`);
+	}
+	return agentResult.text;
+}
+
 /** Internal test seam for exercising the scheduler without a live provider. */
 export type WorkflowRuntimeDependencies = {
 	createPhasePrompt?: typeof createWorkflowPhasePrompt | undefined;
@@ -389,7 +396,7 @@ export async function continueWorkflowExecution(
 					const retryPhaseParams: AiChatParams = createPhaseParams(
 						state.originalParams,
 						retryPhase,
-						createWorkflowWriteGuardRetryMessage(phaseMessage, retryAllowedTools, writeGuardRetryAttempt, agentResult.text),
+						createWorkflowWriteGuardRetryMessage(phaseMessage, retryAllowedTools, writeGuardRetryAttempt, getCompletedAgentText(agentResult)),
 						false
 					);
 					retryPhaseParams.options = {
@@ -534,10 +541,14 @@ export async function continueWorkflowExecution(
 			const message: string = "Execution control is not available inside a planned workflow phase.";
 			throw new WorkflowExecutionError(message, plan, new Error(message), phaseOutputs);
 		}
+		if (agentResult.status === "chat_answer") {
+			const message: string = "Structured chat completion is not available inside a planned workflow phase.";
+			throw new WorkflowExecutionError(message, plan, new Error(message), phaseOutputs);
+		}
 
 		if (shouldRequireWorkflowWriteTool(phase) && !didWorkflowWritePhaseExecute(phase, phaseToolStats)) {
 			const guardMessage: string = `写入阶段「${phase.title}」没有实际调用写入工具或触发审批，已阻止将该 Todo 标记为完成。`;
-			const guardOutcome: WorkflowPhaseOutput = createWorkflowWriteGuardOutcome(phase, phaseRunId, guardMessage, agentResult.text, phaseToolObservations);
+			const guardOutcome: WorkflowPhaseOutput = createWorkflowWriteGuardOutcome(phase, phaseRunId, guardMessage, getCompletedAgentText(agentResult), phaseToolObservations);
 			const guardCommand = scheduleWorkflowPhaseOutcome(state, phase, guardOutcome, MAX_WORKFLOW_AUTO_REPAIR_ROUNDS);
 			state = guardCommand.state;
 			plan = state.plan;
@@ -567,7 +578,7 @@ export async function continueWorkflowExecution(
 
 		const phaseOutcome: WorkflowPhaseOutput = applyDeterministicVerificationGate(
 			phase,
-			createWorkflowPhaseOutcome(phase, phaseRunId, agentResult.text, phaseToolObservations),
+			createWorkflowPhaseOutcome(phase, phaseRunId, getCompletedAgentText(agentResult), phaseToolObservations),
 			phaseOutputs
 		);
 		const outcomeCommand = scheduleWorkflowPhaseOutcome(state, phase, phaseOutcome, MAX_WORKFLOW_AUTO_REPAIR_ROUNDS);
@@ -623,7 +634,7 @@ export async function continueWorkflowExecution(
 				session,
 				state.history,
 				state.originalParams.message,
-				agentResult.text,
+				getCompletedAgentText(agentResult),
 				persistRequestId,
 				userCreatedAt,
 				undefined,
@@ -648,7 +659,7 @@ export async function continueWorkflowExecution(
 				sendSessionEvent(socket, requestId, session, "agent.message.done", {
 					runId: plan.id,
 					stepRunId: phaseRunId,
-					text: agentResult.text,
+					text: getCompletedAgentText(agentResult),
 					context: {
 						historyMessagesStored: session.messages.length,
 						historyBudgetTokens: state.historyBudgetTokens,
@@ -660,7 +671,7 @@ export async function continueWorkflowExecution(
 					id: requestId,
 					ok: true,
 					result: {
-						text: agentResult.text,
+						text: getCompletedAgentText(agentResult),
 						context: {
 							historyMessagesStored: session.messages.length,
 							historyBudgetTokens: state.historyBudgetTokens,
@@ -672,7 +683,7 @@ export async function continueWorkflowExecution(
 				sendSessionEvent(socket, requestId, session, "agent.message.done", {
 					runId: plan.id,
 					stepRunId: phaseRunId,
-					text: agentResult.text,
+					text: getCompletedAgentText(agentResult),
 					context: {
 						historyMessagesStored: session.messages.length,
 						historyBudgetTokens: state.historyBudgetTokens,
@@ -684,7 +695,7 @@ export async function continueWorkflowExecution(
 					id: requestId,
 					ok: true,
 					result: {
-						text: agentResult.text,
+						text: getCompletedAgentText(agentResult),
 						context: {
 							historyMessagesStored: session.messages.length,
 							historyBudgetTokens: state.historyBudgetTokens,

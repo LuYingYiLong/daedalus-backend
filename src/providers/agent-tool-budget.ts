@@ -1,5 +1,5 @@
 import type { ApprovalGateway } from "../tools/approval-gateway.js";
-import { MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../tools/llm-tool-budget.js";
+import { CHAT_TOOL_RESULT_CHAR_LIMIT, MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../tools/llm-tool-budget.js";
 import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult, ToolBudgetLimitKind } from "./agent-types.js";
 
@@ -16,6 +16,12 @@ export function getInitialMaxToolSteps(params: AiChatParams): number {
 		(params.options as Record<string, unknown> | undefined)?.["toolBudget"] as string | undefined,
 		params.skillRefs?.[0]
 	);
+}
+
+export function getInitialToolResultCharLimit(params: AiChatParams): number {
+	return params.options?.outputTarget === "chat"
+		? CHAT_TOOL_RESULT_CHAR_LIMIT
+		: MAX_TOTAL_TOOL_RESULT_CHARS;
 }
 
 export function getContinuationMaxSteps(params: AiChatParams, continuation: AgentContinuation): number {

@@ -5,6 +5,7 @@ import {
 	getSourceScopedServerId,
 	TERMINAL_MCP_SERVER_ID
 } from "./mcp-config.js";
+import * as path from "node:path";
 import { buildCustomMcpServerConfigs } from "./custom-mcp-config-store.js";
 import { GODOT_DIAGNOSTICS_SERVER_ID, GodotDiagnosticsBridge } from "./godot/bridges/diagnostics-bridge.js";
 import { GODOT_EDITOR_SERVER_ID, GodotEditorBridge } from "./godot/bridges/editor-bridge.js";
@@ -24,11 +25,13 @@ import {
 	isWorkspaceSourceAvailable,
 	resolveWorkspaceReadSource,
 	resolveWorkspaceSources,
+	resolveWorkspaceTerminalSource,
 	WorkspaceSourceResolutionError,
 	type WorkspaceScope,
 	type WorkspaceSourceOperation
 } from "../workspace/source-context.js";
 import { WorkspaceSourceIndex } from "../workspace/source-index.js";
+import { readWorkspaceGitHistory } from "../workspace/git-history.js";
 import {
 	clearDynamicMcpToolsForWorkspace,
 	clearGlobalDynamicMcpTools,
@@ -49,7 +52,8 @@ import {
 	MAX_JOB_TIMEOUT_MS,
 	MIN_JOB_TIMEOUT_MS,
 	normalizeTimeoutMs,
-	resolveDefaultCommandTimeoutMs
+	resolveDefaultCommandTimeoutMs,
+	presetRequiresWorkspaceSource
 } from "./terminal/presets.js";
 
 const CUSTOM_MCP_CONNECT_TIMEOUT_MS: number = 30_000;
@@ -544,14 +548,17 @@ export class McpHost {
 		delete forwardedArgs.scope;
 		delete forwardedArgs.continuationToken;
 		const sources = selection.kind === "source" ? [selection.source] : selection.sources;
-		const globalLimit: number = typeof args.limit === "number" && Number.isFinite(args.limit)
+		const requestedLimit: number = typeof args.limit === "number" && Number.isFinite(args.limit)
 			? Math.max(1, Math.floor(args.limit))
-			: name === "list_files" ? 2_000 : 50;
+			: name === "list_files" ? 200 : 50;
+		const globalLimit: number = name === "list_files"
+			? Math.min(requestedLimit, 500)
+			: Math.min(requestedLimit, 500);
 		const continuationToken: string | undefined = typeof args.continuationToken === "string" ? args.continuationToken : undefined;
 		const offset: number = continuationToken?.startsWith("offset:")
 			? Math.max(0, Number.parseInt(continuationToken.slice("offset:".length), 10) || 0)
 			: 0;
-		const perSourceLimit: number = globalLimit + offset;
+		const perSourceLimit: number = globalLimit + offset + 1;
 		const sourceResults = await Promise.all(sources.map(async (source) => {
 			if (!isWorkspaceSourceAvailable(source)) {
 				return {
@@ -622,6 +629,36 @@ export class McpHost {
 			warnings,
 			...(matches.length > offset + globalLimit ? { continuationToken: `offset:${offset + globalLimit}` } : {})
 		});
+	}
+
+	private async callWorkspaceGitHistoryTool(
+		args: Record<string, unknown>,
+		workspace: WorkspaceConfig,
+		abortSignal?: AbortSignal | undefined
+	): Promise<McpTextResult> {
+		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined;
+		const selection = resolveWorkspaceSources(workspace, {
+			sourceFolderId,
+			operation: "read"
+		});
+		if (selection.kind !== "source") {
+			throw new Error("source_required: Git history requires one source folder.");
+		}
+		if (typeof args.fromRef !== "string" || args.fromRef.trim().length === 0) {
+			throw new Error("fromRef is required for Git history.");
+		}
+		const result = await readWorkspaceGitHistory({
+			cwd: selection.source.path,
+			fromRef: args.fromRef,
+			toRef: typeof args.toRef === "string" ? args.toRef : undefined,
+			limit: typeof args.limit === "number" && Number.isFinite(args.limit) ? args.limit : undefined,
+			signal: abortSignal
+		});
+		return createTextToolResult({
+			...result,
+			sourceFolderId: selection.source.id,
+			sourceName: describeWorkspaceSource(selection.source).sourceName
+		}, !result.ok);
 	}
 
 	private callWorkspaceSourceContextTool(name: "list_source_folders" | "get_source_context", workspace: WorkspaceConfig): McpTextResult {
@@ -775,7 +812,8 @@ export class McpHost {
 	private async createTerminalArgs(
 		args: Record<string, unknown>,
 		workspaceId?: string | undefined,
-		commandAuthorization?: TerminalCommandAuthorization | undefined
+		commandAuthorization?: TerminalCommandAuthorization | undefined,
+		toolName?: string | undefined
 	): Promise<Record<string, unknown>> {
 		const resolvedWorkspaceId: string | undefined = workspaceId ?? getCurrentMcpWorkspaceId() ?? this.activeWorkspaceId;
 		const approvalMode = await getApprovalMode();
@@ -792,21 +830,36 @@ export class McpHost {
 			: undefined;
 		if (workspace !== undefined) {
 			const requestedCwd: string | undefined = typeof args.cwd === "string" ? args.cwd.trim() : undefined;
-			const sourceSelection = resolveWorkspaceSources(workspace, {
-				sourceFolderId,
-				operation: "terminal"
-			});
-			sourceFolderId = sourceSelection.kind === "source" ? sourceSelection.source.id : sourceFolderId;
-			if (sourceFolderId === undefined) {
-				throw new Error("source_required: terminal commands must explicitly specify sourceFolderId in a multi-source workspace.");
-			}
-			const source = sourceSelection.kind === "source"
+			const requestedWorkingDirectory: string | undefined = typeof args.workingDirectory === "string"
+				? args.workingDirectory.trim()
+				: undefined;
+			const presetName: string | undefined = typeof args.presetName === "string" ? args.presetName.trim() : undefined;
+			const isPresetCall: boolean = toolName === "run_safe_preset" || toolName === "run_write_preset";
+			const requiresWorkspaceSource: boolean = toolName === "run_command"
+				|| (isPresetCall && presetName !== undefined && presetRequiresWorkspaceSource(presetName));
+			const sourceSelection = requiresWorkspaceSource || sourceFolderId !== undefined
+				? resolveWorkspaceTerminalSource(workspace, {
+					sourceFolderId,
+					pathHint: requestedCwd ?? requestedWorkingDirectory,
+					presetName: isPresetCall ? presetName : undefined
+				})
+				: undefined;
+			sourceFolderId = sourceSelection?.kind === "source" ? sourceSelection.source.id : sourceFolderId;
+			const source = sourceSelection?.kind === "source"
 				? sourceSelection.source
-				: getWorkspaceSourceFolder(workspace, sourceFolderId);
+				: sourceFolderId === undefined ? undefined : getWorkspaceSourceFolder(workspace, sourceFolderId);
 			if (requestedCwd !== undefined && requestedCwd.length > 0) {
-				const cwdSource = findContainingWorkspaceSourceFolder(workspace, requestedCwd);
-				if (cwdSource === undefined || cwdSource.id !== source.id) {
-					throw new Error("source_boundary: terminal cwd must remain inside the selected source folder.");
+				const candidateCwd: string = path.isAbsolute(requestedCwd)
+					? path.resolve(requestedCwd)
+					: source === undefined ? requestedCwd : path.resolve(source.path, requestedCwd);
+				const cwdSource = findContainingWorkspaceSourceFolder(workspace, candidateCwd);
+				if (source !== undefined && (cwdSource === undefined || cwdSource.id !== source.id)) {
+					throw new WorkspaceSourceResolutionError(
+						"source_boundary",
+						workspace,
+						"The terminal cwd must remain inside the selected source folder.",
+						[describeWorkspaceSource(source)]
+					);
 				}
 			}
 		}
@@ -908,15 +961,23 @@ export class McpHost {
 			}
 		}
 		if (serverId === TERMINAL_MCP_SERVER_ID) {
-			return this.getSession(serverId, workspaceId).callTool(
-				name,
-				await this.createTerminalArgs(args, workspaceId, commandAuthorization),
-				{
-					signal: abortSignal,
-					timeoutMs: resolveTerminalMcpRequestTimeoutMs(name, args),
-					onProgress
+			try {
+				const terminalArgs: Record<string, unknown> = await this.createTerminalArgs(args, workspaceId, commandAuthorization, name);
+				return this.getSession(serverId, workspaceId).callTool(
+					name,
+					terminalArgs,
+					{
+						signal: abortSignal,
+						timeoutMs: resolveTerminalMcpRequestTimeoutMs(name, args),
+						onProgress
+					}
+				);
+			} catch (error: unknown) {
+				if (error instanceof WorkspaceSourceResolutionError) {
+					return createSourceErrorResult(error);
 				}
-			);
+				throw error;
+			}
 		}
 
 		if (serverId === GODOT_EDITOR_SERVER_ID) {
@@ -955,6 +1016,9 @@ export class McpHost {
 				}
 				if (name === "list_files" || name === "search_text") {
 					return await this.callWorkspaceIndexedTool(name, args, workspace);
+				}
+				if (name === "get_git_history") {
+					return await this.callWorkspaceGitHistoryTool(args, workspace, abortSignal);
 				}
 				if (name === "read_text_file") {
 					const selection = resolveWorkspaceReadSource(workspace, String(args.relativePath ?? ""), {

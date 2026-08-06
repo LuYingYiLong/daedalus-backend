@@ -8,6 +8,7 @@ import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import type { AiChatParams } from "../../../src/protocol/types.js";
 import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
+import { CHAT_COMPLETION_CONTROL_TOOL_NAME } from "../../../src/tools/chat-completion-control.js";
 
 type RecordedRequest = {
 	url: string;
@@ -321,6 +322,52 @@ async function withMissingToolCallRetryMockServer(run: (baseUrl: string, request
 				index: 0,
 				delta: {
 					content: "读取完成。"
+				},
+				finish_reason: null
+			}]
+		});
+		response.end("data: [DONE]\n\n");
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") {
+		throw new Error("Mock server did not expose a TCP port");
+	}
+
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
+async function withStructuredChatAnswerMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", body });
+		assert.equal(request.url, "/chat/completions");
+
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		writeSseChunk(response, {
+			id: "chatcmpl-structured-answer",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "glm-5.2",
+			choices: [{
+				index: 0,
+				delta: {
+					tool_calls: [{
+						index: 0,
+						id: "call-chat-answer",
+						type: "function",
+						function: {
+							name: CHAT_COMPLETION_CONTROL_TOOL_NAME,
+							arguments: "{\"answer\":\"npm 是 Node.js 的包管理器。\"}"
+						}
+					}]
 				},
 				finish_reason: null
 			}]
@@ -1125,5 +1172,36 @@ test("streaming agent tolerates two required tool-call prelude retries", async (
 		assert.equal(requests.length, 4);
 		assert.match(JSON.stringify(requests[1]?.body.messages), /当前阶段要求先调用工具/);
 		assert.match(JSON.stringify(requests[2]?.body.messages), /当前阶段要求先调用工具/);
+	});
+});
+
+test("streaming agent accepts the dedicated structured chat completion signal", async (): Promise<void> => {
+	await withStructuredChatAnswerMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const params: AiChatParams = {
+			message: "npm 是什么？",
+			options: {
+				stream: true
+			}
+		};
+		(params.options as Record<string, unknown>).requireChatCompletionTool = true;
+
+		const result = await runOpenAICompatibleAgentStreaming(
+			params,
+			{ provider: "zhipu", apiKey: "test-key", baseUrl, model: "glm-5.2" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			[],
+			undefined,
+			undefined,
+			undefined,
+			{ chatCompletion: { requireSubmission: true } }
+		);
+
+		assert.equal(result.status, "chat_answer");
+		assert.equal(result.status === "chat_answer" ? result.answer.answer : "", "npm 是 Node.js 的包管理器。");
+		assert.equal(requests.length, 1);
+		assert.match(JSON.stringify(requests[0]?.body.tools), new RegExp(CHAT_COMPLETION_CONTROL_TOOL_NAME));
 	});
 });

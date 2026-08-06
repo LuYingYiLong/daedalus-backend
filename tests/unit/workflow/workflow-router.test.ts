@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { getExecutionPolicy, routeWorkflowExecution } from "../../../src/workflow/router.js";
+import { canWriteToWorkspace, getExecutionPolicy, getOutputTarget, routeWorkflowExecution } from "../../../src/workflow/router.js";
 
 const workspaceContext = { hasActiveWorkspace: true };
 const noWorkspaceContext = { hasActiveWorkspace: false };
@@ -35,7 +35,52 @@ test("agent auto requests with a workspace use tool-assisted chat independent of
 		assert.equal(route.intent, "answer");
 		assert.equal(route.scope, "bounded");
 		assert.equal(route.lane, "tool_assisted");
+		assert.equal(route.outputTarget, "chat");
 	}
+});
+
+test("workspace output is granted only by a structured target", (): void => {
+	const chatRoute = routeWorkflowExecution({ message: "更新日志", mode: "agent" }, workspaceContext);
+	const workspaceRoute = routeWorkflowExecution({
+		message: "任意文本",
+		mode: "agent",
+		options: { outputTarget: "workspace" }
+	}, workspaceContext);
+
+	assert.equal(getOutputTarget({ message: "更新日志", mode: "agent" }), "chat");
+	assert.equal(chatRoute.outputTarget, "chat");
+	assert.equal(workspaceRoute.outputTarget, "workspace");
+	assert.equal(canWriteToWorkspace({ message: "任意文本", mode: "agent" }), false);
+	assert.equal(canWriteToWorkspace({ message: "任意文本", mode: "agent", options: { outputTarget: "workspace" } }), true);
+});
+
+test("explicit chat output wins over a workflow option", (): void => {
+	const route = routeWorkflowExecution({
+		message: "任意文本",
+		mode: "agent",
+		options: { outputTarget: "chat", workflow: "multi_phase" }
+	}, workspaceContext);
+	assert.equal(route.lane, "read");
+	assert.equal(route.safetyOverride, "output_chat_only");
+	assert.equal(canWriteToWorkspace({
+		message: "任意文本",
+		mode: "agent",
+		options: { outputTarget: "chat", workflow: "multi_phase" }
+	}), false);
+});
+
+test("legacy explicit workflow remains a structured workspace authorization", (): void => {
+	const params = { message: "任意文本", mode: "agent" as const, options: { workflow: "multi_phase" as const } };
+	const route = routeWorkflowExecution(params, workspaceContext);
+	assert.equal(getOutputTarget(params), "workspace");
+	assert.equal(route.lane, "workflow");
+	assert.equal(canWriteToWorkspace(params), true);
+});
+
+test("a tool budget never acts as workspace authorization", (): void => {
+	const params = { message: "任意文本", mode: "agent" as const, options: { toolBudget: "project_edit" as const } };
+	assert.equal(getOutputTarget(params), "chat");
+	assert.equal(canWriteToWorkspace(params), false);
 });
 
 test("explicit multi-phase and llm-planned options start workflows only with a workspace", (): void => {

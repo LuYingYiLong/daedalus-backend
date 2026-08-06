@@ -64,3 +64,16 @@ test("tool budget decision acknowledges before resuming long-running continuatio
 	assert.equal(runnerSource.includes("id: responseId"), false);
 	assert.equal(runnerSource.includes("id: pending.requestId"), true);
 });
+
+test("tool-assisted chat pauses for a budget decision instead of escalating the write scope", async (): Promise<void> => {
+	const source: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
+	const budgetStart: number = source.indexOf('if (agentResult.status === "tool_budget_required")');
+	const budgetEnd: number = source.indexOf('if (agentResult.status === "chat_answer")', budgetStart);
+	assert.ok(budgetStart >= 0);
+	assert.ok(budgetEnd > budgetStart);
+
+	const budgetBranch: string = source.slice(budgetStart, budgetEnd);
+	assert.equal(budgetBranch.includes('routeDecision.lane === "tool_assisted"'), false);
+	assert.equal(budgetBranch.includes("createPendingToolBudget"), true);
+	assert.equal(budgetBranch.includes("sendToolBudgetRequired"), true);
+});

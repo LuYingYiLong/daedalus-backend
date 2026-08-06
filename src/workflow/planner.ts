@@ -32,6 +32,7 @@ const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 		promptId: "godot.assistant",
 		toolBudget: "project_edit",
 		allowedTools: [...READ_TOOLS, ...WRITE_TOOLS],
+		writeRequirement: "write",
 		instruction: "基于已收集上下文完成必要修改。优先小步修改，必须使用 create/overwrite/replace/apply/add/attach/connect/set/unset 等实际写入工具完成修改；这些写入工具会走审批系统。修改项目设置时先用 propose_* 预览，但不要把 propose_* 当作实现结果。",
 		acceptanceCriteria: ["必要文件、场景或项目设置已由实际写入工具完成修改。"]
 	},
@@ -129,7 +130,8 @@ function createPlan(title: string, phaseIds: FixedWorkflowPhaseId[], executionPr
 		todos: createTodos(phases),
 		source: "fixed",
 		revision: 0,
-		executionProfile
+		executionProfile,
+		semanticsVersion: 2
 	};
 }
 
@@ -152,7 +154,8 @@ export function createSingleAnswerPlan(params: AiChatParams, allowedTools?: read
 		phases: [phase],
 		todos: createTodos([phase]),
 		source: "fixed",
-		revision: 0
+		revision: 0,
+		semanticsVersion: 2
 	};
 }
 

@@ -1,6 +1,7 @@
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
 import { getEffectiveToolPolicy, getToolPolicy } from "../tools/tool-policy.js";
 import { isValidWorkflowCompletionTarget, normalizeWorkspaceRelativeArtifactPath } from "./completion-contract.js";
+import { getWorkflowToolSemantics, type WorkflowValidationCapability } from "./tool-semantics.js";
 import type {
 	WorkflowCompletionTarget,
 	WorkflowFailedCheck,
@@ -10,9 +11,6 @@ import type {
 	WorkflowToolObservation
 } from "./types.js";
 
-const SUMMARY_TOOL_INTENT_PATTERN: RegExp = /(准备|将要|接下来|现在|马上|先).{0,20}(调用|使用|读取|运行|查询)|\b(I will|I'll|I am going to|I'm going to)\b/iu;
-const TOOL_REFERENCE_PATTERN: RegExp = /\b(mcp_[a-z0-9_]+|read_text_file|inspect_scene_tree|replace_text_in_file|query_docs|resolve_library_id|godot\.[a-z0-9_.-]+)\b/iu;
-const CONTENT_READBACK_EXTENSIONS: readonly string[] = [".md", ".mdx", ".rst", ".txt"];
 const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
 	"git_repository_missing",
 	"package_manifest_missing",
@@ -46,7 +44,7 @@ function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 
 function parsedResultFromToolEvent(event: Extract<ToolEvent, { type: "tool.result" }>): Record<string, unknown> {
 	const parsedResult: Record<string, unknown> = {};
-	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs", "artifactFileRefs", "sourceFolderId"]) {
+	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "failureCode", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs", "artifactFileRefs", "sourceFolderId"]) {
 		const value: unknown = event[key as keyof typeof event];
 		if (value !== undefined) {
 			parsedResult[key] = value;
@@ -88,6 +86,7 @@ export function applyToolEventToWorkflowObservations(
 ): WorkflowToolObservation[] {
 	if (event.type === "tool.call") {
 		const risk: string | undefined = getEffectiveToolPolicy(event.toolName, event.args)?.risk;
+		const semantics = getWorkflowToolSemantics(event.toolName, event.args);
 		return upsertObservation(observations, {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
@@ -95,12 +94,15 @@ export function applyToolEventToWorkflowObservations(
 			status: "called",
 			argsSummary: summarizeArgs(event.args),
 			artifactRefs: [],
-			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined
+			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined,
+			validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
+			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies]
 		});
 	}
 
 	if (event.type === "tool.approval_required") {
 		const risk: string | undefined = getEffectiveToolPolicy(event.toolName, event.args)?.risk;
+		const semantics = getWorkflowToolSemantics(event.toolName, event.args);
 		return upsertObservation(observations, {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
@@ -108,7 +110,9 @@ export function applyToolEventToWorkflowObservations(
 			status: "approval_required",
 			argsSummary: summarizeArgs(event.args),
 			artifactRefs: [],
-			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined
+			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined,
+			validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
+			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies]
 		});
 	}
 
@@ -116,6 +120,7 @@ export function applyToolEventToWorkflowObservations(
 		const previous: WorkflowToolObservation | undefined = findObservation(observations, event.toolCallId);
 		const risk: string | undefined = previous?.risk ?? getToolPolicy(event.toolName)?.risk;
 		const parsedResult: Record<string, unknown> = parsedResultFromToolEvent(event);
+		const semantics = getWorkflowToolSemantics(event.toolName, previous?.argsSummary ?? {});
 		const validationStatus: unknown = parsedResult.validationStatus;
 		const ok: unknown = parsedResult.ok;
 		const failed: boolean = validationStatus !== "not_applicable" && (validationStatus === "failed" || ok === false);
@@ -138,8 +143,11 @@ export function applyToolEventToWorkflowObservations(
 			parsedResult,
 			artifactRefs,
 			artifactFileRefs,
-				sourceFolderId: observedSourceFolderId,
-			fileEditFingerprints
+			sourceFolderId: observedSourceFolderId,
+			fileEditFingerprints,
+			validationCapabilities: semantics.validationCapabilities === undefined ? previous?.validationCapabilities : [...semantics.validationCapabilities],
+			repairFamilies: semantics.repairFamilies === undefined ? previous?.repairFamilies : [...semantics.repairFamilies],
+			failureCode: typeof parsedResult.failureCode === "string" ? parsedResult.failureCode : undefined
 		});
 	}
 
@@ -163,55 +171,21 @@ export function applyToolEventToWorkflowObservations(
 }
 
 function isVerificationObservation(observation: WorkflowToolObservation): boolean {
-	if (observation.risk === "verify") {
-		return true;
-	}
-
-	if (isContentReadbackVerification(observation)) {
-		return true;
-	}
-
-	return observation.toolName === "mcp_godot_lsp_get_file_diagnostics"
-		|| observation.toolName.startsWith("mcp_godot_lsp_")
-		|| observation.toolName === "mcp_godot_dap_get_last_error"
-		|| observation.toolName.startsWith("mcp_godot_dap_")
-		|| observation.toolName === "mcp_godot_dap_get_stack_trace"
-		|| observation.toolName === "mcp_godot_inspect_scene_tree"
-		|| observation.toolName === "mcp_godot_validate_scene_script_references";
+	return (observation.validationCapabilities?.length ?? 0) > 0;
 }
 
-/** A post-write readback is the deterministic validation for prose-only files. */
-function isContentReadbackVerification(observation: WorkflowToolObservation): boolean {
-	if (
-		observation.toolName !== "mcp_workspace_read_text_file"
-		&& observation.toolName !== "mcp_godot_read_text_file"
-	) {
+function isSuccessfulVerificationObservation(phase: WorkflowPhase, observation: WorkflowToolObservation): boolean {
+	if (observation.status !== "succeeded" || observation.parsedResult?.validationStatus === "not_applicable") {
 		return false;
 	}
-
-	return (observation.artifactRefs ?? []).some((artifact: string): boolean => {
-		const normalized: string = artifact.replace(/^res:\/\//iu, "").toLowerCase();
-		return CONTENT_READBACK_EXTENSIONS.some((extension: string): boolean => normalized.endsWith(extension));
-	});
-}
-
-function isSuccessfulVerificationObservation(observation: WorkflowToolObservation): boolean {
-	return observation.status === "succeeded"
-		&& observation.parsedResult?.validationStatus !== "not_applicable"
-		&& isVerificationObservation(observation);
+	const capabilities: readonly WorkflowValidationCapability[] = observation.validationCapabilities ?? [];
+	return capabilities.some((capability: WorkflowValidationCapability): boolean => (
+		capability !== "artifact_readback" || phase.verificationRequirements?.includes("artifact_readback") === true
+	));
 }
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
 	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
-		return true;
-	}
-	// LSP transport failures have no structured result to repair from. Treat them as
-	// an optional diagnostics-environment gap; Godot check-only remains the code gate.
-	if (
-		observation.status === "failed"
-		&& observation.toolName.startsWith("mcp_godot_lsp_")
-		&& observation.parsedResult === undefined
-	) {
 		return true;
 	}
 	return typeof observation.parsedResult?.applicabilityCode === "string"
@@ -239,8 +213,8 @@ function collectEnvironmentWarnings(observations: WorkflowToolObservation[]): st
 			: "Godot verification environment is unavailable.");
 }
 
-function hasSuccessfulVerificationObservation(observations: WorkflowToolObservation[]): boolean {
-	return observations.some(isSuccessfulVerificationObservation);
+function hasSuccessfulVerificationObservation(phase: WorkflowPhase, observations: WorkflowToolObservation[]): boolean {
+	return observations.some((observation: WorkflowToolObservation): boolean => isSuccessfulVerificationObservation(phase, observation));
 }
 
 function hasSuccessfulMutationObservation(observations: WorkflowToolObservation[]): boolean {
@@ -309,6 +283,14 @@ function isResolvedByLaterSuccess(
 
 function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObservation[], agentResultText: string): WorkflowFailedCheck[] {
 	const failedChecks: WorkflowFailedCheck[] = [];
+	if (phase.toolGroup === "summarize") {
+		if (agentResultText.trim().length === 0) {
+			failedChecks.push({ code: "summary_content_missing", failureCode: "summary_content_missing", message: "总结阶段没有产生可见正文。", severity: "error" });
+		}
+		if (phase.allowedTools.length === 0 && observations.length > 0) {
+			failedChecks.push({ code: "summary_tool_call_protocol_violation", failureCode: "summary_tool_call_protocol_violation", message: "总结阶段的结构化协议不允许工具调用。", severity: "error" });
+		}
+	}
 	for (const [index, observation] of observations.entries()) {
 		if (observation.status === "approval_required") {
 			failedChecks.push({
@@ -355,6 +337,7 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 			for (const failedCheck of parsedFailedChecks) {
 				failedChecks.push({
 					code: String(parsedResult.validationStatus ?? "tool_failed_check"),
+					failureCode: typeof parsedResult.failureCode === "string" ? parsedResult.failureCode : String(parsedResult.validationStatus ?? "tool_failed_check"),
 					message: String(failedCheck),
 					toolCallId: observation.toolCallId,
 						toolName: observation.toolName,
@@ -366,6 +349,7 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 		} else if (observation.status === "failed") {
 			failedChecks.push({
 				code: String(parsedResult.validationStatus ?? "tool_failed"),
+				failureCode: typeof parsedResult.failureCode === "string" ? parsedResult.failureCode : String(parsedResult.validationStatus ?? "tool_failed"),
 				message: String(parsedResult.summary ?? `${observation.toolName} failed`),
 				toolCallId: observation.toolCallId,
 					toolName: observation.toolName,
@@ -374,19 +358,6 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 					artifactFileRef: observation.artifactFileRefs?.[0]
 			});
 		}
-	}
-
-	if (
-		phase.toolGroup === "summarize"
-		&& observations.length === 0
-		&& SUMMARY_TOOL_INTENT_PATTERN.test(agentResultText)
-		&& TOOL_REFERENCE_PATTERN.test(agentResultText)
-	) {
-		failedChecks.push({
-			code: "summary_requested_tool",
-			message: "总结阶段输出了工具调用预告或后续读取动作，但 summarize 阶段不能调用工具，也不能把未执行动作当作最终交付。",
-			severity: "error"
-		});
 	}
 
 	return failedChecks;
@@ -420,11 +391,20 @@ function observationMatchesCompletionTarget(observation: WorkflowToolObservation
 		const key: unknown = observation.argsSummary?.key;
 		return typeof key === "string" && normalizeTargetValue(key) === normalizeTargetValue(target.key);
 	}
+	if (target.fileRef !== undefined) {
+		return observation.artifactFileRefs?.some((fileRef) => (
+			fileRef.workspaceId === target.fileRef!.workspaceId
+			&& fileRef.sourceFolderId === target.fileRef!.sourceFolderId
+			&& fileRef.relativePath === target.fileRef!.relativePath
+		)) === true;
+	}
 
 	const expected: string = normalizeTargetValue(target.path);
-	const expectedIsBareFilename: boolean = !expected.includes("/");
+	if (target.sourceFolderId !== undefined && observation.sourceFolderId !== target.sourceFolderId) {
+		return false;
+	}
 	return observationTargetValues(observation).some((value: string): boolean => (
-		value === expected || (expectedIsBareFilename && value.endsWith(`/${expected}`))
+		value === expected
 	));
 }
 
@@ -435,8 +415,8 @@ function isSuccessfulMutation(observation: WorkflowToolObservation): boolean {
 function isReadbackObservation(observation: WorkflowToolObservation): boolean {
 	return observation.risk === "read"
 		|| observation.risk === "verify"
-		|| observation.toolName.includes("read_text_file")
-		|| observation.toolName.includes("inspect_scene_tree");
+		|| (observation.validationCapabilities?.includes("artifact_readback") === true)
+		|| (observation.validationCapabilities?.includes("godot_scene_reference_check") === true);
 }
 
 function collectCompletionContractFailedChecks(
@@ -460,10 +440,13 @@ function collectCompletionContractFailedChecks(
 		if (matchingMutations.length === 0) {
 			failedChecks.push({
 				code: target.kind === "artifact" ? "target_artifact_missing" : "required_mutation_missing",
+				failureCode: target.kind === "artifact" ? "target_artifact_missing" : "required_mutation_missing",
 				message: target.kind === "artifact"
 					? `写入阶段没有实际创建或修改目标文件 ${target.path}。`
 					: `写入阶段没有实际修改目标项目设置 ${target.key}。`,
 				artifact: target.kind === "artifact" ? target.path : target.key,
+				targetKind: target.kind === "artifact" ? target.targetKind : "project_setting",
+				artifactFileRef: target.kind === "artifact" ? target.fileRef : undefined,
 				severity: "error"
 			});
 			if (!contract.requireAll) {
@@ -478,10 +461,13 @@ function collectCompletionContractFailedChecks(
 		if (readbacks.length > 0 && !readbacks.some((observation: WorkflowToolObservation): boolean => observation.status === "succeeded")) {
 			failedChecks.push({
 				code: "target_readback_failed",
+				failureCode: "target_readback_failed",
 				message: target.kind === "artifact"
 					? `目标文件 ${target.path} 的回读或检查失败。`
 					: `目标项目设置 ${target.key} 的回读失败。`,
 				artifact: target.kind === "artifact" ? target.path : target.key,
+				targetKind: target.kind === "artifact" ? target.targetKind : "project_setting",
+				artifactFileRef: target.kind === "artifact" ? target.fileRef : undefined,
 				severity: "error"
 			});
 		}
@@ -546,7 +532,7 @@ function createOutcomeStatus(
 		if (failedChecks.length > 0) {
 			return "needs_fix";
 		}
-		if (!hasSuccessfulVerificationObservation(observations) && !hasEnvironmentIssueObservation(observations)) {
+		if (!hasSuccessfulVerificationObservation(phase, observations) && !hasEnvironmentIssueObservation(observations)) {
 			return "blocked";
 		}
 	}
@@ -584,9 +570,7 @@ export function createWorkflowPhaseOutcome(
 		...collectCompletionContractFailedChecks(phase, observations)
 	];
 	const status: WorkflowPhaseOutcomeStatus = createOutcomeStatus(phase, failedChecks, observations);
-	const summaries: string[] = failedChecks.some((check: WorkflowFailedCheck): boolean => check.code === "summary_requested_tool")
-		? failedChecks.map((check: WorkflowFailedCheck): string => check.message)
-		: collectSummaries(observations);
+	const summaries: string[] = collectSummaries(observations);
 	const blockedReason: string | undefined = status === "blocked"
 		? (phase.toolGroup === "verify"
 			? hasEnvironmentIssueObservation(observations)
@@ -633,52 +617,6 @@ export function createWorkflowPhaseOutcome(
 	};
 }
 
-function observationMatchesTool(observation: WorkflowToolObservation, toolName: string): boolean {
-	return observation.toolName === toolName
-		&& observation.status === "succeeded"
-		&& observation.parsedResult?.validationStatus !== "not_applicable";
-}
-
-function observationPresetName(observation: WorkflowToolObservation): string {
-	const presetName: unknown = observation.argsSummary?.presetName;
-	return typeof presetName === "string" ? presetName.toLowerCase() : "";
-}
-
-function hasGodotCheckOnly(observations: WorkflowToolObservation[]): boolean {
-	return observations.some((observation: WorkflowToolObservation): boolean => (
-		(
-			observationMatchesTool(observation, "mcp_terminal_run_safe_preset")
-			|| observationMatchesTool(observation, "mcp_terminal_run_write_preset")
-		)
-		&& observationPresetName(observation).includes("check_only")
-	));
-}
-
-function hasGodotCheckOnlyEnvironmentIssue(observations: WorkflowToolObservation[]): boolean {
-	return observations.some((observation: WorkflowToolObservation): boolean => (
-		(
-			observation.toolName === "mcp_terminal_run_safe_preset"
-			|| observation.toolName === "mcp_terminal_run_write_preset"
-		)
-		&& observationPresetName(observation).includes("check_only")
-		&& isEnvironmentIssueObservation(observation)
-	));
-}
-
-function hasSceneValidation(observations: WorkflowToolObservation[]): boolean {
-	return observations.some((observation: WorkflowToolObservation): boolean => (
-		observationMatchesTool(observation, "mcp_godot_validate_scene_script_references")
-		|| (
-			observationMatchesTool(observation, "mcp_terminal_run_safe_preset")
-			&& (observationPresetName(observation).includes("validate_scene") || observationPresetName(observation).includes("scene"))
-		)
-	));
-}
-
-function collectPreviouslyModifiedArtifacts(outputs: WorkflowPhaseOutput[]): string[] {
-	return uniqueStrings(outputs.flatMap((output: WorkflowPhaseOutput): string[] => output.modifiedArtifacts));
-}
-
 function collectVerificationObservations(
 	outcome: WorkflowPhaseOutput,
 	previousOutputs: WorkflowPhaseOutput[]
@@ -691,13 +629,25 @@ function collectVerificationObservations(
 	];
 }
 
-function createGateFailure(code: string, message: string, artifact: string): WorkflowFailedCheck {
+function createGateFailure(code: string, message: string): WorkflowFailedCheck {
 	return {
 		code,
 		message,
-		artifact,
 		severity: "error"
 	};
+}
+
+function hasValidationCapability(
+	observations: WorkflowToolObservation[],
+	capability: WorkflowValidationCapability,
+	sourceFolderId: string | undefined
+): boolean {
+	return observations.some((observation: WorkflowToolObservation): boolean => (
+		observation.status === "succeeded"
+		&& observation.parsedResult?.validationStatus !== "not_applicable"
+		&& observation.validationCapabilities?.includes(capability) === true
+		&& (sourceFolderId === undefined || observation.sourceFolderId === undefined || observation.sourceFolderId === sourceFolderId)
+	));
 }
 
 export function applyDeterministicVerificationGate(
@@ -709,40 +659,23 @@ export function applyDeterministicVerificationGate(
 		return outcome;
 	}
 
-	const modifiedArtifacts: string[] = collectPreviouslyModifiedArtifacts(previousOutputs);
-	const gdArtifacts: string[] = modifiedArtifacts.filter((artifact: string): boolean => artifact.endsWith(".gd"));
-	const sceneArtifacts: string[] = modifiedArtifacts.filter((artifact: string): boolean => artifact.endsWith(".tscn"));
 	const verificationObservations: WorkflowToolObservation[] = collectVerificationObservations(outcome, previousOutputs);
 	const gateFailures: WorkflowFailedCheck[] = [];
-
-	if (gdArtifacts.length > 0 && !hasGodotCheckOnly(verificationObservations) && !hasGodotCheckOnlyEnvironmentIssue(verificationObservations)) {
-		gateFailures.push(createGateFailure(
-			"godot_check_only_required",
-			"修改了 GDScript，但验证阶段没有运行 Godot check-only。",
-			gdArtifacts.join(", ")
-		));
-	}
-	if (gdArtifacts.length > 0 && !hasGodotCheckOnly(verificationObservations) && hasGodotCheckOnlyEnvironmentIssue(verificationObservations)) {
-		gateFailures.push(createGateFailure(
-			"validation_environment_unavailable",
-			"Godot check-only 验证环境不可用，无法判定 GDScript 写入结果。",
-			gdArtifacts.join(", ")
-		));
-	}
-	if (sceneArtifacts.length > 0 && !hasSceneValidation(verificationObservations)) {
-		gateFailures.push(createGateFailure(
-			"scene_validation_required",
-			"修改了场景文件，但验证阶段没有运行场景验证。",
-			sceneArtifacts.join(", ")
-		));
+	for (const requirement of phase.verificationRequirements ?? []) {
+		if (!hasValidationCapability(verificationObservations, requirement, phase.sourceFolderId)) {
+			gateFailures.push(createGateFailure(
+				`${requirement}_required`,
+				`验证阶段未产生所需的结构化验证能力：${requirement}。`
+			));
+		}
 	}
 
 	if (gateFailures.length === 0) {
 		return outcome;
 	}
 
-	const environmentFailures: WorkflowFailedCheck[] = gateFailures.filter((failure: WorkflowFailedCheck): boolean => failure.code === "validation_environment_unavailable");
-	const actionableFailures: WorkflowFailedCheck[] = gateFailures.filter((failure: WorkflowFailedCheck): boolean => failure.code !== "validation_environment_unavailable");
+	const environmentFailures: WorkflowFailedCheck[] = [];
+	const actionableFailures: WorkflowFailedCheck[] = gateFailures;
 	const failedChecks: WorkflowFailedCheck[] = [...outcome.failedChecks, ...actionableFailures];
 	const summary: string = gateFailures.map((failure: WorkflowFailedCheck): string => failure.message).join("\n");
 	if (actionableFailures.length === 0) {

@@ -472,11 +472,11 @@ server.registerTool(
 				oldContent = await fs.readFile(resolvedPath, "utf8");
 			} catch {
 				errors.push(`File does not exist: ${relativePath}`);
-				return asJsonTextResult({ valid: false, path: relativePath, errors });
+				return asJsonTextResult({ valid: false, failureCode: "target_file_missing", path: relativePath, errors });
 			}
 
 			if (errors.length > 0) {
-				return asJsonTextResult({ valid: false, path: relativePath, errors });
+				return asJsonTextResult({ valid: false, failureCode: "write_validation_failed", path: relativePath, errors });
 			}
 
 			const previewLength: number = Math.min(content.length, 500);
@@ -540,7 +540,7 @@ server.registerTool(
 
 			if (!oldContent.includes(oldText)) {
 				errors.push("oldText not found in file. Ensure exact match including whitespace and indentation.");
-				return asJsonTextResult({ valid: false, path: relativePath, errors });
+				return asJsonTextResult({ valid: false, failureCode: "replace_target_not_found", path: relativePath, errors });
 			}
 
 			const newContent: string = oldContent.replace(oldText, newText);

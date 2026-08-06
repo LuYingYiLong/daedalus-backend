@@ -3,8 +3,6 @@ import { applyToolEventToWorkflowObservations } from "./outcome.js";
 import type { WorkflowToolObservation } from "./types.js";
 import type { ExecutionDecision } from "./agent-run-state.js";
 
-const GODOT_VALIDATION_PATH_PATTERN: RegExp = /\.(?:gd|tscn|tres|godot|gdshader)$/iu;
-const SOURCE_VALIDATION_PATH_PATTERN: RegExp = /\.(?:[cm]?[jt]sx?|vue|svelte)$/iu;
 const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
 	"git_repository_missing",
 	"package_manifest_missing",
@@ -140,10 +138,11 @@ export function collectLightweightActionCompletionStatus(
 	}
 
 	const modifiedPaths: Set<string> = collectModifiedPaths(observations.slice(0, lastWriteIndex + 1));
+	const modifiedFamilies: Set<string> = collectModifiedFamilies(observations.slice(0, lastWriteIndex + 1));
 	const laterObservations: WorkflowToolObservation[] = observations.slice(lastWriteIndex + 1);
 	const relevantVerification: WorkflowToolObservation[] = laterObservations.filter((
 		observation: WorkflowToolObservation
-	): boolean => isRelevantVerificationObservation(observation, modifiedPaths));
+	): boolean => isRelevantVerificationObservation(observation, modifiedPaths, modifiedFamilies));
 	const successfulVerification: boolean = relevantVerification.some((
 		observation: WorkflowToolObservation
 	): boolean => observation.status === "succeeded");
@@ -236,12 +235,10 @@ function isEnvironmentIssueObservation(observation: WorkflowToolObservation): bo
 
 function isRelevantVerificationObservation(
 	observation: WorkflowToolObservation,
-	modifiedPaths: Set<string>
+	modifiedPaths: Set<string>,
+	modifiedFamilies: Set<string>
 ): boolean {
-	if (observation.risk === "read") {
-		return pathsOverlap(modifiedPaths, collectObservationPaths(observation));
-	}
-	if (observation.risk !== "verify") {
+	if (observation.risk !== "read" && observation.risk !== "verify") {
 		return false;
 	}
 
@@ -250,16 +247,23 @@ function isRelevantVerificationObservation(
 		return pathsOverlap(modifiedPaths, observationPaths);
 	}
 
-	const toolName: string = observation.toolName.toLowerCase();
-	const presetName: string = String(observation.argsSummary?.presetName ?? "").toLowerCase();
-	if (toolName.includes("godot") || presetName.includes("godot")) {
-		return [...modifiedPaths].some((pathValue: string): boolean => GODOT_VALIDATION_PATH_PATTERN.test(pathValue));
+	const capabilities: readonly string[] = observation.validationCapabilities ?? [];
+	if (capabilities.includes("workspace_typecheck")) {
+		return modifiedFamilies.has("workspace_file") && hasMatchingSourceScope(observation, modifiedPaths);
 	}
-	if (presetName.includes("typecheck") || presetName.includes("test")) {
-		return [...modifiedPaths].some((pathValue: string): boolean => SOURCE_VALIDATION_PATH_PATTERN.test(pathValue));
+	if (capabilities.includes("godot_script_check")) {
+		return modifiedFamilies.has("godot_script") && hasMatchingSourceScope(observation, modifiedPaths);
 	}
+	if (capabilities.includes("godot_scene_reference_check")) {
+		return modifiedFamilies.has("godot_scene") && hasMatchingSourceScope(observation, modifiedPaths);
+	}
+	return false;
+}
 
-	return modifiedPaths.size === 0;
+function hasMatchingSourceScope(observation: WorkflowToolObservation, modifiedPaths: Set<string>): boolean {
+	if (modifiedPaths.size === 0) return false;
+	const sourcePrefix: string = `${observation.sourceFolderId ?? ""}:`;
+	return [...modifiedPaths].some((path: string): boolean => path.startsWith(sourcePrefix));
 }
 
 function collectModifiedPaths(observations: WorkflowToolObservation[]): Set<string> {
@@ -275,15 +279,27 @@ function collectModifiedPaths(observations: WorkflowToolObservation[]): Set<stri
 	return result;
 }
 
+function collectModifiedFamilies(observations: WorkflowToolObservation[]): Set<string> {
+	const families: Set<string> = new Set();
+	for (const observation of observations) {
+		if (!isSuccessfulWriteObservation(observation)) continue;
+		for (const family of observation.repairFamilies ?? []) families.add(family);
+	}
+	return families;
+}
+
 function collectObservationPaths(observation: WorkflowToolObservation): Set<string> {
 	const values: string[] = [];
+	for (const fileRef of observation.artifactFileRefs ?? []) {
+		values.push(`${fileRef.sourceFolderId}:${fileRef.relativePath}`);
+	}
 	for (const key of ["relativePath", "resourcePath", "scenePath", "scriptPath", "path"]) {
 		const value: unknown = observation.argsSummary?.[key];
 		if (typeof value === "string") {
-			values.push(value);
+		values.push(`${observation.sourceFolderId ?? ""}:${value}`);
 		}
 	}
-	values.push(...(observation.artifactRefs ?? []));
+	values.push(...(observation.artifactRefs ?? []).map((value: string): string => `${observation.sourceFolderId ?? ""}:${value}`));
 	return new Set(values.map(normalizePathValue).filter((value: string): boolean => value.length > 0));
 }
 
@@ -297,7 +313,7 @@ function pathsOverlap(left: Set<string>, right: Set<string>): boolean {
 	}
 	for (const leftPath of left) {
 		for (const rightPath of right) {
-			if (leftPath === rightPath || leftPath.endsWith(`/${rightPath}`) || rightPath.endsWith(`/${leftPath}`)) {
+			if (leftPath === rightPath) {
 				return true;
 			}
 		}

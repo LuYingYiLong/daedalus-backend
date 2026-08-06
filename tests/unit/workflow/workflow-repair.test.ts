@@ -50,7 +50,7 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 		3,
 		verify,
 		"`%TitleLabel` 未设置 unique name，需要修复脚本。",
-		[{ code: "script_invalid", message: "脚本检查失败。", artifact: "scripts/game.gd" }]
+		[{ code: "script_invalid", failureCode: "script_invalid", targetKind: "godot_script", message: "脚本检查失败。", artifact: "scripts/game.gd" }]
 	);
 
 	assert.deepEqual(
@@ -74,7 +74,7 @@ test("workflow auto repair insertion preserves current todos and adds repair plu
 test("workspace repairs inherit the generic execution profile", (): void => {
 	const write: WorkflowPhase = {
 		...createPhase("write", "Update workspace file", "write"),
-		allowedTools: ["mcp_workspace_write_text_file"]
+		allowedTools: ["mcp_workspace_overwrite_text_file"]
 	};
 	const verify: WorkflowPhase = createPhase("verify", "Verify workspace file", "verify");
 	const plan: WorkflowPlan = {
@@ -90,8 +90,8 @@ test("workspace repairs inherit the generic execution profile", (): void => {
 		2,
 		verify,
 		"Verification failed",
-		[{ code: "target_readback_failed", message: "Readback failed", artifact: "src/service.ts" }],
-		["mcp_workspace_write_text_file"]
+		[{ code: "target_readback_failed", failureCode: "target_readback_failed", targetKind: "workspace_file", message: "Readback failed", artifact: "src/service.ts" }],
+		["mcp_workspace_overwrite_text_file"]
 	);
 	const repair: WorkflowPhase | undefined = repairedPlan.phases.find((phase: WorkflowPhase): boolean => phase.repairOf === "verify");
 	assert.equal(repair?.promptId, "workspace.assistant");
@@ -103,7 +103,7 @@ test("workflow repair permits two actual rounds and preserves missing target con
 		...createPhase("create-main", "Create main scene", "write"),
 		allowedTools: ["mcp_godot_create_scene"],
 		completionContract: {
-			targets: [{ kind: "artifact", path: "scenes/Main.tscn" }],
+			targets: [{ kind: "artifact", path: "scenes/Main.tscn", targetKind: "godot_scene" }],
 			requireAll: true
 		}
 	};
@@ -118,6 +118,8 @@ test("workflow repair permits two actual rounds and preserves missing target con
 	};
 	const failedChecks: WorkflowFailedCheck[] = [{
 		code: "target_artifact_missing",
+		failureCode: "target_artifact_missing",
+		targetKind: "godot_scene",
 		message: "The target scene was not created.",
 		artifact: "scenes/Main.tscn"
 	}];
@@ -127,7 +129,7 @@ test("workflow repair permits two actual rounds and preserves missing target con
 	assert.equal(countWorkflowAutoRepairRounds(firstRepair), 1);
 	assert.equal(firstRepairPhase?.allowedTools.includes("mcp_godot_create_scene"), true);
 	assert.deepEqual(firstRepairPhase?.completionContract, {
-		targets: [{ kind: "artifact", path: "scenes/Main.tscn" }],
+			targets: [{ kind: "artifact", path: "scenes/Main.tscn", targetKind: "godot_scene" }],
 		requireAll: true
 	});
 
@@ -206,6 +208,8 @@ test("workflow auto repair narrows scene failures to scene write tools", (): voi
 	const failedChecks: WorkflowFailedCheck[] = [
 		{
 			code: "scene_reference_invalid",
+			failureCode: "scene_reference_invalid",
+			targetKind: "godot_scene",
 			message: "scenes/main.tscn 的 script reference 缺失，需要重新挂载脚本。",
 			artifact: "scenes/main.tscn"
 		}
@@ -245,6 +249,8 @@ test("workflow auto repair narrows project setting failures to setting write too
 	const failedChecks: WorkflowFailedCheck[] = [
 		{
 			code: "project_setting_mismatch",
+			failureCode: "project_setting_mismatch",
+			targetKind: "project_setting",
 			message: "project.godot 中 application/config/name 仍为旧值。",
 			artifact: "project.godot"
 		}
@@ -293,5 +299,5 @@ test("unknown repair targets block automatic write repair", (): void => {
 		message: "The repair target cannot be identified."
 	}]);
 	assert.deepEqual(unresolved.tools, []);
-	assert.match(unresolved.reason, /no structured artifact/u);
+	assert.match(unresolved.reason, /structured failure code/u);
 });

@@ -9,6 +9,7 @@ import type { ChatCompletionContext } from "../tools/chat-completion-control.js"
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { cloneLightweightActionState, type LightweightActionState } from "../workflow/lightweight-action.js";
 import type { WorkflowRunState } from "../workflow/types.js";
+import { migratePendingWorkflowRunState } from "../workflow/semantics-migration.js";
 import type { StoredApprovalEvent } from "./session-store.js";
 
 export type PersistedProviderChatOptions = {
@@ -110,8 +111,9 @@ export function createRuntimePendingContinuation(
 	}
 	const persistedRunState: WorkflowRunState | undefined = persisted.agentRunState ?? persisted.workflowState;
 	if (persistedRunState !== undefined) {
-		continuation.agentRunState = persistedRunState;
-		continuation.workflowState = persistedRunState;
+		const migratedRunState: WorkflowRunState = migratePendingWorkflowRunState(persistedRunState);
+		continuation.agentRunState = migratedRunState;
+		continuation.workflowState = migratedRunState;
 	}
 	if (isExecutionControlContext(persisted.executionControl)) {
 		continuation.executionControl = { ...persisted.executionControl };

@@ -4,6 +4,7 @@ import type { ClientSession } from "../client-session.js";
 import type { OnToolEvent, ToolEvent } from "../../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../../tools/tool-result-parser.js";
 import { getEffectiveToolPolicy, getToolPolicy } from "../../tools/tool-policy.js";
+import { getWorkflowToolSemantics } from "../../workflow/tool-semantics.js";
 import type { WorkflowPhase } from "../../workflow/types.js";
 import { sendSessionEvent, sendTransientSessionEvent } from "../session-events.js";
 import { scheduleTerminalJobWakeup } from "../terminal-job-wakeup.js";
@@ -265,7 +266,7 @@ export function updateWorkflowPhaseToolStats(stats: WorkflowPhaseToolStats, even
 }
 
 export function shouldRequireWorkflowWriteTool(phase: WorkflowPhase): boolean {
-	return phase.toolGroup === "write";
+	return phase.writeRequirement === "write" || (phase.writeRequirement === undefined && phase.toolGroup === "write");
 }
 
 export function didWorkflowWritePhaseExecute(phase: WorkflowPhase, stats: WorkflowPhaseToolStats): boolean {
@@ -273,17 +274,7 @@ export function didWorkflowWritePhaseExecute(phase: WorkflowPhase, stats: Workfl
 		return true;
 	}
 
-	return isWorkflowProposalPhase(phase) && stats.successfulProposeToolEvents > 0;
-}
-
-export function isWorkflowProposalPhase(phase: WorkflowPhase): boolean {
-	const text: string = `${phase.id}\n${phase.title}\n${phase.instruction}`.toLowerCase();
-	return text.includes("propose")
-		|| text.includes("preview")
-		|| text.includes("diff")
-		|| text.includes("预览")
-		|| text.includes("提案")
-		|| text.includes("方案");
+	return phase.writeRequirement === "propose" && stats.successfulProposeToolEvents > 0;
 }
 
 export function createWorkflowWriteGuardRetryMessage(
@@ -321,10 +312,8 @@ export function createWorkflowWriteGuardRetryMessage(
 
 export function getWorkflowWriteGuardRetryAllowedTools(phase: WorkflowPhase): string[] {
 	return phase.allowedTools.filter((toolName: string): boolean => {
-		if (toolName.startsWith("mcp_terminal_")) {
-			return false;
-		}
 		const risk: string | undefined = getToolPolicy(toolName)?.risk;
-		return risk === "propose" || risk === "write" || risk === "destructive";
+		return (risk === "propose" || risk === "write" || risk === "destructive")
+			&& (getWorkflowToolSemantics(toolName).repairFamilies?.length ?? 0) > 0;
 	});
 }

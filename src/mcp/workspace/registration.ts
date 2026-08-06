@@ -165,7 +165,7 @@ export function registerWorkspaceTools(server: McpServer): void {
 			try {
 				const content = await service.readTextFile(relativePath);
 				if (!content.includes(oldText)) {
-					return asJsonTextResult({ valid: false, path: relativePath, errors: ["oldText not found in file"] });
+					return asJsonTextResult({ valid: false, failureCode: "replace_target_not_found", path: relativePath, errors: ["oldText not found in file"] });
 				}
 				const nextContent = content.replace(oldText, newText);
 				return asJsonTextResult({

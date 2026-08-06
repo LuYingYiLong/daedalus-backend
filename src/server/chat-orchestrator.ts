@@ -203,7 +203,7 @@ import {
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { cancelPendingToolBudgetsForRequest, createPendingToolBudget, createToolBudgetStopReason, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
-import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
+import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
 import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
 import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
@@ -615,7 +615,13 @@ function applyExecutionDecisionCompletionContract(
 	const expectedTargets: WorkflowCompletionTarget[] = decision.expectedArtifacts.map((artifact: string): WorkflowCompletionTarget => (
 		decision.targetKind === "project_setting"
 			? { kind: "project_setting", key: artifact }
-			: { kind: "artifact", path: artifact }
+			: {
+				kind: "artifact",
+				path: artifact,
+				targetKind: decision.targetKind === "godot_script" || decision.targetKind === "godot_scene"
+					? decision.targetKind
+					: "workspace_file"
+			}
 	));
 	const firstWritePhaseIndex: number = plan.phases.findIndex((phase: WorkflowPhase): boolean => phase.toolGroup === "write");
 	if (firstWritePhaseIndex < 0) {
@@ -642,13 +648,14 @@ function applyExecutionDecisionCompletionContract(
 			? phase
 			: {
 				...phase,
+				writeRequirement: "write",
 				completionContract: {
 					targets,
 					requireAll: true
 				}
 			}
 	));
-	return { ...plan, phases };
+	return { ...plan, phases, semanticsVersion: 2 };
 }
 
 async function createGodotTemplateWorkflowPlanForRuntime(

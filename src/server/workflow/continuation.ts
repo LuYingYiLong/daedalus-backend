@@ -162,8 +162,9 @@ function createWorkflowWriteGuardOutcome(
 		});
 	}
 
-	failedChecks.push({
-		code: "write_tool_missing",
+		failedChecks.push({
+			code: "write_tool_missing",
+			failureCode: "write_tool_missing",
 		message: guardMessage,
 		severity: "error"
 	});

@@ -3,6 +3,7 @@ import type { SkillId } from "../skills/registry.js";
 import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
 import type { WorkflowExecutionProfileId } from "./execution-profile.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
+import type { WorkflowTargetKind, WorkflowValidationCapability } from "./tool-semantics.js";
 
 export type WorkflowPhaseId = string;
 
@@ -16,12 +17,14 @@ export type WorkflowPhaseOutcomeStatus = "completed" | "needs_fix" | "blocked" |
 
 export type WorkflowFailedCheck = {
 	code: string;
+	failureCode?: string | undefined;
 	message: string;
 	toolCallId?: string | undefined;
 	toolName?: string | undefined;
 	artifact?: string | undefined;
 	sourceFolderId?: string | undefined;
 	artifactFileRef?: WorkspaceFileRef | undefined;
+	targetKind?: WorkflowTargetKind | undefined;
 	severity?: string | undefined;
 };
 
@@ -36,6 +39,9 @@ export type WorkflowToolObservation = {
 	artifactRefs?: string[] | undefined;
 	artifactFileRefs?: WorkspaceFileRef[] | undefined;
 	sourceFolderId?: string | undefined;
+	validationCapabilities?: WorkflowValidationCapability[] | undefined;
+	repairFamilies?: WorkflowTargetKind[] | undefined;
+	failureCode?: string | undefined;
 	/** 成功写入且内容实际变化的文件指纹，仅用于自动修复进展判定。 */
 	fileEditFingerprints?: string[] | undefined;
 };
@@ -44,6 +50,7 @@ export type WorkflowCompletionTarget =
 	| {
 		kind: "artifact";
 		path: string;
+		targetKind?: Exclude<WorkflowTargetKind, "project_setting"> | undefined;
 		sourceFolderId?: string | undefined;
 		fileRef?: WorkspaceFileRef | undefined;
 	}
@@ -70,6 +77,9 @@ export type WorkflowPhase = {
 	instruction: string;
 	acceptanceCriteria?: string[] | undefined;
 	completionContract?: WorkflowCompletionContract | undefined;
+	/** The server, never prose, declares what a write phase must actually execute. */
+	writeRequirement?: "write" | "propose" | undefined;
+	verificationRequirements?: WorkflowValidationCapability[] | undefined;
 	requireToolCallOnFirstStep?: boolean | undefined;
 	repairOf?: string | undefined;
 	repairRound?: number | undefined;
@@ -91,6 +101,7 @@ export type WorkflowPlan = {
 	revision?: number | undefined;
 	maxRevisions?: number | undefined;
 	executionProfile?: WorkflowExecutionProfileId | undefined;
+	semanticsVersion?: 2 | undefined;
 };
 
 export type WorkflowPhaseOutput = {

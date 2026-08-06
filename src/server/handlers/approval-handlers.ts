@@ -165,7 +165,7 @@ import {
 	sendContinuedAgentResult,
 	waitForPendingApprovalContinuationRegistration
 } from "../approval-continuation.js";
-import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, isWorkflowProposalPhase, createWorkflowWriteGuardRetryMessage } from "../workflow/tool-events.js";
+import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "../workflow/tool-events.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
 import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "../workflow/events.js";
 import { runWorkflowPhase, createWorkflowPhasePrompt } from "../workflow/phase-runner.js";

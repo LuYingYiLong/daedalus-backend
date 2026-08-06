@@ -71,7 +71,7 @@ test("scheduler inserts repair phases for a repairable verification outcome", ()
 	state.phaseIndex = 1;
 	const outcome: WorkflowPhaseOutput = {
 		...createOutcome(phase, "needs_fix"),
-		failedChecks: [{ code: "artifact_invalid", message: "needs repair", artifact: "src/app.ts" }]
+		failedChecks: [{ code: "artifact_invalid", failureCode: "artifact_invalid", targetKind: "workspace_file", message: "needs repair", artifact: "src/app.ts" }]
 	};
 	const command = scheduleWorkflowPhaseOutcome(state, phase, outcome, 2);
 
@@ -99,12 +99,16 @@ test("scheduler inserts workspace write retry phases for write guard failures", 
 		failedChecks: [
 			{
 				code: "tool_failed_check",
+				failureCode: "replace_target_not_found",
+				targetKind: "workspace_file",
 				message: "oldText not found in file",
 				toolName: "mcp_workspace_propose_replace_text_in_file",
 				artifact: "src/main/services/system-info.ts"
 			},
 			{
 				code: "write_tool_missing",
+				failureCode: "write_tool_missing",
+				targetKind: "workspace_file",
 				message: "写入阶段「实现修改」没有实际调用写入工具或触发审批，已阻止将该 Todo 标记为完成。"
 			}
 		],
@@ -204,14 +208,14 @@ test("scheduler permits a repeated verification failure after a real file mutati
 	};
 	const previousOutcome: WorkflowPhaseOutput = {
 		...createOutcome(previousPhase, "needs_fix"),
-		failedChecks: [{ code: "check", message: "needs repair", artifact: "index.html" }]
+		failedChecks: [{ code: "check", failureCode: "check", targetKind: "workspace_file", message: "needs repair", artifact: "index.html" }]
 	};
 	const state = createState([writePhase, phase], [previousOutcome, repairOutcome]);
 	state.phaseIndex = 1;
 
 	const repeatedOutcome: WorkflowPhaseOutput = {
 		...createOutcome(phase, "needs_fix"),
-		failedChecks: [{ code: "check", message: "needs repair", artifact: "index.html" }]
+		failedChecks: [{ code: "check", failureCode: "check", targetKind: "workspace_file", message: "needs repair", artifact: "index.html" }]
 	};
 	const command = scheduleWorkflowPhaseOutcome(state, phase, repeatedOutcome, 2);
 	assert.equal(command.type, "repair");

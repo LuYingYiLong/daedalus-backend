@@ -178,7 +178,7 @@ test("execution decisions require exact evidence call ids", (): void => {
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, workflow).evidenceToolCallIds, []);
 });
 
-test("no-change tool input binds successful current-run evidence when ids are omitted", (): void => {
+test("no-change decisions require explicit current-run evidence ids", (): void => {
 	const initial = createAgentRunState({
 		sessionId: "session-test",
 		requestId: "request-test",
@@ -222,8 +222,7 @@ test("no-change tool input binds successful current-run evidence when ids are om
 	}, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
 
 	const resolved = validateExecutionDecisionEvidence(probing, decision);
-	assert.equal(resolved.disposition, "no_change");
-	assert.deepEqual(resolved.evidenceToolCallIds, ["current-read", "current-verify"]);
+	assert.equal(resolved.disposition, "blocked");
 });
 
 test("no-change still blocks when no usable read or verify evidence exists", (): void => {
@@ -362,5 +361,5 @@ test("lightweight decisions require a safe evidence-backed bounded target", (): 
 	});
 	assert.deepEqual(validateExecutionDecisionEvidence(probing, valid).expectedArtifacts, ["scripts/Main.gd"]);
 	assert.equal(validateExecutionDecisionEvidence(probing, { ...valid, expectedArtifacts: ["../outside.gd"] }).disposition, "blocked");
-	assert.equal(validateExecutionDecisionEvidence(probing, { ...valid, targetKind: "godot_scene" }).disposition, "blocked");
+	assert.equal(validateExecutionDecisionEvidence(probing, { ...valid, targetKind: "godot_scene" }).disposition, "use_lightweight");
 });

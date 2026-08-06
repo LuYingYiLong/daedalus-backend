@@ -17,6 +17,7 @@ import {
 	type LightweightActionState
 } from "../workflow/lightweight-action.js";
 import { evaluateToolCall, getToolPolicy } from "../tools/tool-policy.js";
+import { getWorkflowToolSemantics } from "../workflow/tool-semantics.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError } from "../tools/execution-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
@@ -356,6 +357,7 @@ export async function validatePendingApprovalBeforeExecution(
 
 export function createApprovedWorkflowToolObservation(pendingApproval: PendingApproval, content: string): WorkflowToolObservation {
 	const parsedResult = parseToolResultSummary(pendingApproval.llmToolName, pendingApproval.args, content);
+	const semantics = getWorkflowToolSemantics(pendingApproval.llmToolName, pendingApproval.args);
 	const failed: boolean = parsedResult.validationStatus !== "not_applicable"
 		&& (parsedResult.validationStatus === "failed" || parsedResult.ok === false);
 	return {
@@ -367,7 +369,12 @@ export function createApprovedWorkflowToolObservation(pendingApproval: PendingAp
 		parsedResult: {
 			...parsedResult
 		},
-		artifactRefs: parsedResult.artifactRefs ?? []
+		artifactRefs: parsedResult.artifactRefs ?? [],
+		artifactFileRefs: parsedResult.artifactFileRefs,
+		sourceFolderId: parsedResult.sourceFolderId ?? (typeof pendingApproval.args.sourceFolderId === "string" ? pendingApproval.args.sourceFolderId : undefined),
+		validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
+		repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies],
+		failureCode: parsedResult.failureCode
 	};
 }
 

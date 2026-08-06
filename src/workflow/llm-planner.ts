@@ -35,13 +35,13 @@ const normalizedPromptIdSchema = z.preprocess((value: unknown): unknown => {
 }, promptIdSchema.optional());
 
 const llmPlanStepSchema = z.object({
-	id: z.string().min(1).max(48).optional(),
+	id: z.string().min(1).max(48),
 	title: z.string().min(1).max(80),
 	instruction: z.string().min(1).max(2000),
 	toolGroup: toolGroupSchema,
 	acceptanceCriteria: z.array(z.string().min(1).max(240)).max(8).optional(),
 	completionTargets: z.object({
-		artifacts: z.array(z.string().min(1).max(260)).max(8).optional(),
+		artifacts: z.array(z.object({ path: z.string().min(1).max(260), targetKind: z.enum(["workspace_file", "godot_script", "godot_scene"]) }).strict()).max(8).optional(),
 		projectSettings: z.array(z.string().min(1).max(180)).max(8).optional(),
 		sourceFolderId: z.string().trim().min(1).max(200).optional()
 	}).strict().optional(),
@@ -130,7 +130,7 @@ function createPlannerSystemPrompt(executionProfile: WorkflowExecutionProfileId)
 function createWorkspacePlannerSystemPrompt(): string {
 	return [
 		"You are a workflow planner. Return one JSON object only; do not call tools or write explanatory prose.",
-		"Schema: { title?: string, steps: [{ id?: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[], completionTargets?: { sourceFolderId?: string, artifacts?: string[], projectSettings?: string[] } }] }.",
+		"Schema: { title?: string, steps: [{ id: string, title: string, instruction: string, toolGroup: 'read'|'write'|'verify'|'summarize', acceptanceCriteria?: string[], completionTargets?: { sourceFolderId?: string, artifacts?: [{ path: string, targetKind: 'workspace_file'|'godot_script'|'godot_scene' }], projectSettings?: string[] } }] }.",
 		"Use read only for evidence gathering, write only for approval-gated workspace changes, verify only for non-mutating checks, and summarize for the final user-facing delivery.",
 		"Plan concrete, minimal steps. Complex mutations normally use read, write, verify, summarize. The final step must be summarize. Do not name tools; the server selects the safe tool set.",
 		"For a write step, completionTargets is optional and may contain only exact workspace-relative paths or project setting keys. When a target is present in a multi-source workspace, include its sourceFolderId. Do not derive targets from prose, descriptions, or expected behavior.",
@@ -235,7 +235,8 @@ function createWorkflowPlanFromLlmPlan(
 		source: "llm",
 		revision: 0,
 		maxRevisions: MAX_LLM_WORKFLOW_REVISIONS,
-		executionProfile
+		executionProfile,
+		semanticsVersion: 2
 	};
 }
 
@@ -302,7 +303,7 @@ function createPhaseFromStep(
 		? profile.promptId
 		: (step.promptId ?? defaultPromptForToolGroup(toolGroup));
 	return {
-		id: createUniqueStepId(step.id ?? step.title, index, usedIds),
+		id: createUniqueStepId(step.id, index, usedIds),
 		title: clipText(step.title, 32),
 		toolGroup,
 		skillId,
@@ -313,8 +314,9 @@ function createPhaseFromStep(
 			: getAllowedToolsForLlmPlannedStep(toolGroup, step.title, step.instruction),
 		instruction: clipText(step.instruction, MAX_PHASE_INSTRUCTION_CHARS),
 		acceptanceCriteria: normalizeAcceptanceCriteria(step.acceptanceCriteria, toolGroup),
-			completionContract: createStructuredWorkflowCompletionContract(toolGroup, step.completionTargets),
-			sourceFolderId: step.completionTargets?.sourceFolderId,
+		completionContract: createStructuredWorkflowCompletionContract(toolGroup, step.completionTargets),
+		sourceFolderId: step.completionTargets?.sourceFolderId,
+		writeRequirement: toolGroup === "write" ? "write" : undefined,
 		requireToolCallOnFirstStep: toolGroup === "write" || toolGroup === "verify" ? true : undefined
 	};
 }
@@ -327,9 +329,8 @@ function mergeRevisedPendingSteps(
 ): WorkflowPlan {
 	const completedPhases: WorkflowPhase[] = plan.phases.slice(0, firstPendingIndex);
 	const completedPhaseIds: Set<string> = new Set(completedPhases.map((phase: WorkflowPhase): string => phase.id));
-	const completedPhaseTitles: Set<string> = new Set(completedPhases.map((phase: WorkflowPhase): string => phase.title.toLowerCase()));
 	const usableSteps: LlmPlanStep[] = rawPlan.steps.filter((step: LlmPlanStep, index: number): boolean => (
-		!doesStepRepeatCompletedPhase(step, index, completedPhaseIds, completedPhaseTitles)
+		!doesStepRepeatCompletedPhase(step, index, completedPhaseIds)
 	));
 	const previousPendingPhases: WorkflowPhase[] = plan.phases.slice(firstPendingIndex);
 	const revisedPendingPhases: WorkflowPhase[] = usableSteps.length > 0
@@ -362,22 +363,8 @@ function mergeRevisedPendingSteps(
 	};
 }
 
-function doesStepRepeatCompletedPhase(
-	step: LlmPlanStep,
-	index: number,
-	completedPhaseIds: Set<string>,
-	completedPhaseTitles: Set<string>
-): boolean {
-	const stepId: string | undefined = step.id?.trim();
-	if (stepId !== undefined && completedPhaseIds.has(normalizeStepId(stepId, index))) {
-		return true;
-	}
-
-	if (completedPhaseIds.has(normalizeStepId(step.title, index))) {
-		return true;
-	}
-
-	return completedPhaseTitles.has(step.title.trim().toLowerCase());
+function doesStepRepeatCompletedPhase(step: LlmPlanStep, index: number, completedPhaseIds: Set<string>): boolean {
+	return completedPhaseIds.has(normalizeStepId(step.id, index));
 }
 
 function createTodos(phases: WorkflowPhase[]): WorkflowTodoItem[] {

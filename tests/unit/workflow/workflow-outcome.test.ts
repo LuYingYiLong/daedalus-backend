@@ -315,7 +315,7 @@ test("verify phase without deterministic validation tool becomes blocked", (): v
 	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 
-test("verify phase accepts a post-write prose document readback", (): void => {
+test("verify phase accepts an explicitly required artifact readback", (): void => {
 	const observations: WorkflowToolObservation[] = applyEvents([{
 		type: "tool.result",
 		step: 0,
@@ -328,7 +328,8 @@ test("verify phase accepts a post-write prose document readback", (): void => {
 		summary: "# Daedalus Backend",
 		artifactRefs: ["README-CN.md"]
 	}]);
-	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "Document readback confirmed.", observations);
+	const phase: WorkflowPhase = { ...createPhase("verify", "verify"), verificationRequirements: ["artifact_readback"] };
+	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-1", "Document readback confirmed.", observations);
 
 	assert.equal(outcome.status, "completed");
 	assert.deepEqual(outcome.verifiedArtifacts, ["README-CN.md"]);
@@ -354,7 +355,7 @@ test("verify phase does not treat a source-code readback as executable validatio
 	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 
-test("summarize phase cannot complete with a tool-call prelude", (): void => {
+test("summarize phase does not infer tool calls from prose", (): void => {
 	const outcome = createWorkflowPhaseOutcome(
 		createPhase("summarize", "summarize"),
 		"phase-run-1",
@@ -362,12 +363,10 @@ test("summarize phase cannot complete with a tool-call prelude", (): void => {
 		[]
 	);
 
-	assert.equal(outcome.status, "blocked");
-	assert.equal(outcome.failedChecks[0]?.code, "summary_requested_tool");
-	assert.match(outcome.summary, /summarize 阶段不能调用工具/);
+	assert.equal(outcome.status, "completed");
 });
 
-test("successful LSP diagnostics lets verify phase complete", (): void => {
+test("LSP diagnostics alone do not satisfy a structured verify phase", (): void => {
 	const observations: WorkflowToolObservation[] = applyEvents([
 		{
 			type: "tool.result",
@@ -386,8 +385,8 @@ test("successful LSP diagnostics lets verify phase complete", (): void => {
 	]);
 	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "验证完成。", observations);
 
-	assert.equal(outcome.status, "completed");
-	assert.deepEqual(outcome.verifiedArtifacts, ["res://scripts/game.gd"]);
+	assert.equal(outcome.status, "blocked");
+	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 
 test("verify phase treats LSP unavailable plus check-only pass as completed", (): void => {
@@ -498,15 +497,15 @@ test("summarize gate blocks unresolved failed outcome until a later completed ou
 			type: "tool.result",
 			step: 0,
 			toolCallId: "call-2",
-			toolName: "mcp_godot_lsp_get_file_diagnostics",
+			toolName: "mcp_godot_validate_scene_script_references",
 			resultChars: 80,
 			truncated: false,
 			ok: true,
 			diagnosticsCount: 0,
 			diagnosticsErrorCount: 0,
 			validationStatus: "passed",
-			summary: "LSP diagnostics passed.",
-			artifactRefs: ["res://scripts/game.gd"]
+			summary: "Scene references passed.",
+			artifactRefs: ["res://scenes/main.tscn"]
 		}])
 	);
 
@@ -548,7 +547,7 @@ test("summarize gate ignores prior approval placeholder from the same phase", ()
 	assert.equal(findBlockingOutcomeBeforeSummarize([failedVerifyOutcome, approvalOutcome], summarizePhase.id), failedVerifyOutcome);
 });
 
-test("deterministic verification gate still requires check-only after GDScript writes", (): void => {
+test("unregistered diagnostics do not satisfy a structured verification gate", (): void => {
 	const writeOutcome: WorkflowPhaseOutput = {
 		phaseId: "implement",
 		phaseRunId: "phase-run-write",
@@ -584,11 +583,11 @@ test("deterministic verification gate still requires check-only after GDScript w
 	);
 	const gatedOutcome = applyDeterministicVerificationGate(verifyPhase, lspOnlyOutcome, [writeOutcome]);
 
-	assert.equal(gatedOutcome.status, "needs_fix");
-	assert.equal(gatedOutcome.failedChecks[0]?.code, "godot_check_only_required");
+	assert.equal(gatedOutcome.status, "blocked");
+	assert.equal(gatedOutcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 
-test("unstructured Godot LSP transport failures become an unverified warning", (): void => {
+test("structured diagnostics-unavailable results become an unverified warning", (): void => {
 	const observations: WorkflowToolObservation[] = applyEvents([
 		{
 			type: "tool.call",
@@ -604,11 +603,16 @@ test("unstructured Godot LSP transport failures become an unverified warning", (
 			target: { kind: "file", path: "res://scripts/game.gd", label: "LSP" }
 		},
 		{
-			type: "tool.error",
+			type: "tool.result",
 			step: 0,
 			toolCallId: "lsp-transport",
 			toolName: "mcp_godot_lsp_get_file_diagnostics",
-			message: "diagnostics connection unavailable"
+			resultChars: 0,
+			truncated: false,
+			ok: false,
+			validationStatus: "not_applicable",
+			applicabilityCode: "diagnostics_unavailable",
+			notApplicableReason: "diagnostics connection unavailable"
 		}
 	]);
 	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-lsp-transport", "", observations);
@@ -1074,7 +1078,7 @@ test("write completion contract ignores malformed legacy prose targets", (): voi
 	assert.deepEqual(outcome.failedChecks, []);
 });
 
-test("write completion contract accepts bare filename target matching a project-relative artifact", (): void => {
+test("write completion contract rejects ambiguous bare filename target matching", (): void => {
 	const phase: WorkflowPhase = {
 		...createPhase("repair-main-scene", "write"),
 		completionContract: {
@@ -1136,8 +1140,8 @@ test("write completion contract accepts bare filename target matching a project-
 	]);
 
 	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-main", "", observations);
-	assert.equal(outcome.status, "completed");
-	assert.deepEqual(outcome.failedChecks, []);
+	assert.equal(outcome.status, "needs_fix");
+	assert.equal(outcome.failedChecks[0]?.code, "target_artifact_missing");
 	assert.deepEqual(outcome.modifiedArtifacts, ["scenes/Main.tscn"]);
 	assert.deepEqual(outcome.verifiedArtifacts, ["scenes/Main.tscn"]);
 });

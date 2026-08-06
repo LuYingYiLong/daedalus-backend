@@ -1,9 +1,16 @@
 import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowToolGroup } from "./types.js";
+import type { WorkflowTargetKind } from "./tool-semantics.js";
 
 export type StructuredCompletionTargets = {
-	artifacts?: readonly string[] | undefined;
+	/** String entries are accepted only while reading old in-process callers; they carry no repair semantics. */
+	artifacts?: readonly (StructuredArtifactTarget | string)[] | undefined;
 	projectSettings?: readonly string[] | undefined;
 	sourceFolderId?: string | undefined;
+};
+
+export type StructuredArtifactTarget = {
+	path: string;
+	targetKind: Exclude<WorkflowTargetKind, "project_setting">;
 };
 
 const INVALID_ARTIFACT_PATH_CHARACTERS: RegExp = /[\u0000-\u001f<>:"|?*()[\]{}（）]/u;
@@ -55,9 +62,9 @@ export function createStructuredWorkflowCompletionContract(
 	}
 
 	const completionTargets: WorkflowCompletionTarget[] = [
-		...(targets.artifacts ?? []).flatMap((artifact: string): WorkflowCompletionTarget[] => {
-			const path: string | undefined = normalizeWorkspaceRelativeArtifactPath(artifact);
-			return path === undefined ? [] : [{ kind: "artifact", path, ...(targets.sourceFolderId === undefined ? {} : { sourceFolderId: targets.sourceFolderId }) }];
+		...(targets.artifacts ?? []).flatMap((artifact: StructuredArtifactTarget | string): WorkflowCompletionTarget[] => {
+			const path: string | undefined = normalizeWorkspaceRelativeArtifactPath(typeof artifact === "string" ? artifact : artifact.path);
+			return path === undefined ? [] : [{ kind: "artifact", path, ...(typeof artifact === "string" ? {} : { targetKind: artifact.targetKind }), ...(targets.sourceFolderId === undefined ? {} : { sourceFolderId: targets.sourceFolderId }) }];
 		}),
 		...(targets.projectSettings ?? []).flatMap((projectSetting: string): WorkflowCompletionTarget[] => {
 			const key: string | undefined = normalizeProjectSettingKey(projectSetting);

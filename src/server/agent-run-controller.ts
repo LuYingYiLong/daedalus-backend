@@ -5,6 +5,7 @@ import { saveAgentRunState } from "../session/agent-run-store.js";
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
 import { isToolApplicabilityCode } from "../tools/tool-applicability.js";
 import { getEffectiveToolPolicy, type ToolRisk } from "../tools/tool-policy.js";
+import { getWorkflowToolSemantics } from "../workflow/tool-semantics.js";
 import {
 	cloneAgentRunState,
 	createAgentRunState,
@@ -141,6 +142,7 @@ export function recordAgentRunToolEvent(
 	const call = calls.get(event.toolCallId);
 	const risk: ToolRisk = call?.risk ?? getEffectiveToolPolicy(event.toolName, {}, session.activeWorkspace?.id)?.risk ?? "read";
 	const eventRecord: Record<string, unknown> = event as unknown as Record<string, unknown>;
+	const semantics = getWorkflowToolSemantics(event.toolName, call?.args ?? {});
 		const artifactRefs: string[] = Array.isArray(eventRecord.artifactRefs)
 			? eventRecord.artifactRefs.filter((item: unknown): item is string => typeof item === "string")
 			: [];
@@ -179,6 +181,7 @@ export function recordAgentRunToolEvent(
 		applicabilityCode: isToolApplicabilityCode(eventRecord.applicabilityCode)
 			? eventRecord.applicabilityCode
 			: undefined,
+		validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
 		terminalObservation: event.type === "tool.result"
 			&& current.lane === "probe"
 			&& event.toolName === "mcp_terminal_run_command"

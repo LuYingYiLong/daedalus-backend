@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ToolApplicabilityCode } from "../tools/tool-applicability.js";
 import type { WorkflowTodoSnapshot } from "./types.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
+import type { WorkflowValidationCapability } from "./tool-semantics.js";
 
 export const AGENT_RUN_STATE_SCHEMA_VERSION = 1 as const;
 
@@ -57,6 +58,7 @@ export type ExecutionEvidence = {
 	validationStatus?: "passed" | "failed" | "not_applicable" | undefined;
 	environmentIssue?: boolean | undefined;
 	applicabilityCode?: ToolApplicabilityCode | undefined;
+	validationCapabilities?: WorkflowValidationCapability[] | undefined;
 	/** A completed, approval-governed terminal command may support complete_read only. */
 	terminalObservation?: boolean | undefined;
 	resultExcerpt?: string | undefined;
@@ -283,13 +285,7 @@ export function validateExecutionDecisionEvidence(
 	const evidenceById: Map<string, ExecutionEvidence> = new Map(
 		currentRunEvidence.map((item: ExecutionEvidence): [string, ExecutionEvidence] => [item.toolCallId, item])
 	);
-	const usableEvidence: ExecutionEvidence[] = currentRunEvidence.filter(isReadOrVerifyEvidence);
-	// 部分 provider 会沿用数组默认值，在成功检查后仍省略 no_change 的证据 ID。
-	// 只恢复这一种安全遗漏；伪造或过期 ID 仍按失败关闭。
-	const evidenceReferences: string[] = decision.disposition === "no_change"
-		&& decision.evidenceToolCallIds.length === 0
-		? usableEvidence.slice(-64).map((evidence: ExecutionEvidence): string => evidence.toolCallId)
-		: decision.evidenceToolCallIds;
+	const evidenceReferences: string[] = decision.evidenceToolCallIds;
 	const resolvedIds: string[] = [];
 	for (const evidenceReference of evidenceReferences) {
 		const exactEvidence: ExecutionEvidence | undefined = evidenceById.get(evidenceReference);
@@ -322,10 +318,8 @@ export function validateExecutionDecisionEvidence(
 	if (expectedArtifacts === null) {
 		return createBlockedExecutionDecision(normalized, "The execution target contains an unsafe workspace path.");
 	}
-	if (normalized.targetKind !== "unknown") {
-		if (normalized.expectedArtifacts.length === 0 || inferExecutionTargetKind(normalized.expectedArtifacts) !== normalized.targetKind) {
-			return createBlockedExecutionDecision(normalized, "The declared target kind does not match the expected artifacts.");
-		}
+	if (normalized.targetKind !== "unknown" && normalized.expectedArtifacts.length === 0) {
+		return createBlockedExecutionDecision(normalized, "A declared target kind requires explicit expected artifacts.");
 	}
 	if (normalized.disposition === "no_change" && resolvedIds.length === 0) {
 		return createBlockedExecutionDecision(normalized, "The no-change decision did not cite successful read or verify evidence.");
@@ -341,10 +335,6 @@ export function validateExecutionDecisionEvidence(
 	}
 	if (normalized.expectedArtifacts.length !== 1 || normalized.targetKind === "unknown" || normalized.targetKind === "godot_script_scene") {
 		return createBlockedExecutionDecision(normalized, "A lightweight write requires one concrete, bounded target.");
-	}
-	const inferredTargetKind: ExecutionTargetKind = inferExecutionTargetKind(normalized.expectedArtifacts);
-	if (inferredTargetKind !== normalized.targetKind) {
-		return createBlockedExecutionDecision(normalized, "The declared target kind does not match the expected artifact.");
 	}
 	return normalized;
 }
@@ -380,14 +370,7 @@ function createBlockedExecutionDecision(decision: ExecutionDecision, summary: st
 }
 
 export function inferExecutionTargetKind(artifacts: readonly string[]): ExecutionTargetKind {
-	const normalized: string[] = artifacts.map((artifact: string): string => artifact.replaceAll("\\", "/").toLowerCase());
-	if (normalized.some((artifact: string): boolean => artifact.endsWith("project.godot"))) return "project_setting";
-	const hasScript: boolean = normalized.some((artifact: string): boolean => artifact.endsWith(".gd"));
-	const hasScene: boolean = normalized.some((artifact: string): boolean => artifact.endsWith(".tscn"));
-	if (hasScript && hasScene) return "godot_script_scene";
-	if (hasScript) return "godot_script";
-	if (hasScene) return "godot_scene";
-	return normalized.length > 0 ? "workspace_file" : "unknown";
+	return artifacts.length > 0 ? "workspace_file" : "unknown";
 }
 
 function normalizeExpectedArtifacts(artifacts: readonly string[]): string[] | null {
@@ -415,6 +398,7 @@ function cloneExecutionEvidence(evidence: ExecutionEvidence): ExecutionEvidence 
 	return {
 		...evidence,
 		artifactRefs: [...evidence.artifactRefs],
-		artifactFileRefs: evidence.artifactFileRefs?.map((fileRef: WorkspaceFileRef): WorkspaceFileRef => ({ ...fileRef }))
+		artifactFileRefs: evidence.artifactFileRefs?.map((fileRef: WorkspaceFileRef): WorkspaceFileRef => ({ ...fileRef })),
+		validationCapabilities: evidence.validationCapabilities === undefined ? undefined : [...evidence.validationCapabilities]
 	};
 }

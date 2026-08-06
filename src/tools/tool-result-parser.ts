@@ -14,6 +14,7 @@ export type ParsedToolResultSummary = {
 	validationStatus?: ToolValidationStatus | undefined;
 	summary?: string | undefined;
 	failedChecks?: string[] | undefined;
+	failureCode?: string | undefined;
 	environmentIssue?: boolean | undefined;
 	applicabilityCode?: ToolApplicabilityCode | undefined;
 	notApplicableReason?: string | undefined;
@@ -370,6 +371,7 @@ function parseTerminalSummary(record: Record<string, unknown>, args: Record<stri
 		validationStatus: explicitStatus ?? (failed ? "failed" : ok === true || status === "completed" ? "passed" : "unknown"),
 		summary: `${presetName}${resourcePath === undefined ? "" : ` ${resourcePath}`} ${failed ? "failed" : ok === true || status === "completed" ? "passed" : "finished"}`,
 		failedChecks: failedChecks.length > 0 ? failedChecks : undefined,
+		failureCode: failed ? (getString(record.failureCode) ?? getErrorCode(record) ?? "tool_failed") : undefined,
 		environmentIssue: environmentIssue || undefined,
 		applicabilityCode,
 		artifactRefs: collectArtifactRefs(args, record),
@@ -419,6 +421,7 @@ function parseGenericJsonSummary(toolName: string, record: Record<string, unknow
 		validationStatus: explicitStatus ?? (effectiveOk === false ? "failed" : effectiveOk === true ? "passed" : "unknown"),
 		summary: getString(record.summary) ?? `${toolName}${effectiveOk === undefined ? "" : effectiveOk ? " passed" : ` failed: ${createFailureMessage(record, "ok=false")}`}`,
 		failedChecks: failedChecks.length > 0 ? failedChecks : undefined,
+		failureCode: effectiveOk === false ? (getString(record.failureCode) ?? getErrorCode(record) ?? "tool_failed") : undefined,
 		environmentIssue: environmentIssue || undefined,
 		applicabilityCode: finalApplicabilityCode,
 		artifactRefs: collectArtifactRefs(args, record)

@@ -1,5 +1,6 @@
 import { READ_TOOLS, VERIFY_TOOLS } from "./planner.js";
 import { getToolPolicy } from "../tools/tool-policy.js";
+import { getWorkflowToolSemantics, type WorkflowTargetKind } from "./tool-semantics.js";
 import type {
 	WorkflowCompletionContract,
 	WorkflowCompletionTarget,
@@ -34,7 +35,7 @@ const REPAIR_READ_TOOLS: string[] = [
 	"mcp_godot_lsp_get_status",
 	"mcp_godot_lsp_get_file_diagnostics"
 ];
-type RepairToolFamily = "workspace" | "script" | "scene" | "project_setting";
+type RepairToolFamily = WorkflowTargetKind;
 
 export type RepairWriteToolResolution = {
 	tools: string[];
@@ -103,44 +104,17 @@ function uniqueTools(tools: readonly string[]): string[] {
 
 function collectActualWriteToolsFromPhase(failedPhase: WorkflowPhase): string[] {
 	return failedPhase.allowedTools.filter((toolName: string): boolean => {
-		if (toolName.startsWith("mcp_terminal_")) {
-			return false;
-		}
 		const risk: string | undefined = getToolPolicy(toolName)?.risk;
-		return risk === "write" || risk === "destructive";
+		return (risk === "write" || risk === "destructive")
+			&& (getWorkflowToolSemantics(toolName).repairFamilies?.length ?? 0) > 0;
 	});
-}
-
-function getRepairToolFamily(toolName: string): RepairToolFamily | undefined {
-	if (toolName.startsWith("mcp_workspace_")) {
-		return "workspace";
-	}
-	if (toolName === "mcp_godot_set_project_setting" || toolName === "mcp_godot_unset_project_setting" || toolName.includes("input_action") || toolName.includes("autoload")) {
-		return "project_setting";
-	}
-	if (toolName.includes("scene") || toolName.includes("node") || toolName.includes("signal")) {
-		return "scene";
-	}
-	if (toolName.startsWith("mcp_godot_") && (toolName.includes("text") || toolName.includes("script"))) {
-		return "script";
-	}
-	return undefined;
 }
 
 function getTargetFamily(target: WorkflowCompletionTarget): RepairToolFamily | undefined {
 	if (target.kind === "project_setting") {
 		return "project_setting";
 	}
-	return getArtifactFamily(target.path);
-}
-
-function getArtifactFamily(artifact: string): RepairToolFamily | undefined {
-	const normalized: string = normalizeCompletionTarget(artifact);
-	if (normalized.endsWith(".tscn")) return "scene";
-	if (normalized.endsWith(".gd")) return "script";
-	if (normalized.endsWith("project.godot")) return "project_setting";
-	if (/\.[a-z0-9]{1,12}$/u.test(normalized) || normalized.endsWith(".gitignore")) return "workspace";
-	return undefined;
+	return target.targetKind;
 }
 
 function collectStructuredRepairFamilies(failedPhase: WorkflowPhase, failedChecks: WorkflowFailedCheck[]): Set<RepairToolFamily> {
@@ -150,13 +124,11 @@ function collectStructuredRepairFamilies(failedPhase: WorkflowPhase, failedCheck
 		if (family !== undefined) families.add(family);
 	}
 	for (const check of failedChecks) {
-		if (check.artifact !== undefined) {
-			const family: RepairToolFamily | undefined = getArtifactFamily(check.artifact);
-			if (family !== undefined) families.add(family);
-		}
+		if (check.targetKind !== undefined) families.add(check.targetKind);
 		if (check.toolName !== undefined) {
-			const family: RepairToolFamily | undefined = getRepairToolFamily(check.toolName);
-			if (family !== undefined) families.add(family);
+			for (const family of getWorkflowToolSemantics(check.toolName).repairFamilies ?? []) {
+				families.add(family);
+			}
 		}
 	}
 	return families;
@@ -184,6 +156,9 @@ export function resolveRepairWriteTools(
 	if (authorizedTools.length === 0) {
 		return { tools: [], reason: "No prior write phase granted a repair tool that can be safely reused." };
 	}
+	if (failedChecks.some((check: WorkflowFailedCheck): boolean => check.failureCode === undefined)) {
+		return { tools: [], reason: "The failed verification has no structured failure code for a safe repair." };
+	}
 	const targetFamilies: Set<RepairToolFamily> = collectStructuredRepairFamilies(failedPhase, failedChecks);
 	if (targetFamilies.size === 0) {
 		if (failedPhase.toolGroup === "write") {
@@ -192,8 +167,8 @@ export function resolveRepairWriteTools(
 		return { tools: [], reason: "The verification failure has no structured artifact, completion target, or tool family for a safe repair." };
 	}
 	const tools: string[] = authorizedTools.filter((toolName: string): boolean => {
-		const family: RepairToolFamily | undefined = getRepairToolFamily(toolName);
-		return family !== undefined && targetFamilies.has(family);
+		const families: readonly RepairToolFamily[] = getWorkflowToolSemantics(toolName).repairFamilies ?? [];
+		return families.some((family: RepairToolFamily): boolean => targetFamilies.has(family));
 	});
 	return tools.length > 0
 		? { tools: uniqueTools(tools), reason: "Repair tools match structured failed targets and existing authorization." }
@@ -214,16 +189,15 @@ function createRepairInstruction(
 			return `${prefix}${check.message}${artifact}`;
 		})
 	].filter((item: string): boolean => item.length > 0)).join("\n");
-	const isWriteRetry: boolean = failedPhase.toolGroup === "write" && (
-		verifyFailureReason.includes("没有实际调用写入工具")
-		|| verifyFailureReason.includes("oldText not found")
-		|| failedChecks.some((check: WorkflowFailedCheck): boolean => check.code === "write_tool_missing")
-	);
+	const isWriteRetry: boolean = failedPhase.toolGroup === "write"
+		&& failedChecks.some((check: WorkflowFailedCheck): boolean => (
+			check.failureCode === "write_tool_missing" || check.failureCode === "replace_target_not_found"
+		));
 	if (isWriteRetry) {
 		return [
 			`上一写入阶段「${failedPhase.title}」没有完成实际落盘修改。`,
 			"请先用只读工具重新读取目标文件的最新内容，再调用下面列出的实际写入工具之一完成修改；如果写入触发审批，按审批流程暂停。",
-			"如果上一次失败包含 oldText not found，必须基于最新文件内容重新构造 oldText 或改用更稳定的行级/覆盖写入工具。",
+			"如遇到结构化替换目标缺失错误，必须基于最新文件内容重新构造精确替换目标，或改用已授权的行级/覆盖写入工具。",
 			"不要只输出计划、修复建议、工具调用预告或后续动作。不要只调用 read/verify/propose 工具替代实际写入。",
 			"不要创建占位文件、临时文件或与用户目标无关的文件；这些不算完成当前修改。",
 			"",
@@ -329,16 +303,7 @@ function createRepairCompletionContract(
 		return { targets: inheritedTargets, requireAll: true };
 	}
 
-	const targets: WorkflowCompletionTarget[] = completionChecks.flatMap((check: WorkflowFailedCheck): WorkflowCompletionTarget[] => {
-		if (check.artifact === undefined) {
-			return [];
-		}
-		return check.code === "required_mutation_missing"
-				? [{ kind: "project_setting", key: check.artifact, sourceFolderId: check.sourceFolderId ?? failedPhase.sourceFolderId }]
-				: [{ kind: "artifact", path: check.artifact, sourceFolderId: check.sourceFolderId ?? failedPhase.sourceFolderId }];
-	});
-	const validTargets: WorkflowCompletionTarget[] = targets.filter(isValidWorkflowCompletionTarget);
-	return validTargets.length > 0 ? { targets: validTargets, requireAll: true } : undefined;
+	return undefined;
 }
 
 export function insertWorkflowAutoRepairPhases(

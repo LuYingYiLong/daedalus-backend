@@ -118,20 +118,51 @@ export function createGodotTemplateWorkflowPlan(
 ): WorkflowPlan | null {
 	if (params.mode === "ask" || params.mode === "plan" || getExecutionPolicy(params) === "read_only") return null;
 	const classification: GodotTaskClassification = classifyGodotTask(target, context);
-	if (classification.type === "scene_attach_script" && classification.scriptPath !== undefined && classification.scenePath !== undefined) {
-		return createScriptSceneAttachPlan(params, classification);
-	}
-	if (classification.type === "script_create_or_edit" && classification.scriptPath !== undefined) {
-		return createScriptWritePlan(params, classification);
-	}
-	if (classification.type === "scene_create" && classification.scenePath !== undefined) {
-		return createSceneCreatePlan(params, classification);
-	}
-	if (classification.type === "project_setting_change") {
-		return createProjectSettingPlan(params);
-	}
+	const plan: WorkflowPlan | null = classification.type === "scene_attach_script" && classification.scriptPath !== undefined && classification.scenePath !== undefined
+		? createScriptSceneAttachPlan(params, classification)
+		: classification.type === "script_create_or_edit" && classification.scriptPath !== undefined
+			? createScriptWritePlan(params, classification)
+			: classification.type === "scene_create" && classification.scenePath !== undefined
+				? createSceneCreatePlan(params, classification)
+				: classification.type === "project_setting_change"
+					? createProjectSettingPlan(params)
+					: null;
+	return plan === null ? null : applyTemplateSemantics(plan, classification);
+}
 
-	return null;
+function applyTemplateSemantics(plan: WorkflowPlan, classification: GodotTaskClassification): WorkflowPlan {
+	const artifactTargets: WorkflowCompletionTarget[] = classification.type === "script_create_or_edit"
+		? [{ kind: "artifact", path: classification.scriptPath!, targetKind: "godot_script" }]
+		: classification.type === "scene_create"
+			? [{ kind: "artifact", path: classification.scenePath!, targetKind: "godot_scene" }]
+			: classification.type === "scene_attach_script"
+				? [
+					{ kind: "artifact", path: classification.scriptPath!, targetKind: "godot_script" },
+					{ kind: "artifact", path: classification.scenePath!, targetKind: "godot_scene" }
+				]
+				: [];
+	const verificationRequirements = classification.type === "script_create_or_edit"
+		? ["godot_script_check" as const]
+		: classification.type === "scene_create" || classification.type === "scene_attach_script"
+			? ["godot_scene_reference_check" as const]
+			: [];
+	return {
+		...plan,
+		semanticsVersion: 2,
+		phases: plan.phases.map((phase: WorkflowPhase): WorkflowPhase => {
+			if (phase.toolGroup === "write") {
+				const target = phase.id === "write-script"
+					? artifactTargets.filter((item: WorkflowCompletionTarget): boolean => item.kind === "artifact" && item.targetKind === "godot_script")
+					: phase.id === "create-scene" || phase.id === "attach-script"
+						? artifactTargets.filter((item: WorkflowCompletionTarget): boolean => item.kind === "artifact" && item.targetKind === "godot_scene")
+						: [];
+				return { ...phase, writeRequirement: "write", completionContract: target.length === 0 ? undefined : { targets: target, requireAll: true } };
+			}
+			return phase.toolGroup === "verify"
+				? { ...phase, verificationRequirements }
+				: phase;
+		})
+	};
 }
 
 export function narrowLlmPlannedWriteTools(phase: Pick<WorkflowPhase, "title" | "instruction" | "toolGroup">): string[] {
@@ -150,42 +181,6 @@ export function getAllowedToolsForLlmPlannedStep(toolGroup: WorkflowPhase["toolG
 	}
 
 	return [...READ_TOOLS];
-}
-
-export function createWorkflowCompletionContract(
-	toolGroup: WorkflowPhase["toolGroup"],
-	title: string,
-	instruction: string,
-	acceptanceCriteria: readonly string[] = []
-): WorkflowCompletionContract | undefined {
-	if (toolGroup !== "write") {
-		return undefined;
-	}
-
-	const text: string = [title, instruction, ...acceptanceCriteria].join("\n");
-	const targets: WorkflowCompletionTarget[] = [];
-	const seen: Set<string> = new Set();
-	const artifactPattern: RegExp = /(?:res:\/\/)?[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*\.(?:gd|tscn|tres|gdshader|ts|tsx|js|jsx|json|md)\b/giu;
-	for (const match of text.matchAll(artifactPattern)) {
-		const path: string = stripResourcePrefix(match[0]).replace(/\\/g, "/");
-		const key: string = `artifact:${path.toLowerCase()}`;
-		if (!seen.has(key)) {
-			seen.add(key);
-			targets.push({ kind: "artifact", path });
-		}
-	}
-
-	const settingPattern: RegExp = /\b(?:application|display|rendering|physics|audio|network|editor|debug)\/[A-Za-z0-9_.\/-]+\b/giu;
-	for (const match of text.matchAll(settingPattern)) {
-		const settingKey: string = match[0].replace(/[.,;:]+$/u, "");
-		const key: string = `project_setting:${settingKey.toLowerCase()}`;
-		if (!seen.has(key)) {
-			seen.add(key);
-			targets.push({ kind: "project_setting", key: settingKey });
-		}
-	}
-
-	return targets.length > 0 ? { targets, requireAll: true } : undefined;
 }
 
 function createScriptSceneAttachPlan(params: AiChatParams, classification: GodotTaskClassification): WorkflowPlan {
@@ -359,7 +354,7 @@ function createPhase(
 		requireToolCallOnFirstStep: toolGroup === "write" ? true : undefined,
 		instruction,
 		acceptanceCriteria,
-		completionContract: createWorkflowCompletionContract(toolGroup, title, instruction, acceptanceCriteria)
+		writeRequirement: toolGroup === "write" ? "write" : undefined
 	};
 }
 

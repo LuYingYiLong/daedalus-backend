@@ -9,6 +9,7 @@ import { resolveReasoningEffort } from "../providers/reasoning-effort.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ToolRisk } from "../tools/tool-policy.js";
+import { createActivityGroupAccumulator, type ActivityGroupAccumulator } from "../session/activity-groups.js";
 
 export type PendingGuide = {
 	id: string;
@@ -122,6 +123,7 @@ export type ClientSession = {
 		risk: ToolRisk;
 		args: Record<string, unknown>;
 	}>>;
+	activityGroupAccumulators: Map<string, ActivityGroupAccumulator>;
 };
 
 export function createClientSession(defaultWorkspace: WorkspaceConfig | undefined): ClientSession {
@@ -159,6 +161,7 @@ export function createClientSession(defaultWorkspace: WorkspaceConfig | undefine
 		workbenchClientPatchSequences: new Map(),
 		agentRuns: new Map(),
 		agentRunToolCalls: new Map(),
+		activityGroupAccumulators: new Map(),
 		eventPersistQueue: Promise.resolve()
 	};
 }
@@ -203,6 +206,7 @@ export function clearActiveSession(session: ClientSession): void {
 	session.terminalErrorEventFingerprints.clear();
 	session.agentRuns.clear();
 	session.agentRunToolCalls.clear();
+	session.activityGroupAccumulators.clear();
 }
 
 export function applySessionMetadata(session: ClientSession, metadata: SessionMetadata): void {

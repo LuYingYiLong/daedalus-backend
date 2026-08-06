@@ -79,6 +79,80 @@ test("canonical timeline keeps request order when older assistant messages are p
 	assert.equal(assistantBlock(result.blocks[3]).content, "最后一轮回答");
 });
 
+test("canonical timeline preserves backend activity group identity and cumulative stats", (): void => {
+	const stored: StoredSession = session([], [
+		event("thinking-delta", "request-activity", "agent.thinking.delta", "2026-08-06T00:00:00.000Z", {
+			text: "inspect"
+		}),
+		event("thinking-done", "request-activity", "agent.thinking.done", "2026-08-06T00:00:01.000Z", {}),
+		event("tool-call", "request-activity", "agent.tool.call", "2026-08-06T00:00:02.000Z", {
+			toolCallId: "write-1",
+			toolName: "mcp_workspace_overwrite_text_file"
+		}),
+		event("run-state", "request-activity", "agent.run.state", "2026-08-06T00:00:02.500Z", {
+			stage: "executing"
+		}),
+		event("tool-result", "request-activity", "agent.tool.result", "2026-08-06T00:00:03.000Z", {
+			toolCallId: "write-1",
+			toolName: "mcp_workspace_overwrite_text_file",
+			ok: true,
+			fileEditBatch: {
+				batchId: "batch-1",
+				editedFiles: [{ sourceFolderId: "frontend", path: "src/App.tsx" }]
+			}
+		})
+	]);
+
+	const assistant = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const thinking = assistant.bodyParts.find((part) => part.type === "thinking");
+	const tool = assistant.bodyParts.find((part) => part.type === "tool");
+	assert.equal(thinking?.type, "thinking");
+	assert.equal(tool?.type, "tool");
+	if (thinking?.type === "thinking" && tool?.type === "tool") {
+		assert.equal(thinking.activityGroupId, tool.activityGroupId);
+		assert.notEqual(thinking.activityPartId, tool.activityPartId);
+		assert.deepEqual(tool.activityGroupStats, { editedFiles: 1, commands: 0, thoughts: 1 });
+	}
+});
+
+test("a body prelude closes the prior thinking group without fragmenting the following tool batch", (): void => {
+	const stored: StoredSession = session([], [
+		event("thinking-delta", "request-prelude", "agent.thinking.delta", "2026-08-06T00:00:00.000Z", { text: "inspect" }),
+		event("prelude", "request-prelude", "agent.message.delta", "2026-08-06T00:00:01.000Z", { text: "I will read the files." }),
+		event("thinking-done", "request-prelude", "agent.thinking.done", "2026-08-06T00:00:02.000Z", {}),
+		event("tool-call-1", "request-prelude", "agent.tool.call", "2026-08-06T00:00:03.000Z", {
+			toolCallId: "read-1",
+			toolName: "mcp_workspace_read_text_file"
+		}),
+		event("run-state", "request-prelude", "agent.run.state", "2026-08-06T00:00:03.500Z", { stage: "executing" }),
+		event("tool-result-1", "request-prelude", "agent.tool.result", "2026-08-06T00:00:04.000Z", {
+			toolCallId: "read-1",
+			toolName: "mcp_workspace_read_text_file",
+			ok: true
+		}),
+		event("tool-call-2", "request-prelude", "agent.tool.call", "2026-08-06T00:00:05.000Z", {
+			toolCallId: "read-2",
+			toolName: "mcp_workspace_read_text_file"
+		}),
+		event("tool-result-2", "request-prelude", "agent.tool.result", "2026-08-06T00:00:06.000Z", {
+			toolCallId: "read-2",
+			toolName: "mcp_workspace_read_text_file",
+			ok: true
+		})
+	]);
+
+	const assistant = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const thinking = assistant.bodyParts.find((part) => part.type === "thinking");
+	const tools = assistant.bodyParts.filter((part) => part.type === "tool");
+	assert.equal(thinking?.type, "thinking");
+	assert.equal(tools.length, 2);
+	if (thinking?.type === "thinking" && tools[0]?.type === "tool" && tools[1]?.type === "tool") {
+		assert.equal(thinking.done, true);
+		assert.notEqual(thinking.activityGroupId, tools[0].activityGroupId);
+		assert.equal(tools[0].activityGroupId, tools[1].activityGroupId);
+	}
+});
+
 test("provider reconnect events discard only failed attempt text and update one persistent part", (): void => {
 	const stored: StoredSession = session([], [
 		event("delta-1", "request-reconnect", "agent.message.delta", "2026-08-03T00:00:00.000Z", { text: "stable partial🙂" }),

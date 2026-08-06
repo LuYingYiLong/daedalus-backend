@@ -24,6 +24,7 @@ import {
 	type AgentRunResultStatus,
 	type AgentRunState
 } from "../workflow/agent-run-state.js";
+import { annotateActivityEvent, createActivityGroupAccumulator } from "../session/activity-groups.js";
 
 const PERSISTED_DELTA_FLUSH_CHARS = 8192;
 const LIVE_DELTA_FLUSH_MS = 32;
@@ -107,6 +108,23 @@ function getRecordString(data: unknown, key: string): string {
 
 	const value: unknown = (data as Record<string, unknown>)[key];
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function annotateSessionActivity(
+	session: ClientSession,
+	requestKey: string,
+	eventName: CanonicalServerEventName,
+	data: unknown
+): unknown {
+	if (typeof data !== "object" || data === null || Array.isArray(data)) {
+		return data;
+	}
+	let accumulator = session.activityGroupAccumulators.get(requestKey);
+	if (accumulator === undefined) {
+		accumulator = createActivityGroupAccumulator();
+		session.activityGroupAccumulators.set(requestKey, accumulator);
+	}
+	return annotateActivityEvent(accumulator, requestKey, eventName, data as Record<string, unknown>);
 }
 
 function createTerminalEventFingerprint(eventName: CanonicalServerEventName, data: unknown, sessionId: string | undefined, persistRequestId: string): string | null {
@@ -673,8 +691,9 @@ export function sendSessionEvent(
 ): void {
 	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
 	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
-	const eventData: unknown = withSessionId(data, sessionId);
-	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, eventData);
+	const baseEventData: unknown = withSessionId(data, sessionId);
+	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, baseEventData);
+	const eventData: unknown = annotateSessionActivity(session, timelineIdentity.persistRequestId, canonicalEventName, baseEventData);
 	if (shouldSuppressDuplicateTerminalEvent(session, canonicalEventName, eventData, sessionId, timelineIdentity.persistRequestId)) {
 		return;
 	}
@@ -737,8 +756,9 @@ export function sendTransientSessionEvent(
 	if (sessionId === undefined) {
 		return;
 	}
-	const eventData: unknown = withSessionId(data, sessionId);
-	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, eventData);
+	const baseEventData: unknown = withSessionId(data, sessionId);
+	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, baseEventData);
+	const eventData: unknown = annotateSessionActivity(session, timelineIdentity.persistRequestId, eventName, baseEventData);
 	const envelope: ServerEvent = createEventEnvelope(eventName, eventData, timelineIdentity.requestId, sessionId);
 	if (socket.readyState === WebSocket.OPEN) {
 		sendJson(socket, envelope);

@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../protocol/types.js";
 import type { StoredMessage, StoredSession, StoredSessionEvent } from "./session-store.js";
+import { annotateActivityEvent, createActivityGroupAccumulator, type TimelineActivityStats } from "./activity-groups.js";
 
 export type TimelineUserBlock = {
 	id: string;
@@ -42,6 +43,10 @@ export type TimelineThinkingPart = {
 	type: "thinking";
 	text: string;
 	done: boolean;
+	activityGroupId?: string;
+	activityPartId?: string;
+	activityPartKind?: "thinking" | "tool";
+	activityGroupStats?: TimelineActivityStats;
 };
 
 export type TimelineProviderReconnectPart = {
@@ -63,6 +68,10 @@ export type TimelineToolPart = {
 	type: "tool";
 	tool_call_id: string;
 	events: Record<string, unknown>[];
+	activityGroupId?: string;
+	activityPartId?: string;
+	activityPartKind?: "thinking" | "tool";
+	activityGroupStats?: TimelineActivityStats;
 };
 
 export type TimelinePlanRecommendedReply = {
@@ -374,23 +383,55 @@ function shouldReplaceMarkdownWithFinalText(existingText: string, finalText: str
 	return commonPrefixLength >= 80 && commonPrefixLength / Math.max(1, Math.min(existingText.length, finalText.length)) >= 0.35;
 }
 
-function appendThinkingPart(parts: TimelineBodyPart[], text: string, done: boolean): void {
-	for (let index: number = parts.length - 1; index >= 0; index -= 1) {
-		const part: TimelineBodyPart = parts[index]!;
-		if (part.type !== "thinking" || part.done) {
-			continue;
-		}
+function getActivityMetadata(data: Record<string, unknown>): {
+	activityGroupId?: string;
+	activityPartId?: string;
+	activityPartKind?: "thinking" | "tool";
+	activityGroupStats?: TimelineActivityStats;
+} {
+	const activityGroupId: string = asString(data.activityGroupId);
+	const activityPartId: string = asString(data.activityPartId);
+	const activityPartKind: string = asString(data.activityPartKind);
+	const stats: Record<string, unknown> = isRecord(data.activityGroupStats) ? data.activityGroupStats : {};
+	const activityGroupStats: TimelineActivityStats | undefined = activityGroupId.length === 0 || activityPartId.length === 0
+		? undefined
+		: {
+			editedFiles: asNumber(stats.editedFiles),
+			commands: asNumber(stats.commands),
+			thoughts: asNumber(stats.thoughts)
+		};
+	return {
+		...(activityGroupId.length === 0 ? {} : { activityGroupId }),
+		...(activityPartId.length === 0 ? {} : { activityPartId }),
+		...(activityPartKind === "thinking" || activityPartKind === "tool" ? { activityPartKind } : {}),
+		...(activityGroupStats === undefined ? {} : { activityGroupStats })
+	};
+}
 
-		if (text.length > 0) {
-			part.text += text;
-		}
-		if (done) {
-			part.done = true;
-		}
+function appendThinkingPart(parts: TimelineBodyPart[], text: string, done: boolean, metadata: ReturnType<typeof getActivityMetadata> = {}): void {
+	const lastPart: TimelineBodyPart | undefined = parts.at(-1);
+	if (text.length > 0 && lastPart?.type === "thinking" && !lastPart.done) {
+		lastPart.text += text;
+		Object.assign(lastPart, metadata);
 		return;
 	}
 
-	parts.push({ type: "thinking", text, done });
+	if (done) {
+		for (let index: number = parts.length - 1; index >= 0; index -= 1) {
+			const part: TimelineBodyPart = parts[index]!;
+			if (part.type !== "thinking" || part.done) {
+				continue;
+			}
+
+			part.done = true;
+			if (part.activityGroupId === metadata.activityGroupId || metadata.activityGroupId === undefined) {
+				Object.assign(part, metadata);
+			}
+			return;
+		}
+	}
+
+	parts.push({ type: "thinking", text, done, ...metadata });
 }
 
 function truncateTextByCodePoints(text: string, count: number): { text: string; removed: number } {
@@ -498,6 +539,7 @@ function appendToolPart(parts: TimelineBodyPart[], eventData: Record<string, unk
 			if (eventRecordId.length > 0 && part.events.some((event: Record<string, unknown>): boolean => event._eventRecordId === eventRecordId)) {
 				return;
 			}
+			Object.assign(part, getActivityMetadata(eventData));
 			part.events.push(cloneRecord(eventData));
 			return;
 		}
@@ -506,6 +548,7 @@ function appendToolPart(parts: TimelineBodyPart[], eventData: Record<string, unk
 	parts.push({
 		type: "tool",
 		tool_call_id: toolCallKey,
+		...getActivityMetadata(eventData),
 		events: [cloneRecord(eventData)]
 	});
 }
@@ -946,6 +989,7 @@ function buildAssistantBodyParts(
 ): TimelineBodyPart[] {
 	const parts: TimelineBodyPart[] = [];
 	const fileEditBatches: Record<string, unknown>[] = [];
+	const activityAccumulator = createActivityGroupAccumulator();
 	let hasMarkdownDelta: boolean = false;
 	let hasErrorStatus: boolean = false;
 	const recordsHaveMarkdownDelta: boolean = events.some((event: StoredSessionEvent): boolean => event.event === "ai.delta" || event.event === "agent.message.delta");
@@ -960,6 +1004,7 @@ function buildAssistantBodyParts(
 			eventData.type = event.event;
 		}
 		eventData._eventRecordId = event.id;
+		Object.assign(eventData, annotateActivityEvent(activityAccumulator, requestId, event.event, eventData));
 
 		if (event.event === "ai.delta" || event.event === "agent.message.delta") {
 			const deltaText: string = asString(eventData.text);
@@ -979,9 +1024,9 @@ function buildAssistantBodyParts(
 		} else if (event.event === "agent.context.compression") {
 			appendCompressionPart(parts, eventData);
 		} else if (event.event === "ai.thinking.delta" || event.event === "agent.thinking.delta") {
-			appendThinkingPart(parts, asString(eventData.text), false);
+			appendThinkingPart(parts, asString(eventData.text), false, getActivityMetadata(eventData));
 		} else if (event.event === "ai.thinking.done" || event.event === "agent.thinking.done") {
-			appendThinkingPart(parts, "", true);
+			appendThinkingPart(parts, "", true, getActivityMetadata(eventData));
 		} else if (event.event === "agent.provider.reconnect") {
 			appendProviderReconnectPart(parts, eventData);
 		} else if (event.event === "ai.status") {

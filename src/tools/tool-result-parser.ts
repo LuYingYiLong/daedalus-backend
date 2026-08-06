@@ -1,5 +1,6 @@
 import { createTerminalDisplaySnapshot, type TerminalDisplaySnapshot } from "../mcp/terminal/display-output.js";
 import { isToolApplicabilityCode, type ToolApplicabilityCode } from "./tool-applicability.js";
+import type { WorkspaceFileRef } from "../workspace/source-context.js";
 
 export type { ToolApplicabilityCode } from "./tool-applicability.js";
 
@@ -17,6 +18,8 @@ export type ParsedToolResultSummary = {
 	applicabilityCode?: ToolApplicabilityCode | undefined;
 	notApplicableReason?: string | undefined;
 	artifactRefs?: string[] | undefined;
+	artifactFileRefs?: WorkspaceFileRef[] | undefined;
+	sourceFolderId?: string | undefined;
 	terminalJobId?: string | undefined;
 	terminalJobStatus?: string | undefined;
 	terminalJobWakeAfterMs?: number | undefined;
@@ -196,6 +199,42 @@ function collectArtifactRefs(args: Record<string, unknown>, record: Record<strin
 		}
 	}
 	return [...refs];
+}
+
+function collectArtifactFileRefs(
+	args: Record<string, unknown>,
+	record: Record<string, unknown> | null,
+	workspaceId: string | undefined
+): WorkspaceFileRef[] | undefined {
+	const sourceFolderId: string | undefined = getString(args.sourceFolderId)
+		?? (record === null ? undefined : getString(record.sourceFolderId));
+	if (workspaceId === undefined || sourceFolderId === undefined) return undefined;
+	const refs = collectArtifactRefs(args, record);
+	const fileRefs: WorkspaceFileRef[] = refs.flatMap((value: string): WorkspaceFileRef[] => {
+		const relativePath: string = value.replace(/^res:\/\//iu, "").replaceAll("\\", "/");
+		if (relativePath.length === 0 || relativePath.startsWith("/") || /^[A-Za-z]:\//u.test(relativePath)
+			|| relativePath.split("/").some((segment: string): boolean => segment === ".." || segment === ".")) {
+			return [];
+		}
+		return [{ workspaceId, sourceFolderId, relativePath }];
+	});
+	return fileRefs.length === 0 ? undefined : fileRefs;
+}
+
+function enrichParsedSummary(
+	summary: ParsedToolResultSummary,
+	args: Record<string, unknown>,
+	record: Record<string, unknown> | null,
+	workspaceId: string | undefined
+): ParsedToolResultSummary {
+	const sourceFolderId: string | undefined = getString(args.sourceFolderId)
+		?? (record === null ? undefined : getString(record.sourceFolderId));
+	const artifactFileRefs: WorkspaceFileRef[] | undefined = collectArtifactFileRefs(args, record, workspaceId);
+	return {
+		...summary,
+		...(sourceFolderId === undefined ? {} : { sourceFolderId }),
+		...(artifactFileRefs === undefined ? {} : { artifactFileRefs })
+	};
 }
 
 function createFailureMessage(record: Record<string, unknown>, fallback: string): string {
@@ -386,28 +425,35 @@ function parseGenericJsonSummary(toolName: string, record: Record<string, unknow
 	};
 }
 
-export function parseToolResultSummary(toolName: string, args: Record<string, unknown>, content: string): ParsedToolResultSummary {
+export function parseToolResultSummary(
+	toolName: string,
+	args: Record<string, unknown>,
+	content: string,
+	workspaceId?: string | undefined
+): ParsedToolResultSummary {
 	const record: Record<string, unknown> | null = parseJsonObject(content);
 	if (record === null) {
 		const firstLine: string | undefined = firstUsefulLine(content);
-		return {
+		return enrichParsedSummary({
 			validationStatus: "unknown",
 			summary: firstLine === undefined ? toolName : clipSummary(firstLine),
 			artifactRefs: collectArtifactRefs(args, null)
-		};
+		}, args, null, workspaceId);
 	}
 
+	let summary: ParsedToolResultSummary;
 	if (
 		toolName === "mcp_terminal_run_command"
 		|| toolName === "mcp_terminal_run_safe_preset"
 		|| toolName === "mcp_terminal_run_write_preset"
 		|| isGodotRuntimeTool(toolName)
 	) {
-		const summary: ParsedToolResultSummary = parseTerminalSummary(record, args);
-		return toolName === "mcp_terminal_run_command" ? { ...summary, terminalDisplay: createTerminalDisplaySnapshot(record, args) } : summary;
+		const terminalSummary: ParsedToolResultSummary = parseTerminalSummary(record, args);
+		summary = toolName === "mcp_terminal_run_command" ? { ...terminalSummary, terminalDisplay: createTerminalDisplaySnapshot(record, args) } : terminalSummary;
+	} else if (toolName.startsWith("mcp_godot_lsp_") || toolName.startsWith("mcp_godot_dap_")) {
+		summary = parseDiagnosticsSummary(toolName, record, args);
+	} else {
+		summary = parseGenericJsonSummary(toolName, record, args);
 	}
-	if (toolName.startsWith("mcp_godot_lsp_") || toolName.startsWith("mcp_godot_dap_")) {
-		return parseDiagnosticsSummary(toolName, record, args);
-	}
-	return parseGenericJsonSummary(toolName, record, args);
+	return enrichParsedSummary(summary, args, record, workspaceId);
 }

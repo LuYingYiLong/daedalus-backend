@@ -51,9 +51,45 @@ export function createWorkspaceSourceFolderId(rootPath: string): string {
 }
 
 function detectSourceFolderCapabilities(rootPath: string): WorkspaceSourceFolder["capabilities"] {
+	const projectMarkers: string[] = [
+		".git",
+		"package.json",
+		"tsconfig.json",
+		"pyproject.toml",
+		"Cargo.toml",
+		"go.mod",
+		"project.godot"
+	].filter((marker: string): boolean => existsSync(join(rootPath, marker)));
+	let typecheck: "available" | "unavailable" | "unknown" = "unavailable";
+	const packagePath: string = join(rootPath, "package.json");
+	if (existsSync(packagePath)) {
+		typecheck = "unknown";
+		try {
+			const packageJson: unknown = JSON.parse(readFileSync(packagePath, "utf8")) as unknown;
+			const scripts: unknown = typeof packageJson === "object" && packageJson !== null
+				? (packageJson as Record<string, unknown>).scripts
+				: undefined;
+			typecheck = typeof scripts === "object"
+				&& scripts !== null
+				&& typeof (scripts as Record<string, unknown>).typecheck === "string"
+				? "available"
+				: "unavailable";
+		} catch {
+			// 损坏的清单保持 unknown，避免把真实命令错误误判为“不支持”。
+		}
+	}
+	const terminalPresets: string[] = [
+		...(existsSync(join(rootPath, ".git")) ? ["git.status", "git.diff"] : []),
+		...(typecheck === "available" ? ["workspace.typecheck"] : []),
+		...(existsSync(join(rootPath, "project.godot")) ? ["godot.check_only"] : [])
+	];
 	return {
 		git: existsSync(join(rootPath, ".git")),
-		godot: existsSync(join(rootPath, "project.godot"))
+		godot: existsSync(join(rootPath, "project.godot")),
+		projectMarkers,
+		typecheck,
+		terminalPresets,
+		workflowProfile: existsSync(join(rootPath, "project.godot")) ? "godot" : "workspace"
 	};
 }
 

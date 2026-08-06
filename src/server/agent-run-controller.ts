@@ -21,6 +21,7 @@ import type { ClientSession } from "./client-session.js";
 import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
 import { notifyGoalRunState } from "./goal-run-observer.js";
 import { enqueueGoalWriteCheckpointUnavailable } from "./goal-checkpoints.js";
+import type { WorkspaceFileRef } from "../workspace/source-context.js";
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) {
@@ -140,9 +141,18 @@ export function recordAgentRunToolEvent(
 	const call = calls.get(event.toolCallId);
 	const risk: ToolRisk = call?.risk ?? getEffectiveToolPolicy(event.toolName, {}, session.activeWorkspace?.id)?.risk ?? "read";
 	const eventRecord: Record<string, unknown> = event as unknown as Record<string, unknown>;
-	const artifactRefs: string[] = Array.isArray(eventRecord.artifactRefs)
-		? eventRecord.artifactRefs.filter((item: unknown): item is string => typeof item === "string")
-		: [];
+		const artifactRefs: string[] = Array.isArray(eventRecord.artifactRefs)
+			? eventRecord.artifactRefs.filter((item: unknown): item is string => typeof item === "string")
+			: [];
+		const artifactFileRefs: WorkspaceFileRef[] = Array.isArray(eventRecord.artifactFileRefs)
+			? eventRecord.artifactFileRefs.filter((item: unknown): item is WorkspaceFileRef => (
+				typeof item === "object"
+					&& item !== null
+					&& typeof (item as Record<string, unknown>).workspaceId === "string"
+					&& typeof (item as Record<string, unknown>).sourceFolderId === "string"
+					&& typeof (item as Record<string, unknown>).relativePath === "string"
+			))
+			: [];
 	const evidence: ExecutionEvidence = {
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
@@ -152,7 +162,9 @@ export function recordAgentRunToolEvent(
 			: eventRecord.validationStatus === "not_applicable"
 				? "succeeded"
 				: eventRecord.ok === false ? "failed" : "succeeded",
-		artifactRefs,
+			artifactRefs,
+			artifactFileRefs: artifactFileRefs.length > 0 ? artifactFileRefs : undefined,
+			sourceFolderId: typeof eventRecord.sourceFolderId === "string" ? eventRecord.sourceFolderId : call?.args.sourceFolderId as string | undefined,
 		summary: typeof eventRecord.summary === "string"
 			? eventRecord.summary
 			: event.type === "tool.error"

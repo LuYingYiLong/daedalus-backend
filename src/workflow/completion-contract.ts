@@ -3,6 +3,7 @@ import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowTool
 export type StructuredCompletionTargets = {
 	artifacts?: readonly string[] | undefined;
 	projectSettings?: readonly string[] | undefined;
+	sourceFolderId?: string | undefined;
 };
 
 const INVALID_ARTIFACT_PATH_CHARACTERS: RegExp = /[\u0000-\u001f<>:"|?*()[\]{}（）]/u;
@@ -56,11 +57,11 @@ export function createStructuredWorkflowCompletionContract(
 	const completionTargets: WorkflowCompletionTarget[] = [
 		...(targets.artifacts ?? []).flatMap((artifact: string): WorkflowCompletionTarget[] => {
 			const path: string | undefined = normalizeWorkspaceRelativeArtifactPath(artifact);
-			return path === undefined ? [] : [{ kind: "artifact", path }];
+			return path === undefined ? [] : [{ kind: "artifact", path, ...(targets.sourceFolderId === undefined ? {} : { sourceFolderId: targets.sourceFolderId }) }];
 		}),
 		...(targets.projectSettings ?? []).flatMap((projectSetting: string): WorkflowCompletionTarget[] => {
 			const key: string | undefined = normalizeProjectSettingKey(projectSetting);
-			return key === undefined ? [] : [{ kind: "project_setting", key }];
+			return key === undefined ? [] : [{ kind: "project_setting", key, ...(targets.sourceFolderId === undefined ? {} : { sourceFolderId: targets.sourceFolderId }) }];
 		})
 	];
 	if (completionTargets.length === 0) {

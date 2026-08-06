@@ -532,7 +532,7 @@ test("summarize gate ignores prior approval placeholder from the same phase", ()
 	assert.equal(findBlockingOutcomeBeforeSummarize([failedVerifyOutcome, approvalOutcome], summarizePhase.id), failedVerifyOutcome);
 });
 
-test("deterministic verification gate requires check-only after GDScript writes", (): void => {
+test("deterministic verification gate still requires check-only after GDScript writes", (): void => {
 	const writeOutcome: WorkflowPhaseOutput = {
 		phaseId: "implement",
 		phaseRunId: "phase-run-write",
@@ -570,6 +570,37 @@ test("deterministic verification gate requires check-only after GDScript writes"
 
 	assert.equal(gatedOutcome.status, "needs_fix");
 	assert.equal(gatedOutcome.failedChecks[0]?.code, "godot_check_only_required");
+});
+
+test("unstructured Godot LSP transport failures become an unverified warning", (): void => {
+	const observations: WorkflowToolObservation[] = applyEvents([
+		{
+			type: "tool.call",
+			step: 0,
+			toolCallId: "lsp-transport",
+			toolName: "mcp_godot_lsp_get_file_diagnostics",
+			args: { resourcePath: "res://scripts/game.gd" },
+			serverId: "godot_diagnostics",
+			serverName: "Godot Diagnostics",
+			category: "read",
+			title: "LSP diagnostics",
+			summary: "LSP diagnostics",
+			target: { kind: "file", path: "res://scripts/game.gd", label: "LSP" }
+		},
+		{
+			type: "tool.error",
+			step: 0,
+			toolCallId: "lsp-transport",
+			toolName: "mcp_godot_lsp_get_file_diagnostics",
+			message: "diagnostics connection unavailable"
+		}
+	]);
+	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-lsp-transport", "", observations);
+
+	assert.equal(outcome.status, "completed");
+	assert.equal(outcome.verificationStatus, "unverified");
+	assert.deepEqual(outcome.failedChecks, []);
+	assert.equal(outcome.warnings?.some((warning: string): boolean => /diagnostics connection unavailable/iu.test(warning)), true);
 });
 
 test("deterministic verification gate accepts check-only when LSP is unavailable", (): void => {

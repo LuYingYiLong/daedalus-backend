@@ -21,6 +21,7 @@ import {
 } from "./execution-control.js";
 import type { ProviderReconnectEvent } from "../providers/provider-types.js";
 import type { ToolApplicabilityCode } from "./tool-applicability.js";
+import { WorkspaceSourceResolutionError } from "../workspace/source-context.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -424,7 +425,7 @@ async function executeSingleToolCall(
 				await reportGodotDocumentationQueryFailure(failureCode);
 			}
 		}
-		const parsedSummary: ParsedToolResultSummary = parseToolResultSummary(functionName, executionArgs, result.content);
+			const parsedSummary: ParsedToolResultSummary = parseToolResultSummary(functionName, executionArgs, result.content, workspaceId);
 		if (parsedSummary.environmentIssue === true) {
 			cacheRuntimeCapabilityFailure(
 				toolContext?.requestId,
@@ -476,7 +477,9 @@ async function executeSingleToolCall(
 			throw error;
 		}
 
-		const message: string = error instanceof Error ? error.message : "MCP tool call failed";
+			const message: string = error instanceof WorkspaceSourceResolutionError
+				? `${error.code}: ${error.message}`
+				: error instanceof Error ? error.message : "MCP tool call failed";
 		logger.error("tool", "call_failed", error, {
 			toolCallId: toolCall.id,
 			toolName: functionName,

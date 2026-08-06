@@ -6,6 +6,7 @@ import { continueOpenAICompatibleAgent, createMissingRequiredToolCallCorrectionM
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import type { AiChatParams } from "../../../src/protocol/types.js";
+import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
 type RecordedRequest = {
@@ -168,6 +169,80 @@ async function withInterruptedStreamingMockServer(run: (baseUrl: string, request
 				finish_reason: null
 			}]
 		});
+		response.end("data: [DONE]\n\n");
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (address === null || typeof address === "string") {
+		throw new Error("Mock server did not expose a TCP port");
+	}
+
+	try {
+		await run(`http://127.0.0.1:${address.port}`, requests);
+	} finally {
+		server.close();
+		await once(server, "close");
+	}
+}
+
+async function withRecoveryThenProtocolRetryMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
+	const requests: RecordedRequest[] = [];
+	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		const body: Record<string, unknown> = await readRequestBody(request);
+		requests.push({ url: request.url ?? "", body });
+		assert.equal(request.url, "/chat/completions");
+
+		if (requests.length === 1 || requests.length === 3) {
+			response.writeHead(200, {
+				"Content-Type": "text/event-stream",
+				"Content-Length": "65536",
+				"Connection": "close"
+			});
+			if (requests.length === 1) {
+				writeSseChunk(response, {
+					id: "chatcmpl-initial-interrupted",
+					object: "chat.completion.chunk",
+					created: 1,
+					model: "deepseek-v4-flash",
+					choices: [{
+						index: 0,
+						delta: { reasoning_content: "先检查请求状态。" },
+						finish_reason: null
+					}]
+				});
+			}
+			await new Promise<void>((resolve): void => { setImmediate(resolve); });
+			response.destroy(new Error("simulated stream interruption"));
+			return;
+		}
+
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		if (requests.length === 2) {
+			writeSseChunk(response, {
+				id: "chatcmpl-thinking-only-after-recovery",
+				object: "chat.completion.chunk",
+				created: 1,
+				model: "deepseek-v4-flash",
+				choices: [{
+					index: 0,
+					delta: { reasoning_content: "恢复后重新判断工具调用。" },
+					finish_reason: null
+				}]
+				});
+		} else {
+			writeSseChunk(response, {
+				id: "chatcmpl-final-after-protocol-retry",
+				object: "chat.completion.chunk",
+				created: 1,
+				model: "deepseek-v4-flash",
+				choices: [{
+					index: 0,
+					delta: { content: "恢复链已完成。" },
+					finish_reason: null
+				}]
+			});
+		}
 		response.end("data: [DONE]\n\n");
 	});
 	server.listen(0, "127.0.0.1");
@@ -832,6 +907,34 @@ test("streaming agent safely retries an interrupted reasoning-only response", as
 		assert.deepEqual(visibleDeltas, ["Recovered response"]);
 		assert.deepEqual(thinkingDeltas, ["Inspecting the project before editing."]);
 		assert.equal(requests.length, 2);
+	});
+});
+
+test("recovery followed by protocol correction keeps one reconnect chain", async (): Promise<void> => {
+	await withRecoveryThenProtocolRetryMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
+		const reconnects: Array<Extract<ToolEvent, { type: "provider.reconnect" }>> = [];
+		const result = await runOpenAICompatibleAgentStreaming(
+			{ message: "Inspect the project", options: { stream: true } },
+			{ provider: "deepseek", apiKey: "test-key", baseUrl, model: "deepseek-v4-flash" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			["mcp_godot_read_text_file"],
+			(event): void => {
+				if (event.type === "provider.reconnect") reconnects.push(event);
+			}
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "恢复链已完成。");
+		assert.equal(requests.length, 4);
+		assert.ok(reconnects.length > 0);
+		assert.equal(new Set(reconnects.map((event): string => event.reconnectId)).size, 1);
+		assert.ok(reconnects.every((event): boolean => event.attempt <= event.maxAttempts));
+		assert.ok(reconnects.every((event: Extract<ToolEvent, { type: "provider.reconnect" }>, index: number): boolean => (
+			index === 0 || event.revision > reconnects[index - 1]!.revision
+		)));
 	});
 });
 

@@ -72,7 +72,10 @@ test("auto-safe mode self-approves builtin write tools but not dynamic MCP or de
 	assert.equal(evaluateToolCall("auto-safe", proposeTool, {}).action, "allow");
 	assert.equal(evaluateToolCall("auto-safe", writeTool, {}).action, "allow");
 	assert.equal(evaluateToolCall("auto-safe", dynamicMcpTool, {}).action, "request_approval");
-	assert.equal(evaluateToolCall("auto-safe", destructiveTool, {}).action, "request_approval");
+	assert.equal(evaluateToolCall("auto-safe", destructiveTool, {}).action, "allow");
+	assert.equal(evaluateToolCall("auto-safe", "mcp_workspace_delete_file", {}).action, "allow");
+	assert.equal(evaluateToolCall("auto-safe", "mcp_image_replace_workspace_asset", {}).action, "request_approval");
+	assert.equal(evaluateToolCall("auto-safe", "mcp_terminal_run_command", { commandLine: "del file.txt" }).action, "request_approval");
 });
 
 test("read-only gateway allows only read, verify and plan-safe dynamic MCP tools", async (): Promise<void> => {

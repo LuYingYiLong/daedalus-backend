@@ -85,6 +85,21 @@ test("Godot terminal spawn errors are marked as environment issues", (): void =>
 	assert.match(summary.failedChecks?.[0] ?? "", /spawn godot ENOENT/);
 });
 
+test("parsed tool results preserve source-scoped evidence", (): void => {
+	const summary = parseToolResultSummary(
+		"mcp_terminal_run_safe_preset",
+		{ sourceFolderId: "backend", presetName: "workspace.typecheck", resourcePath: "src/workflow/router.ts" },
+		JSON.stringify({ ok: true, validationStatus: "passed", resourcePath: "src/workflow/router.ts" }),
+		"workspace-test"
+	);
+	assert.equal(summary.sourceFolderId, "backend");
+	assert.deepEqual(summary.artifactFileRefs, [{
+		workspaceId: "workspace-test",
+		sourceFolderId: "backend",
+		relativePath: "src/workflow/router.ts"
+	}]);
+});
+
 test("Git checks in a non-Git workspace are not applicable, not failed", (): void => {
 	const summary = parseToolResultSummary(
 		"mcp_terminal_run_safe_preset",

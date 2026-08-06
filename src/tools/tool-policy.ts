@@ -25,6 +25,15 @@ const TERMINAL_PRESET_RISKS: Record<string, ToolRisk> = {
 	"godot.validate_scene": "verify"
 };
 
+const AUTO_SAFE_FILE_DELETE_TOOLS: ReadonlySet<string> = new Set([
+	"mcp_workspace_delete_file",
+	"mcp_godot_delete_file"
+]);
+
+export function isAutoSafeFileDeleteTool(toolName: string): boolean {
+	return AUTO_SAFE_FILE_DELETE_TOOLS.has(toolName);
+}
+
 export function getToolPolicy(toolName: string, _workspaceId?: string | undefined): ToolPolicy | undefined {
 	if (isDynamicMcpToolName(toolName)) {
 		return { risk: "write" };
@@ -136,6 +145,10 @@ export function evaluateToolCall(
 
 	if (mode === "auto-safe") {
 		if (policy.risk === "read" || policy.risk === "verify" || policy.risk === "propose") {
+			return { action: "allow" };
+		}
+
+		if (policy.risk === "destructive" && isAutoSafeFileDeleteTool(toolName)) {
 			return { action: "allow" };
 		}
 

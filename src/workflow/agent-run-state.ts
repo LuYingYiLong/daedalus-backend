@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ToolApplicabilityCode } from "../tools/tool-applicability.js";
 import type { WorkflowTodoSnapshot } from "./types.js";
+import type { WorkspaceFileRef } from "../workspace/source-context.js";
 
 export const AGENT_RUN_STATE_SCHEMA_VERSION = 1 as const;
 
@@ -50,6 +51,8 @@ export type ExecutionEvidence = {
 	risk: "read" | "verify" | "propose" | "write" | "destructive";
 	status: "succeeded" | "failed";
 	artifactRefs: string[];
+	artifactFileRefs?: WorkspaceFileRef[] | undefined;
+	sourceFolderId?: string | undefined;
 	summary?: string | undefined;
 	validationStatus?: "passed" | "failed" | "not_applicable" | undefined;
 	environmentIssue?: boolean | undefined;
@@ -107,6 +110,7 @@ export type ExecutionDecision = {
 	summary: string;
 	evidenceToolCallIds: string[];
 	expectedArtifacts: string[];
+	expectedFileRefs?: WorkspaceFileRef[] | undefined;
 	expectedLogicalWrites?: number | undefined;
 	targetKind: ExecutionTargetKind;
 };
@@ -116,6 +120,11 @@ export const executionDecisionToolInputSchema = z.object({
 	summary: z.string().trim().min(1).max(2000),
 	evidenceToolCallIds: z.array(z.string().trim().min(1).max(200)).max(64).default([]),
 	expectedArtifacts: z.array(z.string().trim().min(1).max(1000)).max(64).default([]),
+	expectedFileRefs: z.array(z.object({
+		workspaceId: z.string().trim().min(1).max(200),
+		sourceFolderId: z.string().trim().min(1).max(200),
+		relativePath: z.string().trim().min(1).max(1000)
+	}).strict()).max(64).optional(),
 	expectedLogicalWrites: z.number().int().min(0).max(64).optional(),
 	targetKind: z.enum(["workspace_file", "godot_script", "godot_scene", "godot_script_scene", "project_setting", "unknown"]).default("unknown")
 }).strict();
@@ -405,6 +414,7 @@ export function cloneAgentRunState(state: AgentRunState): AgentRunState {
 function cloneExecutionEvidence(evidence: ExecutionEvidence): ExecutionEvidence {
 	return {
 		...evidence,
-		artifactRefs: [...evidence.artifactRefs]
+		artifactRefs: [...evidence.artifactRefs],
+		artifactFileRefs: evidence.artifactFileRefs?.map((fileRef: WorkspaceFileRef): WorkspaceFileRef => ({ ...fileRef }))
 	};
 }

@@ -48,7 +48,11 @@ import {
 	isProviderImageInputUnsupportedError,
 	recognizeToolImageReferences
 } from "./tool-image-recognition.js";
-import { runProviderRequestWithResilience } from "./provider-resilience.js";
+import {
+	createProviderReconnectState,
+	runProviderRequestWithResilience,
+	type ProviderReconnectState
+} from "./provider-resilience.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -1110,12 +1114,14 @@ async function readStreamingAssistantMessage(
 	onEvent?: OnToolEvent,
 	emitContentDeltas: boolean = true,
 	abortSignal?: AbortSignal | undefined,
-	toolContext?: ToolExecutionContext | undefined
+	toolContext?: ToolExecutionContext | undefined,
+	reconnectState?: ProviderReconnectState | undefined
 ): Promise<StreamedAssistantMessage> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
 		onEvent,
 		abortSignal,
+		reconnectState,
 		execute: async (attempt): Promise<StreamedAssistantMessage> => readStreamingAssistantMessageAttempt(
 			client,
 			params,
@@ -1167,7 +1173,8 @@ async function createFinalAnswer(
 	reason: string,
 	abortSignal?: AbortSignal | undefined,
 	aliasContext?: ToolNameAliasContext | undefined,
-	toolImageReferences: readonly ProviderToolImageReference[] = []
+	toolImageReferences: readonly ProviderToolImageReference[] = [],
+	reconnectState?: ProviderReconnectState | undefined
 ): Promise<string> {
 	const finalMessages: ChatCompletionMessageParam[] = await injectToolImagesIntoChatMessages([
 		...messages,
@@ -1189,6 +1196,7 @@ async function createFinalAnswer(
 		completion = await runProviderRequestWithResilience({
 			providerOptions: options,
 			abortSignal,
+			reconnectState,
 			execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 		});
 	} catch (error: unknown) {
@@ -1252,11 +1260,13 @@ async function runAgentLoop(
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(tools);
 	let toolProtocolViolationRetries: number = 0;
 	let imageFallbackAttempted: boolean = false;
+	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
+		stepReconnectState ??= createProviderReconnectState();
 
 		const providerMessages: ChatCompletionMessageParam[] = await injectToolImagesIntoChatMessages(messages, toolImageReferences);
 		let toolCalls: ChatCompletionMessageToolCall[] | undefined;
@@ -1280,7 +1290,8 @@ async function runAgentLoop(
 					onEvent,
 					!requiredToolCallOnStep,
 					abortSignal,
-					toolContext
+					toolContext,
+					stepReconnectState
 				);
 			} catch (error: unknown) {
 				if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {
@@ -1318,6 +1329,7 @@ async function runAgentLoop(
 					providerOptions: options,
 					onEvent,
 					abortSignal,
+					reconnectState: stepReconnectState,
 					execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 				});
 			} catch (error: unknown) {
@@ -1578,6 +1590,9 @@ async function runAgentLoop(
 				text: finalText
 			};
 		}
+
+		// 工具执行成功后进入新的模型步骤，新的步骤使用新的重连链。
+		stepReconnectState = undefined;
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;

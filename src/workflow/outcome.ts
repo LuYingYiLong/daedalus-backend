@@ -29,7 +29,7 @@ export function createWorkflowPhaseRunId(phaseId: string): string {
 
 function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 	const summary: Record<string, unknown> = {};
-	for (const key of ["relativePath", "resourcePath", "scenePath", "scriptPath", "path", "presetName", "operationJson", "key"]) {
+	for (const key of ["sourceFolderId", "relativePath", "resourcePath", "scenePath", "scriptPath", "path", "presetName", "operationJson", "key"]) {
 		const value: unknown = args[key];
 		if (typeof value === "string") {
 			summary[key] = value.length > 240 ? `${value.slice(0, 240)}...` : value;
@@ -46,7 +46,7 @@ function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 
 function parsedResultFromToolEvent(event: Extract<ToolEvent, { type: "tool.result" }>): Record<string, unknown> {
 	const parsedResult: Record<string, unknown> = {};
-	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs"]) {
+	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs", "artifactFileRefs", "sourceFolderId"]) {
 		const value: unknown = event[key as keyof typeof event];
 		if (value !== undefined) {
 			parsedResult[key] = value;
@@ -75,6 +75,8 @@ function upsertObservation(
 		...observation,
 		argsSummary: observation.argsSummary ?? nextObservations[existingIndex]?.argsSummary,
 		artifactRefs: observation.artifactRefs ?? nextObservations[existingIndex]?.artifactRefs,
+		artifactFileRefs: observation.artifactFileRefs ?? nextObservations[existingIndex]?.artifactFileRefs,
+		sourceFolderId: observation.sourceFolderId ?? nextObservations[existingIndex]?.sourceFolderId,
 		fileEditFingerprints: observation.fileEditFingerprints ?? nextObservations[existingIndex]?.fileEditFingerprints
 	};
 	return nextObservations;
@@ -92,7 +94,8 @@ export function applyToolEventToWorkflowObservations(
 			risk,
 			status: "called",
 			argsSummary: summarizeArgs(event.args),
-			artifactRefs: []
+			artifactRefs: [],
+			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined
 		});
 	}
 
@@ -104,7 +107,8 @@ export function applyToolEventToWorkflowObservations(
 			risk,
 			status: "approval_required",
 			argsSummary: summarizeArgs(event.args),
-			artifactRefs: []
+			artifactRefs: [],
+			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined
 		});
 	}
 
@@ -118,11 +122,13 @@ export function applyToolEventToWorkflowObservations(
 		const artifactRefs: string[] | undefined = Array.isArray(event.artifactRefs)
 			? event.artifactRefs.map((value: unknown): string => String(value))
 			: previous?.artifactRefs;
+		const artifactFileRefs = Array.isArray(event.artifactFileRefs) ? event.artifactFileRefs : previous?.artifactFileRefs;
+		const observedSourceFolderId: string | undefined = event.sourceFolderId ?? previous?.sourceFolderId;
 		const fileEditFingerprints: string[] | undefined = event.fileEditDraft === undefined
 			? previous?.fileEditFingerprints
 			: event.fileEditDraft.edits
 				.filter((edit): boolean => edit.beforeSha256 !== edit.afterSha256)
-				.map((edit): string => `${edit.path}:${edit.beforeSha256 ?? "new"}:${edit.afterSha256 ?? "deleted"}`);
+				.map((edit): string => `${observedSourceFolderId === undefined ? "" : `${observedSourceFolderId}:`}${edit.path}:${edit.beforeSha256 ?? "new"}:${edit.afterSha256 ?? "deleted"}`);
 		return upsertObservation(observations, {
 			toolCallId: event.toolCallId,
 			toolName: event.toolName,
@@ -131,6 +137,8 @@ export function applyToolEventToWorkflowObservations(
 			argsSummary: previous?.argsSummary,
 			parsedResult,
 			artifactRefs,
+			artifactFileRefs,
+				sourceFolderId: observedSourceFolderId,
 			fileEditFingerprints
 		});
 	}
@@ -145,7 +153,9 @@ export function applyToolEventToWorkflowObservations(
 			status: "failed",
 			argsSummary: previous?.argsSummary,
 			error: event.message,
-			artifactRefs: previous?.artifactRefs
+				artifactRefs: previous?.artifactRefs,
+				artifactFileRefs: previous?.artifactFileRefs,
+			sourceFolderId: previous?.sourceFolderId
 		});
 	}
 
@@ -193,6 +203,15 @@ function isSuccessfulVerificationObservation(observation: WorkflowToolObservatio
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
 	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
+		return true;
+	}
+	// LSP transport failures have no structured result to repair from. Treat them as
+	// an optional diagnostics-environment gap; Godot check-only remains the code gate.
+	if (
+		observation.status === "failed"
+		&& observation.toolName.startsWith("mcp_godot_lsp_")
+		&& observation.parsedResult === undefined
+	) {
 		return true;
 	}
 	return typeof observation.parsedResult?.applicabilityCode === "string"
@@ -262,6 +281,11 @@ function hasArtifactOverlap(left: readonly string[] | undefined, right: readonly
 }
 
 function matchesRetryTarget(failedObservation: WorkflowToolObservation, successObservation: WorkflowToolObservation): boolean {
+	if (failedObservation.sourceFolderId !== undefined
+		&& successObservation.sourceFolderId !== undefined
+		&& failedObservation.sourceFolderId !== successObservation.sourceFolderId) {
+		return false;
+	}
 	return failedObservation.toolName === successObservation.toolName
 		&& normalizedRecord(failedObservation.argsSummary) === normalizedRecord(successObservation.argsSummary)
 		&& hasArtifactOverlap(failedObservation.artifactRefs, successObservation.artifactRefs);
@@ -290,8 +314,9 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 			failedChecks.push({
 				code: "approval_required",
 				message: `${observation.toolName} 正在等待审批。`,
-				toolCallId: observation.toolCallId,
-				toolName: observation.toolName
+					toolCallId: observation.toolCallId,
+					toolName: observation.toolName,
+					sourceFolderId: observation.sourceFolderId
 			});
 			continue;
 		}
@@ -311,8 +336,9 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 			failedChecks.push({
 				code: "tool_error",
 				message: observation.error,
-				toolCallId: observation.toolCallId,
-				toolName: observation.toolName
+					toolCallId: observation.toolCallId,
+					toolName: observation.toolName,
+					sourceFolderId: observation.sourceFolderId
 			});
 		}
 
@@ -331,8 +357,10 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 					code: String(parsedResult.validationStatus ?? "tool_failed_check"),
 					message: String(failedCheck),
 					toolCallId: observation.toolCallId,
-					toolName: observation.toolName,
-					artifact: observation.artifactRefs?.[0]
+						toolName: observation.toolName,
+						artifact: observation.artifactRefs?.[0],
+						sourceFolderId: observation.sourceFolderId,
+						artifactFileRef: observation.artifactFileRefs?.[0]
 				});
 			}
 		} else if (observation.status === "failed") {
@@ -340,8 +368,10 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 				code: String(parsedResult.validationStatus ?? "tool_failed"),
 				message: String(parsedResult.summary ?? `${observation.toolName} failed`),
 				toolCallId: observation.toolCallId,
-				toolName: observation.toolName,
-				artifact: observation.artifactRefs?.[0]
+					toolName: observation.toolName,
+					artifact: observation.artifactRefs?.[0],
+					sourceFolderId: observation.sourceFolderId,
+					artifactFileRef: observation.artifactFileRefs?.[0]
 			});
 		}
 	}
@@ -609,18 +639,6 @@ function observationPresetName(observation: WorkflowToolObservation): string {
 	return typeof presetName === "string" ? presetName.toLowerCase() : "";
 }
 
-function hasLspDiagnostics(observations: WorkflowToolObservation[]): boolean {
-	return observations.some((observation: WorkflowToolObservation): boolean => (
-		observationMatchesTool(observation, "mcp_godot_lsp_get_file_diagnostics")
-	));
-}
-
-function hasLspEnvironmentIssue(observations: WorkflowToolObservation[]): boolean {
-	return observations.some((observation: WorkflowToolObservation): boolean => (
-		observation.toolName.startsWith("mcp_godot_lsp_") && isEnvironmentIssueObservation(observation)
-	));
-}
-
 function hasGodotCheckOnly(observations: WorkflowToolObservation[]): boolean {
 	return observations.some((observation: WorkflowToolObservation): boolean => (
 		(
@@ -692,13 +710,6 @@ export function applyDeterministicVerificationGate(
 	const verificationObservations: WorkflowToolObservation[] = collectVerificationObservations(outcome, previousOutputs);
 	const gateFailures: WorkflowFailedCheck[] = [];
 
-	if (gdArtifacts.length > 0 && !hasLspDiagnostics(verificationObservations) && !hasLspEnvironmentIssue(verificationObservations)) {
-		gateFailures.push(createGateFailure(
-			"lsp_diagnostics_required",
-			"修改了 GDScript，但验证阶段没有运行 LSP diagnostics。",
-			gdArtifacts.join(", ")
-		));
-	}
 	if (gdArtifacts.length > 0 && !hasGodotCheckOnly(verificationObservations) && !hasGodotCheckOnlyEnvironmentIssue(verificationObservations)) {
 		gateFailures.push(createGateFailure(
 			"godot_check_only_required",

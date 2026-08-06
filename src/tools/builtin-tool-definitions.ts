@@ -19,6 +19,16 @@ function createSceneToolDefinition(
 		|| name === "mcp_image_propose_import_to_workspace"
 		|| name === "mcp_image_import_to_workspace"
 		|| name === "mcp_image_replace_workspace_asset";
+	const scopeProperty: Record<string, unknown> = name === "mcp_workspace_read_text_file"
+		? { scope: { type: "string", enum: ["primary", "source"], description: "Source scope for an explicit file read." } }
+		: name === "mcp_workspace_list_files"
+			? { scope: { type: "string", enum: ["primary", "source", "all"], description: "Listing scope; all searches every source folder." } }
+			: name === "mcp_workspace_search_text"
+				? { scope: { type: "string", enum: ["primary", "source", "all"], description: "Search scope; all searches every source folder." } }
+				: {};
+	const paginationProperty: Record<string, unknown> = name === "mcp_workspace_list_files" || name === "mcp_workspace_search_text"
+		? { continuationToken: { type: "string", description: "Opaque token for the next page of a bounded result." } }
+		: {};
 	return {
 		type: "function",
 		function: {
@@ -30,8 +40,10 @@ function createSceneToolDefinition(
 					? {
 						sourceFolderId: {
 							type: "string",
-							description: "Optional source folder id. Omit to use the workspace primary source folder."
+							description: "Source folder id. Multi-source writes require it; list/search may omit to use all sources, and reads may auto-select a unique match."
 						},
+						...scopeProperty,
+						...paginationProperty,
 						...properties
 					}
 					: properties,
@@ -199,6 +211,18 @@ const WEB_SEARCH_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 ];
 
 const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
+	createSceneToolDefinition(
+		"mcp_workspace_list_source_folders",
+		"List the current workspace source folders and their capability snapshots.",
+		{},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_workspace_get_source_context",
+		"Get structured source-folder context for the current workspace.",
+		{},
+		[]
+	),
 	createSceneToolDefinition(
 		"mcp_workspace_list_files",
 		"列出当前 workspace 中的文件。仅在会话已绑定 workspace 时可用；普通项目文件任务优先使用 workspace 工具，Godot 场景/运行时任务再使用 Godot 专属工具。",

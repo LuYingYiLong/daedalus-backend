@@ -11,6 +11,8 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_image_replace_workspace_asset": { risk: "destructive" },
 	"mcp_web_search": { risk: "read" },
 	"mcp_workspace_list_files": { risk: "read" },
+	"mcp_workspace_list_source_folders": { risk: "read" },
+	"mcp_workspace_get_source_context": { risk: "read" },
 	"mcp_workspace_read_text_file": { risk: "read" },
 	"mcp_workspace_search_text": { risk: "read" },
 	"mcp_workspace_propose_create_text_file": { risk: "propose" },

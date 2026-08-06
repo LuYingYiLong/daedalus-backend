@@ -18,6 +18,7 @@ import {
 } from "../session/session-attachments.js";
 import { createWorkspaceFileService } from "../workspace/files.js";
 import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
+import { resolveWorkspaceReadSource } from "../workspace/source-context.js";
 
 export const IMAGE_INSPECT_TOOL_NAME: string = "mcp_image_inspect";
 
@@ -120,13 +121,24 @@ export async function resolveImageInspection(
 		if (args.imageId !== undefined) {
 			throw new Error("imageId is only valid for session images.");
 		}
-		const workspace = findWorkspace(context.workspaceId);
+			const workspace = findWorkspace(context.workspaceId);
 		if (workspace === undefined) {
 			throw new Error(`Workspace not found: ${context.workspaceId}`);
-		}
-		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId.trim() || undefined : undefined;
-		const sourceFolder = getWorkspaceSourceFolder(workspace, sourceFolderId);
-		const relativePath: string = normalizeWorkspaceImagePath(args.relativePath, sourceFolder.capabilities.godot);
+			}
+			const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId.trim() || undefined : undefined;
+			const rawRelativePath: unknown = args.relativePath;
+			if (typeof rawRelativePath !== "string") {
+				throw new Error("relativePath is required for workspace images.");
+			}
+			const trimmedPath: string = rawRelativePath.trim().replaceAll("\\", "/");
+			if (/^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmedPath) && !trimmedPath.startsWith("res://")) {
+				throw new Error("Image URLs and user:// paths are not allowed.");
+			}
+			const resolverPath: string = trimmedPath.startsWith("res://") ? trimmedPath.slice("res://".length) : trimmedPath;
+			const selected = resolveWorkspaceReadSource(workspace, resolverPath, { sourceFolderId });
+			const sourceFolder = selected.source;
+			args.sourceFolderId = sourceFolder.id;
+			const relativePath: string = normalizeWorkspaceImagePath(selected.relativePath, sourceFolder.capabilities.godot);
 		assertNotGodotInternalPath(relativePath);
 		const service = createWorkspaceFileService({ rootPath: sourceFolder.path, readMaxBytes: MAX_IMAGE_BYTES });
 		const resolved = await service.resolveReadPath(relativePath);

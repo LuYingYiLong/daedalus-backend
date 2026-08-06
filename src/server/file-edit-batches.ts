@@ -5,6 +5,7 @@ import { enqueueGoalFileEditDraft } from "./goal-checkpoints.js";
 
 export type FileEditSummaryItem = {
 	path: string;
+	sourceFolderId?: string | undefined;
 	absolutePath: string;
 	workspaceRoot: string;
 	additions: number;
@@ -22,6 +23,7 @@ export type FileEditBatchSummary = {
 	sessionId: string;
 	workspaceId: string;
 	workspaceRoot: string;
+	sourceFolderId?: string | undefined;
 	editedFileCount: number;
 	additions: number;
 	deletions: number;
@@ -37,6 +39,7 @@ export type PersistedFileEditBatch = {
 	toolName: string;
 	workspaceId: string;
 	workspaceRoot: string;
+	sourceFolderId?: string | undefined;
 	createdAt: string;
 	edits: FileEditSnapshot[];
 };
@@ -56,6 +59,7 @@ function getBatchCacheKey(sessionId: string, batchId: string): string {
 function summarizeBatch(batch: PersistedFileEditBatch, sessionId: string): FileEditBatchSummary {
 	const editedFiles: FileEditSummaryItem[] = batch.edits.map((edit: FileEditSnapshot): FileEditSummaryItem => ({
 		path: edit.path,
+		sourceFolderId: edit.sourceFolderId ?? batch.sourceFolderId,
 		absolutePath: edit.absolutePath,
 		workspaceRoot: edit.workspaceRoot,
 		additions: edit.additions,
@@ -73,6 +77,7 @@ function summarizeBatch(batch: PersistedFileEditBatch, sessionId: string): FileE
 		sessionId,
 		workspaceId: batch.workspaceId,
 		workspaceRoot: batch.workspaceRoot,
+		sourceFolderId: batch.sourceFolderId,
 		editedFileCount: editedFiles.length,
 		additions: editedFiles.reduce((sum: number, edit: FileEditSummaryItem): number => sum + edit.additions, 0),
 		deletions: editedFiles.reduce((sum: number, edit: FileEditSummaryItem): number => sum + edit.deletions, 0),
@@ -150,6 +155,7 @@ export function persistFileEditBatch(
 		toolName,
 		workspaceId: draft.workspaceId,
 		workspaceRoot: draft.workspaceRoot,
+		sourceFolderId: draft.sourceFolderId,
 		createdAt: new Date().toISOString(),
 		edits: draft.edits
 	};

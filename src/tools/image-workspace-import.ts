@@ -1,7 +1,8 @@
 import { constants as fsConstants, copyFile, link, lstat, mkdir, realpath, rename, rm } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import * as path from "node:path";
-import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
+import { findWorkspace } from "../workspace/registry.js";
+import { resolveWorkspaceSources } from "../workspace/source-context.js";
 import {
 	getGeneratedImageArtifactLocalPath,
 	readGeneratedImageArtifact,
@@ -141,7 +142,14 @@ export async function executeImageWorkspaceImport(params: {
 	if (workspace === undefined) {
 		throw new Error(`Workspace is not registered: ${params.workspaceId}`);
 	}
-	const sourceFolder = getWorkspaceSourceFolder(workspace, params.sourceFolderId);
+	const sourceSelection = resolveWorkspaceSources(workspace, {
+		sourceFolderId: params.sourceFolderId,
+		operation: "write"
+	});
+	if (sourceSelection.kind !== "source") {
+		throw new Error("source_required: image workspace imports require one source folder.");
+	}
+	const sourceFolder = sourceSelection.source;
 	const generated = await readGeneratedImageArtifact(params.sessionId, params.imageId);
 	const metadata: GeneratedImageArtifactMetadata = generated.metadata;
 	const actualMimeType: SupportedImageMimeType = assertSupportedImageSignature(generated.bytes);

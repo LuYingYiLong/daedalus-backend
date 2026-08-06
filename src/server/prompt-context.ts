@@ -338,7 +338,14 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 		sections.push("");
 	}
 
-	// Godot environment section
+		if (session.activeWorkspace !== undefined && session.activeWorkspace.sourceFolders.length > 1) {
+			sections.push("- Multi-source rules: omit sourceFolderId for list_files/search_text to inspect all source folders; include sourceFolderId for writes, terminal commands, Godot/editor operations, and any operation targeting one source.");
+			sections.push("- read_text_file without sourceFolderId is allowed only when the relative path exists in exactly one source folder; multiple matches return structured ambiguous_source and must not be guessed.");
+			sections.push("- scope all is read/list/search only. Never use it for create, overwrite, replace, delete, terminal, Godot, or workflow writes.");
+			sections.push("- Treat sourceFolderId plus relativePath as the complete file identity. Never match evidence, approvals, diffs, or repair targets by relativePath alone.");
+		}
+
+		// Godot environment section
 	if (session.godotExecutablePath || session.godotProjectPath || session.activeWorkspace) {
 		sections.push("## Godot 开发环境");
 

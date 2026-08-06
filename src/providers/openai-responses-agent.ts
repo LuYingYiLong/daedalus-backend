@@ -45,7 +45,12 @@ import {
 	isProviderImageInputUnsupportedError,
 	recognizeToolImageReferences
 } from "./tool-image-recognition.js";
-import { ProviderIncompleteStreamError, runProviderRequestWithResilience } from "./provider-resilience.js";
+import {
+	createProviderReconnectState,
+	ProviderIncompleteStreamError,
+	runProviderRequestWithResilience,
+	type ProviderReconnectState
+} from "./provider-resilience.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -363,12 +368,14 @@ async function readResponsesAssistantMessage(
 	streamAssistant: boolean,
 	requireToolCall: boolean,
 	onEvent?: OnToolEvent,
-	abortSignal?: AbortSignal | undefined
+	abortSignal?: AbortSignal | undefined,
+	reconnectState?: ProviderReconnectState | undefined
 ): Promise<ResponsesAssistantMessage> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
 		onEvent,
 		abortSignal,
+		reconnectState,
 		execute: async (attempt): Promise<ResponsesAssistantMessage> => readResponsesAssistantMessageAttempt(
 			params,
 			options,
@@ -465,11 +472,13 @@ async function runResponsesAgentLoop(
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(chatTools);
 	let toolProtocolViolationRetries: number = 0;
 	let imageFallbackAttempted: boolean = false;
+	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
+		stepReconnectState ??= createProviderReconnectState();
 
 		let assistantMessage: ResponsesAssistantMessage;
 		try {
@@ -482,7 +491,8 @@ async function runResponsesAgentLoop(
 				streamAssistant,
 				shouldRequireToolCallOnStep(params, step, startStep),
 				onEvent,
-				abortSignal
+				abortSignal,
+				stepReconnectState
 			);
 		} catch (error: unknown) {
 			if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {
@@ -641,6 +651,9 @@ async function runResponsesAgentLoop(
 			}
 			return { status: "completed", text: finalText };
 		}
+
+		// 工具执行成功后进入新的模型步骤，新的步骤使用新的重连链。
+		stepReconnectState = undefined;
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;

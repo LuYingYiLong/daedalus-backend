@@ -8,6 +8,7 @@ const MAX_FILE_EDIT_SNAPSHOT_BYTES: number = 20 * 1024 * 1024;
 
 export type FileEditSnapshot = {
 	path: string;
+	sourceFolderId?: string | undefined;
 	absolutePath: string;
 	workspaceRoot: string;
 	existedBefore: boolean;
@@ -26,6 +27,7 @@ export type FileEditSnapshot = {
 
 export type FileEditBatchDraft = {
 	workspaceId: string;
+	sourceFolderId?: string | undefined;
 	workspaceRoot: string;
 	edits: FileEditSnapshot[];
 };
@@ -40,6 +42,7 @@ type SnapshotRead = {
 
 type TrackedTarget = {
 	path: string;
+	sourceFolderId?: string | undefined;
 	absolutePath: string;
 	workspaceRoot: string;
 };
@@ -129,7 +132,8 @@ function collectTrackedTargets(mcpHost: McpHost, workspaceRoot: string, llmToolN
 			break;
 	}
 
-	return Array.from(targets.values());
+	const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined;
+	return Array.from(targets.values()).map((target: TrackedTarget): TrackedTarget => ({ ...target, sourceFolderId }));
 }
 
 export function isGoalCheckpointCapableToolCall(
@@ -295,8 +299,9 @@ function createEditSnapshot(target: TrackedTarget, before: SnapshotRead, after: 
 	const undoable: boolean = unavailableReason === undefined
 		&& (!before.exists || before.text !== undefined || before.base64 !== undefined)
 		&& (!after.exists || after.text !== undefined || after.base64 !== undefined);
-	return {
-		path: target.path,
+		return {
+			path: target.path,
+			sourceFolderId: target.sourceFolderId,
 		absolutePath: target.absolutePath,
 		workspaceRoot: target.workspaceRoot,
 		existedBefore: before.exists,
@@ -360,8 +365,9 @@ export async function captureFileEditBatchDraft<T extends { content: string; reu
 
 	return {
 		...result,
-		fileEditDraft: {
-			workspaceId,
+			fileEditDraft: {
+				workspaceId,
+				sourceFolderId,
 			workspaceRoot,
 			edits
 		}

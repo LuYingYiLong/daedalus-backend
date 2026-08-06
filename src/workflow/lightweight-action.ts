@@ -112,7 +112,11 @@ export function addLightweightActionObservation(
 		},
 		artifactRefs: observation.artifactRefs !== undefined && observation.artifactRefs.length > 0
 			? observation.artifactRefs
-			: existing?.artifactRefs
+			: existing?.artifactRefs,
+		artifactFileRefs: observation.artifactFileRefs !== undefined && observation.artifactFileRefs.length > 0
+			? observation.artifactFileRefs
+			: existing?.artifactFileRefs,
+		sourceFolderId: observation.sourceFolderId ?? existing?.sourceFolderId
 	});
 }
 
@@ -188,7 +192,8 @@ function cloneObservation(observation: WorkflowToolObservation): WorkflowToolObs
 		...observation,
 		argsSummary: observation.argsSummary === undefined ? undefined : { ...observation.argsSummary },
 		parsedResult: observation.parsedResult === undefined ? undefined : { ...observation.parsedResult },
-		artifactRefs: observation.artifactRefs === undefined ? undefined : [...observation.artifactRefs]
+		artifactRefs: observation.artifactRefs === undefined ? undefined : [...observation.artifactRefs],
+		artifactFileRefs: observation.artifactFileRefs === undefined ? undefined : observation.artifactFileRefs.map((fileRef) => ({ ...fileRef }))
 	};
 }
 

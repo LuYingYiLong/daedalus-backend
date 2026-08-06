@@ -2,6 +2,7 @@ import type { AdditionalContextItem, AiChatParams, ChatMessage, PromptId } from 
 import type { SkillId } from "../skills/registry.js";
 import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
 import type { WorkflowExecutionProfileId } from "./execution-profile.js";
+import type { WorkspaceFileRef } from "../workspace/source-context.js";
 
 export type WorkflowPhaseId = string;
 
@@ -19,6 +20,8 @@ export type WorkflowFailedCheck = {
 	toolCallId?: string | undefined;
 	toolName?: string | undefined;
 	artifact?: string | undefined;
+	sourceFolderId?: string | undefined;
+	artifactFileRef?: WorkspaceFileRef | undefined;
 	severity?: string | undefined;
 };
 
@@ -31,6 +34,8 @@ export type WorkflowToolObservation = {
 	parsedResult?: Record<string, unknown> | undefined;
 	error?: string | undefined;
 	artifactRefs?: string[] | undefined;
+	artifactFileRefs?: WorkspaceFileRef[] | undefined;
+	sourceFolderId?: string | undefined;
 	/** 成功写入且内容实际变化的文件指纹，仅用于自动修复进展判定。 */
 	fileEditFingerprints?: string[] | undefined;
 };
@@ -39,10 +44,13 @@ export type WorkflowCompletionTarget =
 	| {
 		kind: "artifact";
 		path: string;
+		sourceFolderId?: string | undefined;
+		fileRef?: WorkspaceFileRef | undefined;
 	}
 	| {
 		kind: "project_setting";
 		key: string;
+		sourceFolderId?: string | undefined;
 	};
 
 export type WorkflowCompletionContract = {
@@ -58,6 +66,7 @@ export type WorkflowPhase = {
 	promptId?: PromptId | undefined;
 	toolBudget: ToolBudgetLevel;
 	allowedTools: string[];
+	sourceFolderId?: string | undefined;
 	instruction: string;
 	acceptanceCriteria?: string[] | undefined;
 	completionContract?: WorkflowCompletionContract | undefined;

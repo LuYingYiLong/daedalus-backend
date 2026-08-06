@@ -4,6 +4,7 @@ import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import { createOpenAICompatibleClient } from "../../../src/providers/provider-chat-completions-client.js";
 import { createOpenAIResponsesClient } from "../../../src/providers/openai-responses-client.js";
 import {
+	createProviderReconnectState,
 	ProviderConnectionInterruptedError,
 	ProviderHttpError,
 	classifyProviderRetry,
@@ -82,10 +83,12 @@ test("eligible transport failures automatically extend from five to fifteen reco
 });
 
 test("rate limiting stops after five reconnect attempts", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
 	let calls: number = 0;
 	await assert.rejects(
 		runProviderRequestWithResilience({
 			providerOptions,
+			onEvent: (event: ToolEvent): void => { events.push(event); },
 			sleep: immediateSleep,
 			execute: async (): Promise<string> => {
 				calls += 1;
@@ -95,6 +98,9 @@ test("rate limiting stops after five reconnect attempts", async (): Promise<void
 		ProviderConnectionInterruptedError
 	);
 	assert.equal(calls, 6);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.ok(reconnects.every((event): boolean => event.attempt <= event.maxAttempts));
+	assert.equal(reconnects.at(-1)?.attempt, 5);
 });
 
 test("certificate and proxy authentication failures are not retried", async (): Promise<void> => {
@@ -142,6 +148,46 @@ test("the inactivity watchdog reconnects an otherwise stalled request", async ()
 	assert.equal(reconnects[0]?.status, "waiting");
 	assert.ok(reconnects.some((event): boolean => event.status === "reconnecting"));
 	assert.equal(reconnects.at(-1)?.status, "recovered");
+});
+
+test("logical reconnect state is shared across protocol-level provider retries", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
+	const reconnectState = createProviderReconnectState();
+	let calls: number = 0;
+
+	const execute = async (): Promise<string> => {
+		calls += 1;
+		if (calls === 1 || calls === 3) {
+			throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+		}
+		return calls === 2 ? "first response" : "second response";
+	};
+
+	assert.equal(await runProviderRequestWithResilience({
+		providerOptions,
+		onEvent: (event: ToolEvent): void => { events.push(event); },
+		reconnectState,
+		sleep: immediateSleep,
+		random: (): number => 0.5,
+		execute
+	}), "first response");
+	assert.equal(await runProviderRequestWithResilience({
+		providerOptions,
+		onEvent: (event: ToolEvent): void => { events.push(event); },
+		reconnectState,
+		sleep: immediateSleep,
+		random: (): number => 0.5,
+		execute
+	}), "second response");
+
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.ok(reconnects.length > 0);
+	assert.equal(new Set(reconnects.map((event): string => event.reconnectId)).size, 1);
+	assert.deepEqual(reconnects.map((event): number => event.attempt), [1, 1, 1, 2, 2, 2]);
+	assert.deepEqual(reconnects.map((event): number => event.revision), [1, 2, 3, 4, 5, 6]);
+	assert.equal(reconnectState.attempt, 2);
+	assert.equal(reconnectState.revision, 6);
+	assert.ok(reconnects.every((event): boolean => event.attempt <= event.maxAttempts));
 });
 
 test("a silent provider stream becomes visible before its reconnect deadline and clears when activity resumes", async (): Promise<void> => {

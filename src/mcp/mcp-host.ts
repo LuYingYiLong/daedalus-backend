@@ -19,6 +19,17 @@ import {
 } from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import {
+	describeWorkspaceSource,
+	formatWorkspaceFileRef,
+	isWorkspaceSourceAvailable,
+	resolveWorkspaceReadSource,
+	resolveWorkspaceSources,
+	WorkspaceSourceResolutionError,
+	type WorkspaceScope,
+	type WorkspaceSourceOperation
+} from "../workspace/source-context.js";
+import { WorkspaceSourceIndex } from "../workspace/source-index.js";
+import {
 	clearDynamicMcpToolsForWorkspace,
 	clearGlobalDynamicMcpTools,
 	replaceDynamicMcpToolsForWorkspace,
@@ -54,6 +65,28 @@ type McpToolListResult = {
 		inputSchema?: unknown;
 	}>;
 };
+
+type McpTextResult = {
+	content?: Array<{ type?: unknown; text?: unknown }>;
+	[key: string]: unknown;
+};
+
+function createTextToolResult(value: unknown, isError: boolean = false): McpTextResult {
+	return {
+		...(isError ? { isError: true } : {}),
+		content: [{ type: "text", text: JSON.stringify(value) }]
+	};
+}
+
+function createSourceErrorResult(error: WorkspaceSourceResolutionError): McpTextResult {
+	return createTextToolResult({
+		ok: false,
+		code: error.code,
+		workspaceId: error.workspaceId,
+		message: error.message,
+		candidates: error.candidates
+	}, true);
+}
 
 export type CustomMcpServerRuntimeStatus = {
 	id: string;
@@ -127,6 +160,7 @@ export class McpHost {
 	private activeWorkspaceId?: string | undefined;
 	private readonly editorBridge: GodotEditorBridge = new GodotEditorBridge();
 	private readonly diagnosticsBridge: GodotDiagnosticsBridge = new GodotDiagnosticsBridge();
+	private readonly sourceIndex: WorkspaceSourceIndex = new WorkspaceSourceIndex();
 
 	async connectAll(): Promise<void> {
 		await this.ensureGlobalInternalServers();
@@ -493,6 +527,114 @@ export class McpHost {
 		return resolvedWorkspaceId;
 	}
 
+	private async callWorkspaceIndexedTool(
+		name: "list_files" | "search_text",
+		args: Record<string, unknown>,
+		workspace: WorkspaceConfig
+	): Promise<McpTextResult> {
+		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string" ? args.sourceFolderId : undefined;
+		const scope: WorkspaceScope | undefined = typeof args.scope === "string" ? args.scope as WorkspaceScope : undefined;
+		const selection = resolveWorkspaceSources(workspace, {
+			sourceFolderId,
+			scope,
+			operation: name === "list_files" ? "list" : "search"
+		});
+		const forwardedArgs: Record<string, unknown> = { ...args };
+		delete forwardedArgs.sourceFolderId;
+		delete forwardedArgs.scope;
+		delete forwardedArgs.continuationToken;
+		const sources = selection.kind === "source" ? [selection.source] : selection.sources;
+		const globalLimit: number = typeof args.limit === "number" && Number.isFinite(args.limit)
+			? Math.max(1, Math.floor(args.limit))
+			: name === "list_files" ? 2_000 : 50;
+		const continuationToken: string | undefined = typeof args.continuationToken === "string" ? args.continuationToken : undefined;
+		const offset: number = continuationToken?.startsWith("offset:")
+			? Math.max(0, Number.parseInt(continuationToken.slice("offset:".length), 10) || 0)
+			: 0;
+		const perSourceLimit: number = globalLimit + offset;
+		const sourceResults = await Promise.all(sources.map(async (source) => {
+			if (!isWorkspaceSourceAvailable(source)) {
+				return {
+					source,
+					warning: `source_unavailable: Source folder is unavailable: ${source.id}`
+				};
+			}
+			try {
+				if (name === "list_files") {
+					const listed = await this.sourceIndex.listSourceFiles(workspace, source, {
+						subdir: typeof forwardedArgs.subdir === "string" ? forwardedArgs.subdir : undefined,
+						extensions: Array.isArray(forwardedArgs.extensions) ? forwardedArgs.extensions.filter((value): value is string => typeof value === "string") : undefined,
+						includeIgnored: forwardedArgs.includeIgnored === true,
+						limit: perSourceLimit
+					});
+					return { source, listed, warning: undefined };
+				}
+				const searched = await this.sourceIndex.searchSource(workspace, source, {
+					query: typeof forwardedArgs.query === "string" ? forwardedArgs.query : "",
+					extensions: Array.isArray(forwardedArgs.extensions) ? forwardedArgs.extensions.filter((value): value is string => typeof value === "string") : undefined,
+					limit: perSourceLimit,
+					subdir: typeof forwardedArgs.subdir === "string" ? forwardedArgs.subdir : undefined
+				});
+				return { source, searched, warning: undefined };
+			} catch (error: unknown) {
+				return {
+					source,
+					warning: error instanceof Error ? error.message : "Source folder could not be accessed."
+				};
+			}
+		}));
+		const warnings = sourceResults
+			.filter((result): result is typeof result & { warning: string } => typeof result.warning === "string")
+			.map((result) => ({
+				sourceFolderId: result.source.id,
+				sourceName: describeWorkspaceSource(result.source).sourceName,
+				warning: result.warning
+			}));
+		if (name === "list_files") {
+			const files = sourceResults.flatMap((result) => "listed" in result && result.listed !== undefined
+				? result.listed.files
+				: []);
+			files.sort((left, right) => left.sourceFolderId.localeCompare(right.sourceFolderId) || left.file.localeCompare(right.file));
+			const limited = files.slice(offset, offset + globalLimit);
+			return createTextToolResult({
+				files: limited.map((file) => file.file),
+				fileRefs: limited.map((file) => formatWorkspaceFileRef(file.fileRef)),
+				scope: selection.kind === "all" ? "all" : "source",
+				directoryExists: sourceResults.some((result) => "listed" in result && result.listed?.directoryExists === true),
+				sources: sources.map((source) => ({ sourceFolderId: source.id, sourceName: describeWorkspaceSource(source).sourceName })),
+				warnings,
+				...(files.length > offset + globalLimit ? { continuationToken: `offset:${offset + globalLimit}` } : {})
+			});
+		}
+		const matches = sourceResults.flatMap((result) => "searched" in result && result.searched !== undefined ? result.searched : []);
+		matches.sort((left, right) => left.sourceFolderId.localeCompare(right.sourceFolderId) || left.file.localeCompare(right.file) || left.line - right.line);
+		const limitedMatches = matches.slice(offset, offset + globalLimit);
+		return createTextToolResult({
+			matches: limitedMatches.map((match) => ({
+				file: match.file,
+				line: match.line,
+				text: match.text,
+				sourceFolderId: match.sourceFolderId,
+				sourceName: match.sourceName,
+				fileRef: formatWorkspaceFileRef(match.fileRef)
+			})),
+			scope: selection.kind === "all" ? "all" : "source",
+			warnings,
+			...(matches.length > offset + globalLimit ? { continuationToken: `offset:${offset + globalLimit}` } : {})
+		});
+	}
+
+	private callWorkspaceSourceContextTool(name: "list_source_folders" | "get_source_context", workspace: WorkspaceConfig): McpTextResult {
+		const sources = workspace.sourceFolders.map((source) => describeWorkspaceSource(source));
+		return createTextToolResult({
+			workspaceId: workspace.id,
+			workspaceName: workspace.name,
+			primarySourceFolderId: workspace.primarySourceFolderId,
+			sources,
+			...(name === "list_source_folders" ? {} : { kind: workspace.kind })
+		});
+	}
+
 	private selectDiagnosticsWorkspace(workspaceId?: string | undefined): WorkspaceConfig {
 		const resolvedWorkspaceId: string = this.getWorkspaceId(workspaceId);
 		const workspace: WorkspaceConfig | undefined = findWorkspace(resolvedWorkspaceId);
@@ -650,10 +792,23 @@ export class McpHost {
 			: undefined;
 		if (workspace !== undefined) {
 			const requestedCwd: string | undefined = typeof args.cwd === "string" ? args.cwd.trim() : undefined;
-			if (sourceFolderId === undefined && requestedCwd !== undefined && requestedCwd.length > 0) {
-				sourceFolderId = findContainingWorkspaceSourceFolder(workspace, requestedCwd)?.id;
+			const sourceSelection = resolveWorkspaceSources(workspace, {
+				sourceFolderId,
+				operation: "terminal"
+			});
+			sourceFolderId = sourceSelection.kind === "source" ? sourceSelection.source.id : sourceFolderId;
+			if (sourceFolderId === undefined) {
+				throw new Error("source_required: terminal commands must explicitly specify sourceFolderId in a multi-source workspace.");
 			}
-			getWorkspaceSourceFolder(workspace, sourceFolderId);
+			const source = sourceSelection.kind === "source"
+				? sourceSelection.source
+				: getWorkspaceSourceFolder(workspace, sourceFolderId);
+			if (requestedCwd !== undefined && requestedCwd.length > 0) {
+				const cwdSource = findContainingWorkspaceSourceFolder(workspace, requestedCwd);
+				if (cwdSource === undefined || cwdSource.id !== source.id) {
+					throw new Error("source_boundary: terminal cwd must remain inside the selected source folder.");
+				}
+			}
 		}
 
 		return {
@@ -683,7 +838,14 @@ export class McpHost {
 			return forwardedArgs;
 		}
 
-		const sourceFolder = getWorkspaceSourceFolder(workspace, sourceFolderId);
+		const sourceSelection = resolveWorkspaceSources(workspace, {
+			sourceFolderId,
+			operation: "read"
+		});
+		if (sourceSelection.kind !== "source") {
+			throw new Error("source_required: documentation queries require one source folder.");
+		}
+		const sourceFolder = sourceSelection.source;
 		const projectVersion: string | undefined = await readGodotProjectFeatureVersion(sourceFolder.path);
 		return projectVersion === undefined
 			? forwardedArgs
@@ -759,19 +921,26 @@ export class McpHost {
 
 		if (serverId === GODOT_EDITOR_SERVER_ID) {
 			const workspace: WorkspaceConfig | undefined = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
-			const routedWorkspaceId: string | undefined = workspace === undefined
-				? workspaceId
-				: createSourceScopedWorkspace(workspace, sourceFolderId).id;
+			let routedWorkspaceId: string | undefined = workspaceId;
+			if (workspace !== undefined) {
+				const selection = resolveWorkspaceSources(workspace, { sourceFolderId, operation: "godot" });
+				if (selection.kind !== "source") throw new Error("source_required: editor operations require one source folder.");
+				routedWorkspaceId = createSourceScopedWorkspace(workspace, selection.source.id).id;
+			}
 			const forwardedArgs: Record<string, unknown> = { ...args };
 			delete forwardedArgs.sourceFolderId;
+			delete forwardedArgs.scope;
 			return this.editorBridge.callTool(name, forwardedArgs, routedWorkspaceId, editorInstanceId);
 		}
 
 		if (serverId === GODOT_DIAGNOSTICS_SERVER_ID) {
 			const workspace: WorkspaceConfig = this.selectDiagnosticsWorkspace(workspaceId);
-			this.diagnosticsBridge.setWorkspace(createSourceScopedWorkspace(workspace, sourceFolderId));
+			const selection = resolveWorkspaceSources(workspace, { sourceFolderId, operation: "godot" });
+			if (selection.kind !== "source") throw new Error("source_required: diagnostics require one source folder.");
+			this.diagnosticsBridge.setWorkspace(createSourceScopedWorkspace(workspace, selection.source.id));
 			const forwardedArgs: Record<string, unknown> = { ...args };
 			delete forwardedArgs.sourceFolderId;
+			delete forwardedArgs.scope;
 			return this.diagnosticsBridge.callTool(name, forwardedArgs);
 		}
 
@@ -779,13 +948,55 @@ export class McpHost {
 		const workspace: WorkspaceConfig | undefined = resolvedWorkspaceId === undefined
 			? undefined
 			: findWorkspace(resolvedWorkspaceId);
+		if (serverId === "workspace" && workspace !== undefined) {
+			try {
+				if (name === "list_source_folders" || name === "get_source_context") {
+					return this.callWorkspaceSourceContextTool(name, workspace);
+				}
+				if (name === "list_files" || name === "search_text") {
+					return await this.callWorkspaceIndexedTool(name, args, workspace);
+				}
+				if (name === "read_text_file") {
+					const selection = resolveWorkspaceReadSource(workspace, String(args.relativePath ?? ""), {
+						sourceFolderId,
+						scope: typeof args.scope === "string" ? args.scope as WorkspaceScope : undefined
+					});
+					// 将唯一匹配结果回填到本次执行上下文，保证 evidence、ToolPart 和恢复日志使用同一文件身份。
+					args.sourceFolderId = selection.source.id;
+					const forwardedReadArgs: Record<string, unknown> = { ...args };
+					delete forwardedReadArgs.sourceFolderId;
+					delete forwardedReadArgs.scope;
+					const routedServerId: string = getSourceScopedServerId("workspace", workspace, selection.source.id);
+					return this.getSession(routedServerId, workspaceId).callTool(name, forwardedReadArgs, { signal: abortSignal });
+				}
+			} catch (error: unknown) {
+				if (error instanceof WorkspaceSourceResolutionError) return createSourceErrorResult(error);
+				throw error;
+			}
+		}
 		const forwardedArgs: Record<string, unknown> = { ...args };
 		delete forwardedArgs.sourceFolderId;
+		delete forwardedArgs.scope;
 		const sourceScoped: boolean = serverId === "workspace" || serverId === "godot" || serverId === "skills";
-		const routedServerId: string = workspace === undefined || !sourceScoped
-			? serverId
-			: getSourceScopedServerId(serverId, workspace, getWorkspaceSourceFolder(workspace, sourceFolderId).id);
-		return this.getSession(routedServerId, workspaceId).callTool(name, forwardedArgs, { signal: abortSignal });
+		let routedServerId: string = serverId;
+		if (workspace !== undefined && sourceScoped) {
+			const operation: WorkspaceSourceOperation = serverId === "godot"
+				? "godot"
+				: serverId === "skills" && name === "load" ? "read" : "write";
+			const selection = resolveWorkspaceSources(workspace, { sourceFolderId, operation });
+			if (selection.kind !== "source") {
+				throw new Error("source_required: this operation requires one source folder.");
+			}
+			routedServerId = getSourceScopedServerId(serverId, workspace, selection.source.id);
+		}
+		const result = await this.getSession(routedServerId, workspaceId).callTool(name, forwardedArgs, { signal: abortSignal });
+		if (workspace !== undefined && sourceScoped) {
+			const routedSourceId: string | undefined = routedServerId.includes(":")
+				? routedServerId.slice(routedServerId.lastIndexOf(":") + 1)
+				: undefined;
+			if (routedSourceId !== undefined) this.sourceIndex.invalidateSource(workspace.id, routedSourceId);
+		}
+		return result;
 	}
 
 	async listResources(serverId: string, workspaceId?: string | undefined) {
@@ -843,6 +1054,7 @@ export class McpHost {
 		this.workspaceSessions.clear();
 		this.workspaceCustomTools.clear();
 		this.customServerStatuses.clear();
+		this.sourceIndex.clear();
 		clearGlobalDynamicMcpTools();
 		this.activeWorkspaceId = undefined;
 		this.globalInternalInitialized = false;

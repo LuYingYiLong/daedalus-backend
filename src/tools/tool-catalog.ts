@@ -44,6 +44,8 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_web_search",
 		"mcp_image_inspect",
 		"mcp_workspace_list_files",
+		"mcp_workspace_list_source_folders",
+		"mcp_workspace_get_source_context",
 		"mcp_workspace_read_text_file",
 		"mcp_workspace_search_text",
 		"mcp_godot_get_runtime_status",

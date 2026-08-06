@@ -265,8 +265,9 @@ function createAutoVerifyPhase(
 		allowedTools: [...READ_TOOLS, ...VERIFY_TOOLS],
 		repairOf: failedPhase.id,
 		repairRound: round,
-		acceptanceCriteria,
-		instruction: verifyOnly
+			acceptanceCriteria,
+			sourceFolderId: failedPhase.sourceFolderId,
+			instruction: verifyOnly
 			? [
 				`上一验证阶段「${failedPhase.title}」缺少必要验证或验证环境不可用。`,
 				"请只补跑与失败点相关的验证工具，不能修改项目文件。",
@@ -289,6 +290,11 @@ function completionTargetValue(target: WorkflowCompletionTarget): string {
 	return target.kind === "artifact" ? target.path : target.key;
 }
 
+function completionTargetIdentity(value: string, sourceFolderId?: string | undefined): string {
+	const normalized: string = normalizeCompletionTarget(value);
+	return sourceFolderId === undefined ? normalized : `${sourceFolderId}:${normalized}`;
+}
+
 function createRepairCompletionContract(
 	failedPhase: WorkflowPhase,
 	failedChecks: WorkflowFailedCheck[]
@@ -302,14 +308,20 @@ function createRepairCompletionContract(
 		return undefined;
 	}
 
-	const missingTargets: Set<string> = new Set(completionChecks
-		.map((check: WorkflowFailedCheck): string | undefined => check.artifact)
-		.filter((value: string | undefined): value is string => value !== undefined)
-		.map(normalizeCompletionTarget));
+	const missingTargets: Set<string> = new Set(completionChecks.flatMap((check: WorkflowFailedCheck): string[] => (
+		check.artifact === undefined
+			? []
+			: [
+				normalizeCompletionTarget(check.artifact),
+				...(check.sourceFolderId === undefined ? [] : [completionTargetIdentity(check.artifact, check.sourceFolderId)])
+			]
+	)));
 	const inheritedTargets: WorkflowCompletionTarget[] = failedPhase.completionContract?.targets
 		.filter((target: WorkflowCompletionTarget): boolean => (
 			isValidWorkflowCompletionTarget(target)
-			&& (missingTargets.size === 0 || missingTargets.has(normalizeCompletionTarget(completionTargetValue(target))))
+			&& (missingTargets.size === 0
+				|| missingTargets.has(completionTargetIdentity(completionTargetValue(target)))
+				|| (target.sourceFolderId !== undefined && missingTargets.has(completionTargetIdentity(completionTargetValue(target), target.sourceFolderId))))
 		))
 		.map((target: WorkflowCompletionTarget): WorkflowCompletionTarget => ({ ...target }))
 		?? [];
@@ -322,8 +334,8 @@ function createRepairCompletionContract(
 			return [];
 		}
 		return check.code === "required_mutation_missing"
-			? [{ kind: "project_setting", key: check.artifact }]
-			: [{ kind: "artifact", path: check.artifact }];
+				? [{ kind: "project_setting", key: check.artifact, sourceFolderId: check.sourceFolderId ?? failedPhase.sourceFolderId }]
+				: [{ kind: "artifact", path: check.artifact, sourceFolderId: check.sourceFolderId ?? failedPhase.sourceFolderId }];
 	});
 	const validTargets: WorkflowCompletionTarget[] = targets.filter(isValidWorkflowCompletionTarget);
 	return validTargets.length > 0 ? { targets: validTargets, requireAll: true } : undefined;
@@ -377,8 +389,9 @@ export function insertWorkflowAutoRepairPhases(
 		repairRound: round,
 		acceptanceCriteria,
 		instruction: createRepairInstruction(failedPhase, verifyFailureReason, resolvedRepairWriteTools, failedChecks),
-		completionContract: createRepairCompletionContract(failedPhase, failedChecks),
-		requireToolCallOnFirstStep: true
+			completionContract: createRepairCompletionContract(failedPhase, failedChecks),
+			sourceFolderId: failedPhase.sourceFolderId,
+			requireToolCallOnFirstStep: true
 	};
 	const phases: WorkflowPhase[] = [
 		...plan.phases.slice(0, insertIndex),

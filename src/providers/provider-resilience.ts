@@ -104,6 +104,28 @@ export type ProviderAttemptContext = {
 	onEvent: OnToolEvent | undefined;
 };
 
+/**
+ * 同一逻辑模型步骤内跨协议纠正重试共享的恢复状态。
+ * reconnectId 和 revision 不能随着底层 HTTP 请求重置，否则 UI 会把一次恢复拆成多条重连记录。
+ */
+export type ProviderReconnectState = {
+	readonly reconnectId: string;
+	revision: number;
+	attempt: number;
+	maxAttempts: 5 | 15;
+	autoExtended: boolean;
+};
+
+export function createProviderReconnectState(): ProviderReconnectState {
+	return {
+		reconnectId: `provider-reconnect-${randomUUID()}`,
+		revision: 0,
+		attempt: 0,
+		maxAttempts: PROVIDER_RECONNECT_ATTEMPTS,
+		autoExtended: false
+	};
+}
+
 export type ProviderResilienceOptions<T> = {
 	providerOptions: ProviderChatOptions;
 	onEvent?: OnToolEvent | undefined;
@@ -115,6 +137,7 @@ export type ProviderResilienceOptions<T> = {
 	now?: (() => number) | undefined;
 	sleep?: ((milliseconds: number, signal?: AbortSignal | undefined) => Promise<void>) | undefined;
 	reconnectId?: string | undefined;
+	reconnectState?: ProviderReconnectState | undefined;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -292,12 +315,28 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 	const random: () => number = options.random ?? Math.random;
 	const now: () => number = options.now ?? Date.now;
 	const sleep = options.sleep ?? defaultSleep;
-	const reconnectId: string = options.reconnectId ?? `provider-reconnect-${randomUUID()}`;
-	let currentAttempt: number = 0;
-	let maxAttempts: 5 | 15 = PROVIDER_RECONNECT_ATTEMPTS;
-	let autoExtended: boolean = false;
-	let revision: number = 0;
+	const reconnectState: ProviderReconnectState | undefined = options.reconnectState;
+	const reconnectId: string = reconnectState?.reconnectId ?? options.reconnectId ?? `provider-reconnect-${randomUUID()}`;
+	let currentAttempt: number = Math.max(0, Math.trunc(reconnectState?.attempt ?? 0));
+	let maxAttempts: 5 | 15 = reconnectState?.maxAttempts === 15 ? 15 : PROVIDER_RECONNECT_ATTEMPTS;
+	let autoExtended: boolean = reconnectState?.autoExtended === true;
+	let revision: number = Math.max(0, Math.trunc(reconnectState?.revision ?? 0));
 	let lastReason: ProviderReconnectReason = "transport";
+	let reconnectedDuringInvocation: boolean = false;
+
+	const syncReconnectState = (): void => {
+		if (reconnectState === undefined) return;
+		reconnectState.revision = revision;
+		reconnectState.attempt = currentAttempt;
+		reconnectState.maxAttempts = maxAttempts;
+		reconnectState.autoExtended = autoExtended;
+	};
+
+	// 外部 seam 不应把已超出上限的状态继续带入下一次请求。
+	if (currentAttempt > maxAttempts) {
+		currentAttempt = maxAttempts;
+	}
+	syncReconnectState();
 
 	while (true) {
 		if (options.abortSignal?.aborted === true) throw createAbortError();
@@ -390,7 +429,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 				options.execute({ signal: attemptController.signal, markActivity: resetWatchdog, onEvent: attemptEvent }),
 				timeoutPromise
 			]);
-			if (currentAttempt > 0) {
+			if (reconnectedDuringInvocation) {
 				revision += 1;
 				emitReconnectEvent(options.onEvent, {
 					schemaVersion: 1,
@@ -403,6 +442,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 					timeoutMs: inactivityTimeoutMs
 				}, revision, "recovered", currentAttempt, maxAttempts, autoExtended, { messageCodePoints: 0, thinkingCodePoints: 0 });
 			}
+			syncReconnectState();
 			return result;
 		} catch (caught: unknown) {
 			clearAttemptResources();
@@ -420,6 +460,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 						reason: classification.reason, timeoutMs: inactivityTimeoutMs
 					}, revision, "failed", currentAttempt, maxAttempts, autoExtended, counters);
 				}
+				syncReconnectState();
 				throw error;
 			}
 
@@ -435,6 +476,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 					model: options.providerOptions.model ?? options.providerOptions.modelProfile?.model ?? "",
 					reason: classification.reason, timeoutMs: inactivityTimeoutMs
 				}, revision, "failed", currentAttempt, maxAttempts, autoExtended, counters);
+				syncReconnectState();
 				throw new ProviderConnectionInterruptedError(error);
 			}
 
@@ -460,6 +502,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 			});
 			await sleep(delayMs, options.abortSignal);
 			currentAttempt = nextAttempt;
+			reconnectedDuringInvocation = true;
 			revision += 1;
 			emitReconnectEvent(options.onEvent, {
 				schemaVersion: 1, reconnectId, runId: "", stepRunId: "",
@@ -467,6 +510,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 				model: options.providerOptions.model ?? options.providerOptions.modelProfile?.model ?? "",
 				reason: classification.reason, timeoutMs: inactivityTimeoutMs
 			}, revision, "reconnecting", currentAttempt, maxAttempts, autoExtended, { messageCodePoints: 0, thinkingCodePoints: 0 });
+			syncReconnectState();
 		} finally {
 			clearAttemptResources();
 		}

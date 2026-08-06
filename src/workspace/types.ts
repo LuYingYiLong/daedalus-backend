@@ -1,13 +1,21 @@
 export type WorkspaceIcon = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type WorkspaceColor = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
+export type WorkspaceCapabilityStatus = "available" | "unavailable" | "unknown";
+
+export type WorkspaceSourceCapabilities = {
+	git: boolean;
+	godot: boolean;
+	projectMarkers?: string[] | undefined;
+	typecheck?: WorkspaceCapabilityStatus | undefined;
+	terminalPresets?: string[] | undefined;
+	workflowProfile?: "godot" | "workspace" | undefined;
+};
+
 export type WorkspaceSourceFolder = {
 	id: string;
 	path: string;
-	capabilities: {
-		git: boolean;
-		godot: boolean;
-	};
+	capabilities: WorkspaceSourceCapabilities;
 };
 
 export type WorkspaceConfig = {

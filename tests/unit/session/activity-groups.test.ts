@@ -50,7 +50,7 @@ test("backend assigns one stable group across contiguous thinking and tools", ()
 	});
 });
 
-test("hidden lifecycle snapshots preserve a tool batch while semantic boundaries close it", (): void => {
+test("hidden lifecycle and workflow phase snapshots preserve a tool batch", (): void => {
 	const accumulator = createActivityGroupAccumulator();
 	const firstCall = annotate(accumulator, "agent.tool.call", {
 		toolCallId: "verify-1",
@@ -71,6 +71,11 @@ test("hidden lifecycle snapshots preserve a tool batch while semantic boundaries
 		toolCallId: "verify-3",
 		toolName: "mcp_terminal_run_safe_preset"
 	});
+	annotate(accumulator, "agent.step.started", { stepId: "verify" });
+	const afterNextPhase = annotate(accumulator, "agent.tool.call", {
+		toolCallId: "verify-4",
+		toolName: "mcp_terminal_run_safe_preset"
+	});
 
 	assert.equal(executing.activityGroupId, undefined);
 	assert.equal(firstCall.activityGroupId, firstResult.activityGroupId);
@@ -80,7 +85,37 @@ test("hidden lifecycle snapshots preserve a tool batch while semantic boundaries
 		commands: 2,
 		thoughts: 0
 	});
-	assert.notEqual(afterPhase.activityGroupId, secondCall.activityGroupId);
+	assert.equal(afterPhase.activityGroupId, secondCall.activityGroupId);
+	assert.equal(afterNextPhase.activityGroupId, secondCall.activityGroupId);
+});
+
+test("a delayed tool result retains its call group after streamed prose", (): void => {
+	const accumulator = createActivityGroupAccumulator();
+	const thinking = annotate(accumulator, "agent.thinking.delta", { text: "prepare" });
+	const toolCall = annotate(accumulator, "agent.tool.call", {
+		toolCallId: "write-1",
+		toolName: "mcp_workspace_overwrite_text_file"
+	});
+	annotate(accumulator, "agent.message.delta", { text: "Writing the file." });
+	const toolResult = annotate(accumulator, "agent.tool.result", {
+		toolCallId: "write-1",
+		toolName: "mcp_workspace_overwrite_text_file",
+		ok: true,
+		fileEditBatch: {
+			batchId: "batch-1",
+			editedFiles: [{ sourceFolderId: "workspace", path: "README.md" }]
+		}
+	});
+	const afterResultThinking = annotate(accumulator, "agent.thinking.delta", { text: "verify" });
+
+	assert.equal(toolResult.activityGroupId, toolCall.activityGroupId);
+	assert.equal(toolResult.activityPartId, toolCall.activityPartId);
+	assert.deepEqual(activityMetadata(toolResult).activityGroupStats, {
+		editedFiles: 1,
+		commands: 0,
+		thoughts: 1
+	});
+	assert.notEqual(afterResultThinking.activityGroupId, thinking.activityGroupId);
 });
 
 test("only non-empty thinking and unique terminal invocations contribute to activity stats", (): void => {

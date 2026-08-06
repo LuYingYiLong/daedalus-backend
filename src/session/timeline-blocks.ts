@@ -531,6 +531,24 @@ function toolPartMatchesEvent(part: TimelineToolPart, toolCallKey: string, event
 	});
 }
 
+function mergeToolActivityMetadata(part: TimelineToolPart, metadata: ReturnType<typeof getActivityMetadata>): void {
+	if (part.activityGroupId === undefined || part.activityPartId === undefined) {
+		Object.assign(part, metadata);
+		return;
+	}
+
+	if (metadata.activityGroupStats === undefined) {
+		return;
+	}
+
+	const current = part.activityGroupStats;
+	part.activityGroupStats = {
+		editedFiles: Math.max(current?.editedFiles ?? 0, metadata.activityGroupStats.editedFiles),
+		commands: Math.max(current?.commands ?? 0, metadata.activityGroupStats.commands),
+		thoughts: Math.max(current?.thoughts ?? 0, metadata.activityGroupStats.thoughts)
+	};
+}
+
 function appendToolPart(parts: TimelineBodyPart[], eventData: Record<string, unknown>, requestId: string): void {
 	const toolCallKey: string = getToolCallKey(eventData, requestId);
 	for (const part of parts) {
@@ -539,7 +557,9 @@ function appendToolPart(parts: TimelineBodyPart[], eventData: Record<string, unk
 			if (eventRecordId.length > 0 && part.events.some((event: Record<string, unknown>): boolean => event._eventRecordId === eventRecordId)) {
 				return;
 			}
-			Object.assign(part, getActivityMetadata(eventData));
+			// A tool result can arrive after streamed prose. The card remains at the
+			// call's original timeline position, so its activity identity must not move.
+			mergeToolActivityMetadata(part, getActivityMetadata(eventData));
 			part.events.push(cloneRecord(eventData));
 			return;
 		}

@@ -115,6 +115,36 @@ test("canonical timeline preserves backend activity group identity and cumulativ
 	}
 });
 
+test("canonical timeline retains a tool card's original activity group when its result follows prose", (): void => {
+	const stored: StoredSession = session([], [
+		event("thinking-delta", "request-delayed-result", "agent.thinking.delta", "2026-08-06T00:00:00.000Z", { text: "prepare" }),
+		event("tool-call", "request-delayed-result", "agent.tool.call", "2026-08-06T00:00:01.000Z", {
+			toolCallId: "write-1",
+			toolName: "mcp_workspace_overwrite_text_file"
+		}),
+		event("prelude", "request-delayed-result", "agent.message.delta", "2026-08-06T00:00:02.000Z", { text: "Writing the file." }),
+		event("tool-result", "request-delayed-result", "agent.tool.result", "2026-08-06T00:00:03.000Z", {
+			toolCallId: "write-1",
+			toolName: "mcp_workspace_overwrite_text_file",
+			ok: true,
+			fileEditBatch: {
+				batchId: "batch-1",
+				editedFiles: [{ sourceFolderId: "workspace", path: "README.md" }]
+			}
+		})
+	]);
+
+	const assistant = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const thinking = assistant.bodyParts.find((part) => part.type === "thinking");
+	const tool = assistant.bodyParts.find((part) => part.type === "tool");
+	assert.equal(thinking?.type, "thinking");
+	assert.equal(tool?.type, "tool");
+	if (thinking?.type === "thinking" && tool?.type === "tool") {
+		assert.equal(tool.activityGroupId, thinking.activityGroupId);
+		assert.deepEqual(tool.activityGroupStats, { editedFiles: 1, commands: 0, thoughts: 1 });
+	}
+});
+
 test("a body prelude closes the prior thinking group without fragmenting the following tool batch", (): void => {
 	const stored: StoredSession = session([], [
 		event("thinking-delta", "request-prelude", "agent.thinking.delta", "2026-08-06T00:00:00.000Z", { text: "inspect" }),

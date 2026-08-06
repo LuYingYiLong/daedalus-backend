@@ -14,6 +14,7 @@ export type ActivityGroupAnnotation = {
 export type ActivityGroupAccumulator = {
 	nextGroupSequence: number;
 	currentGroup?: ActivityGroupState;
+	toolParts: Map<string, ActivityToolPartState>;
 };
 
 type ActivityGroupState = {
@@ -29,10 +30,15 @@ type ActivityGroupState = {
 	fallbackEditedFiles: number;
 };
 
+type ActivityToolPartState = {
+	group: ActivityGroupState;
+	activityPartId: string;
+};
+
 const TERMINAL_RUN_TOOL_PREFIX: string = "mcp_terminal_run_";
 
 export function createActivityGroupAccumulator(): ActivityGroupAccumulator {
-	return { nextGroupSequence: 0 };
+	return { nextGroupSequence: 0, toolParts: new Map<string, ActivityToolPartState>() };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -58,6 +64,10 @@ function getToolCallKey(data: Record<string, unknown>): string {
 		|| "tool";
 }
 
+function canTrackToolPart(data: Record<string, unknown>): boolean {
+	return getString(data, "toolCallId").length > 0 || getString(data, "approvalId").length > 0;
+}
+
 function isThinkingEvent(eventName: string): boolean {
 	return eventName === "agent.thinking.delta"
 		|| eventName === "agent.thinking.done"
@@ -80,9 +90,9 @@ function isTerminalRunState(data: Record<string, unknown>): boolean {
 
 /**
  * Only semantic, user-visible boundaries close a group. Lifecycle snapshots
- * such as `agent.run.state: executing` are interleaved with every tool call
- * but do not produce a timeline body part, so treating them as boundaries
- * fragments one operational batch into many single-item rows.
+ * and workflow phase markers such as `agent.run.state: executing` or
+ * `agent.step.outcome` do not produce a timeline body part, so treating them
+ * as boundaries fragments one operational batch into many single-item rows.
  */
 function closesActivityGroup(eventName: string, data: Record<string, unknown>): boolean {
 	if (
@@ -95,8 +105,6 @@ function closesActivityGroup(eventName: string, data: Record<string, unknown>): 
 		|| eventName === "agent.context.compression"
 		|| eventName === "agent.status"
 		|| eventName === "ai.status"
-		|| eventName === "agent.step.started"
-		|| eventName === "agent.step.outcome"
 		|| eventName === "agent.run.done"
 		|| eventName === "agent.run.error"
 		|| eventName === "agent.run.cancelled"
@@ -165,6 +173,23 @@ export function annotateActivityEvent(
 	const activityPartKey: string = activityPartKind === "thinking"
 		? "thinking"
 		: getToolCallKey(data);
+	const trackedToolPart: ActivityToolPartState | undefined = activityPartKind === "tool" && canTrackToolPart(data)
+		? accumulator.toolParts.get(activityPartKey)
+		: undefined;
+	if (trackedToolPart !== undefined) {
+		const group: ActivityGroupState = trackedToolPart.group;
+		if (eventName === "agent.tool.result" || eventName === "tool.result") {
+			updateEditedFileStats(group, data);
+		}
+		return {
+			...data,
+			activityGroupId: group.id,
+			activityPartId: trackedToolPart.activityPartId,
+			activityPartKind,
+			activityGroupStats: getGroupStats(group)
+		};
+	}
+
 	let group: ActivityGroupState | undefined = accumulator.currentGroup;
 	if (group === undefined) {
 		accumulator.nextGroupSequence += 1;
@@ -207,5 +232,8 @@ export function annotateActivityEvent(
 		activityPartKind,
 		activityGroupStats: getGroupStats(group)
 	};
+	if (activityPartKind === "tool" && canTrackToolPart(data)) {
+		accumulator.toolParts.set(activityPartKey, { group, activityPartId: annotation.activityPartId });
+	}
 	return { ...data, ...annotation };
 }

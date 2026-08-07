@@ -355,6 +355,25 @@ export async function refreshEditorFilesystemAfterGodotMutation(
 	}
 }
 
+/**
+ * 编辑器刷新是写入后的同步通知，不应阻塞工具本身的成功结果。
+ * Godot 编辑器断连或未响应时，磁盘写入已经完成，Studio 仍应立即收到
+ * tool.result；刷新失败只记录为环境日志，下一次编辑器上下文更新会重新同步。
+ */
+export function scheduleEditorFilesystemRefreshAfterGodotMutation(
+	mcpHost: McpHost,
+	llmToolName: string,
+	args: Record<string, unknown>,
+	workspaceId?: string | undefined
+): void {
+	void refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId).catch((error: unknown): void => {
+		logger.warn("godot_editor", "filesystem_refresh_background_failed", {
+			llmToolName,
+			error: error instanceof Error ? error.message : String(error)
+		});
+	});
+}
+
 async function executeMappedTool(
 	mcpHost: McpHost,
 	serverId: string,
@@ -544,7 +563,7 @@ export async function executeLlmToolWithIdempotency(
 		const result: IdempotentToolExecutionResult = llmToolName === "mcp_image_propose_import_to_workspace"
 			? await executeImport()
 			: await captureFileEditBatchDraft(mcpHost, llmToolName, args, executeImport);
-		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return result;
 	}
 	if (llmToolName === "mcp_web_search") {
@@ -572,7 +591,7 @@ export async function executeLlmToolWithIdempotency(
 				onProgress
 			)
 		);
-		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return result;
 	}
 
@@ -581,7 +600,7 @@ export async function executeLlmToolWithIdempotency(
 
 	const existingRecord: ToolExecutionRecord | undefined = completedToolExecutions.get(identity.fingerprint);
 	if (existingRecord !== undefined && !isRecordExpired(existingRecord)) {
-		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		return {
 			content: existingRecord.content,
 			rawContentLength: existingRecord.rawContentLength,
@@ -616,7 +635,7 @@ export async function executeLlmToolWithIdempotency(
 				onProgress
 			)
 		);
-		await refreshEditorFilesystemAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
+		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
 		const createdAt: string = new Date().toISOString();
 		const record: ToolExecutionRecord = {
 			fingerprint: identity.fingerprint,

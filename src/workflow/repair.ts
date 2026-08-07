@@ -110,26 +110,10 @@ function collectActualWriteToolsFromPhase(failedPhase: WorkflowPhase): string[] 
 	});
 }
 
-function getTargetFamily(target: WorkflowCompletionTarget): RepairToolFamily | undefined {
-	if (target.kind === "project_setting") {
-		return "project_setting";
-	}
-	return target.targetKind;
-}
-
-function collectStructuredRepairFamilies(failedPhase: WorkflowPhase, failedChecks: WorkflowFailedCheck[]): Set<RepairToolFamily> {
+function collectStructuredRepairFamilies(failedChecks: WorkflowFailedCheck[]): Set<RepairToolFamily> {
 	const families: Set<RepairToolFamily> = new Set();
-	for (const target of failedPhase.completionContract?.targets ?? []) {
-		const family: RepairToolFamily | undefined = getTargetFamily(target);
-		if (family !== undefined) families.add(family);
-	}
 	for (const check of failedChecks) {
 		if (check.targetKind !== undefined) families.add(check.targetKind);
-		if (check.toolName !== undefined) {
-			for (const family of getWorkflowToolSemantics(check.toolName).repairFamilies ?? []) {
-				families.add(family);
-			}
-		}
 	}
 	return families;
 }
@@ -159,7 +143,7 @@ export function resolveRepairWriteTools(
 	if (failedChecks.some((check: WorkflowFailedCheck): boolean => check.failureCode === undefined)) {
 		return { tools: [], reason: "The failed verification has no structured failure code for a safe repair." };
 	}
-	const targetFamilies: Set<RepairToolFamily> = collectStructuredRepairFamilies(failedPhase, failedChecks);
+	const targetFamilies: Set<RepairToolFamily> = collectStructuredRepairFamilies(failedChecks);
 	if (targetFamilies.size === 0) {
 		if (failedPhase.toolGroup === "write") {
 			return { tools: uniqueTools(authorizedTools), reason: "Retrying the failed write phase with its existing authorization only." };

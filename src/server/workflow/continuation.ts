@@ -5,7 +5,7 @@ import type { ProviderChatOptions } from "../../providers/provider-types.js";
 import { McpHost } from "../../mcp/mcp-host.js";
 import { sendJson } from "../send-json.js";
 import { createWorkflowPhaseRunId, applyDeterministicVerificationGate, createWorkflowPhaseOutcome } from "../../workflow/outcome.js";
-import { appendPhaseOutput, createPhaseMessage, createPhaseParams, updateWorkflowPhaseStatus } from "../../workflow/runner.js";
+import { createPhaseMessage, createPhaseParams } from "../../workflow/runner.js";
 import type { WorkflowFailedCheck, WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../../workflow/types.js";
 import type { ClientSession, PendingAiContinuation } from "../client-session.js";
 import { appendChatTurnToSession } from "../token-budget.js";
@@ -26,7 +26,12 @@ import {
 } from "./tool-events.js";
 import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./events.js";
 import { createRuntimeWorkflowPhase, createWorkflowPhasePrompt, runWorkflowPhase } from "./phase-runner.js";
-import { scheduleWorkflowApproval, scheduleWorkflowPhaseOutcome, scheduleWorkflowPhaseStart } from "../../workflow/scheduler.js";
+import {
+	scheduleWorkflowApproval,
+	scheduleWorkflowPhaseOutcome,
+	scheduleWorkflowPhaseStart,
+	type WorkflowSchedulerCommand
+} from "../../workflow/scheduler.js";
 import { logger } from "../../logger.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
 import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
@@ -50,11 +55,15 @@ export function collectWorkflowCompletionStatus(
 	plan: WorkflowPlan,
 	outputs: WorkflowPhaseOutput[]
 ): {
-	resultStatus: "completed" | "completed_with_warnings";
+	resultStatus: "completed" | "completed_with_warnings" | "blocked";
 	verificationStatus: "verified" | "unverified";
 	warnings: string[];
 } {
 	const warnings: string[] = [...new Set(outputs.flatMap((output: WorkflowPhaseOutput): string[] => output.warnings ?? []))];
+	const blockedOutputs: WorkflowPhaseOutput[] = outputs.filter((output: WorkflowPhaseOutput): boolean => output.status === "blocked");
+	for (const output of blockedOutputs) {
+		warnings.push(output.blockedReason ?? output.summary);
+	}
 	let lastWriteOutputIndex: number = -1;
 	for (let index: number = 0; index < outputs.length; index += 1) {
 		const output: WorkflowPhaseOutput | undefined = outputs[index];
@@ -86,7 +95,9 @@ export function collectWorkflowCompletionStatus(
 		? (uniqueWarnings.length === 0 ? "verified" : "unverified")
 		: (hasSuccessfulVerifyAfterWrite && uniqueWarnings.length === 0 ? "verified" : "unverified");
 	return {
-		resultStatus: uniqueWarnings.length > 0 ? "completed_with_warnings" : "completed",
+		resultStatus: blockedOutputs.length > 0
+			? "blocked"
+			: uniqueWarnings.length > 0 ? "completed_with_warnings" : "completed",
 		verificationStatus,
 		warnings: uniqueWarnings
 	};
@@ -94,15 +105,50 @@ export function collectWorkflowCompletionStatus(
 
 export function createFinalSummaryVerificationContext(plan: WorkflowPlan, outputs: WorkflowPhaseOutput[]): string {
 	const completionStatus = collectWorkflowCompletionStatus(plan, outputs);
-	if (completionStatus.warnings.length === 0) {
+	const blockedOutputs: WorkflowPhaseOutput[] = outputs.filter((output: WorkflowPhaseOutput): boolean => output.status === "blocked");
+	if (completionStatus.warnings.length === 0 && blockedOutputs.length === 0) {
 		return "";
 	}
 
 	return [
 		"## 最终交付的验证限制",
-		"以下验证限制来自已执行的工具结果或本次请求的结构化执行策略。必须在最终总结中用自然、简洁的语言如实说明；不要声称验证已经通过，也不要把这段原文作为系统状态块复述。",
+		blockedOutputs.length > 0
+			? "任务因结构化工具失败而正常阻断。必须明确说明未完成的目标、具体错误码和建议动作；不得声称任务已经完成。"
+			: "以下验证限制来自已执行的工具结果或本次请求的结构化执行策略。必须在最终总结中用自然、简洁的语言如实说明；不要声称验证已经通过，也不要把这段原文作为系统状态块复述。",
+		...blockedOutputs.flatMap((output: WorkflowPhaseOutput): string[] => output.failedChecks.map((check: WorkflowFailedCheck): string => (
+			`- 阻断：[${check.failureCode ?? check.code}] ${check.message}${check.artifact === undefined ? "" : `（目标：${check.artifact}）`}`
+		))),
 		...completionStatus.warnings.map((warning: string): string => `- ${warning}`)
 	].join("\n");
+}
+
+function createDeterministicBlockedSummary(outputs: WorkflowPhaseOutput[]): string {
+	const blockedOutputs: WorkflowPhaseOutput[] = outputs.filter((output: WorkflowPhaseOutput): boolean => output.status === "blocked");
+	const failureLines: string[] = blockedOutputs.flatMap((output: WorkflowPhaseOutput): string[] => (
+		output.failedChecks.map((check: WorkflowFailedCheck): string => {
+			const target: string = check.artifact === undefined ? "" : `，目标：${check.artifact}`;
+			return `- [${check.failureCode ?? check.code}] ${check.message}${target}`;
+		})
+	));
+	const skippedCount: number = outputs.filter((output: WorkflowPhaseOutput): boolean => output.status === "skipped").length;
+	return [
+		"本轮任务未能完整完成，已安全停止后续写入。",
+		...(failureLines.length > 0 ? failureLines : blockedOutputs.map((output: WorkflowPhaseOutput): string => `- ${output.blockedReason ?? output.summary}`)),
+		skippedCount > 0 ? `已跳过 ${skippedCount} 个依赖阶段。` : "",
+		"请根据以上具体失败信息修正目标或环境后重试。"
+	].filter((line: string): boolean => line.length > 0).join("\n");
+}
+
+function createStructuredTerminalReason(outputs: WorkflowPhaseOutput[]): string | undefined {
+	for (const output of outputs) {
+		if (output.status !== "blocked") continue;
+		const check: WorkflowFailedCheck | undefined = output.failedChecks[0];
+		if (check !== undefined) {
+			return `[${check.failureCode ?? check.code}] ${check.message}`;
+		}
+		return output.blockedReason ?? output.summary;
+	}
+	return undefined;
 }
 
 export function shouldReviseLlmWorkflowPlan(
@@ -203,6 +249,40 @@ function appendCapturedAttachments(state: WorkflowRunState, attachments: Additio
 		}
 	}
 	return { ...state, capturedAttachments: next };
+}
+
+function sendGracefulBlockedOutcome(
+	socket: WebSocket,
+	requestId: string,
+	session: ClientSession,
+	command: Extract<WorkflowSchedulerCommand, { type: "graceful_blocked" }>,
+	persistRequestId: string
+): void {
+	sendWorkflowEvent(socket, requestId, session, "workflow.phase.outcome", {
+		workflowId: command.state.plan.id,
+		phaseId: command.phase.id,
+		phaseRunId: command.outcome.phaseRunId,
+		outcome: command.outcome
+	}, persistRequestId);
+	for (const output of command.state.phaseOutputs) {
+		if (output.status !== "skipped" || output.sourcePhaseId !== command.phase.id) {
+			continue;
+		}
+		sendWorkflowEvent(socket, requestId, session, "workflow.phase.outcome", {
+			workflowId: command.state.plan.id,
+			phaseId: output.phaseId,
+			phaseRunId: output.phaseRunId,
+			outcome: output
+		}, persistRequestId);
+	}
+	sendWorkflowTodoSnapshot(
+		socket,
+		requestId,
+		session,
+		command.state.plan,
+		persistRequestId,
+		command.state.phaseOutputs
+	);
 }
 
 export function createWorkflowPendingContinuation(
@@ -434,6 +514,15 @@ export async function continueWorkflowExecution(
 		}
 		throwIfAborted(abortSignal);
 		agentResultOverride = undefined;
+		if (phase.toolGroup === "summarize" && (
+			agentResult.status !== "completed"
+			|| agentResult.text.trim().length === 0
+		)) {
+			agentResult = {
+				status: "completed",
+				text: createDeterministicBlockedSummary(phaseOutputs)
+			};
+		}
 
 		if (agentResult.status === "approval_required") {
 			const approvalOutcome: WorkflowPhaseOutput = createWorkflowPhaseOutcome(phase, phaseRunId, "", phaseToolObservations);
@@ -529,24 +618,55 @@ export async function continueWorkflowExecution(
 				toolObservations: phaseToolObservations,
 				blockedReason: agentResult.reason
 			};
-			phaseOutputs = appendPhaseOutput(phaseOutputs, phase, protocolOutcome);
-			plan = updateWorkflowPhaseStatus(plan, phase.id, "failed");
-			sendWorkflowEvent(socket, requestId, session, "workflow.phase.outcome", {
-				workflowId: plan.id,
+			const protocolCommand = scheduleWorkflowPhaseOutcome(
+				{ ...state, plan, phaseIndex: index, phaseOutputs },
+				phase,
+				protocolOutcome,
+				MAX_WORKFLOW_AUTO_REPAIR_ROUNDS
+			);
+			if (protocolCommand.type !== "graceful_blocked") {
+				throw new WorkflowExecutionError("Workflow scheduler returned an unexpected protocol command", plan, new Error("workflow_protocol_unexpected_command"), phaseOutputs);
+			}
+			state = protocolCommand.state;
+			plan = state.plan;
+			phaseOutputs = state.phaseOutputs;
+			sendGracefulBlockedOutcome(socket, requestId, session, protocolCommand, persistRequestId);
+			index = state.phaseIndex - 1;
+			continue;
+		}
+		if (agentResult.status === "execution_decision" || agentResult.status === "chat_answer") {
+			const message: string = agentResult.status === "execution_decision"
+				? "Execution control is not available inside a planned workflow phase."
+				: "Structured chat completion is not available inside a planned workflow phase.";
+			const controlOutcome: WorkflowPhaseOutput = {
 				phaseId: phase.id,
 				phaseRunId,
-				outcome: protocolOutcome
-			}, persistRequestId);
-			sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs, phaseRunId);
-			throw new WorkflowExecutionError(agentResult.reason, plan, new Error(agentResult.reason), phaseOutputs);
-		}
-		if (agentResult.status === "execution_decision") {
-			const message: string = "Execution control is not available inside a planned workflow phase.";
-			throw new WorkflowExecutionError(message, plan, new Error(message), phaseOutputs);
-		}
-		if (agentResult.status === "chat_answer") {
-			const message: string = "Structured chat completion is not available inside a planned workflow phase.";
-			throw new WorkflowExecutionError(message, plan, new Error(message), phaseOutputs);
+				title: phase.title,
+				status: "blocked",
+				summary: message,
+				evidence: [],
+				failedChecks: [{ code: "workflow_phase_protocol_violation", failureCode: "workflow_phase_protocol_violation", message, severity: "error" }],
+				requiredFixes: [],
+				modifiedArtifacts: [],
+				verifiedArtifacts: [],
+				toolObservations: phaseToolObservations,
+				blockedReason: message
+			};
+			const controlCommand = scheduleWorkflowPhaseOutcome(
+				{ ...state, plan, phaseIndex: index, phaseOutputs },
+				phase,
+				controlOutcome,
+				MAX_WORKFLOW_AUTO_REPAIR_ROUNDS
+			);
+			if (controlCommand.type !== "graceful_blocked") {
+				throw new WorkflowExecutionError("Workflow scheduler returned an unexpected control command", plan, new Error("workflow_control_unexpected_command"), phaseOutputs);
+			}
+			state = controlCommand.state;
+			plan = state.plan;
+			phaseOutputs = state.phaseOutputs;
+			sendGracefulBlockedOutcome(socket, requestId, session, controlCommand, persistRequestId);
+			index = state.phaseIndex - 1;
+			continue;
 		}
 
 		if (shouldRequireWorkflowWriteTool(phase) && !didWorkflowWritePhaseExecute(phase, phaseToolStats)) {
@@ -575,6 +695,11 @@ export async function continueWorkflowExecution(
 				}, persistRequestId);
 				sendWorkflowTodoSnapshot(socket, requestId, session, plan, persistRequestId, phaseOutputs);
 				throw new WorkflowExecutionError(guardCommand.outcome.summary, plan, new Error(guardMessage), phaseOutputs);
+			}
+			if (guardCommand.type === "graceful_blocked") {
+				sendGracefulBlockedOutcome(socket, requestId, session, guardCommand, persistRequestId);
+				index = state.phaseIndex - 1;
+				continue;
 			}
 			throw new WorkflowExecutionError("Workflow scheduler returned an unexpected write guard command", plan, new Error("workflow_write_guard_unexpected_command"), phaseOutputs);
 		}
@@ -612,6 +737,11 @@ export async function continueWorkflowExecution(
 				new Error(`${outcomeCommand.outcome.summary}\n\n${outcomeCommand.outcome.requiredFixes.join("\n")}`),
 				phaseOutputs
 			);
+		}
+		if (outcomeCommand.type === "graceful_blocked") {
+			sendGracefulBlockedOutcome(socket, requestId, session, outcomeCommand, persistRequestId);
+			index = state.phaseIndex - 1;
+			continue;
 		}
 		if (outcomeCommand.type !== "complete_phase") {
 			throw new WorkflowExecutionError("Workflow scheduler returned an unexpected command", plan, new Error("workflow_scheduler_unexpected_command"), phaseOutputs);
@@ -655,7 +785,8 @@ export async function continueWorkflowExecution(
 				title: plan.title,
 				resultStatus: completionStatus.resultStatus,
 				verificationStatus: completionStatus.verificationStatus,
-				warnings: completionStatus.warnings
+				warnings: completionStatus.warnings,
+				message: createStructuredTerminalReason(phaseOutputs)
 			}, persistRequestId);
 
 			if (streamFinal) {

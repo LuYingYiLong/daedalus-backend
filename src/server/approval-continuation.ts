@@ -30,7 +30,14 @@ import { sendSessionEvent } from "./session-events.js";
 import { sendJson } from "./send-json.js";
 import { createPendingToolBudget, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
 import { getAgentRun, updateAgentRun } from "./agent-run-controller.js";
-import { transitionAgentRunState, validateExecutionDecisionEvidence, type AgentRunState, type ExecutionDecision } from "../workflow/agent-run-state.js";
+import {
+	transitionAgentRunState,
+	validateExecutionDecisionEvidence,
+	type AgentRunState,
+	type ExecutionDecision,
+	type ExecutionEvidence
+} from "../workflow/agent-run-state.js";
+import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -398,6 +405,7 @@ export function createApprovedWorkflowToolObservation(pendingApproval: PendingAp
 		parsedResult: {
 			...parsedResult
 		},
+		failure: parsedResult.failure,
 		artifactRefs: parsedResult.artifactRefs ?? [],
 		artifactFileRefs: parsedResult.artifactFileRefs,
 		sourceFolderId: parsedResult.sourceFolderId ?? (typeof pendingApproval.args.sourceFolderId === "string" ? pendingApproval.args.sourceFolderId : undefined),
@@ -539,6 +547,9 @@ export async function sendContinuedAgentResult(
 	if (completionStatus.failureMessage !== undefined) {
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}
+	if (completionStatus.resultStatus === "blocked" && text.trim().length === 0) {
+		text = `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`;
+	}
 	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {
 		updateAgentRun(socket, session, pendingContinuation.requestId, "finalizing", {
 			verificationStatus: completionStatus.verificationStatus ?? null,
@@ -581,6 +592,7 @@ export async function sendContinuedAgentResult(
 		updateAgentRun(socket, session, pendingContinuation.requestId, "completed", {
 			terminal: {
 				resultStatus: completionStatus.resultStatus,
+				message: completionStatus.resultStatus === "blocked" ? completionStatus.warnings[0] : undefined,
 				completedAt: new Date().toISOString()
 			},
 			verificationStatus: completionStatus.verificationStatus ?? null,
@@ -607,7 +619,7 @@ function collectContinuationCompletionStatus(
 	session: ClientSession,
 	requestId: string
 ): {
-	resultStatus: "completed" | "completed_with_warnings";
+	resultStatus: "completed" | "completed_with_warnings" | "blocked";
 	verificationStatus?: "verified" | "unverified" | undefined;
 	warnings: string[];
 } {
@@ -615,20 +627,35 @@ function collectContinuationCompletionStatus(
 	if (run?.lane !== "tool_assisted") {
 		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
+	const unresolvedFailures: ExecutionEvidence[] = collectUnresolvedExecutionFailures(run.checkpoint.evidence);
+	const environmentWarnings: string[] = run.checkpoint.evidence
+		.filter((item: ExecutionEvidence): boolean => item.status === "failed" && item.failure?.category === "environment")
+		.map(formatExecutionFailure);
+	if (unresolvedFailures.length > 0) {
+		return {
+			resultStatus: "blocked",
+			verificationStatus: "unverified",
+			warnings: unresolvedFailures.map(formatExecutionFailure)
+		};
+	}
 	const changedWorkspace: boolean = run.checkpoint.evidence.some((item): boolean => (
 		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
 	));
 	if (!changedWorkspace) {
-		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+		return environmentWarnings.length > 0
+			? { resultStatus: "completed_with_warnings", verificationStatus: "unverified", warnings: environmentWarnings }
+			: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const verified: boolean = run.checkpoint.evidence.some((item): boolean => (
 		item.status === "succeeded" && item.risk === "verify" && item.validationStatus !== "not_applicable"
 	));
 	return verified
-		? { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
+		? environmentWarnings.length > 0
+			? { resultStatus: "completed_with_warnings", verificationStatus: "verified", warnings: environmentWarnings }
+			: { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
 		: {
 			resultStatus: "completed_with_warnings",
 			verificationStatus: "unverified",
-			warnings: ["The approved change completed without a successful verification step."]
+			warnings: [...environmentWarnings, "The approved change completed without a successful verification step."]
 		};
 }

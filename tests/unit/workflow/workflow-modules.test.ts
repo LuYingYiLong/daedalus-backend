@@ -4,13 +4,8 @@ import test from "node:test";
 import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import type { WorkflowPhase } from "../../../src/workflow/types.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure } from "../../../src/workflow/planner.js";
-import {
-	classifyGodotTask,
-	createGodotTemplateWorkflowPlan,
-	getAllowedToolsForLlmPlannedStep,
-	narrowLlmPlannedWriteTools
-} from "../../../src/workflow/godot-template-planner.js";
 import { createStructuredWorkflowCompletionContract } from "../../../src/workflow/completion-contract.js";
+import { getWorkflowToolsForProfile } from "../../../src/workflow/execution-profile.js";
 import { applyWorkflowVerificationPolicy } from "../../../src/workflow/verification-policy.js";
 import {
 	createEmptyWorkflowPhaseToolStats,
@@ -28,22 +23,31 @@ test("workflow planner uses the neutral provider chat gateway", async (): Promis
 	assert.equal(source.includes("createWorkflowCompletionContract"), false);
 });
 
-test("fixed fallback is a safe workflow and respects read-only policy", (): void => {
-	const fallback = planWorkflowAfterLlmPlannerFailure({ message: "Anything", mode: "agent", options: { workflow: "llm_planned" } });
+test("fixed fallback requires an exact structured target and respects read-only policy", (): void => {
+	const params = { message: "Anything", mode: "agent" as const, options: { workflow: "llm_planned" as const } };
+	assert.equal(planWorkflowAfterLlmPlannerFailure(params), null);
+	const fallback = planWorkflowAfterLlmPlannerFailure(params, "godot", {
+		targets: [{ kind: "artifact", path: "scripts/player.gd", targetKind: "godot_script" }],
+		requireAll: true
+	});
 	assert.deepEqual(fallback?.phases.map((phase: WorkflowPhase): WorkflowPhase["toolGroup"] => phase.toolGroup), ["read", "write", "verify", "summarize"]);
+	assert.deepEqual(fallback?.phases.find((phase: WorkflowPhase): boolean => phase.toolGroup === "write")?.completionContract?.targets, [
+		{ kind: "artifact", path: "scripts/player.gd", targetKind: "godot_script" }
+	]);
 	assert.equal(planWorkflow({ message: "Anything", mode: "agent", options: { executionPolicy: "read_only" } }), null);
 });
 
-test("verification policy is applied structurally after Godot template planning", (): void => {
-	const target = { kind: "godot_script" as const, artifacts: ["scripts/player.gd"] };
-	const skipPlan = createGodotTemplateWorkflowPlan({
+test("verification policy is applied structurally after target-bound fallback planning", (): void => {
+	const skipPlan = planWorkflowAfterLlmPlannerFailure({
 		message: "Any prose is irrelevant to policy",
 		mode: "agent",
 		options: { verificationPolicy: "skip" }
-	}, target, { isGodotProject: true });
+	}, "godot", {
+		targets: [{ kind: "artifact", path: "scripts/player.gd", targetKind: "godot_script" }],
+		requireAll: true
+	});
 	assert.equal(skipPlan?.verificationPolicy, "skip");
 	assert.equal(skipPlan?.phases.some((phase: WorkflowPhase): boolean => phase.toolGroup === "verify"), false);
-	assert.equal(skipPlan?.phases.some((phase: WorkflowPhase): boolean => phase.allowedTools.includes("mcp_godot_lsp_get_file_diagnostics")), false);
 
 	const requiredPlan = applyWorkflowVerificationPolicy({
 		id: "workflow-required",
@@ -65,7 +69,10 @@ test("workspace workflow profile overrides Godot prompt and skill defaults", ():
 		mode: "agent",
 		promptId: "godot.assistant",
 		options: { workflow: "llm_planned" }
-	}, "workspace");
+	}, "workspace", {
+		targets: [{ kind: "artifact", path: "src/service.ts", targetKind: "workspace_file" }],
+		requireAll: true
+	});
 	assert.equal(fallback?.executionProfile, "workspace");
 	assert.deepEqual(
 		fallback?.phases.map((phase: WorkflowPhase): string | undefined => phase.promptId),
@@ -82,34 +89,11 @@ test("workspace workflow profile overrides Godot prompt and skill defaults", ():
 	);
 });
 
-test("Godot templates only use evidence-driven targets", (): void => {
-	const target = {
-		kind: "godot_script_scene" as const,
-		artifacts: ["scripts/smoke.gd", "scenes/smoke.tscn"]
-	};
-	const classification = classifyGodotTask(target, { isGodotProject: true });
-	assert.equal(classification.type, "scene_attach_script");
-	assert.equal(classification.scriptPath, "scripts/smoke.gd");
-	assert.equal(classification.scenePath, "scenes/smoke.tscn");
-	assert.equal(classifyGodotTask(undefined, { isGodotProject: true }).type, "general_edit");
-	const plan = createGodotTemplateWorkflowPlan({ message: "Any prose", mode: "agent" }, target, { isGodotProject: true });
-	assert.equal(plan?.source, "godot_template");
-	assert.equal(plan?.executionProfile, "godot");
-	assert.ok(plan?.phases.some((phase: WorkflowPhase): boolean => phase.id === "attach-script"));
-});
-
-test("unknown targets never choose a Godot template", (): void => {
-	assert.equal(createGodotTemplateWorkflowPlan({ message: "Create a scene", mode: "agent" }, undefined, { isGodotProject: true }), null);
-	assert.equal(createGodotTemplateWorkflowPlan({ message: "Any prose", mode: "ask" }, { kind: "godot_script", artifacts: ["scripts/a.gd"] }, { isGodotProject: true }), null);
-	assert.equal(createGodotTemplateWorkflowPlan({ message: "Any prose", mode: "agent", options: { executionPolicy: "read_only" } }, { kind: "godot_script", artifacts: ["scripts/a.gd"] }, { isGodotProject: true }), null);
-});
-
-test("LLM planned write tools are generic and do not depend on phase prose", (): void => {
-	const one = getAllowedToolsForLlmPlannedStep("write", "Attach script", "Attach a script.");
-	const two = getAllowedToolsForLlmPlannedStep("write", "Set a project setting", "Set it.");
-	assert.deepEqual(one, two);
-	assert.deepEqual(narrowLlmPlannedWriteTools({ title: "Any", instruction: "Any", toolGroup: "write" }), one);
-	assert.equal(one.includes("mcp_godot_create_text_file"), true);
+test("LLM planned tools come only from the execution profile and not phase prose", (): void => {
+	const godotTools = getWorkflowToolsForProfile("godot", "write");
+	const workspaceTools = getWorkflowToolsForProfile("workspace", "write");
+	assert.equal(godotTools.includes("mcp_godot_create_text_file"), true);
+	assert.equal(workspaceTools.some((toolName: string): boolean => toolName.startsWith("mcp_godot_")), false);
 });
 
 test("LLM completion contracts only accept structured, exact targets", (): void => {

@@ -46,17 +46,16 @@ function createOutcome(phase: WorkflowPhase, status: WorkflowPhaseOutput["status
 	};
 }
 
-test("scheduler blocks summarize after an unresolved earlier outcome", (): void => {
+test("scheduler always permits the summary phase after an unresolved outcome", (): void => {
 	const failedPhase = createPhase("verify", "verify");
 	const summarizePhase = createPhase("summarize", "summarize");
 	const state = createState([failedPhase, summarizePhase], [createOutcome(failedPhase, "needs_fix")]);
 	state.phaseIndex = 1;
 
 	const command = scheduleWorkflowPhaseStart(state, "run-summarize");
-	assert.equal(command.type, "blocked_before_start");
-	if (command.type === "blocked_before_start") {
-		assert.equal(command.state.plan.todos[1]?.status, "failed");
-		assert.equal(command.outcome.status, "blocked");
+	assert.equal(command.type, "run_phase");
+	if (command.type === "run_phase") {
+		assert.equal(command.state.plan.todos[1]?.status, "running");
 	}
 });
 
@@ -64,7 +63,11 @@ test("scheduler inserts repair phases for a repairable verification outcome", ()
 	const write: WorkflowPhase = {
 		...createPhase("write", "write"),
 		toolGroup: "write",
-		allowedTools: ["mcp_workspace_replace_text_in_file"]
+		allowedTools: ["mcp_workspace_replace_text_in_file"],
+		completionContract: {
+			targets: [{ kind: "artifact", path: "src/app.ts", targetKind: "workspace_file" }],
+			requireAll: true
+		}
 	};
 	const phase = createPhase("verify", "verify");
 	const state = createState([write, phase]);
@@ -132,7 +135,7 @@ test("scheduler inserts workspace write retry phases for write guard failures", 
 	}
 });
 
-test("scheduler blocks a repairable outcome after the repair budget is exhausted", (): void => {
+test("scheduler completes verification with warnings after the repair budget is exhausted", (): void => {
 	const phase = createPhase("verify", "verify");
 	const state = createState([phase]);
 	state.plan.phases = [
@@ -144,53 +147,131 @@ test("scheduler blocks a repairable outcome after the repair budget is exhausted
 	state.plan.todos = state.plan.phases.map((item: WorkflowPhase) => ({ id: item.id, phaseId: item.id, text: item.title, status: "pending" }));
 
 	const command = scheduleWorkflowPhaseOutcome(state, phase, createOutcome(phase, "needs_fix"), 2);
-	assert.equal(command.type, "failed");
-	if (command.type === "failed") {
-		assert.equal(command.outcome.status, "blocked");
+	assert.equal(command.type, "complete_phase");
+	if (command.type === "complete_phase") {
+		assert.equal(command.outcome.verificationStatus, "unverified");
+		assert.ok((command.outcome.warnings?.length ?? 0) > 0);
 	}
 });
 
-test("scheduler stops when auto repair repeats the same failure without progress", (): void => {
+test("scheduler never repairs guessed verification paths outside the registered target", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write", "write"),
+		allowedTools: ["mcp_godot_overwrite_text_file"],
+		completionContract: {
+			targets: [{ kind: "artifact", path: "scripts/player.gd", targetKind: "godot_script" }],
+			requireAll: true
+		}
+	};
+	const verify = createPhase("verify", "verify");
+	const state = createState([write, verify]);
+	state.phaseIndex = 1;
+	const outcome: WorkflowPhaseOutput = {
+		...createOutcome(verify, "needs_fix"),
+		failedChecks: [
+			{ code: "godot_check", failureCode: "godot_check_failed", artifact: "scripts/player.gd", message: "PlayerStats is unresolved" },
+			{ code: "godot_check", failureCode: "godot_check_failed", artifact: "scripts/player_stats.gd", message: "Guessed path does not exist" }
+		]
+	};
+
+	const command = scheduleWorkflowPhaseOutcome(state, verify, outcome, 2);
+	assert.equal(command.type, "repair");
+	if (command.type === "repair") {
+		assert.deepEqual(command.outcome.failedChecks.map((check): string | undefined => check.artifact), ["scripts/player.gd"]);
+		assert.match(command.outcome.warnings?.[0] ?? "", /Guessed path does not exist/);
+		assert.equal(command.state.plan.phases[2]?.allowedTools.includes("mcp_godot_overwrite_text_file"), true);
+	}
+});
+
+test("targetless verification failure completes with a warning instead of a backend failure", (): void => {
+	const write: WorkflowPhase = {
+		...createPhase("write", "write"),
+		allowedTools: ["mcp_godot_overwrite_text_file"]
+	};
+	const verify = createPhase("verify", "verify");
+	const state = createState([write, verify]);
+	state.phaseIndex = 1;
+	const outcome: WorkflowPhaseOutput = {
+		...createOutcome(verify, "needs_fix"),
+		failedChecks: [{ code: "tool_failed", failureCode: "godot_check_failed", message: "No structured artifact was returned" }]
+	};
+
+	const command = scheduleWorkflowPhaseOutcome(state, verify, outcome, 2);
+	assert.equal(command.type, "complete_phase");
+	if (command.type === "complete_phase") {
+		assert.equal(command.outcome.verificationStatus, "unverified");
+		assert.equal(command.outcome.failedChecks.length, 0);
+		assert.match(command.outcome.warnings?.[0] ?? "", /No structured artifact/);
+	}
+});
+
+test("scheduler reports repeated verification failure as a normal warning", (): void => {
+	const writePhase: WorkflowPhase = {
+		...createPhase("write", "write"),
+		allowedTools: ["mcp_workspace_overwrite_text_file"],
+		completionContract: {
+			targets: [{ kind: "artifact", path: "index.html", targetKind: "workspace_file" }],
+			requireAll: true
+		}
+	};
 	const phase = createPhase("auto-verify-1", "verify");
 	phase.repairRound = 1;
 	const previousPhase = createPhase("verify", "verify");
-	const previousOutcome = createOutcome(previousPhase, "needs_fix");
-	const state = createState([phase], [previousOutcome]);
+	const previousOutcome: WorkflowPhaseOutput = {
+		...createOutcome(previousPhase, "needs_fix"),
+		failedChecks: [{ code: "check", failureCode: "check", targetKind: "workspace_file", artifact: "index.html", message: "needs repair" }]
+	};
+	const state = createState([writePhase, phase], [previousOutcome]);
+	state.phaseIndex = 1;
 
 	const command = scheduleWorkflowPhaseOutcome(
 		state,
 		phase,
-		createOutcome(phase, "needs_fix"),
+		{
+			...createOutcome(phase, "needs_fix"),
+			failedChecks: [{ code: "check", failureCode: "check", targetKind: "workspace_file", artifact: "index.html", message: "needs repair" }]
+		},
 		2
 	);
 
-	assert.equal(command.type, "failed");
-	if (command.type === "failed") {
+	assert.equal(command.type, "complete_phase");
+	if (command.type === "complete_phase") {
 		assert.match(command.outcome.summary, /重复出现相同失败/);
+		assert.equal(command.outcome.verificationStatus, "unverified");
 	}
 });
 
 test("scheduler never creates a write repair for a read-stage failure", (): void => {
 	const phase = createPhase("inspect", "read");
+	const write = createPhase("implement", "write");
+	const verify = createPhase("verify", "verify");
+	const summarize = createPhase("summarize", "summarize");
 	const command = scheduleWorkflowPhaseOutcome(
-		createState([phase]),
+		createState([phase, write, verify, summarize]),
 		phase,
 		createOutcome(phase, "needs_fix"),
 		2
 	);
 
-	assert.equal(command.type, "failed");
-	if (command.type === "failed") {
+	assert.equal(command.type, "graceful_blocked");
+	if (command.type === "graceful_blocked") {
 		assert.equal(command.outcome.status, "blocked");
 		assert.match(command.outcome.summary, /不能通过自动写入修复/);
 		assert.equal(command.state.plan.phases.some((item: WorkflowPhase): boolean => item.repairOf === phase.id), false);
+		assert.equal(command.state.phaseIndex, 3);
+		assert.deepEqual(command.state.plan.todos.map((todo) => todo.status), ["failed", "skipped", "skipped", "pending"]);
+		assert.deepEqual(command.state.phaseOutputs.map((output) => output.status), ["blocked", "skipped", "skipped"]);
 	}
 });
 
 test("scheduler permits a repeated verification failure after a real file mutation", (): void => {
 	const writePhase: WorkflowPhase = {
 		...createPhase("implement", "write"),
-		allowedTools: ["mcp_workspace_overwrite_text_file"]
+		allowedTools: ["mcp_workspace_overwrite_text_file"],
+		completionContract: {
+			targets: [{ kind: "artifact", path: "index.html", targetKind: "workspace_file" }],
+			requireAll: true
+		}
 	};
 	const phase = createPhase("auto-verify-1", "verify");
 	phase.repairRound = 1;
@@ -203,6 +284,8 @@ test("scheduler permits a repeated verification failure after a real file mutati
 			toolName: "mcp_workspace_overwrite_text_file",
 			risk: "write",
 			status: "succeeded",
+			artifactRefs: ["index.html"],
+			repairFamilies: ["workspace_file"],
 			fileEditFingerprints: ["index.html:before:after"]
 		}]
 	};

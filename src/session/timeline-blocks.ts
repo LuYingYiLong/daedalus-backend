@@ -1116,7 +1116,14 @@ function buildAssistantBodyParts(
 		} else if (event.event === "agent.run.state") {
 			const stage: string = asString(eventData.stage);
 			const terminal: Record<string, unknown> = isRecord(eventData.terminal) ? eventData.terminal : {};
-			if (stage === "failed") {
+			if (stage === "completed" && asString(terminal.resultStatus) === "blocked") {
+				appendStatusPart(parts, {
+					status: "warning",
+					title: "任务未完成",
+					details: asString(terminal.message) || "The task was safely blocked before completion.",
+					code: "agent_run_blocked"
+				});
+			} else if (stage === "failed") {
 				const message: string = asString(terminal.message) || "The run failed.";
 				markRunningImageGenerationFailed(parts, message);
 				appendStatusPart(parts, createRunErrorStatus({
@@ -1432,7 +1439,8 @@ function findLatestSnapshots(events: StoredSessionEvent[]): { latestWorkflowSnap
 		if (event.event === "agent.run.state" && isRecord(event.data)) {
 			if (isRecord(event.data.todo)) {
 				const todo = structuredClone(event.data.todo);
-				if (event.data.stage === "completed") {
+				const terminal: Record<string, unknown> = isRecord(event.data.terminal) ? event.data.terminal : {};
+				if (event.data.stage === "completed" && asString(terminal.resultStatus) !== "blocked") {
 					for (const key of ["phases", "todos"] as const) {
 					if (!Array.isArray(todo[key])) continue;
 					todo[key] = todo[key].map((item: unknown): unknown => (

@@ -1,6 +1,7 @@
 import { createTerminalDisplaySnapshot, type TerminalDisplaySnapshot } from "../mcp/terminal/display-output.js";
 import { isToolApplicabilityCode, type ToolApplicabilityCode } from "./tool-applicability.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
+import { parseStructuredToolFailure, type ToolFailure } from "./tool-failure.js";
 
 export type { ToolApplicabilityCode } from "./tool-applicability.js";
 
@@ -25,6 +26,7 @@ export type ParsedToolResultSummary = {
 	terminalJobStatus?: string | undefined;
 	terminalJobWakeAfterMs?: number | undefined;
 	terminalDisplay?: TerminalDisplaySnapshot | undefined;
+	failure?: ToolFailure | undefined;
 };
 
 // 旧结果只有同时满足 preset、退出码和完整错误签名时才允许兼容放行。
@@ -442,6 +444,22 @@ export function parseToolResultSummary(
 			summary: firstLine === undefined ? toolName : clipSummary(firstLine),
 			artifactRefs: collectArtifactRefs(args, null)
 		}, args, null, workspaceId);
+	}
+	const structuredFailure: ToolFailure | undefined = parseStructuredToolFailure(record);
+	if (structuredFailure !== undefined) {
+		const environmentIssue: boolean = structuredFailure.category === "environment";
+		return enrichParsedSummary({
+			ok: false,
+			validationStatus: environmentIssue ? "not_applicable" : "failed",
+			summary: structuredFailure.message,
+			failedChecks: environmentIssue ? undefined : [structuredFailure.message],
+			failureCode: structuredFailure.code,
+			environmentIssue: environmentIssue || undefined,
+			notApplicableReason: environmentIssue ? structuredFailure.message : undefined,
+			artifactRefs: structuredFailure.artifactRefs,
+			sourceFolderId: structuredFailure.sourceFolderId,
+			failure: structuredFailure
+		}, args, record, workspaceId);
 	}
 
 	let summary: ParsedToolResultSummary;

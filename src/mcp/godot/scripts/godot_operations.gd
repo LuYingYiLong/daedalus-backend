@@ -1,5 +1,7 @@
 extends SceneTree
 
+const RESULT_PREFIX: String = "DAEDALUS_RESULT:"
+
 func _init() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	if args.size() < 1:
@@ -33,7 +35,20 @@ func _init() -> void:
 	_finish(result, 0 if bool(result.get("ok", false)) else 1)
 
 func _finish(result: Dictionary, exit_code: int) -> void:
-	print(JSON.stringify(result))
+	var final_result: Dictionary = result.duplicate(true)
+	if not bool(final_result.get("ok", false)) and not final_result.has("failure"):
+		var failure_code: String = String(final_result.get("code", "godot_operation_failed"))
+		var failure_message: String = String(final_result.get("error", failure_code))
+		final_result["failureCode"] = failure_code
+		final_result["validationStatus"] = "failed"
+		final_result["failure"] = {
+			"code": failure_code,
+			"category": "business",
+			"message": failure_message,
+			"retryable": true,
+			"artifactRefs": []
+		}
+	print(RESULT_PREFIX + JSON.stringify(final_result))
 	quit(exit_code)
 
 func _require_string(operation: Dictionary, key: String) -> String:
@@ -49,12 +64,22 @@ func _get_uid(operation: Dictionary) -> Dictionary:
 		return {"ok": false, "operation": "get_uid", "error": "Missing resource_path"}
 
 	var uid: int = ResourceLoader.get_resource_uid(resource_path)
+	if uid == -1:
+		return {
+			"ok": false,
+			"operation": "get_uid",
+			"resource_path": resource_path,
+			"uid": uid,
+			"uid_text": "",
+			"code": "resource_uid_missing",
+			"error": "Godot did not assign a UID to the requested resource."
+		}
 	return {
-		"ok": uid != -1,
+		"ok": true,
 		"operation": "get_uid",
 		"resource_path": resource_path,
 		"uid": uid,
-		"uid_text": "" if uid == -1 else ResourceUID.id_to_text(uid)
+		"uid_text": ResourceUID.id_to_text(uid)
 	}
 
 func _resave_resource(operation: Dictionary) -> Dictionary:

@@ -267,6 +267,9 @@ function formatPhaseOutput(output: WorkflowPhaseOutput): string {
 
 function getPhaseStatus(plan: WorkflowPlan, phaseId: string): WorkflowTodoStatus {
 	const phaseTodos: WorkflowTodoItem[] = plan.todos.filter((todo: WorkflowTodoItem): boolean => todo.phaseId === phaseId);
+	if (phaseTodos.length > 0 && phaseTodos.every((todo: WorkflowTodoItem): boolean => todo.status === "skipped")) {
+		return "skipped";
+	}
 	if (phaseTodos.some((todo: WorkflowTodoItem): boolean => todo.status === "failed")) {
 		return "failed";
 	}

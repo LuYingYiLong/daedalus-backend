@@ -1,7 +1,7 @@
 import type { AiChatParams } from "../protocol/types.js";
 import { getDefaultWorkflowToolNames } from "../tools/tool-catalog.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../tools/tool-sentinels.js";
-import type { WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } from "./types.js";
+import type { WorkflowCompletionContract, WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getExecutionPolicy } from "./router.js";
 import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowExecutionProfileId } from "./execution-profile.js";
@@ -122,8 +122,23 @@ function createTodos(phases: WorkflowPhase[]): WorkflowTodoItem[] {
 	return createVisibleWorkflowTodos(phases);
 }
 
-function createPlan(title: string, phaseIds: FixedWorkflowPhaseId[], executionProfile: WorkflowExecutionProfileId): WorkflowPlan {
+function createPlan(
+	title: string,
+	phaseIds: FixedWorkflowPhaseId[],
+	executionProfile: WorkflowExecutionProfileId,
+	completionContract?: WorkflowCompletionContract | undefined
+): WorkflowPlan {
 	const phases: WorkflowPhase[] = phaseIds.map((phaseId: FixedWorkflowPhaseId): WorkflowPhase => createPhase(phaseId, executionProfile));
+	const firstWriteIndex: number = phases.findIndex((phase: WorkflowPhase): boolean => phase.toolGroup === "write");
+	if (firstWriteIndex >= 0 && completionContract !== undefined) {
+		phases[firstWriteIndex] = {
+			...phases[firstWriteIndex]!,
+			completionContract: {
+				requireAll: completionContract.requireAll,
+				targets: completionContract.targets.map((target) => ({ ...target }))
+			}
+		};
+	}
 	return {
 		id: createWorkflowId(),
 		title,
@@ -169,7 +184,11 @@ export function createWorkflowTitle(message: string): string {
 	return `${normalized.slice(0, 24)}...`;
 }
 
-export function planWorkflow(params: AiChatParams, executionProfile: WorkflowExecutionProfileId = "godot"): WorkflowPlan | null {
+export function planWorkflow(
+	params: AiChatParams,
+	executionProfile: WorkflowExecutionProfileId = "godot",
+	completionContract?: WorkflowCompletionContract | undefined
+): WorkflowPlan | null {
 	const workflowMode = params.options?.workflow ?? "auto";
 	if (
 		workflowMode === "single"
@@ -180,14 +199,22 @@ export function planWorkflow(params: AiChatParams, executionProfile: WorkflowExe
 	) {
 		return null;
 	}
+	if (completionContract === undefined || completionContract.targets.length === 0) {
+		return null;
+	}
 	const title: string = createWorkflowTitle(params.message);
-	return applyWorkflowVerificationPolicy(createPlan(title, ["inspect", "implement", "verify", "summarize"], executionProfile), params);
+	return applyWorkflowVerificationPolicy(createPlan(title, ["inspect", "implement", "verify", "summarize"], executionProfile, completionContract), params);
 }
 
 export function planWorkflowAfterLlmPlannerFailure(
 	params: AiChatParams,
-	executionProfile: WorkflowExecutionProfileId = "godot"
+	executionProfile: WorkflowExecutionProfileId = "godot",
+	completionContract?: WorkflowCompletionContract | undefined
 ): WorkflowPlan | null {
 	if (params.mode === "ask" || params.mode === "plan" || getExecutionPolicy(params) === "read_only") return null;
-	return applyWorkflowVerificationPolicy(createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"], executionProfile), params);
+	if (completionContract === undefined || completionContract.targets.length === 0) return null;
+	return applyWorkflowVerificationPolicy(
+		createPlan(createWorkflowTitle(params.message), ["inspect", "implement", "verify", "summarize"], executionProfile, completionContract),
+		params
+	);
 }

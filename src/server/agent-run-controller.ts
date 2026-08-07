@@ -23,6 +23,7 @@ import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js"
 import { notifyGoalRunState } from "./goal-run-observer.js";
 import { enqueueGoalWriteCheckpointUnavailable } from "./goal-checkpoints.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
+import { parseStructuredToolFailure, type ToolFailure } from "../tools/tool-failure.js";
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) {
@@ -143,10 +144,13 @@ export function recordAgentRunToolEvent(
 	const risk: ToolRisk = call?.risk ?? getEffectiveToolPolicy(event.toolName, {}, session.activeWorkspace?.id)?.risk ?? "read";
 	const eventRecord: Record<string, unknown> = event as unknown as Record<string, unknown>;
 	const semantics = getWorkflowToolSemantics(event.toolName, call?.args ?? {});
-		const artifactRefs: string[] = Array.isArray(eventRecord.artifactRefs)
+	const failure: ToolFailure | undefined = event.type === "tool.error"
+		? event.failure
+		: parseStructuredToolFailure(eventRecord);
+	const artifactRefs: string[] = Array.isArray(eventRecord.artifactRefs)
 			? eventRecord.artifactRefs.filter((item: unknown): item is string => typeof item === "string")
-			: [];
-		const artifactFileRefs: WorkspaceFileRef[] = Array.isArray(eventRecord.artifactFileRefs)
+			: failure?.artifactRefs ?? [];
+	const artifactFileRefs: WorkspaceFileRef[] = Array.isArray(eventRecord.artifactFileRefs)
 			? eventRecord.artifactFileRefs.filter((item: unknown): item is WorkspaceFileRef => (
 				typeof item === "object"
 					&& item !== null
@@ -154,7 +158,7 @@ export function recordAgentRunToolEvent(
 					&& typeof (item as Record<string, unknown>).sourceFolderId === "string"
 					&& typeof (item as Record<string, unknown>).relativePath === "string"
 			))
-			: [];
+			: failure?.artifactFileRefs ?? [];
 	const evidence: ExecutionEvidence = {
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
@@ -182,6 +186,8 @@ export function recordAgentRunToolEvent(
 			? eventRecord.applicabilityCode
 			: undefined,
 		validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
+		repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies],
+		failure,
 		terminalObservation: event.type === "tool.result"
 			&& current.lane === "probe"
 			&& event.toolName === "mcp_terminal_run_command"

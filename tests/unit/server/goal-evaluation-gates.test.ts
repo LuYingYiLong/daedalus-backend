@@ -175,3 +175,21 @@ test("Goal evaluation preserves a structured blocked execution decision", () => 
 	const result = enforceGoalEvaluationGates(blockedEvaluation, [run]);
 	assert.equal(result.disposition, "blocked");
 });
+
+test("Goal never treats a normally terminated blocked run as achieved", () => {
+	const run = completedRun({
+		runId: "run-terminal-blocked",
+		cycle: 3,
+		intent: "inspect",
+		verificationStatus: "unverified",
+		evidence: []
+	});
+	run.terminal = {
+		resultStatus: "blocked",
+		message: "[signal_node_not_found] Signal source node does not exist.",
+		completedAt: "2026-08-01T00:00:03.000Z"
+	};
+
+	const result = enforceGoalEvaluationGates(achieved(), [run]);
+	assert.equal(result.disposition, "blocked");
+});

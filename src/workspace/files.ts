@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { StructuredToolError } from "../tools/tool-failure.js";
 
 export const DEFAULT_WORKSPACE_TEXT_FILE_BYTES: number = 512 * 1024;
 export const DEFAULT_WORKSPACE_NEW_FILE_BYTES: number = 64 * 1024;
@@ -457,7 +458,13 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		const resolved = await resolveWritePath(relativePath);
 		const oldContent: string = await fs.readFile(resolved.absolutePath, "utf8");
 		if (!oldContent.includes(oldText)) {
-			throw new Error("oldText was not found in file");
+			throw new StructuredToolError({
+				code: "old_text_not_found",
+				category: "business",
+				message: "The requested text was not found in the current file content.",
+				retryable: true,
+				artifactRefs: [resolved.relativePath]
+			});
 		}
 		const occurrenceCount: number = oldContent.split(oldText).length - 1;
 		const newContent: string = oldContent.replace(oldText, newText);
@@ -492,7 +499,14 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 			throw new Error(`lineNumber is outside file: ${lineNumber}`);
 		}
 		if (currentLine !== expectedText) {
-			throw new Error("expectedText does not match the current line");
+			throw new StructuredToolError({
+				code: "expected_text_mismatch",
+				category: "business",
+				message: "expectedText does not match the current line content.",
+				retryable: true,
+				artifactRefs: [resolved.relativePath],
+				details: { lineNumber }
+			});
 		}
 		lines[index] = newText;
 		const newContent: string = lines.join(newline);

@@ -4,8 +4,7 @@ import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
 import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
-	createWorkflowPhaseOutcome,
-	findBlockingOutcomeBeforeSummarize
+	createWorkflowPhaseOutcome
 } from "../../../src/workflow/outcome.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowToolObservation } from "../../../src/workflow/types.js";
 
@@ -83,7 +82,7 @@ test("read phase failure blocks without requesting a workspace repair", (): void
 	const outcome = createWorkflowPhaseOutcome(createPhase("inspect", "read"), "phase-run-read", "", observations);
 
 	assert.equal(outcome.status, "blocked");
-	assert.equal(outcome.failedChecks[0]?.code, "tool_error");
+	assert.equal(outcome.failedChecks[0]?.code, "tool_execution_failed");
 });
 
 test("not-applicable workspace checks complete verification with an explicit warning", (): void => {
@@ -307,6 +306,111 @@ test("write phase ignores failed non-mutation verification after a successful wr
 	assert.deepEqual(outcome.modifiedArtifacts, ["src/renderer/src/hooks/useDiskSpaceCheck.ts"]);
 });
 
+function createSuccessfulProjectileWriteEvents(): ToolEvent[] {
+	return [
+		{
+			type: "tool.call",
+			step: 0,
+			toolCallId: "write-projectile",
+			toolName: "mcp_godot_overwrite_text_file",
+			args: { relativePath: "scripts/projectile.gd", content: "extends Node2D\n" },
+			serverId: "godot",
+			serverName: "Godot",
+			category: "write",
+			title: "覆盖 Godot 文件",
+			summary: "scripts/projectile.gd",
+			target: { kind: "file", path: "scripts/projectile.gd", label: "scripts/projectile.gd" }
+		},
+		{
+			type: "tool.result",
+			step: 0,
+			toolCallId: "write-projectile",
+			toolName: "mcp_godot_overwrite_text_file",
+			resultChars: 20,
+			truncated: false,
+			ok: true,
+			validationStatus: "passed",
+			summary: "mcp_godot_overwrite_text_file",
+			artifactRefs: ["scripts/projectile.gd"]
+		}
+	];
+}
+
+function createGitDiffCheckEvents(commandLine: string, failedCheck: string): ToolEvent[] {
+	return [
+		{
+			type: "tool.call",
+			step: 1,
+			toolCallId: "git-diff-check",
+			toolName: "mcp_terminal_run_command",
+			args: { commandLine, cwd: "." },
+			serverId: "terminal",
+			serverName: "Terminal",
+			category: "terminal",
+			title: "运行终端命令",
+			summary: "git diff --check",
+			target: { kind: "command", label: "git diff --check" }
+		},
+		{
+			type: "tool.result",
+			step: 1,
+			toolCallId: "git-diff-check",
+			toolName: "mcp_terminal_run_command",
+			resultChars: 80,
+			truncated: false,
+			ok: false,
+			exitCode: 2,
+			validationStatus: "failed",
+			failureCode: "tool_failed",
+			summary: "terminal.command failed",
+			failedChecks: [failedCheck],
+			artifactRefs: []
+		}
+	];
+}
+
+test("write phase demotes an unscoped workspace diff check failure to a warning", (): void => {
+	const phase: WorkflowPhase = {
+		...createPhase("write", "write"),
+		completionContract: {
+			targets: [{ kind: "artifact", path: "scripts/projectile.gd", targetKind: "godot_script" }],
+			requireAll: true
+		}
+	};
+	const observations: WorkflowToolObservation[] = applyEvents([
+		...createSuccessfulProjectileWriteEvents(),
+		...createGitDiffCheckEvents("git diff --check", "terminal.command failed: scripts/player.gd:36: trailing whitespace.")
+	]);
+	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-write", "修改完成。", observations);
+
+	assert.equal(outcome.status, "completed");
+	assert.deepEqual(outcome.failedChecks, []);
+	assert.match(outcome.warnings?.[0] ?? "", /non_blocking_verification.*scripts\/player\.gd:36/u);
+	assert.deepEqual(outcome.modifiedArtifacts, ["scripts/projectile.gd"]);
+});
+
+test("write phase keeps a path-scoped diff check failure for the modified target", (): void => {
+	const phase: WorkflowPhase = {
+		...createPhase("write", "write"),
+		completionContract: {
+			targets: [{ kind: "artifact", path: "scripts/projectile.gd", targetKind: "godot_script" }],
+			requireAll: true
+		}
+	};
+	const observations: WorkflowToolObservation[] = applyEvents([
+		...createSuccessfulProjectileWriteEvents(),
+		...createGitDiffCheckEvents(
+			"git diff --check -- scripts/projectile.gd",
+			"terminal.command failed: scripts/projectile.gd:20: trailing whitespace."
+		)
+	]);
+	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-write", "修改完成。", observations);
+
+	assert.equal(outcome.status, "failed");
+	assert.equal(outcome.failedChecks.length, 1);
+	assert.match(outcome.failedChecks[0]?.message ?? "", /scripts\/projectile\.gd:20/u);
+});
+
 test("verify phase without deterministic validation tool becomes blocked", (): void => {
 	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "我检查过了，应该没问题。", []);
 
@@ -467,84 +571,6 @@ test("verify phase with only LSP unavailable completes as non-blocking environme
 	assert.deepEqual(outcome.requiredFixes, []);
 	assert.equal(outcome.blockedReason, undefined);
 	assert.match(outcome.evidence.join("\n"), /godot_diagnostics_unavailable/);
-});
-
-test("summarize gate blocks unresolved failed outcome until a later completed outcome", (): void => {
-	const verifyPhase: WorkflowPhase = createPhase("verify", "verify");
-	const failedOutcome = createWorkflowPhaseOutcome(
-		verifyPhase,
-		"phase-run-1",
-		"",
-		applyEvents([{
-			type: "tool.result",
-			step: 0,
-			toolCallId: "call-1",
-			toolName: "mcp_godot_validate_scene_script_references",
-			resultChars: 120,
-			truncated: false,
-			ok: false,
-			validationStatus: "failed",
-			summary: "场景引用缺失。",
-			failedChecks: ["`%TitleLabel` 未设置 unique name。"],
-			artifactRefs: ["res://scenes/main.tscn"]
-		}])
-	);
-	const repairedOutcome = createWorkflowPhaseOutcome(
-		verifyPhase,
-		"phase-run-2",
-		"",
-		applyEvents([{
-			type: "tool.result",
-			step: 0,
-			toolCallId: "call-2",
-			toolName: "mcp_godot_validate_scene_script_references",
-			resultChars: 80,
-			truncated: false,
-			ok: true,
-			diagnosticsCount: 0,
-			diagnosticsErrorCount: 0,
-			validationStatus: "passed",
-			summary: "Scene references passed.",
-			artifactRefs: ["res://scenes/main.tscn"]
-		}])
-	);
-
-	assert.equal(findBlockingOutcomeBeforeSummarize([failedOutcome])?.status, "needs_fix");
-	assert.equal(findBlockingOutcomeBeforeSummarize([failedOutcome, repairedOutcome]), null);
-});
-
-test("summarize gate ignores prior approval placeholder from the same phase", (): void => {
-	const summarizePhase: WorkflowPhase = createPhase("answer", "summarize");
-	const approvalOutcome: WorkflowPhaseOutput = {
-		phaseId: "answer",
-		phaseRunId: "phase-run-answer",
-		title: "回答用户",
-		status: "approval_required",
-		summary: "等待审批",
-		evidence: [],
-		failedChecks: [],
-		requiredFixes: [],
-		modifiedArtifacts: [],
-		verifiedArtifacts: [],
-		toolObservations: [],
-		text: ""
-	};
-	const failedVerifyOutcome: WorkflowPhaseOutput = {
-		phaseId: "verify",
-		phaseRunId: "phase-run-verify",
-		title: "运行验证",
-		status: "needs_fix",
-		summary: "验证失败",
-		evidence: [],
-		failedChecks: [{ code: "failed", message: "验证失败" }],
-		requiredFixes: ["修复：验证失败"],
-		modifiedArtifacts: [],
-		verifiedArtifacts: [],
-		toolObservations: []
-	};
-
-	assert.equal(findBlockingOutcomeBeforeSummarize([approvalOutcome], summarizePhase.id), null);
-	assert.equal(findBlockingOutcomeBeforeSummarize([failedVerifyOutcome, approvalOutcome], summarizePhase.id), failedVerifyOutcome);
 });
 
 test("unregistered diagnostics do not satisfy a structured verification gate", (): void => {
@@ -1035,6 +1061,49 @@ test("write completion contract accepts the actual target artifact", (): void =>
 	const outcome = createWorkflowPhaseOutcome(phase, "phase-run-main", "", observations);
 	assert.equal(outcome.status, "completed");
 	assert.deepEqual(outcome.failedChecks, []);
+});
+
+test("an unavailable required verification capability is unverified instead of repairable", (): void => {
+	const verifyPhase: WorkflowPhase = {
+		...createPhase("verify", "verify"),
+		verificationRequirements: ["godot_script_check"]
+	};
+	const observations = applyEvents([
+		{
+			type: "tool.call",
+			step: 0,
+			toolCallId: "godot-unavailable",
+			toolName: "mcp_terminal_run_safe_preset",
+			args: { presetName: "godot.check_only", resourcePath: "scripts/game.gd" },
+			serverId: "terminal",
+			serverName: "Terminal",
+			category: "terminal",
+			title: "Run check",
+			summary: "godot.check_only",
+			target: { kind: "command", path: "scripts/game.gd", label: "godot.check_only" }
+		},
+		{
+			type: "tool.error",
+			step: 0,
+			toolCallId: "godot-unavailable",
+			toolName: "mcp_terminal_run_safe_preset",
+			message: "Godot executable is unavailable.",
+			failure: {
+				code: "godot_runtime_unavailable",
+				category: "environment",
+				message: "Godot executable is unavailable.",
+				retryable: true,
+				artifactRefs: ["scripts/game.gd"]
+			}
+		}
+	]);
+	const outcome = createWorkflowPhaseOutcome(verifyPhase, "phase-run-unavailable", "", observations);
+	const gated = applyDeterministicVerificationGate(verifyPhase, outcome, []);
+
+	assert.equal(gated.status, "completed");
+	assert.equal(gated.verificationStatus, "unverified");
+	assert.equal(gated.failedChecks.length, 0);
+	assert.match(gated.warnings?.join("\n") ?? "", /godot_runtime_unavailable|Godot executable/);
 });
 
 test("write completion contract ignores malformed legacy prose targets", (): void => {

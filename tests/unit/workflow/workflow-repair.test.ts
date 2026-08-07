@@ -152,7 +152,7 @@ test("workflow verification-only failures add reverify without write repair", ()
 	const plan: WorkflowPlan = {
 		id: "workflow-test",
 		title: "测试 workflow 补验",
-		source: "godot_template",
+		source: "fixed",
 		revision: 0,
 		phases: [inspect, implement, verify, summarize],
 		todos: [
@@ -200,7 +200,7 @@ test("workflow auto repair narrows scene failures to scene write tools", (): voi
 	const plan: WorkflowPlan = {
 		id: "workflow-scene-repair",
 		title: "测试场景修复",
-		source: "godot_template",
+		source: "fixed",
 		revision: 0,
 		phases: [write, verify, summarize],
 		todos: [createTodo(write, "done"), createTodo(verify, "failed"), createTodo(summarize)]
@@ -241,7 +241,7 @@ test("workflow auto repair narrows project setting failures to setting write too
 	const plan: WorkflowPlan = {
 		id: "workflow-settings-repair",
 		title: "测试项目设置修复",
-		source: "godot_template",
+		source: "fixed",
 		revision: 0,
 		phases: [write, verify, summarize],
 		todos: [createTodo(write, "done"), createTodo(verify, "failed"), createTodo(summarize)]

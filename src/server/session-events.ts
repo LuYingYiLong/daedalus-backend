@@ -536,6 +536,7 @@ function enqueueLiveDelta(
 
 function asAgentRunResultStatus(value: unknown): AgentRunResultStatus {
 	return value === "completed_with_warnings"
+		|| value === "blocked"
 		|| value === "failed"
 		|| value === "cancelled"
 		? value
@@ -634,6 +635,7 @@ function emitLegacyLifecycleAsRunState(params: {
 						? (params.data as Record<string, unknown>).resultStatus
 						: undefined
 				),
+				message: getRecordString(params.data, "message") || undefined,
 				completedAt: new Date().toISOString()
 			}
 		});

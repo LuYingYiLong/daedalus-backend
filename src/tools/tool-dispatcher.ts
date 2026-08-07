@@ -27,6 +27,11 @@ import {
 import type { ProviderReconnectEvent } from "../providers/provider-types.js";
 import type { ToolApplicabilityCode } from "./tool-applicability.js";
 import { WorkspaceSourceResolutionError } from "../workspace/source-context.js";
+import {
+	createToolFailure,
+	serializeToolFailure,
+	type ToolFailure
+} from "./tool-failure.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -38,7 +43,7 @@ export type ToolEvent =
 	| ({ type: "tool.call"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
 	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined } & ParsedToolResultSummary)
-	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string }
+	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined }
 	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"]; provider?: string | undefined; model?: string | undefined }
 	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined } & ToolEventDisplay);
 
@@ -160,6 +165,15 @@ export class ToolApprovalRequiredError extends Error {
 	}
 }
 
+function collectToolArgumentArtifactRefs(args: Record<string, unknown>): string[] {
+	const refs: Set<string> = new Set();
+	for (const key of ["relativePath", "resourcePath", "scenePath", "scriptPath", "path"]) {
+		const value: unknown = args[key];
+		if (typeof value === "string" && value.length > 0) refs.add(value);
+	}
+	return [...refs];
+}
+
 async function executeSingleToolCall(
 	mcpHost: McpHost,
 	toolCall: ChatCompletionMessageToolCall,
@@ -175,10 +189,26 @@ async function executeSingleToolCall(
 	}
 
 	if (toolCall.type !== "function") {
+		const toolName: string = "unsupported_tool_call";
+		const failure: ToolFailure = {
+			code: "unsupported_tool_call_type",
+			category: "protocol",
+			message: `Unsupported tool call type: ${toolCall.type}`,
+			retryable: true,
+			artifactRefs: []
+		};
+		onEvent?.({
+			type: "tool.error",
+			step,
+			toolCallId: toolCall.id,
+			toolName,
+			message: failure.message,
+			failure
+		});
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: "Error: Unsupported tool call type"
+			content: serializeToolFailure(failure)
 		};
 	}
 
@@ -190,16 +220,23 @@ async function executeSingleToolCall(
 		argsParsed = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
 	} catch {
 		const message: string = `Invalid JSON arguments: ${toolCall.function.arguments}`;
+		const failure: ToolFailure = {
+			code: "invalid_arguments",
+			category: "protocol",
+			message,
+			retryable: true,
+			artifactRefs: []
+		};
 		logger.warn("tool", "arguments_invalid", {
 			toolCallId: toolCall.id,
 			toolName: functionName,
 			step
 		});
-		onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message });
+		onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message, failure });
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: `Error: ${message}`
+			content: serializeToolFailure(failure)
 		};
 	}
 
@@ -237,17 +274,25 @@ async function executeSingleToolCall(
 	});
 
 	if (decision.action === "deny") {
+		const failure: ToolFailure = {
+			code: "command_review_denied",
+			category: "policy",
+			message: decision.reason,
+			retryable: false,
+			artifactRefs: collectToolArgumentArtifactRefs(executionArgs),
+			sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined
+		};
 		logger.warn("tool", "denied", {
 			toolCallId: toolCall.id,
 			toolName: functionName,
 			step,
 			reason: decision.reason
 		});
-		onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: decision.reason });
+		onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: decision.reason, failure });
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: `Error: ${decision.reason}`
+			content: serializeToolFailure(failure)
 		};
 	}
 
@@ -303,12 +348,22 @@ async function executeSingleToolCall(
 	const cachedCapabilityFailure: string | null = getCachedRuntimeCapabilityFailure(toolContext?.requestId, runtimeCapabilityKind);
 	if (cachedCapabilityFailure !== null) {
 		const applicabilityCode: ToolApplicabilityCode | undefined = getRuntimeCapabilityApplicabilityCode(runtimeCapabilityKind);
+		const failure: ToolFailure = {
+			code: "runtime_capability_unavailable_cached",
+			category: "environment",
+			message: cachedCapabilityFailure,
+			retryable: true,
+			artifactRefs: collectToolArgumentArtifactRefs(executionArgs),
+			sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
+			details: { applicabilityCode }
+		};
 		const content: string = JSON.stringify({
 			ok: false,
 			code: "runtime_capability_unavailable_cached",
 			environmentIssue: true,
 			applicabilityCode,
 			error: cachedCapabilityFailure,
+			failure,
 			cached: true
 		});
 		onEvent?.({
@@ -324,6 +379,7 @@ async function executeSingleToolCall(
 			environmentIssue: true,
 			applicabilityCode,
 			summary: cachedCapabilityFailure,
+			failure,
 			failedChecks: [cachedCapabilityFailure],
 			artifactRefs: []
 		});
@@ -430,7 +486,33 @@ async function executeSingleToolCall(
 				await reportGodotDocumentationQueryFailure(failureCode);
 			}
 		}
-			const parsedSummary: ParsedToolResultSummary = parseToolResultSummary(functionName, executionArgs, result.content, workspaceId);
+		let parsedSummary: ParsedToolResultSummary = parseToolResultSummary(functionName, executionArgs, result.content, workspaceId);
+		let modelResultContent: string = result.content;
+		if (
+			parsedSummary.failure === undefined
+			&& (parsedSummary.ok === false || parsedSummary.validationStatus === "failed")
+		) {
+			const failure: ToolFailure = {
+				code: parsedSummary.failureCode ?? "tool_execution_failed",
+				category: parsedSummary.environmentIssue === true ? "environment" : "business",
+				message: parsedSummary.summary ?? `${functionName} failed`,
+				retryable: true,
+				artifactRefs: [...(parsedSummary.artifactRefs ?? collectToolArgumentArtifactRefs(executionArgs))],
+				artifactFileRefs: parsedSummary.artifactFileRefs,
+				sourceFolderId: parsedSummary.sourceFolderId,
+				details: { originalResult: result.content }
+			};
+			parsedSummary = { ...parsedSummary, failure, failureCode: failure.code };
+			modelResultContent = JSON.stringify({
+				ok: false,
+				validationStatus: parsedSummary.validationStatus ?? "failed",
+				environmentIssue: parsedSummary.environmentIssue,
+				applicabilityCode: parsedSummary.applicabilityCode,
+				failureCode: failure.code,
+				failure,
+				result: result.content
+			});
+		}
 		if (parsedSummary.environmentIssue === true) {
 			cacheRuntimeCapabilityFailure(
 				toolContext?.requestId,
@@ -471,7 +553,7 @@ async function executeSingleToolCall(
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: result.content,
+			content: modelResultContent,
 			imageReferences: result.imageReferences?.map((reference: ProviderToolImageReference): ProviderToolImageReference => ({
 				...reference,
 				toolCallId: toolCall.id
@@ -482,9 +564,26 @@ async function executeSingleToolCall(
 			throw error;
 		}
 
-			const message: string = error instanceof WorkspaceSourceResolutionError
-				? `${error.code}: ${error.message}`
-				: error instanceof Error ? error.message : "MCP tool call failed";
+		const message: string = error instanceof WorkspaceSourceResolutionError
+			? `${error.code}: ${error.message}`
+			: error instanceof Error ? error.message : "MCP tool call failed";
+		const failure: ToolFailure = createToolFailure(
+			error instanceof WorkspaceSourceResolutionError
+				? {
+					code: error.code,
+					category: error.code === "source_unavailable" ? "environment" : "policy",
+					message,
+					retryable: error.code === "ambiguous_source" || error.code === "source_required",
+					artifactRefs: collectToolArgumentArtifactRefs(executionArgs),
+					sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
+					details: { workspaceId: error.workspaceId, candidates: error.candidates }
+				}
+				: error,
+			{
+				artifactRefs: collectToolArgumentArtifactRefs(executionArgs),
+				sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined
+			}
+		);
 		logger.error("tool", "call_failed", error, {
 			toolCallId: toolCall.id,
 			toolName: functionName,
@@ -494,13 +593,13 @@ async function executeSingleToolCall(
 		});
 
 		if (onEvent) {
-			onEvent({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message });
+			onEvent({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message, failure });
 		}
 
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
-			content: `Error: ${message}`
+			content: serializeToolFailure(failure)
 		};
 	}
 }

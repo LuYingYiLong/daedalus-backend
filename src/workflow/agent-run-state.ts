@@ -3,9 +3,10 @@ import { z } from "zod";
 import type { ToolApplicabilityCode } from "../tools/tool-applicability.js";
 import type { WorkflowTodoSnapshot } from "./types.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
-import type { WorkflowValidationCapability } from "./tool-semantics.js";
+import type { WorkflowTargetKind, WorkflowValidationCapability } from "./tool-semantics.js";
+import type { ToolFailure } from "../tools/tool-failure.js";
 
-export const AGENT_RUN_STATE_SCHEMA_VERSION = 1 as const;
+export const AGENT_RUN_STATE_SCHEMA_VERSION = 2 as const;
 
 export type AgentRunIntent = "answer" | "inspect" | "mutate";
 export type AgentRunScope = "bounded" | "unknown" | "complex";
@@ -25,7 +26,7 @@ export type AgentRunStage =
 	| "cancelled";
 
 export type AgentRunVerificationStatus = "verified" | "unverified" | "failed";
-export type AgentRunResultStatus = "completed" | "completed_with_warnings" | "failed" | "cancelled";
+export type AgentRunResultStatus = "completed" | "completed_with_warnings" | "blocked" | "failed" | "cancelled";
 
 export type AgentRunPause =
 	| {
@@ -59,6 +60,8 @@ export type ExecutionEvidence = {
 	environmentIssue?: boolean | undefined;
 	applicabilityCode?: ToolApplicabilityCode | undefined;
 	validationCapabilities?: WorkflowValidationCapability[] | undefined;
+	repairFamilies?: WorkflowTargetKind[] | undefined;
+	failure?: ToolFailure | undefined;
 	/** A completed, approval-governed terminal command may support complete_read only. */
 	terminalObservation?: boolean | undefined;
 	resultExcerpt?: string | undefined;
@@ -399,6 +402,13 @@ function cloneExecutionEvidence(evidence: ExecutionEvidence): ExecutionEvidence 
 		...evidence,
 		artifactRefs: [...evidence.artifactRefs],
 		artifactFileRefs: evidence.artifactFileRefs?.map((fileRef: WorkspaceFileRef): WorkspaceFileRef => ({ ...fileRef })),
-		validationCapabilities: evidence.validationCapabilities === undefined ? undefined : [...evidence.validationCapabilities]
+		validationCapabilities: evidence.validationCapabilities === undefined ? undefined : [...evidence.validationCapabilities],
+		repairFamilies: evidence.repairFamilies === undefined ? undefined : [...evidence.repairFamilies],
+		failure: evidence.failure === undefined ? undefined : {
+			...evidence.failure,
+			artifactRefs: [...evidence.failure.artifactRefs],
+			artifactFileRefs: evidence.failure.artifactFileRefs?.map((fileRef: WorkspaceFileRef): WorkspaceFileRef => ({ ...fileRef })),
+			details: evidence.failure.details === undefined ? undefined : { ...evidence.failure.details }
+		}
 	};
 }

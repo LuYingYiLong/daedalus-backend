@@ -6,6 +6,7 @@ import {
 	executeLlmToolWithIdempotency,
 	getLlmToolExecutionIdentity,
 	refreshEditorFilesystemAfterGodotMutation,
+	scheduleEditorFilesystemRefreshAfterGodotMutation,
 	shouldDedupeLlmToolExecution
 } from "../../../src/tools/tool-idempotency.js";
 import { MAX_TOOL_RESULT_CHARS } from "../../../src/tools/llm-tool-budget.js";
@@ -187,6 +188,36 @@ test("Godot mutation refresh waits for an editor acknowledgement", async (): Pro
 		changedPaths: ["scenes/main.tscn"],
 		editorCount: 1
 	});
+});
+
+test("scheduled Godot mutation refresh does not block the tool result", async (): Promise<void> => {
+	let acknowledge: ((value: unknown[]) => void) | undefined;
+	const acknowledgement = new Promise<unknown[]>((resolve): void => {
+		acknowledge = resolve;
+	});
+	let refreshCompleted: boolean = false;
+	const mcpHost = {
+		getEditorBridge: (): { refreshFilesystem: () => Promise<unknown[]> } => ({
+			refreshFilesystem: async (): Promise<unknown[]> => {
+				const result: unknown[] = await acknowledgement;
+				refreshCompleted = true;
+				return result;
+			}
+		})
+	} as unknown as McpHost;
+
+	scheduleEditorFilesystemRefreshAfterGodotMutation(
+		mcpHost,
+		"mcp_godot_replace_text_in_file",
+		{ relativePath: "scripts/player.gd" }
+	);
+	assert.equal(refreshCompleted, false);
+	acknowledge?.([{ ok: true }]);
+	await acknowledgement;
+	await new Promise<void>((resolve): void => {
+		setImmediate(resolve);
+	});
+	assert.equal(refreshCompleted, true);
 });
 
 test("Godot mutation refresh reports unavailable and failed editor notifications", async (): Promise<void> => {

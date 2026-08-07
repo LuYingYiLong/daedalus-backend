@@ -1319,6 +1319,39 @@ test("canonical timeline reconciles a completed v3 run todo with its terminal st
 	assert.deepEqual(snapshot.phases.map((phase) => phase.status), ["done", "done", "done", "done"]);
 });
 
+test("canonical timeline preserves skipped todos and shows blocked as a warning", (): void => {
+	const requestId = "request-v3-blocked";
+	const result = buildCanonicalTimelineBlocks(session([
+		{ role: "user", requestId, content: "Connect the missing signal", createdAt: "2026-07-09T01:20:00.000Z" }
+	], [
+		event("event-run-state-blocked", requestId, "agent.run.state", "2026-07-09T01:20:05.000Z", {
+			runId: "run-v3-blocked",
+			requestId,
+			stage: "completed",
+			todo: {
+				workflowId: "workflow-v3-blocked",
+				phases: [
+					{ id: "inspect", title: "Inspect", status: "failed" },
+					{ id: "implement", title: "Implement", status: "skipped" },
+					{ id: "summarize", title: "Summarize", status: "done" }
+				],
+				todos: []
+			},
+			terminal: {
+				resultStatus: "blocked",
+				message: "[signal_node_not_found] Signal source node does not exist.",
+				completedAt: "2026-07-09T01:20:05.000Z"
+			}
+		})
+	]));
+	const snapshot = result.latestAgentSnapshot as { phases: Array<{ status: string }> };
+	assert.deepEqual(snapshot.phases.map((phase) => phase.status), ["failed", "skipped", "done"]);
+	const assistant = assistantBlock(result.blocks[1]);
+	const blockedStatus = assistant.bodyParts.find((part) => part.type === "status" && part.code === "agent_run_blocked");
+	assert.equal(blockedStatus?.type, "status");
+	assert.equal(blockedStatus?.status, "warning");
+});
+
 test("canonical timeline restores v3 failed and interrupted run states", (): void => {
 	const failedResult = buildCanonicalTimelineBlocks(session(
 		[

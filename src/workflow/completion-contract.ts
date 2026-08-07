@@ -14,7 +14,7 @@ export type StructuredArtifactTarget = {
 };
 
 const INVALID_ARTIFACT_PATH_CHARACTERS: RegExp = /[\u0000-\u001f<>:"|?*()[\]{}（）]/u;
-const PROJECT_SETTING_KEY_PATTERN: RegExp = /^(?:application|display|rendering|physics|audio|network|editor|debug)\/[A-Za-z0-9_.\/-]+$/u;
+const PROJECT_SETTING_KEY_PATTERN: RegExp = /^(?:application|display|rendering|physics|audio|network|editor|debug|input|autoload)\/[A-Za-z0-9_.\/-]+$/u;
 const ARTIFACT_PATH_PATTERN: RegExp = /(?:^|\/)\.?[\p{L}\p{N}_ -]+(?:\.[\p{L}\p{N}_-]+)+$/u;
 
 /** 仅接受可被工作区工具安全定位的相对文件路径。 */

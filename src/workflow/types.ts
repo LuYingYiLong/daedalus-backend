@@ -3,22 +3,29 @@ import type { SkillId } from "../skills/registry.js";
 import type { ToolBudgetLevel } from "../tools/llm-tool-budget.js";
 import type { WorkflowExecutionProfileId } from "./execution-profile.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
-import type { WorkflowTargetKind, WorkflowValidationCapability } from "./tool-semantics.js";
+import type {
+	WorkflowTargetKind,
+	WorkflowToolExecutionRole,
+	WorkflowValidationCapability,
+	WorkflowValidationScope
+} from "./tool-semantics.js";
 import type { WorkflowVerificationPolicy } from "./verification-policy.js";
+import type { ToolFailure } from "../tools/tool-failure.js";
 
 export type WorkflowPhaseId = string;
 
-export type WorkflowTodoStatus = "pending" | "running" | "done" | "failed" | "paused";
+export type WorkflowTodoStatus = "pending" | "running" | "done" | "failed" | "paused" | "skipped";
 
-export type WorkflowSource = "fixed" | "llm" | "godot_template" | "slash";
+export type WorkflowSource = "fixed" | "llm" | "slash";
 
 export type WorkflowToolGroup = "read" | "write" | "verify" | "summarize";
 
-export type WorkflowPhaseOutcomeStatus = "completed" | "needs_fix" | "blocked" | "approval_required" | "failed";
+export type WorkflowPhaseOutcomeStatus = "completed" | "needs_fix" | "blocked" | "approval_required" | "failed" | "skipped";
 
 export type WorkflowFailedCheck = {
 	code: string;
 	failureCode?: string | undefined;
+	failure?: ToolFailure | undefined;
 	message: string;
 	toolCallId?: string | undefined;
 	toolName?: string | undefined;
@@ -37,11 +44,14 @@ export type WorkflowToolObservation = {
 	argsSummary?: Record<string, unknown> | undefined;
 	parsedResult?: Record<string, unknown> | undefined;
 	error?: string | undefined;
+	failure?: ToolFailure | undefined;
 	artifactRefs?: string[] | undefined;
 	artifactFileRefs?: WorkspaceFileRef[] | undefined;
 	sourceFolderId?: string | undefined;
 	validationCapabilities?: WorkflowValidationCapability[] | undefined;
 	repairFamilies?: WorkflowTargetKind[] | undefined;
+	executionRole?: WorkflowToolExecutionRole | undefined;
+	validationScope?: WorkflowValidationScope | undefined;
 	failureCode?: string | undefined;
 	/** 成功写入且内容实际变化的文件指纹，仅用于自动修复进展判定。 */
 	fileEditFingerprints?: string[] | undefined;

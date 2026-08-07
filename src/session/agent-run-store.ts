@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PendingAiContinuation } from "./pending-continuation.js";
 import type { PendingToolBudget } from "./pending-tool-budget.js";
 import {
+	AGENT_RUN_STATE_SCHEMA_VERSION,
 	cloneAgentRunState,
 	interruptRecoverableAgentRun,
 	type AgentRunState
@@ -59,6 +60,22 @@ function serializeWithoutApiKey(value: unknown): unknown {
 		}
 	}
 	return cloned;
+}
+
+function parsePersistedAgentRunState(value: unknown): AgentRunState {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("agent_run_state_corrupted: persisted state is not an object");
+	}
+	const record: Record<string, unknown> = value as Record<string, unknown>;
+	if (record.schemaVersion === AGENT_RUN_STATE_SCHEMA_VERSION) {
+		return record as AgentRunState;
+	}
+	if (record.schemaVersion === 1) {
+		// Version 1 has the same core state shape. New failure/blocked fields are
+		// optional, so migration is structural and never infers data from text.
+		return { ...record, schemaVersion: AGENT_RUN_STATE_SCHEMA_VERSION } as AgentRunState;
+	}
+	throw new Error(`agent_run_state_corrupted: unsupported schema version ${String(record.schemaVersion)}`);
 }
 
 function upsertAgentRunState(db: DatabaseSync, state: AgentRunState): void {
@@ -134,7 +151,7 @@ export async function saveAgentRunState(state: AgentRunState): Promise<void> {
 export async function readAgentRunState(runId: string): Promise<AgentRunState | null> {
 	const db: DatabaseSync = await getSessionDatabase();
 	const row = db.prepare("SELECT state_json FROM agent_runs WHERE run_id = ?").get(runId) as Record<string, unknown> | undefined;
-	return row === undefined ? null : parseSqlJson<AgentRunState>(row.state_json);
+	return row === undefined ? null : parsePersistedAgentRunState(parseSqlJson<unknown>(row.state_json));
 }
 
 export async function listAgentRunStates(sessionId: string): Promise<AgentRunState[]> {
@@ -144,7 +161,7 @@ export async function listAgentRunStates(sessionId: string): Promise<AgentRunSta
 		WHERE session_id = ?
 		ORDER BY updated_at, run_id
 	`).all(sessionId) as Record<string, unknown>[];
-	return rows.map((row: Record<string, unknown>): AgentRunState => parseSqlJson<AgentRunState>(row.state_json));
+	return rows.map((row: Record<string, unknown>): AgentRunState => parsePersistedAgentRunState(parseSqlJson<unknown>(row.state_json)));
 }
 
 export async function markActiveAgentRunsInterrupted(

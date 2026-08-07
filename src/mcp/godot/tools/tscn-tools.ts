@@ -1,3 +1,5 @@
+import { StructuredToolError } from "../../../tools/tool-failure.js";
+
 export type TscnSection = {
 	name: string;
 	attrs: Record<string, string>;
@@ -498,11 +500,25 @@ export function connectSignalInSceneTscn(content: string, signal: string, fromNo
 	const data: TscnData = parseTscn(content);
 
 	if (findNodeInTscn(data, fromNode) === null) {
-		throw new Error(`Signal source node not found in scene: ${fromNode}`);
+		throw new StructuredToolError({
+			code: "signal_node_not_found",
+			category: "business",
+			message: `Signal source node not found in the current scene: ${fromNode}`,
+			retryable: true,
+			artifactRefs: [],
+			details: { endpoint: "source", nodePath: fromNode, signal }
+		});
 	}
 
 	if (findNodeInTscn(data, toNode) === null) {
-		throw new Error(`Signal target node not found in scene: ${toNode}`);
+		throw new StructuredToolError({
+			code: "signal_node_not_found",
+			category: "business",
+			message: `Signal target node not found in the current scene: ${toNode}`,
+			retryable: true,
+			artifactRefs: [],
+			details: { endpoint: "target", nodePath: toNode, signal }
+		});
 	}
 
 	const resolvedFromNode: string = toSceneRelativeNodePath(data, fromNode);

@@ -610,11 +610,16 @@ export function enforceGoalEvaluationGates(evaluation: GoalEvaluation, runs: Age
 	if (parsed.disposition === "achieved" && mutationIntent && hasActualWrite && !hasPostWriteValidation) {
 		parsed = { ...parsed, disposition: "continue", unmetCriteria: [...parsed.unmetCriteria, "No matching verification ran after the final write."], nextAction: "Run a matching verification after the final change." };
 	}
-	if (parsed.disposition === "achieved" && (currentRun.stage !== "completed" || currentRun.verificationStatus === "failed")) {
+	if (parsed.disposition === "achieved" && (
+		currentRun.stage !== "completed"
+		|| currentRun.verificationStatus === "failed"
+		|| currentRun.terminal?.resultStatus === "blocked"
+	)) {
 		parsed = { ...parsed, disposition: "blocked", unmetCriteria: [...parsed.unmetCriteria, "The latest linked AgentRun did not complete successfully."], nextAction: null };
 	}
 	const latestRunCanContinue = currentRun.stage === "completed"
 		&& currentRun.verificationStatus !== "failed"
+		&& currentRun.terminal?.resultStatus !== "blocked"
 		&& currentRun.executionDecision?.disposition !== "blocked"
 		&& !referencesUnknownEvidence;
 	if (parsed.disposition === "blocked" && latestRunCanContinue) {

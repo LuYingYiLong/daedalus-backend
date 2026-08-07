@@ -142,6 +142,32 @@ test("final summary receives unverified completion constraints as prompt context
 	assert.match(context, /不要声称验证已经通过/u);
 });
 
+test("an unresolved business failure completes the request with blocked status and summary context", (): void => {
+	const plan: WorkflowPlan = {
+		id: "workflow-blocked",
+		title: "Edit scene",
+		phases: [phase("implement", "write"), phase("summarize", "summarize")],
+		todos: []
+	};
+	const blocked: WorkflowPhaseOutput = {
+		...output("implement", []),
+		status: "blocked",
+		summary: "Signal node was not found.",
+		blockedReason: "Signal node was not found.",
+		failedChecks: [{
+			code: "signal_node_not_found",
+			failureCode: "signal_node_not_found",
+			message: "Signal source node does not exist.",
+			artifact: "scenes/Main.tscn"
+		}]
+	};
+	const result = collectWorkflowCompletionStatus(plan, [blocked]);
+
+	assert.equal(result.resultStatus, "blocked");
+	assert.equal(result.verificationStatus, "unverified");
+	assert.match(createFinalSummaryVerificationContext(plan, [blocked]), /signal_node_not_found/);
+});
+
 test("LLM workflow revision only runs for material outcomes or user guidance", (): void => {
 	const completed = output("inspect", []);
 	const needsFix: WorkflowPhaseOutput = {

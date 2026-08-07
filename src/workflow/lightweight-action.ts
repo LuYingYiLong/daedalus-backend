@@ -19,7 +19,7 @@ export type LightweightActionState = {
 };
 
 export type LightweightActionCompletionStatus = {
-	resultStatus: "completed" | "completed_with_warnings";
+	resultStatus: "completed" | "completed_with_warnings" | "blocked";
 	verificationStatus: "verified" | "unverified";
 	warnings: string[];
 	failureMessage?: string | undefined;
@@ -122,6 +122,11 @@ export function collectLightweightActionCompletionStatus(
 	state: LightweightActionState
 ): LightweightActionCompletionStatus {
 	const observations: WorkflowToolObservation[] = state.observations;
+	const unresolvedFailures: WorkflowToolObservation[] = observations.filter((observation: WorkflowToolObservation, index: number): boolean => (
+		observation.status === "failed"
+		&& !isEnvironmentIssueObservation(observation)
+		&& !isObservationResolvedByLaterSuccess(observation, index, observations)
+	));
 	let lastWriteIndex: number = -1;
 	for (let index: number = 0; index < observations.length; index += 1) {
 		if (isSuccessfulWriteObservation(observations[index])) {
@@ -130,6 +135,13 @@ export function collectLightweightActionCompletionStatus(
 	}
 
 	if (lastWriteIndex < 0) {
+		if (unresolvedFailures.length > 0) {
+			return {
+				resultStatus: "blocked",
+				verificationStatus: "unverified",
+				warnings: unresolvedFailures.map(summarizeObservationFailure)
+			};
+		}
 		return {
 			resultStatus: "completed",
 			verificationStatus: "verified",
@@ -160,10 +172,9 @@ export function collectLightweightActionCompletionStatus(
 		&& !isEnvironmentIssueObservation(latestVerification)
 	) {
 		return {
-			resultStatus: "completed_with_warnings",
+			resultStatus: "blocked",
 			verificationStatus: "unverified",
-			warnings: environmentWarnings,
-			failureMessage: `轻量操作的验证失败：${summarizeObservationFailure(latestVerification)}`
+			warnings: uniqueStrings([...environmentWarnings, summarizeObservationFailure(latestVerification)])
 		};
 	}
 
@@ -192,7 +203,13 @@ function cloneObservation(observation: WorkflowToolObservation): WorkflowToolObs
 		argsSummary: observation.argsSummary === undefined ? undefined : { ...observation.argsSummary },
 		parsedResult: observation.parsedResult === undefined ? undefined : { ...observation.parsedResult },
 		artifactRefs: observation.artifactRefs === undefined ? undefined : [...observation.artifactRefs],
-		artifactFileRefs: observation.artifactFileRefs === undefined ? undefined : observation.artifactFileRefs.map((fileRef) => ({ ...fileRef }))
+		artifactFileRefs: observation.artifactFileRefs === undefined ? undefined : observation.artifactFileRefs.map((fileRef) => ({ ...fileRef })),
+		failure: observation.failure === undefined ? undefined : {
+			...observation.failure,
+			artifactRefs: [...observation.failure.artifactRefs],
+			artifactFileRefs: observation.failure.artifactFileRefs?.map((fileRef) => ({ ...fileRef })),
+			details: observation.failure.details === undefined ? undefined : { ...observation.failure.details }
+		}
 	};
 }
 
@@ -226,11 +243,34 @@ function isSuccessfulWriteObservation(observation: WorkflowToolObservation | und
 }
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
+	if (observation.failure?.category === "environment") {
+		return true;
+	}
 	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
 		return true;
 	}
 	const applicabilityCode: unknown = observation.parsedResult?.applicabilityCode;
 	return typeof applicabilityCode === "string" && ENVIRONMENT_APPLICABILITY_CODES.has(applicabilityCode);
+}
+
+function isObservationResolvedByLaterSuccess(
+	failedObservation: WorkflowToolObservation,
+	index: number,
+	observations: WorkflowToolObservation[]
+): boolean {
+	const failedPaths: Set<string> = collectObservationPaths(failedObservation);
+	return observations.slice(index + 1).some((candidate: WorkflowToolObservation): boolean => {
+		if (candidate.status !== "succeeded") return false;
+		if (
+			failedObservation.sourceFolderId !== undefined
+			&& candidate.sourceFolderId !== undefined
+			&& failedObservation.sourceFolderId !== candidate.sourceFolderId
+		) return false;
+		const candidatePaths: Set<string> = collectObservationPaths(candidate);
+		return failedPaths.size > 0 && candidatePaths.size > 0
+			? pathsOverlap(failedPaths, candidatePaths)
+			: failedObservation.toolName === candidate.toolName;
+	});
 }
 
 function isRelevantVerificationObservation(
@@ -322,6 +362,9 @@ function pathsOverlap(left: Set<string>, right: Set<string>): boolean {
 }
 
 function summarizeObservationFailure(observation: WorkflowToolObservation): string {
+	if (observation.failure !== undefined) {
+		return `[${observation.failure.code}] ${observation.failure.message}`;
+	}
 	const failedChecks: unknown = observation.parsedResult?.failedChecks;
 	if (Array.isArray(failedChecks) && failedChecks.length > 0) {
 		return failedChecks.map((value: unknown): string => String(value)).join("; ");

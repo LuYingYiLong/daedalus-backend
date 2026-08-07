@@ -77,6 +77,7 @@ export function mapWorkflowEventToAgentEvent(
 				resultStatus: record.resultStatus ?? "completed",
 				verificationStatus: record.verificationStatus,
 				warnings: record.warnings ?? [],
+				message: record.message,
 				title: record.title,
 				sequence: record.sequence
 			}

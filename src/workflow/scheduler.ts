@@ -1,6 +1,6 @@
 import { appendPhaseOutput, updateWorkflowPhaseStatus } from "./runner.js";
 import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases, resolveRepairWriteTools, shouldUseVerifyOnlyRepair } from "./repair.js";
-import { findBlockingOutcomeBeforeSummarize } from "./outcome.js";
+import { scopeVerificationOutcomeToRegisteredTargets } from "./outcome.js";
 import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState } from "./types.js";
 
 export type WorkflowSchedulerCommand =
@@ -8,28 +8,10 @@ export type WorkflowSchedulerCommand =
 	| { type: "blocked_before_start"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
 	| { type: "pause_for_approval"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
 	| { type: "repair"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
+	| { type: "graceful_blocked"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
 	| { type: "failed"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
 	| { type: "complete_phase"; state: WorkflowRunState; phase: WorkflowPhase; outcome: WorkflowPhaseOutput }
 	| { type: "finish"; state: WorkflowRunState };
-
-function createSummarizeBlockedOutcome(phase: WorkflowPhase, phaseRunId: string, blockingOutcome: WorkflowPhaseOutput): WorkflowPhaseOutput {
-	const message: string = `总结阶段被阻止：阶段「${blockingOutcome.title}」仍处于 ${blockingOutcome.status}，不能交付完成总结。`;
-	return {
-		phaseId: phase.id,
-		phaseRunId,
-		title: phase.title,
-		status: "blocked",
-		summary: message,
-		evidence: [],
-		failedChecks: blockingOutcome.failedChecks,
-		requiredFixes: blockingOutcome.requiredFixes,
-		modifiedArtifacts: [],
-		verifiedArtifacts: [],
-		toolObservations: [],
-		sourcePhaseId: blockingOutcome.phaseId,
-		blockedReason: message
-	};
-}
 
 function createFailureSignature(outcome: WorkflowPhaseOutput): string {
 	const checks: string[] = outcome.failedChecks
@@ -60,29 +42,97 @@ function hasRepeatedRepairFailure(state: WorkflowRunState, phase: WorkflowPhase,
 	return previousFailureIndex >= 0 && !hasFileMutationProgress(state.phaseOutputs, previousFailureIndex);
 }
 
+function completeVerificationWithWarnings(
+	state: WorkflowRunState,
+	phase: WorkflowPhase,
+	outcome: WorkflowPhaseOutput,
+	message: string
+): Extract<WorkflowSchedulerCommand, { type: "complete_phase" }> {
+	const warningDetails: string[] = outcome.failedChecks.map((check): string => (
+		`[${check.failureCode ?? check.code}] ${check.message}`
+	));
+	const completedOutcome: WorkflowPhaseOutput = {
+		...outcome,
+		status: "completed",
+		summary: message,
+		failedChecks: [],
+		requiredFixes: [],
+		verificationStatus: "unverified",
+		warnings: [...new Set([...(outcome.warnings ?? []), message, ...warningDetails])],
+		blockedReason: undefined
+	};
+	const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "done");
+	return {
+		type: "complete_phase",
+		phase,
+		outcome: completedOutcome,
+		state: {
+			...state,
+			plan,
+			phaseIndex: state.phaseIndex + 1,
+			phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, completedOutcome)
+		}
+	};
+}
+
+function scheduleGracefulBlocked(
+	state: WorkflowRunState,
+	phase: WorkflowPhase,
+	outcome: WorkflowPhaseOutput
+): Extract<WorkflowSchedulerCommand, { type: "graceful_blocked" }> {
+	const blockedOutcome: WorkflowPhaseOutput = {
+		...outcome,
+		status: "blocked",
+		blockedReason: outcome.blockedReason ?? outcome.summary
+	};
+	const summarizeIndex: number = state.plan.phases.findIndex((candidate: WorkflowPhase, index: number): boolean => (
+		index > state.phaseIndex && candidate.toolGroup === "summarize"
+	));
+	const stopIndex: number = summarizeIndex < 0 ? state.plan.phases.length : summarizeIndex;
+	const skippedPhases: WorkflowPhase[] = state.plan.phases.slice(state.phaseIndex + 1, stopIndex);
+	const skippedPhaseIds: ReadonlySet<string> = new Set(skippedPhases.map((candidate: WorkflowPhase): string => candidate.id));
+	const skippedOutputs: WorkflowPhaseOutput[] = skippedPhases.map((candidate: WorkflowPhase): WorkflowPhaseOutput => ({
+		phaseId: candidate.id,
+		phaseRunId: `skipped-${candidate.id}`,
+		title: candidate.title,
+		status: "skipped",
+		summary: `Skipped because phase ${phase.title} could not complete.`,
+		evidence: [],
+		failedChecks: [],
+		requiredFixes: [],
+		modifiedArtifacts: [],
+		verifiedArtifacts: [],
+		toolObservations: [],
+		sourcePhaseId: phase.id,
+		warnings: [blockedOutcome.blockedReason ?? blockedOutcome.summary]
+	}));
+	const failedPlan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
+	const plan: WorkflowPlan = {
+		...failedPlan,
+		todos: failedPlan.todos.map((todo) => skippedPhaseIds.has(todo.phaseId)
+			? { ...todo, status: "skipped" }
+			: todo)
+	};
+	return {
+		type: "graceful_blocked",
+		phase,
+		outcome: blockedOutcome,
+		state: {
+			...state,
+			plan,
+			phaseIndex: stopIndex,
+			phaseOutputs: [
+				...appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome),
+				...skippedOutputs
+			]
+		}
+	};
+}
+
 export function scheduleWorkflowPhaseStart(state: WorkflowRunState, phaseRunId: string): WorkflowSchedulerCommand {
 	const phase: WorkflowPhase | undefined = state.plan.phases[state.phaseIndex];
 	if (phase === undefined) {
 		return { type: "finish", state };
-	}
-
-	if (phase.toolGroup === "summarize") {
-		const blockingOutcome: WorkflowPhaseOutput | null = findBlockingOutcomeBeforeSummarize(state.phaseOutputs, phase.id);
-		if (blockingOutcome !== null) {
-			const outcome: WorkflowPhaseOutput = createSummarizeBlockedOutcome(phase, phaseRunId, blockingOutcome);
-			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-			return {
-				type: "blocked_before_start",
-				phase,
-				outcome,
-				state: {
-					...state,
-					plan,
-					phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, outcome),
-					activePhaseRunId: phaseRunId
-				}
-			};
-		}
 	}
 
 	const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "running");
@@ -99,6 +149,7 @@ export function scheduleWorkflowPhaseOutcome(
 	outcome: WorkflowPhaseOutput,
 	maxAutoRepairRounds: number
 ): WorkflowSchedulerCommand {
+	outcome = scopeVerificationOutcomeToRegisteredTargets(state.plan, state.phaseOutputs, outcome);
 	if (outcome.status === "needs_fix") {
 		if (phase.toolGroup !== "write" && phase.toolGroup !== "verify") {
 			const message: string = `阶段「${phase.title}」不是写入或验证阶段，不能通过自动写入修复其失败。`;
@@ -108,35 +159,23 @@ export function scheduleWorkflowPhaseOutcome(
 				summary: message,
 				blockedReason: message
 			};
-			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-			return {
-				type: "failed",
-				phase,
-				outcome: blockedOutcome,
-				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
-			};
+			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 		if (hasRepeatedRepairFailure(state, phase, outcome)) {
 			const message: string = `验证阶段「${phase.title}」重复出现相同失败且没有修复进展，已停止自动修复。`;
+			if (phase.toolGroup === "verify") {
+				return completeVerificationWithWarnings(state, phase, outcome, message);
+			}
 			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };
-			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-			return {
-				type: "failed",
-				phase,
-				outcome: blockedOutcome,
-				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
-			};
+			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 		if (countWorkflowAutoRepairRounds(state.plan) >= maxAutoRepairRounds) {
 			const message: string = `验证阶段「${phase.title}」仍发现需要修复的问题，已达到自动修复次数上限。`;
+			if (phase.toolGroup === "verify") {
+				return completeVerificationWithWarnings(state, phase, outcome, message);
+			}
 			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };
-			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-			return {
-				type: "failed",
-				phase,
-				outcome: blockedOutcome,
-				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
-			};
+			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 		const repairTools = shouldUseVerifyOnlyRepair(outcome.failedChecks)
 			? { tools: [] as string[], reason: "Verification-only failure." }
@@ -158,14 +197,11 @@ export function scheduleWorkflowPhaseOutcome(
 		}
 		if (repairTools.tools.length === 0) {
 			const message: string = `验证阶段「${phase.title}」需要写入修复，但无法在不扩大既有授权范围的前提下确定安全工具：${repairTools.reason}`;
+			if (phase.toolGroup === "verify") {
+				return completeVerificationWithWarnings(state, phase, outcome, message);
+			}
 			const blockedOutcome: WorkflowPhaseOutput = { ...outcome, status: "blocked", summary: message, blockedReason: message };
-			const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-			return {
-				type: "failed",
-				phase,
-				outcome: blockedOutcome,
-				state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, blockedOutcome) }
-			};
+			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 
 		const failedPlan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
@@ -184,13 +220,10 @@ export function scheduleWorkflowPhaseOutcome(
 	}
 
 	if (outcome.status === "blocked" || outcome.status === "failed") {
-		const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "failed");
-		return {
-			type: "failed",
-			phase,
-			outcome,
-			state: { ...state, plan, phaseOutputs: appendPhaseOutput(state.phaseOutputs, phase, outcome) }
-		};
+		if (phase.toolGroup === "verify") {
+			return completeVerificationWithWarnings(state, phase, outcome, outcome.blockedReason ?? outcome.summary);
+		}
+		return scheduleGracefulBlocked(state, phase, outcome);
 	}
 
 	const plan: WorkflowPlan = updateWorkflowPhaseStatus(state.plan, phase.id, "done");

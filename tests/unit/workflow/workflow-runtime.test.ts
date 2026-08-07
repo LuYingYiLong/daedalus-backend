@@ -73,6 +73,90 @@ test("workflow runtime seam completes a phase without a live provider", async ()
 	assert.equal(phaseCalls, 1);
 });
 
+test("workflow runtime gracefully blocks a business failure and still runs summary", async (): Promise<void> => {
+	const phases: WorkflowPhase[] = [
+		{ id: "inspect", title: "Inspect", toolGroup: "read", toolBudget: "normal", allowedTools: ["mcp_workspace_read_text_file"], instruction: "Inspect" },
+		{ id: "implement", title: "Implement", toolGroup: "write", toolBudget: "project_edit", allowedTools: ["mcp_workspace_replace_text_in_file"], instruction: "Implement" },
+		{ id: "verify", title: "Verify", toolGroup: "verify", toolBudget: "normal", allowedTools: [], instruction: "Verify" },
+		{ id: "summarize", title: "Summarize", toolGroup: "summarize", toolBudget: "simple", allowedTools: [], instruction: "Summarize" }
+	];
+	const state: WorkflowRunState = {
+		plan: {
+			id: "workflow-business-failure",
+			title: "Business failure",
+			phases,
+			todos: phases.map((phase: WorkflowPhase) => ({ id: phase.id, phaseId: phase.id, text: phase.title, status: "pending" }))
+		},
+		phaseIndex: 0,
+		phaseOutputs: [],
+		originalParams: { message: "Connect a missing signal node" },
+		history: [],
+		historyBudgetTokens: 100
+	};
+	const session = createClientSession(undefined);
+	const calledPhases: string[] = [];
+	const sentPayloads: Array<Record<string, unknown>> = [];
+	const socket = {
+		readyState: WebSocket.OPEN,
+		send: (payload: string): void => {
+			sentPayloads.push(JSON.parse(payload) as Record<string, unknown>);
+		}
+	} as unknown as WebSocket;
+
+	await continueWorkflowExecution(
+		socket,
+		"request-business-failure",
+		session,
+		FAKE_MCP_HOST,
+		PROVIDER_OPTIONS,
+		state,
+		new Date().toISOString(),
+		undefined,
+		"request-business-failure",
+		undefined,
+		[],
+		undefined,
+		{
+			createPhasePrompt: async (): Promise<string> => "fake prompt",
+			runPhase: async (_socket, _params, _options, _history, _prompt, phase) => {
+				calledPhases.push(phase.id);
+				return phase.toolGroup === "summarize"
+					? {
+						agentResult: { status: "completed", text: "" },
+					toolStats: createEmptyWorkflowPhaseToolStats(),
+					toolObservations: [],
+					capturedAttachments: []
+				}
+					: {
+					agentResult: { status: "completed", text: "I will inspect the scene." },
+					toolStats: createEmptyWorkflowPhaseToolStats(),
+					toolObservations: [{
+						toolCallId: "missing-node",
+						toolName: "mcp_godot_connect_signal",
+						risk: "read",
+						status: "failed",
+						artifactRefs: ["scenes/Main.tscn"],
+						failure: {
+							code: "signal_node_not_found",
+							category: "business",
+							message: "Signal source node Player does not exist.",
+							retryable: true,
+							artifactRefs: ["scenes/Main.tscn"]
+						}
+					}],
+					capturedAttachments: []
+				};
+			}
+		}
+	);
+
+	assert.deepEqual(calledPhases, ["inspect", "summarize"]);
+	assert.equal(session.agentRuns.get("request-business-failure")?.terminal?.resultStatus, "blocked");
+	const response = sentPayloads.find((payload: Record<string, unknown>): boolean => payload.type === "response");
+	assert.equal(response?.ok, true);
+	assert.match(String((response?.result as Record<string, unknown> | undefined)?.text ?? ""), /signal_node_not_found/);
+});
+
 test("workflow runtime seam never calls a provider after cancellation", async (): Promise<void> => {
 	const controller: AbortController = new AbortController();
 	controller.abort();

@@ -80,15 +80,15 @@ import { classifyProviderError, createProviderStatusEvent, type ProviderErrorInf
 import { isFirstSessionUserTurn } from "./session-title.js";
 import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
 import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
-import { createGodotTemplateWorkflowPlan, type GodotTemplateTarget } from "../workflow/godot-template-planner.js";
 import { resolveWorkflowExecutionProfile, type WorkflowExecutionProfileId } from "../workflow/execution-profile.js";
+import { normalizeProjectSettingKey, normalizeWorkspaceRelativeArtifactPath } from "../workflow/completion-contract.js";
+import { getWorkflowToolSemantics, type WorkflowTargetKind } from "../workflow/tool-semantics.js";
 import { getExecutionPolicy, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
 import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
 	createWorkflowPhaseOutcome,
-	createWorkflowPhaseRunId,
-	findBlockingOutcomeBeforeSummarize
+	createWorkflowPhaseRunId
 } from "../workflow/outcome.js";
 import {
 	appendPhaseOutput,
@@ -100,7 +100,7 @@ import {
 	updateWorkflowPhaseStatus
 } from "../workflow/runner.js";
 import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../workflow/repair.js";
-import type { WorkflowCompletionTarget, WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
+import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
 	applyToolEventToLightweightActionState,
 	collectLightweightActionCompletionStatus,
@@ -189,6 +189,7 @@ import {
 	maybeScheduleSessionTitleGeneration
 } from "./session-events.js";
 import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
+import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
 
 import {
 	createPendingAiContinuation,
@@ -235,6 +236,12 @@ import {
 } from "../workflow/agent-run-state.js";
 
 const WEB_SEARCH_TOOL_NAME: string = "mcp_web_search";
+const GODOT_AUTOLOAD_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"mcp_godot_propose_set_autoload",
+	"mcp_godot_set_autoload",
+	"mcp_godot_propose_unset_autoload",
+	"mcp_godot_unset_autoload"
+]);
 
 function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatParams): boolean {
 	if (params.provider === undefined && params.model === undefined && params.options?.reasoningEffort === undefined) {
@@ -329,14 +336,108 @@ function createWorkflowRouteContext(session: ClientSession): WorkflowRouteContex
 	return { hasActiveWorkspace: session.activeWorkspace !== undefined };
 }
 
-function createGodotTemplateTarget(decision: ExecutionDecision | undefined): GodotTemplateTarget | undefined {
-	if (decision === undefined || decision.targetKind === "unknown" || decision.expectedArtifacts.length === 0) {
+function selectConcreteTargetKind(families: readonly WorkflowTargetKind[]): WorkflowTargetKind | undefined {
+	for (const candidate of ["project_setting", "godot_scene", "godot_script", "workspace_file"] as const) {
+		if (families.includes(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function createPendingWriteExecutionDecision(
+	event: Extract<ToolEvent, { type: "tool.call" }>,
+	workspaceId: string | undefined
+): ExecutionDecision | undefined {
+	const targetKind: WorkflowTargetKind | undefined = selectConcreteTargetKind(
+		getWorkflowToolSemantics(event.toolName, event.args).repairFamilies ?? []
+	);
+	if (targetKind === undefined) return undefined;
+
+	const sourceFolderId: string | undefined = typeof event.args.sourceFolderId === "string"
+		? event.args.sourceFolderId
+		: undefined;
+	if (targetKind === "project_setting") {
+		const rawKey: unknown = event.args.key;
+		const rawAction: unknown = event.args.action;
+		const rawAutoloadName: unknown = event.args.name;
+		const targetValue: string | undefined = typeof rawKey === "string"
+			? rawKey
+			: typeof rawAction === "string"
+				? `input/${rawAction}`
+				: typeof rawAutoloadName === "string" && GODOT_AUTOLOAD_WRITE_TOOL_NAMES.has(event.toolName)
+					? `autoload/${rawAutoloadName}`
+					: undefined;
+		const key: string | undefined = targetValue === undefined ? undefined : normalizeProjectSettingKey(targetValue);
+		return key === undefined ? undefined : {
+			disposition: "use_workflow",
+			summary: "Continue the pending structured project-setting mutation in a target-scoped workflow.",
+			evidenceToolCallIds: [],
+			expectedArtifacts: [key],
+			expectedFileRefs: workspaceId !== undefined && sourceFolderId !== undefined
+				? [{ workspaceId, sourceFolderId, relativePath: "project.godot" }]
+				: undefined,
+			targetKind
+		};
+	}
+
+	let relativePath: string | undefined;
+	for (const key of ["relativePath", "resourcePath", "scenePath", "scriptPath", "path"] as const) {
+		const rawValue: unknown = event.args[key];
+		if (typeof rawValue !== "string") continue;
+		relativePath = normalizeWorkspaceRelativeArtifactPath(rawValue);
+		if (relativePath !== undefined) break;
+	}
+	if (relativePath === undefined) return undefined;
+	return {
+		disposition: "use_workflow",
+		summary: "Continue the pending structured file mutation in a target-scoped workflow.",
+		evidenceToolCallIds: [],
+		expectedArtifacts: [relativePath],
+		expectedFileRefs: workspaceId !== undefined && sourceFolderId !== undefined
+			? [{ workspaceId, sourceFolderId, relativePath }]
+			: undefined,
+		targetKind
+	};
+}
+
+function createExecutionDecisionCompletionContract(
+	decision: ExecutionDecision | undefined
+): WorkflowCompletionContract | undefined {
+	if (
+		decision === undefined
+		|| (decision.disposition !== "use_workflow" && decision.disposition !== "use_lightweight")
+		|| decision.expectedArtifacts.length === 0
+		|| decision.targetKind === "unknown"
+	) {
 		return undefined;
 	}
-	return {
-		kind: decision.targetKind,
-		artifacts: decision.expectedArtifacts
-	};
+	const targets: WorkflowCompletionTarget[] = decision.expectedArtifacts.flatMap((artifact: string): WorkflowCompletionTarget[] => {
+		if (decision.targetKind === "project_setting") {
+			const key: string | undefined = normalizeProjectSettingKey(artifact);
+			const sourceFolderId: string | undefined = decision.expectedFileRefs?.length === 1
+				? decision.expectedFileRefs[0]?.sourceFolderId
+				: undefined;
+			return key === undefined ? [] : [{ kind: "project_setting", key, sourceFolderId }];
+		}
+		const relativePath: string | undefined = normalizeWorkspaceRelativeArtifactPath(artifact);
+		if (relativePath === undefined) return [];
+		const targetKind: Exclude<WorkflowTargetKind, "project_setting"> = decision.targetKind === "godot_script"
+			|| decision.targetKind === "godot_scene"
+			? decision.targetKind
+			: "workspace_file";
+		const matchingFileRefs = (decision.expectedFileRefs ?? []).filter((fileRef): boolean => (
+			(normalizeWorkspaceRelativeArtifactPath(fileRef.relativePath) ?? fileRef.relativePath) === relativePath
+		));
+		return matchingFileRefs.length === 0
+			? [{ kind: "artifact", path: relativePath, targetKind }]
+			: matchingFileRefs.map((fileRef): WorkflowCompletionTarget => ({
+				kind: "artifact",
+				path: relativePath,
+				targetKind,
+				sourceFolderId: fileRef.sourceFolderId,
+				fileRef: { ...fileRef, relativePath }
+			}));
+	});
+	return targets.length === 0 ? undefined : { targets, requireAll: true };
 }
 
 function getAllRuntimeToolNames(session: ClientSession): readonly string[] {
@@ -556,22 +657,10 @@ async function createWorkflowPlanForRoute(
 	planningContext: string,
 	abortSignal?: AbortSignal | undefined,
 	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined,
-	target?: GodotTemplateTarget | undefined,
 	executionDecision?: ExecutionDecision | undefined
 ): Promise<WorkflowPlan | null> {
 	throwIfAborted(abortSignal);
 	const executionProfile: WorkflowExecutionProfileId = await resolveWorkflowExecutionProfileForWorkspace(runtimeContext?.activeWorkspace);
-	throwIfAborted(abortSignal);
-	if (params.options?.workflow !== "llm_planned" && target !== undefined) {
-		const preferredTemplate: WorkflowPlan | null = await awaitWithAbort(
-			createGodotTemplateWorkflowPlanForRuntime(params, target, executionProfile),
-			abortSignal
-		);
-		throwIfAborted(abortSignal);
-		if (preferredTemplate !== null) {
-			return applyExecutionDecisionCompletionContract(preferredTemplate, executionDecision);
-		}
-	}
 
 	try {
 		const plannerOptions: ProviderChatOptions = withProviderUsageContext(
@@ -597,7 +686,11 @@ async function createWorkflowPlanForRoute(
 	}
 
 	throwIfAborted(abortSignal);
-	const fallbackPlan: WorkflowPlan | null = planWorkflowAfterLlmPlannerFailure(params, executionProfile);
+	const fallbackPlan: WorkflowPlan | null = planWorkflowAfterLlmPlannerFailure(
+		params,
+		executionProfile,
+		createExecutionDecisionCompletionContract(executionDecision)
+	);
 	return fallbackPlan === null ? null : applyExecutionDecisionCompletionContract(fallbackPlan, executionDecision);
 }
 
@@ -612,17 +705,8 @@ function applyExecutionDecisionCompletionContract(
 	) {
 		return plan;
 	}
-	const expectedTargets: WorkflowCompletionTarget[] = decision.expectedArtifacts.map((artifact: string): WorkflowCompletionTarget => (
-		decision.targetKind === "project_setting"
-			? { kind: "project_setting", key: artifact }
-			: {
-				kind: "artifact",
-				path: artifact,
-				targetKind: decision.targetKind === "godot_script" || decision.targetKind === "godot_scene"
-					? decision.targetKind
-					: "workspace_file"
-			}
-	));
+	const expectedTargets: WorkflowCompletionTarget[] = createExecutionDecisionCompletionContract(decision)?.targets ?? [];
+	if (expectedTargets.length === 0) return plan;
 	const firstWritePhaseIndex: number = plan.phases.findIndex((phase: WorkflowPhase): boolean => phase.toolGroup === "write");
 	if (firstWritePhaseIndex < 0) {
 		return plan;
@@ -634,8 +718,8 @@ function applyExecutionDecisionCompletionContract(
 	const targets: WorkflowCompletionTarget[] = [];
 	for (const target of [...existingTargets, ...expectedTargets]) {
 		const key: string = target.kind === "artifact"
-			? `artifact:${target.path.replace(/^res:\/\//iu, "").replace(/\\/g, "/").toLowerCase()}`
-			: `project_setting:${target.key.toLowerCase()}`;
+			? `artifact:${target.fileRef?.workspaceId ?? ""}:${target.fileRef?.sourceFolderId ?? target.sourceFolderId ?? ""}:${target.path.replace(/^res:\/\//iu, "").replace(/\\/g, "/").toLowerCase()}`
+			: `project_setting:${target.sourceFolderId ?? ""}:${target.key.toLowerCase()}`;
 		if (targetKeys.has(key)) {
 			continue;
 		}
@@ -656,14 +740,6 @@ function applyExecutionDecisionCompletionContract(
 			}
 	));
 	return { ...plan, phases, semanticsVersion: 2 };
-}
-
-async function createGodotTemplateWorkflowPlanForRuntime(
-	params: AiChatParams,
-	target: GodotTemplateTarget,
-	executionProfile: WorkflowExecutionProfileId
-): Promise<WorkflowPlan | null> {
-	return createGodotTemplateWorkflowPlan(params, target, { isGodotProject: executionProfile === "godot" });
 }
 
 async function resolveWorkflowExecutionProfileForWorkspace(workspace: WorkspaceConfig | undefined): Promise<WorkflowExecutionProfileId> {
@@ -729,7 +805,10 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 					item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
 				));
 			if (hasSuccessfulMutation && (risk === "write" || risk === "destructive")) {
-				throw new LightweightActionScopeExceededError("write_scope_exceeded");
+				throw new LightweightActionScopeExceededError(
+					"write_scope_exceeded",
+					createPendingWriteExecutionDecision(event, params.session.activeWorkspace?.id)
+				);
 			}
 		}
 		if (lightweightActionState !== undefined) {
@@ -1051,7 +1130,7 @@ function collectToolAssistedCompletionStatus(
 	lane: AgentRunLane,
 	outputTarget: WorkflowRouteDecision["outputTarget"]
 ): {
-	resultStatus: "completed" | "completed_with_warnings";
+	resultStatus: "completed" | "completed_with_warnings" | "blocked";
 	verificationStatus?: "verified" | "unverified" | undefined;
 	warnings: string[];
 } {
@@ -1059,6 +1138,17 @@ function collectToolAssistedCompletionStatus(
 		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const evidence: readonly ExecutionEvidence[] = getAgentRun(session, runId)?.checkpoint.evidence ?? [];
+	const unresolvedFailures: ExecutionEvidence[] = collectUnresolvedExecutionFailures(evidence);
+	const environmentWarnings: string[] = evidence
+		.filter((item: ExecutionEvidence): boolean => item.status === "failed" && item.failure?.category === "environment")
+		.map(formatExecutionFailure);
+	if (unresolvedFailures.length > 0) {
+		return {
+			resultStatus: "blocked",
+			verificationStatus: "unverified",
+			warnings: unresolvedFailures.map(formatExecutionFailure)
+		};
+	}
 	const changedWorkspace: boolean = evidence.some((item: ExecutionEvidence): boolean => (
 		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
 	));
@@ -1066,10 +1156,12 @@ function collectToolAssistedCompletionStatus(
 		return outputTarget === "workspace"
 			? {
 				resultStatus: "completed_with_warnings",
-				verificationStatus: undefined,
-				warnings: ["The workspace output target completed without a successful write or destructive tool result; no workspace change was recorded."]
+				verificationStatus: "unverified",
+				warnings: [...environmentWarnings, "The workspace output target completed without a successful write or destructive tool result; no workspace change was recorded."]
 			}
-			: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
+			: environmentWarnings.length > 0
+				? { resultStatus: "completed_with_warnings", verificationStatus: "unverified", warnings: environmentWarnings }
+				: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const verified: boolean = evidence.some((item: ExecutionEvidence): boolean => (
 		item.status === "succeeded"
@@ -1077,11 +1169,13 @@ function collectToolAssistedCompletionStatus(
 			&& item.validationStatus !== "not_applicable"
 	));
 	return verified
-		? { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
+		? environmentWarnings.length > 0
+			? { resultStatus: "completed_with_warnings", verificationStatus: "verified", warnings: environmentWarnings }
+			: { resultStatus: "completed", verificationStatus: "verified", warnings: [] }
 		: {
 			resultStatus: "completed_with_warnings",
 			verificationStatus: "unverified",
-			warnings: ["The approved change completed without a successful verification step."]
+			warnings: [...environmentWarnings, "The approved change completed without a successful verification step."]
 		};
 }
 
@@ -1090,7 +1184,7 @@ async function completeHiddenAnswerExecution(
 	chatParams: AiChatParams,
 	text: string,
 	completionStatus: {
-		resultStatus: "completed" | "completed_with_warnings";
+		resultStatus: "completed" | "completed_with_warnings" | "blocked";
 		verificationStatus?: "verified" | "unverified" | undefined;
 		warnings: string[];
 		failureMessage?: string | undefined;
@@ -1098,6 +1192,11 @@ async function completeHiddenAnswerExecution(
 ): Promise<void> {
 	const runId: string = params.requestId;
 	const stepRunId: string = `${params.requestId}:answer`;
+	const effectiveText: string = text.trim().length > 0
+		? text
+		: completionStatus.resultStatus === "blocked"
+			? `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`
+			: text;
 	if (getAgentRun(params.session, runId) !== undefined) {
 		updateAgentRun(params.socket, params.session, runId, "finalizing", {
 			verificationStatus: completionStatus.verificationStatus ?? null,
@@ -1108,7 +1207,7 @@ async function completeHiddenAnswerExecution(
 		params.session,
 		params.history,
 		chatParams.message,
-		text,
+		effectiveText,
 		params.requestId,
 		params.userCreatedAt,
 		undefined,
@@ -1118,7 +1217,7 @@ async function completeHiddenAnswerExecution(
 	sendSessionEvent(params.socket, params.requestId, params.session, "agent.message.done", {
 		runId,
 		stepRunId,
-		text,
+		text: effectiveText,
 		context: {
 			historyMessagesStored: params.session.messages.length,
 			historyBudgetTokens: params.historyBudgetTokens,
@@ -1129,6 +1228,7 @@ async function completeHiddenAnswerExecution(
 		updateAgentRun(params.socket, params.session, runId, "completed", {
 			terminal: {
 				resultStatus: completionStatus.resultStatus,
+				message: completionStatus.resultStatus === "blocked" ? completionStatus.warnings[0] : undefined,
 				completedAt: new Date().toISOString()
 			},
 			verificationStatus: completionStatus.verificationStatus ?? null,
@@ -1140,7 +1240,7 @@ async function completeHiddenAnswerExecution(
 		id: params.requestId,
 		ok: true,
 		result: {
-			text,
+			text: effectiveText,
 			context: {
 				historyMessagesStored: params.session.messages.length,
 				historyBudgetTokens: params.historyBudgetTokens,
@@ -1217,17 +1317,27 @@ async function runHiddenAnswerExecutionWithEscalation(
 		escalationContext,
 		params.abortSignal,
 		{ activeWorkspace: params.session.activeWorkspace },
-		createGodotTemplateTarget(escalationDecision),
 		escalationDecision
 	);
 	if (workflowPlan === null) {
 		workflowPlan = planWorkflow(
 			workflowParams,
-			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace)
+			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace),
+			createExecutionDecisionCompletionContract(escalationDecision)
 		);
 	}
 	if (workflowPlan === null) {
-		throw new Error("轻量操作超出范围，但无法创建升级后的 Workflow。");
+		await completeHiddenAnswerExecution(
+			params,
+			params.chatParams,
+			"The approved changes already completed in this run were preserved. The remaining operation was not executed because the provider did not return a structured plan and no exact pending target was available for a safe fallback.",
+			{
+				resultStatus: "completed_with_warnings",
+				verificationStatus: "unverified",
+				warnings: ["The remaining mutation could not be bound to an exact structured target, so it was safely left pending."]
+			}
+		);
+		return;
 	}
 	if (!params.webSearchEnabled) {
 		workflowPlan = filterWebSearchFromWorkflowPlan(workflowPlan);
@@ -1285,13 +1395,23 @@ export async function escalatePendingContinuationToWorkflow(params: {
 		{ activeWorkspace: params.session.activeWorkspace }
 	);
 	if (plan === null) {
-		plan = planWorkflow(
-			workflowParams,
-			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace)
+		await sendContinuedAgentResult(
+			params.socket,
+			requestId,
+			params.session,
+			params.mcpHost,
+			{
+				status: "completed",
+				text: "The approved changes already completed in this run were preserved. The remaining operation was not executed because no exact structured target was available after planning failed."
+			},
+			{
+				...params.pendingContinuation,
+				executionControl: undefined,
+				chatCompletion: undefined,
+				lightweightActionState: undefined
+			}
 		);
-	}
-	if (plan === null) {
-		throw new Error("The lightweight run exceeded its safe scope, but no executable Workflow could be created.");
+		return;
 	}
 	const currentRun: AgentRunState | undefined = getAgentRun(params.session, requestId);
 	if (currentRun !== undefined) {
@@ -2687,7 +2807,33 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 								abortController.signal
 							), abortController.signal);
 						} else {
-							throw new Error("Workflow routing requires an executable safe fallback plan.");
+							const fallbackRoute: WorkflowRouteDecision = {
+								...routeDecision,
+								intent: "answer",
+								scope: "bounded",
+								lane: "tool_assisted",
+								reason: "The planner did not return a structured plan; continue with bounded tool-assisted execution."
+							};
+							await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
+								socket,
+								requestId: request.id,
+								session,
+								mcpHost,
+								options,
+								chatParams: effectiveParams,
+								routeDecision: fallbackRoute,
+								history,
+								historyBudgetTokens,
+								fullSystemPrompt,
+								allowedToolNames: mutationToolNames,
+								mutationToolNames,
+								approvalGateway: session.approvalGateway,
+								userCreatedAt: turnStartedAt,
+								abortSignal: abortController.signal,
+								planningContext,
+								guidePromptSection,
+								webSearchEnabled
+							}), abortController.signal);
 						}
 					} else {
 						throwIfAborted(abortController.signal);

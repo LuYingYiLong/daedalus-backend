@@ -85,8 +85,7 @@ import {
 	applyDeterministicVerificationGate,
 	applyToolEventToWorkflowObservations,
 	createWorkflowPhaseOutcome,
-	createWorkflowPhaseRunId,
-	findBlockingOutcomeBeforeSummarize
+	createWorkflowPhaseRunId
 } from "../workflow/outcome.js";
 import {
 	appendPhaseOutput,

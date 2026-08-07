@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { createToolFailure, StructuredToolError } from "../../../tools/tool-failure.js";
 import { randomUUID } from "node:crypto";
 import type { ServerEvent } from "../../../protocol/types.js";
 import { getCurrentMcpEditorInstanceId, getCurrentMcpWorkspaceId } from "../../request-context.js";
@@ -149,10 +150,9 @@ export class GodotEditorBridge {
 			return true;
 		}
 
-		const message: string = typeof error === "string" && error.length > 0
-			? error
-			: "Godot editor tool failed";
-		pending.reject(new Error(message));
+		pending.reject(new StructuredToolError(createToolFailure(
+			error ?? "Godot editor tool failed"
+		)));
 		return true;
 	}
 

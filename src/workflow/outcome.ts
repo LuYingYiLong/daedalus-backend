@@ -1,13 +1,15 @@
 import type { ToolEvent } from "../tools/tool-dispatcher.js";
 import { getEffectiveToolPolicy, getToolPolicy } from "../tools/tool-policy.js";
 import { isValidWorkflowCompletionTarget, normalizeWorkspaceRelativeArtifactPath } from "./completion-contract.js";
-import { getWorkflowToolSemantics, type WorkflowValidationCapability } from "./tool-semantics.js";
+import { getWorkflowToolSemantics, type WorkflowTargetKind, type WorkflowValidationCapability } from "./tool-semantics.js";
+import type { WorkspaceFileRef } from "../workspace/source-context.js";
 import type {
 	WorkflowCompletionTarget,
 	WorkflowFailedCheck,
 	WorkflowPhase,
 	WorkflowPhaseOutput,
 	WorkflowPhaseOutcomeStatus,
+	WorkflowPlan,
 	WorkflowToolObservation
 } from "./types.js";
 
@@ -20,6 +22,18 @@ const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
 	"diagnostics_unavailable",
 	"workspace_unavailable"
 ]);
+const GODOT_INPUT_ACTION_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"mcp_godot_propose_set_input_action",
+	"mcp_godot_set_input_action",
+	"mcp_godot_propose_unset_input_action",
+	"mcp_godot_unset_input_action"
+]);
+const GODOT_AUTOLOAD_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"mcp_godot_propose_set_autoload",
+	"mcp_godot_set_autoload",
+	"mcp_godot_propose_unset_autoload",
+	"mcp_godot_unset_autoload"
+]);
 
 export function createWorkflowPhaseRunId(phaseId: string): string {
 	return `phase-run-${phaseId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -27,7 +41,7 @@ export function createWorkflowPhaseRunId(phaseId: string): string {
 
 function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 	const summary: Record<string, unknown> = {};
-	for (const key of ["sourceFolderId", "relativePath", "resourcePath", "scenePath", "scriptPath", "path", "presetName", "operationJson", "key"]) {
+	for (const key of ["sourceFolderId", "relativePath", "resourcePath", "scenePath", "scriptPath", "path", "presetName", "operationJson", "key", "action", "name"]) {
 		const value: unknown = args[key];
 		if (typeof value === "string") {
 			summary[key] = value.length > 240 ? `${value.slice(0, 240)}...` : value;
@@ -44,7 +58,7 @@ function summarizeArgs(args: Record<string, unknown>): Record<string, unknown> {
 
 function parsedResultFromToolEvent(event: Extract<ToolEvent, { type: "tool.result" }>): Record<string, unknown> {
 	const parsedResult: Record<string, unknown> = {};
-	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "failureCode", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs", "artifactFileRefs", "sourceFolderId"]) {
+	for (const key of ["ok", "exitCode", "diagnosticsCount", "diagnosticsErrorCount", "validationStatus", "summary", "failedChecks", "failureCode", "failure", "environmentIssue", "applicabilityCode", "notApplicableReason", "artifactRefs", "artifactFileRefs", "sourceFolderId"]) {
 		const value: unknown = event[key as keyof typeof event];
 		if (value !== undefined) {
 			parsedResult[key] = value;
@@ -75,6 +89,8 @@ function upsertObservation(
 		artifactRefs: observation.artifactRefs ?? nextObservations[existingIndex]?.artifactRefs,
 		artifactFileRefs: observation.artifactFileRefs ?? nextObservations[existingIndex]?.artifactFileRefs,
 		sourceFolderId: observation.sourceFolderId ?? nextObservations[existingIndex]?.sourceFolderId,
+		executionRole: observation.executionRole ?? nextObservations[existingIndex]?.executionRole,
+		validationScope: observation.validationScope ?? nextObservations[existingIndex]?.validationScope,
 		fileEditFingerprints: observation.fileEditFingerprints ?? nextObservations[existingIndex]?.fileEditFingerprints
 	};
 	return nextObservations;
@@ -93,10 +109,12 @@ export function applyToolEventToWorkflowObservations(
 			risk,
 			status: "called",
 			argsSummary: summarizeArgs(event.args),
-			artifactRefs: [],
+			artifactRefs: semantics.artifactRefs === undefined ? [] : [...semantics.artifactRefs],
 			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined,
 			validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
-			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies]
+			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies],
+			executionRole: semantics.executionRole,
+			validationScope: semantics.validationScope
 		});
 	}
 
@@ -109,10 +127,12 @@ export function applyToolEventToWorkflowObservations(
 			risk,
 			status: "approval_required",
 			argsSummary: summarizeArgs(event.args),
-			artifactRefs: [],
+			artifactRefs: semantics.artifactRefs === undefined ? [] : [...semantics.artifactRefs],
 			sourceFolderId: typeof event.args.sourceFolderId === "string" ? event.args.sourceFolderId : undefined,
 			validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
-			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies]
+			repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies],
+			executionRole: semantics.executionRole,
+			validationScope: semantics.validationScope
 		});
 	}
 
@@ -124,8 +144,11 @@ export function applyToolEventToWorkflowObservations(
 		const validationStatus: unknown = parsedResult.validationStatus;
 		const ok: unknown = parsedResult.ok;
 		const failed: boolean = validationStatus !== "not_applicable" && (validationStatus === "failed" || ok === false);
-		const artifactRefs: string[] | undefined = Array.isArray(event.artifactRefs)
+		const resultArtifactRefs: string[] = Array.isArray(event.artifactRefs)
 			? event.artifactRefs.map((value: unknown): string => String(value))
+			: [];
+		const artifactRefs: string[] | undefined = resultArtifactRefs.length > 0
+			? resultArtifactRefs
 			: previous?.artifactRefs;
 		const artifactFileRefs = Array.isArray(event.artifactFileRefs) ? event.artifactFileRefs : previous?.artifactFileRefs;
 		const observedSourceFolderId: string | undefined = event.sourceFolderId ?? previous?.sourceFolderId;
@@ -147,7 +170,10 @@ export function applyToolEventToWorkflowObservations(
 			fileEditFingerprints,
 			validationCapabilities: semantics.validationCapabilities === undefined ? previous?.validationCapabilities : [...semantics.validationCapabilities],
 			repairFamilies: semantics.repairFamilies === undefined ? previous?.repairFamilies : [...semantics.repairFamilies],
-			failureCode: typeof parsedResult.failureCode === "string" ? parsedResult.failureCode : undefined
+			executionRole: semantics.executionRole ?? previous?.executionRole,
+			validationScope: semantics.validationScope ?? previous?.validationScope,
+			failureCode: typeof parsedResult.failureCode === "string" ? parsedResult.failureCode : undefined,
+			failure: event.failure
 		});
 	}
 
@@ -161,9 +187,22 @@ export function applyToolEventToWorkflowObservations(
 			status: "failed",
 			argsSummary: previous?.argsSummary,
 			error: event.message,
-				artifactRefs: previous?.artifactRefs,
-				artifactFileRefs: previous?.artifactFileRefs,
-			sourceFolderId: previous?.sourceFolderId
+			artifactRefs: previous?.artifactRefs,
+			artifactFileRefs: previous?.artifactFileRefs,
+			sourceFolderId: previous?.sourceFolderId,
+			executionRole: previous?.executionRole,
+			validationScope: previous?.validationScope,
+			failureCode: event.failure?.code,
+			failure: event.failure,
+			parsedResult: event.failure === undefined ? undefined : {
+				ok: false,
+				validationStatus: event.failure.category === "environment" ? "not_applicable" : "failed",
+				environmentIssue: event.failure.category === "environment" || undefined,
+				failureCode: event.failure.code,
+				summary: event.failure.message,
+				failedChecks: event.failure.category === "environment" ? undefined : [event.failure.message],
+				failure: event.failure
+			}
 		});
 	}
 
@@ -185,6 +224,9 @@ function isSuccessfulVerificationObservation(phase: WorkflowPhase, observation: 
 }
 
 function isEnvironmentIssueObservation(observation: WorkflowToolObservation): boolean {
+	if (observation.failure?.category === "environment") {
+		return true;
+	}
 	if (observation.parsedResult?.environmentIssue === true || observation.parsedResult?.validationStatus === "not_applicable") {
 		return true;
 	}
@@ -200,12 +242,13 @@ function collectEnvironmentWarnings(observations: WorkflowToolObservation[]): st
 	return uniqueStrings(observations
 		.filter(isEnvironmentIssueObservation)
 		.map((observation: WorkflowToolObservation): string => {
-			const applicabilityCode: string = String(observation.parsedResult?.applicabilityCode ?? "");
+			const applicabilityCode: string = observation.failure?.code
+				?? String(observation.parsedResult?.applicabilityCode ?? "");
 			const notApplicableReason: string = String(observation.parsedResult?.notApplicableReason ?? "");
-			const reason: string = notApplicableReason.length > 0
+			const reason: string = observation.failure?.message ?? (notApplicableReason.length > 0
 				? notApplicableReason
 				: observation.error
-					?? (String(observation.parsedResult?.summary ?? "") || `${observation.toolName} verification environment is unavailable`);
+					?? (String(observation.parsedResult?.summary ?? "") || `${observation.toolName} verification environment is unavailable`));
 			return applicabilityCode.length > 0 ? `[${applicabilityCode}] ${reason}` : reason;
 		}))
 		.map((warning: string): string => warning.length > 0
@@ -223,14 +266,83 @@ function hasSuccessfulMutationObservation(observations: WorkflowToolObservation[
 	));
 }
 
+function scopedArtifactKey(sourceFolderId: string | undefined, artifact: string): string {
+	return `${sourceFolderId ?? ""}:${normalizeTargetValue(artifact)}`;
+}
+
+function collectWritePhaseTargetKeys(
+	phase: WorkflowPhase,
+	observations: WorkflowToolObservation[]
+): Set<string> {
+	const targets: Set<string> = new Set();
+	for (const observation of observations) {
+		if (!isSuccessfulMutation(observation)) continue;
+		for (const artifact of observation.artifactRefs ?? []) {
+			targets.add(scopedArtifactKey(observation.sourceFolderId, artifact));
+		}
+	}
+	for (const target of phase.completionContract?.targets ?? []) {
+		const artifact: string = target.kind === "project_setting" ? target.key : target.path;
+		targets.add(scopedArtifactKey(target.sourceFolderId ?? phase.sourceFolderId, artifact));
+	}
+	return targets;
+}
+
+function verificationTargetsCurrentWrite(
+	phase: WorkflowPhase,
+	observation: WorkflowToolObservation,
+	observations: WorkflowToolObservation[]
+): boolean {
+	if (observation.validationScope !== "artifacts" || (observation.artifactRefs?.length ?? 0) === 0) {
+		return false;
+	}
+	const writeTargets: Set<string> = collectWritePhaseTargetKeys(phase, observations);
+	return observation.artifactRefs?.some((artifact: string): boolean => (
+		writeTargets.has(scopedArtifactKey(observation.sourceFolderId ?? phase.sourceFolderId, artifact))
+	)) === true;
+}
+
 function isNonMutationFailureInCompletedWritePhase(
 	phase: WorkflowPhase,
 	observation: WorkflowToolObservation,
 	observations: WorkflowToolObservation[]
 ): boolean {
-	return phase.toolGroup === "write"
-		&& hasSuccessfulMutationObservation(observations)
-		&& (observation.risk === "read" || observation.risk === "verify" || observation.risk === "propose");
+	if (phase.toolGroup !== "write" || !hasSuccessfulMutationObservation(observations)) {
+		return false;
+	}
+	if (observation.risk === "read" || observation.risk === "verify" || observation.risk === "propose") {
+		return true;
+	}
+	return observation.executionRole === "verification"
+		&& !verificationTargetsCurrentWrite(phase, observation, observations);
+}
+
+function collectNonBlockingWriteWarnings(
+	phase: WorkflowPhase,
+	observations: WorkflowToolObservation[]
+): string[] {
+	const warnings: string[] = [];
+	for (const observation of observations) {
+		if (
+			(observation.status !== "failed" && observation.error === undefined)
+			|| !isNonMutationFailureInCompletedWritePhase(phase, observation, observations)
+		) {
+			continue;
+		}
+		if (observation.error !== undefined) {
+			warnings.push(`[non_blocking_verification] ${observation.error}`);
+			continue;
+		}
+		const parsedFailedChecks: unknown = observation.parsedResult?.failedChecks;
+		if (Array.isArray(parsedFailedChecks) && parsedFailedChecks.length > 0) {
+			for (const failedCheck of parsedFailedChecks) {
+				warnings.push(`[non_blocking_verification] ${String(failedCheck)}`);
+			}
+			continue;
+		}
+		warnings.push(`[non_blocking_verification] ${String(observation.parsedResult?.summary ?? `${observation.toolName} failed`)}`);
+	}
+	return uniqueStrings(warnings);
 }
 
 function normalizedRecord(value: Record<string, unknown> | undefined): string {
@@ -247,11 +359,25 @@ function normalizedRecord(value: Record<string, unknown> | undefined): string {
 
 function hasArtifactOverlap(left: readonly string[] | undefined, right: readonly string[] | undefined): boolean {
 	if (left === undefined || right === undefined || left.length === 0 || right.length === 0) {
-		return true;
+		return false;
 	}
 
-	const rightSet: Set<string> = new Set(right);
-	return left.some((artifact: string): boolean => rightSet.has(artifact));
+	const rightSet: Set<string> = new Set(right.map((artifact: string): string => normalizeTargetValue(artifact)));
+	return left.some((artifact: string): boolean => rightSet.has(normalizeTargetValue(artifact)));
+}
+
+function hasFileRefOverlap(
+	left: readonly WorkspaceFileRef[] | undefined,
+	right: readonly WorkspaceFileRef[] | undefined
+): boolean {
+	if (left === undefined || right === undefined || left.length === 0 || right.length === 0) {
+		return false;
+	}
+	return left.some((leftRef: WorkspaceFileRef): boolean => right.some((rightRef: WorkspaceFileRef): boolean => (
+		leftRef.workspaceId === rightRef.workspaceId
+		&& leftRef.sourceFolderId === rightRef.sourceFolderId
+		&& normalizeTargetValue(leftRef.relativePath) === normalizeTargetValue(rightRef.relativePath)
+	)));
 }
 
 function matchesRetryTarget(failedObservation: WorkflowToolObservation, successObservation: WorkflowToolObservation): boolean {
@@ -260,9 +386,16 @@ function matchesRetryTarget(failedObservation: WorkflowToolObservation, successO
 		&& failedObservation.sourceFolderId !== successObservation.sourceFolderId) {
 		return false;
 	}
+	if (hasFileRefOverlap(failedObservation.artifactFileRefs, successObservation.artifactFileRefs)) {
+		return true;
+	}
+	if (hasArtifactOverlap(failedObservation.artifactRefs, successObservation.artifactRefs)) {
+		return true;
+	}
+	// Legacy observations without structured targets can only be resolved by an
+	// exact retry. This fallback never grants repair authority.
 	return failedObservation.toolName === successObservation.toolName
-		&& normalizedRecord(failedObservation.argsSummary) === normalizedRecord(successObservation.argsSummary)
-		&& hasArtifactOverlap(failedObservation.artifactRefs, successObservation.artifactRefs);
+		&& normalizedRecord(failedObservation.argsSummary) === normalizedRecord(successObservation.argsSummary);
 }
 
 function isResolvedByLaterSuccess(
@@ -311,24 +444,35 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 			continue;
 		}
 
-		if (observation.error !== undefined) {
-			if (isEnvironmentIssueObservation(observation)) {
-				continue;
-			}
+		const parsedResult: Record<string, unknown> | undefined = observation.parsedResult;
+		if (isEnvironmentIssueObservation(observation)) {
+			continue;
+		}
+		if (observation.failure !== undefined) {
 			failedChecks.push({
-				code: "tool_error",
-				message: observation.error,
+				code: observation.failure.code,
+				failureCode: observation.failure.code,
+				message: observation.failure.message,
+				toolCallId: observation.toolCallId,
+				toolName: observation.toolName,
+				artifact: observation.failure.artifactRefs[0] ?? observation.artifactRefs?.[0],
+				sourceFolderId: observation.failure.sourceFolderId ?? observation.sourceFolderId,
+				artifactFileRef: observation.failure.artifactFileRefs?.[0] ?? observation.artifactFileRefs?.[0],
+				severity: "error"
+			});
+			continue;
+		}
+		if (parsedResult === undefined) {
+			if (observation.error !== undefined) {
+				failedChecks.push({
+					code: "tool_execution_failed",
+					failureCode: "tool_execution_failed",
+					message: observation.error,
 					toolCallId: observation.toolCallId,
 					toolName: observation.toolName,
 					sourceFolderId: observation.sourceFolderId
-			});
-		}
-
-		const parsedResult: Record<string, unknown> | undefined = observation.parsedResult;
-		if (parsedResult === undefined) {
-			continue;
-		}
-		if (isEnvironmentIssueObservation(observation)) {
+				});
+			}
 			continue;
 		}
 
@@ -579,9 +723,9 @@ export function createWorkflowPhaseOutcome(
 			: summaries[0])
 		: undefined;
 	const trimmedAgentText: string = agentResultText.trim();
-	const environmentWarnings: string[] = phase.toolGroup === "verify"
-		? collectEnvironmentWarnings(observations)
-		: [];
+	const environmentWarnings: string[] = collectEnvironmentWarnings(observations);
+	const nonBlockingWriteWarnings: string[] = collectNonBlockingWriteWarnings(phase, observations);
+	const outcomeWarnings: string[] = uniqueStrings([...environmentWarnings, ...nonBlockingWriteWarnings]);
 	const summary: string = blockedReason
 		?? (status === "completed" || status === "approval_required" ? undefined : summarizeFailedChecks(failedChecks))
 		?? summaries[0]
@@ -608,9 +752,9 @@ export function createWorkflowPhaseOutcome(
 			.flatMap((observation: WorkflowToolObservation): string[] => observation.artifactRefs ?? [])),
 		toolObservations: observations.map((observation: WorkflowToolObservation): WorkflowToolObservation => ({ ...observation })),
 		verificationStatus: phase.toolGroup === "verify"
-			? environmentWarnings.length > 0 ? "unverified" : "verified"
+			? status === "completed" && environmentWarnings.length === 0 ? "verified" : "unverified"
 			: undefined,
-		warnings: environmentWarnings.length > 0 ? environmentWarnings : undefined,
+		warnings: outcomeWarnings.length > 0 ? outcomeWarnings : undefined,
 		text: agentResultText,
 		sourcePhaseId: phase.repairOf,
 		blockedReason
@@ -634,6 +778,160 @@ function createGateFailure(code: string, message: string): WorkflowFailedCheck {
 		code,
 		message,
 		severity: "error"
+	};
+}
+function completionTargetIdentity(target: WorkflowCompletionTarget): string {
+	if (target.kind === "project_setting") {
+		return `setting:${target.sourceFolderId ?? ""}:${normalizeTargetValue(target.key)}`;
+	}
+	if (target.fileRef !== undefined) {
+		return `file:${target.fileRef.workspaceId}:${target.fileRef.sourceFolderId}:${normalizeTargetValue(target.fileRef.relativePath)}`;
+	}
+	return `artifact:${target.sourceFolderId ?? ""}:${normalizeTargetValue(target.path)}`;
+}
+
+function selectObservationTargetKind(
+	observation: WorkflowToolObservation
+): Exclude<WorkflowTargetKind, "project_setting"> | undefined {
+	const families = observation.repairFamilies ?? [];
+	if (families.includes("godot_scene")) return "godot_scene";
+	if (families.includes("godot_script")) return "godot_script";
+	if (families.includes("workspace_file")) return "workspace_file";
+	return undefined;
+}
+
+function getProjectSettingObservationKey(observation: WorkflowToolObservation): string | undefined {
+	const explicitKey: unknown = observation.argsSummary?.key;
+	if (typeof explicitKey === "string") return explicitKey;
+	const action: unknown = observation.argsSummary?.action;
+	if (typeof action === "string" && GODOT_INPUT_ACTION_TOOL_NAMES.has(observation.toolName)) {
+		return `input/${action}`;
+	}
+	const name: unknown = observation.argsSummary?.name;
+	if (typeof name === "string" && GODOT_AUTOLOAD_TOOL_NAMES.has(observation.toolName)) {
+		return `autoload/${name}`;
+	}
+	return undefined;
+}
+
+function collectRegisteredMutationTargets(
+	plan: WorkflowPlan,
+	previousOutputs: readonly WorkflowPhaseOutput[]
+): WorkflowCompletionTarget[] {
+	const targets: WorkflowCompletionTarget[] = plan.phases
+		.filter((phase: WorkflowPhase): boolean => phase.toolGroup === "write")
+		.flatMap((phase: WorkflowPhase): WorkflowCompletionTarget[] => phase.completionContract?.targets ?? [])
+		.filter(isValidWorkflowCompletionTarget)
+		.map((target: WorkflowCompletionTarget): WorkflowCompletionTarget => ({ ...target }));
+	for (const observation of previousOutputs.flatMap((output: WorkflowPhaseOutput): WorkflowToolObservation[] => output.toolObservations)) {
+		if (!isSuccessfulMutation(observation)) continue;
+		const targetKind = selectObservationTargetKind(observation);
+		for (const fileRef of observation.artifactFileRefs ?? []) {
+			const path: string | undefined = normalizeWorkspaceRelativeArtifactPath(fileRef.relativePath);
+			if (path === undefined || targetKind === undefined) continue;
+			targets.push({
+				kind: "artifact",
+				path,
+				targetKind,
+				sourceFolderId: fileRef.sourceFolderId,
+				fileRef: { ...fileRef, relativePath: path }
+			});
+		}
+		if ((observation.artifactFileRefs?.length ?? 0) > 0 || targetKind === undefined) continue;
+		for (const artifact of observation.artifactRefs ?? []) {
+			const path: string | undefined = normalizeWorkspaceRelativeArtifactPath(artifact);
+			if (path === undefined) continue;
+			targets.push({ kind: "artifact", path, targetKind, sourceFolderId: observation.sourceFolderId });
+		}
+		if (observation.repairFamilies?.includes("project_setting") === true) {
+			const key: string | undefined = getProjectSettingObservationKey(observation);
+			if (key !== undefined) {
+				targets.push({ kind: "project_setting", key, sourceFolderId: observation.sourceFolderId });
+			}
+		}
+	}
+	const uniqueTargets: Map<string, WorkflowCompletionTarget> = new Map();
+	for (const target of targets) {
+		if (!isValidWorkflowCompletionTarget(target)) continue;
+		uniqueTargets.set(completionTargetIdentity(target), target);
+	}
+	return [...uniqueTargets.values()];
+}
+
+function failedCheckMatchesTarget(check: WorkflowFailedCheck, target: WorkflowCompletionTarget): boolean {
+	if (target.kind === "project_setting") {
+		return check.artifact !== undefined
+			&& normalizeTargetValue(check.artifact) === normalizeTargetValue(target.key)
+			&& (target.sourceFolderId === undefined || check.sourceFolderId === target.sourceFolderId);
+	}
+	if (check.artifactFileRef !== undefined && target.fileRef !== undefined) {
+		return check.artifactFileRef.workspaceId === target.fileRef.workspaceId
+			&& check.artifactFileRef.sourceFolderId === target.fileRef.sourceFolderId
+			&& normalizeTargetValue(check.artifactFileRef.relativePath) === normalizeTargetValue(target.fileRef.relativePath);
+	}
+	return check.artifact !== undefined
+		&& normalizeTargetValue(check.artifact) === normalizeTargetValue(target.path)
+		&& (target.sourceFolderId === undefined || check.sourceFolderId === target.sourceFolderId);
+}
+
+/**
+ * Verification may only trigger repair for an exact target established by a
+ * completion contract or a successful write observation. Auxiliary probes and
+ * guessed paths remain visible as warnings but never gain mutation authority.
+ */
+export function scopeVerificationOutcomeToRegisteredTargets(
+	plan: WorkflowPlan,
+	previousOutputs: readonly WorkflowPhaseOutput[],
+	outcome: WorkflowPhaseOutput
+): WorkflowPhaseOutput {
+	const phase: WorkflowPhase | undefined = plan.phases.find((item: WorkflowPhase): boolean => item.id === outcome.phaseId);
+	if (phase?.toolGroup !== "verify") return outcome;
+	const registeredTargets: WorkflowCompletionTarget[] = collectRegisteredMutationTargets(plan, previousOutputs);
+	const actionableChecks: WorkflowFailedCheck[] = [];
+	const unscopedChecks: WorkflowFailedCheck[] = [];
+	for (const check of outcome.failedChecks) {
+		const target: WorkflowCompletionTarget | undefined = registeredTargets.find((candidate: WorkflowCompletionTarget): boolean => (
+			failedCheckMatchesTarget(check, candidate)
+		));
+		if (target === undefined) {
+			unscopedChecks.push(check);
+			continue;
+		}
+		actionableChecks.push({
+			...check,
+			targetKind: target.kind === "project_setting" ? "project_setting" : target.targetKind,
+			sourceFolderId: target.sourceFolderId ?? check.sourceFolderId,
+			artifactFileRef: target.kind === "artifact" ? target.fileRef ?? check.artifactFileRef : check.artifactFileRef
+		});
+	}
+	const warningDetails: string[] = unscopedChecks.map((check: WorkflowFailedCheck): string => (
+		`[${check.failureCode ?? check.code}] ${check.message}`
+	));
+	if (outcome.status === "blocked" && warningDetails.length === 0) {
+		warningDetails.push(outcome.blockedReason ?? outcome.summary);
+	}
+	const warnings: string[] = uniqueStrings([...(outcome.warnings ?? []), ...warningDetails]);
+	if (actionableChecks.length > 0) {
+		return {
+			...outcome,
+			failedChecks: actionableChecks,
+			requiredFixes: createRequiredFixes(actionableChecks),
+			verificationStatus: "unverified",
+			warnings: warnings.length > 0 ? warnings : undefined
+		};
+	}
+	if (unscopedChecks.length === 0 && outcome.status !== "blocked") {
+		return outcome;
+	}
+	return {
+		...outcome,
+		status: "completed",
+		summary: "Verification completed with warnings; no failure was linked to a registered mutation target.",
+		failedChecks: [],
+		requiredFixes: [],
+		verificationStatus: "unverified",
+		warnings: warnings.length > 0 ? warnings : ["Verification did not produce target-scoped evidence."],
+		blockedReason: undefined
 	};
 }
 
@@ -661,23 +959,43 @@ export function applyDeterministicVerificationGate(
 
 	const verificationObservations: WorkflowToolObservation[] = collectVerificationObservations(outcome, previousOutputs);
 	const gateFailures: WorkflowFailedCheck[] = [];
+	const environmentFailures: WorkflowFailedCheck[] = [];
 	for (const requirement of phase.verificationRequirements ?? []) {
-		if (!hasValidationCapability(verificationObservations, requirement, phase.sourceFolderId)) {
-			gateFailures.push(createGateFailure(
-				`${requirement}_required`,
-				`验证阶段未产生所需的结构化验证能力：${requirement}。`
-			));
+		if (hasValidationCapability(verificationObservations, requirement, phase.sourceFolderId)) continue;
+		const unavailableObservation: WorkflowToolObservation | undefined = verificationObservations.find((observation: WorkflowToolObservation): boolean => (
+			isEnvironmentIssueObservation(observation)
+			&& observation.validationCapabilities?.includes(requirement) === true
+			&& (phase.sourceFolderId === undefined || observation.sourceFolderId === undefined || observation.sourceFolderId === phase.sourceFolderId)
+		));
+		const failure: WorkflowFailedCheck = createGateFailure(
+			`${requirement}_required`,
+			`验证阶段未产生所需的结构化验证能力：${requirement}。`
+		);
+		if (unavailableObservation !== undefined) {
+			environmentFailures.push({
+				...failure,
+				code: unavailableObservation.failure?.code ?? "validation_environment_unavailable",
+				failureCode: unavailableObservation.failure?.code ?? "validation_environment_unavailable",
+				message: unavailableObservation.failure?.message
+					?? String(unavailableObservation.parsedResult?.summary ?? failure.message),
+				toolCallId: unavailableObservation.toolCallId,
+				toolName: unavailableObservation.toolName,
+				sourceFolderId: unavailableObservation.sourceFolderId
+			});
+			continue;
 		}
+		gateFailures.push(failure);
 	}
 
-	if (gateFailures.length === 0) {
+	if (gateFailures.length === 0 && environmentFailures.length === 0) {
 		return outcome;
 	}
 
-	const environmentFailures: WorkflowFailedCheck[] = [];
 	const actionableFailures: WorkflowFailedCheck[] = gateFailures;
 	const failedChecks: WorkflowFailedCheck[] = [...outcome.failedChecks, ...actionableFailures];
-	const summary: string = gateFailures.map((failure: WorkflowFailedCheck): string => failure.message).join("\n");
+	const summary: string = [...gateFailures, ...environmentFailures]
+		.map((failure: WorkflowFailedCheck): string => failure.message)
+		.join("\n");
 	if (actionableFailures.length === 0) {
 		return {
 			...outcome,
@@ -708,24 +1026,4 @@ export function applyDeterministicVerificationGate(
 			: outcome.warnings,
 		blockedReason: outcome.blockedReason
 	};
-}
-
-export function findBlockingOutcomeBeforeSummarize(outputs: WorkflowPhaseOutput[], currentPhaseId?: string | undefined): WorkflowPhaseOutput | null {
-	for (let index: number = outputs.length - 1; index >= 0; index -= 1) {
-		const output: WorkflowPhaseOutput | undefined = outputs[index];
-		if (output === undefined) {
-			continue;
-		}
-		if (currentPhaseId !== undefined && output.phaseId === currentPhaseId) {
-			continue;
-		}
-		if (output.status === "completed") {
-			return null;
-		}
-		if (output.status === "needs_fix" || output.status === "blocked" || output.status === "failed" || output.status === "approval_required") {
-			return output;
-		}
-	}
-
-	return null;
 }

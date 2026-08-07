@@ -24,7 +24,12 @@ type HeadlessOperationResult = {
 	stdout: string;
 	stderr: string;
 	parsed: unknown;
+	failure?: unknown;
+	failureCode?: string | undefined;
+	validationStatus?: "passed" | "failed";
 };
+
+const HEADLESS_RESULT_PREFIX: string = "DAEDALUS_RESULT:";
 
 export async function buildGodotHeadlessOperationInvocation(operation: Record<string, unknown>): Promise<{
 	executable: string;
@@ -52,16 +57,39 @@ function parseJsonObjectsFromOutput(output: string): unknown[] {
 	const values: unknown[] = [];
 	for (const line of output.split(/\r?\n/u)) {
 		const trimmedLine: string = line.trim();
-		if (!trimmedLine.startsWith("{") || !trimmedLine.endsWith("}")) {
+		if (!trimmedLine.startsWith(HEADLESS_RESULT_PREFIX)) {
+			continue;
+		}
+		const jsonText: string = trimmedLine.slice(HEADLESS_RESULT_PREFIX.length);
+		if (!jsonText.startsWith("{") || !jsonText.endsWith("}")) {
 			continue;
 		}
 		try {
-			values.push(JSON.parse(trimmedLine));
+			values.push(JSON.parse(jsonText));
 		} catch {
 			continue;
 		}
 	}
 	return values;
+}
+
+function enrichHeadlessResult(
+	base: Omit<HeadlessOperationResult, "parsed" | "failure" | "failureCode" | "validationStatus">,
+	parsed: unknown
+): HeadlessOperationResult {
+	const record: Record<string, unknown> | undefined = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+		? parsed as Record<string, unknown>
+		: undefined;
+	const ok: boolean = record?.ok === true;
+	return {
+		...base,
+		parsed,
+		validationStatus: ok ? "passed" : "failed",
+		failure: record?.failure,
+		failureCode: typeof record?.failureCode === "string"
+			? record.failureCode
+			: typeof record?.code === "string" ? record.code : undefined
+	};
 }
 
 async function toProjectResPath(resourcePath: string): Promise<string> {
@@ -113,7 +141,8 @@ export async function runGodotHeadlessOperation(operation: Record<string, unknow
 			maxBuffer: 2 * 1024 * 1024
 		});
 		const parsedEvents: unknown[] = parseJsonObjectsFromOutput(result.stdout);
-		return {
+		const parsed: unknown = parsedEvents.at(-1) ?? null;
+		return enrichHeadlessResult({
 			ok: parsedEvents.some((event: unknown): boolean =>
 				typeof event === "object" && event !== null && !Array.isArray(event) && (event as Record<string, unknown>).ok === true
 			),
@@ -121,21 +150,33 @@ export async function runGodotHeadlessOperation(operation: Record<string, unknow
 			exitCode: 0,
 			stdout: result.stdout,
 			stderr: result.stderr,
-			parsed: parsedEvents.at(-1) ?? null
-		};
+		}, parsed);
 	} catch (error: unknown) {
-		const execError = error as { code?: number | string | null; stdout?: string; stderr?: string; message?: string };
+		const execError = error as { code?: number | string | null; stdout?: string; stderr?: string; message?: string; killed?: boolean };
 		const stdout: string = execError.stdout ?? "";
 		const stderr: string = execError.stderr ?? execError.message ?? "Godot headless operation failed";
 		const parsedEvents: unknown[] = parseJsonObjectsFromOutput(stdout);
-		return {
+		const unavailable: boolean = execError.code === "ENOENT" || execError.killed === true;
+		const failureCode: string = unavailable ? "godot_runtime_unavailable" : "headless_result_missing";
+		const parsed: unknown = parsedEvents.at(-1) ?? {
+			ok: false,
+			code: failureCode,
+			failureCode,
+			failure: {
+				code: failureCode,
+				category: unavailable ? "environment" : "protocol",
+				message: stderr,
+				retryable: unavailable,
+				artifactRefs: []
+			}
+		};
+		return enrichHeadlessResult({
 			ok: false,
 			operation: operationName,
 			exitCode: typeof execError.code === "number" ? execError.code : null,
 			stdout,
 			stderr,
-			parsed: parsedEvents.at(-1) ?? null
-		};
+		}, parsed);
 	}
 }
 

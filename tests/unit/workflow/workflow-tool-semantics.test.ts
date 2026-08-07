@@ -12,6 +12,26 @@ test("workflow tool semantics use exact terminal preset keys", (): void => {
 	assert.deepEqual(getWorkflowToolSemantics("custom_unknown_tool").repairFamilies, undefined);
 });
 
+test("free terminal verification semantics require an exact single git diff check command", (): void => {
+	assert.deepEqual(
+		getWorkflowToolSemantics("mcp_terminal_run_command", { commandLine: "git diff --check" }),
+		{ executionRole: "verification", validationScope: "workspace" }
+	);
+	assert.deepEqual(
+		getWorkflowToolSemantics("mcp_terminal_run_command", {
+			commandLine: "git diff --check -- scripts/projectile.gd scenes/projectile.tscn",
+			cwd: "."
+		}),
+		{
+			executionRole: "verification",
+			validationScope: "artifacts",
+			artifactRefs: ["scripts/projectile.gd", "scenes/projectile.tscn"]
+		}
+	);
+	assert.deepEqual(getWorkflowToolSemantics("mcp_terminal_run_command", { commandLine: "git status --short" }), {});
+	assert.deepEqual(getWorkflowToolSemantics("mcp_terminal_run_command", { commandLine: "git diff --check && git status" }), {});
+});
+
 test("proposal completion is declared by phase structure, never phase prose", (): void => {
 	const stats = createEmptyWorkflowPhaseToolStats();
 	stats.successfulProposeToolEvents = 1;

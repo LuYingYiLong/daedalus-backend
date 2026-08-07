@@ -136,7 +136,7 @@ test("environment verification failures become warnings", (): void => {
 	assert.match(completion.warnings.join("\n"), /not available/);
 });
 
-test("deterministic verification failures fail the lightweight action", (): void => {
+test("deterministic verification failures gracefully block the lightweight action", (): void => {
 	const state = createLightweightActionState();
 	applyToolEventToLightweightActionState(state, call("write-1", "mcp_workspace_replace_text_in_file", {
 		relativePath: "src/app.ts"
@@ -153,10 +153,10 @@ test("deterministic verification failures fail the lightweight action", (): void
 		failedChecks: ["TS2322 in src/app.ts"]
 	}));
 
-	assert.match(
-		collectLightweightActionCompletionStatus(state).failureMessage ?? "",
-		/TS2322/
-	);
+	const completion = collectLightweightActionCompletionStatus(state);
+	assert.equal(completion.resultStatus, "blocked");
+	assert.equal(completion.failureMessage, undefined);
+	assert.match(completion.warnings.join("\n"), /TS2322/);
 });
 
 test("a later deterministic failure is not hidden by an earlier readback", (): void => {
@@ -183,10 +183,34 @@ test("a later deterministic failure is not hidden by an earlier readback", (): v
 		failedChecks: ["TS1005 in src/app.ts"]
 	}));
 
-	assert.match(
-		collectLightweightActionCompletionStatus(state).failureMessage ?? "",
-		/TS1005/
-	);
+	const completion = collectLightweightActionCompletionStatus(state);
+	assert.equal(completion.resultStatus, "blocked");
+	assert.match(completion.warnings.join("\n"), /TS1005/);
+});
+
+test("an unresolved business write failure is blocked instead of reported as completed", (): void => {
+	const state = createLightweightActionState();
+	applyToolEventToLightweightActionState(state, call("write-1", "mcp_workspace_replace_text_in_file", {
+		relativePath: "src/app.ts"
+	}));
+	applyToolEventToLightweightActionState(state, {
+		type: "tool.error",
+		step: 1,
+		toolCallId: "write-1",
+		toolName: "mcp_workspace_replace_text_in_file",
+		message: "oldText was not found",
+		failure: {
+			code: "old_text_not_found",
+			category: "business",
+			message: "oldText was not found",
+			retryable: true,
+			artifactRefs: ["src/app.ts"]
+		}
+	});
+
+	const completion = collectLightweightActionCompletionStatus(state);
+	assert.equal(completion.resultStatus, "blocked");
+	assert.match(completion.warnings[0] ?? "", /old_text_not_found/);
 });
 
 test("a third automatic write escalates the lightweight action", (): void => {

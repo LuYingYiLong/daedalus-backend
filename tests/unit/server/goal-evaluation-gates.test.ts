@@ -29,6 +29,7 @@ function completedRun(params: {
 	evidence: ExecutionEvidence[];
 	lastWriteAt?: string;
 	executionDecision?: AgentRunState["executionDecision"];
+	lane?: AgentRunState["lane"];
 }): AgentRunState {
 	const now = `2026-08-01T00:00:0${params.cycle}.000Z`;
 	return {
@@ -39,6 +40,7 @@ function completedRun(params: {
 			goalId: "goal-test",
 			goalCycle: params.cycle,
 			intent: params.intent,
+			lane: params.lane,
 			now
 		}),
 		stage: "completed",
@@ -80,6 +82,7 @@ test("Goal completion accepts a write and its later verification from separate r
 			cycle: 2,
 			intent: "inspect",
 			verificationStatus: "verified",
+			lane: "workflow",
 			evidence: [evidence("verify-call", "verify", verifyAt, "passed")]
 		})
 	];
@@ -104,6 +107,7 @@ test("Goal completion rejects verification that predates the latest write", () =
 			cycle: 2,
 			intent: "mutate",
 			verificationStatus: "unverified",
+			lane: "workflow",
 			evidence: [evidence("write-call", "write", writeAt)],
 			lastWriteAt: writeAt
 		})
@@ -112,6 +116,22 @@ test("Goal completion rejects verification that predates the latest write", () =
 	const result = enforceGoalEvaluationGates(achieved("write-call", "verify-call"), runs);
 	assert.equal(result.disposition, "continue");
 	assert.match(result.unmetCriteria.join(" "), /after the final write/i);
+});
+
+test("free Agent Loop Goals do not get a synthetic verify phase after a completed write", () => {
+	const writeAt = "2026-08-01T00:00:02.000Z";
+	const run = completedRun({
+		runId: "run-agent-loop-write",
+		cycle: 1,
+		intent: "mutate",
+		lane: "agent_loop",
+		verificationStatus: "unverified",
+		evidence: [evidence("write-call", "write", writeAt)],
+		lastWriteAt: writeAt
+	});
+
+	const result = enforceGoalEvaluationGates(achieved("write-call"), [run]);
+	assert.equal(result.disposition, "achieved");
 });
 
 test("Goal completion rejects evidence ids that do not belong to any linked run", () => {

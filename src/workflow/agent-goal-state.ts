@@ -66,6 +66,8 @@ export type AgentGoalState = {
 		provider: string;
 		model: string;
 		reasoningEffort: string | null;
+		/** Retained so a paused Goal keeps the user's verification preference. */
+		verificationPolicy?: "required" | "best_effort" | "skip" | undefined;
 		approvalMode: string;
 		workspaceId: string | null;
 	};

@@ -44,6 +44,7 @@ import { bindGoalRun, registerGoalRunListener, releaseGoalRunBinding } from "./g
 import { enqueueSessionEventWrite, sendStudioPersistentSessionEvent } from "./session-events.js";
 
 type ChatRunner = (socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost) => Promise<void>;
+type GoalVerificationPolicy = NonNullable<NonNullable<AiChatParams["options"]>["verificationPolicy"]>;
 
 type GoalRuntime = {
 	socket: WebSocket;
@@ -73,6 +74,27 @@ const runtimes = new Map<string, GoalRuntime>();
 const latestGoalStates = new Map<string, AgentGoalState>();
 // 终态事件可能在面板关闭后才到达；进程内墓碑配合 dismissed_at 防止面板复活。
 const dismissedGoalIds = new Set<string>();
+
+/**
+ * Goal coordinates free Agent Loop turns. Legacy clients may still send a
+ * workflow option, but that option must not select the historical phase
+ * executor for a newly started Goal cycle.
+ */
+export function normalizeGoalAgentLoopParams(params: AiChatParams): AiChatParams {
+	const { workflow: _legacyWorkflow, ...options } = params.options ?? {};
+	return {
+		...params,
+		mode: "agent",
+		options: {
+			...options,
+			outputTarget: "workspace"
+		}
+	};
+}
+
+function getGoalVerificationPolicy(state: AgentGoalState): GoalVerificationPolicy {
+	return state.modelSnapshot.verificationPolicy ?? "best_effort";
+}
 
 export function emitAgentGoalState(socket: WebSocket, session: ClientSession, state: AgentGoalState): void {
 	if (dismissedGoalIds.has(state.goalId)) return;
@@ -320,7 +342,7 @@ async function checkReadiness(state: AgentGoalState, runtime: GoalRuntime): Prom
 	}
 	try {
 		const priorRuns = state.usage.cycles > 0 ? await readGoalRuns(state.goalId) : [];
-		const contextMessage = priorRuns.length > 0 ? createContinuationPrompt(state, priorRuns) : state.condition;
+		const contextMessage = priorRuns.length > 0 ? createGoalContinuationPrompt(state, priorRuns) : state.condition;
 		const { createContextEstimateResult } = await import("./session-rpc-handlers.js");
 		const estimate = await createContextEstimateResult(runtime.session, runtime.mcpHost, {
 			provider: state.modelSnapshot.provider,
@@ -381,6 +403,7 @@ export async function createAgentGoal(params: {
 			provider: params.session.activeProvider,
 			model: params.session.providerModel ?? params.chatParams.model ?? getProviderDefaultModel(params.session.activeProvider),
 			reasoningEffort: params.chatParams.options?.reasoningEffort ?? null,
+			verificationPolicy: params.chatParams.options?.verificationPolicy ?? "best_effort",
 			approvalMode: params.session.approvalGateway.getMode(),
 			workspaceId: params.session.activeWorkspace?.id ?? null
 		}
@@ -392,14 +415,7 @@ export async function createAgentGoal(params: {
 		session: params.session,
 		mcpHost: params.mcpHost,
 		runChat: params.runChat,
-		initialParams: {
-			...params.chatParams,
-			mode: "agent",
-			options: {
-				...(params.chatParams.options ?? {}),
-				outputTarget: "workspace"
-			}
-		},
+		initialParams: normalizeGoalAgentLoopParams(params.chatParams),
 		lastRunId: null,
 		cycleStartedAt: null,
 		evaluationInFlight: false,
@@ -436,7 +452,7 @@ async function readGoalRunUsage(run: AgentRunState): Promise<{ tokens: number; e
 	};
 }
 
-function createContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunState[]): string {
+export function createGoalContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunState[]): string {
 	const journal = previousRuns.flatMap((run: AgentRunState): ExecutionEvidence[] => run.checkpoint.evidence)
 		.slice(-32)
 		.map((evidence: ExecutionEvidence) => ({
@@ -448,6 +464,11 @@ function createContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunS
 			artifacts: evidence.artifactRefs.slice(0, 12),
 			summary: evidence.summary?.slice(0, 800)
 		}));
+	const verificationGuidance: string = getGoalVerificationPolicy(state) === "skip"
+		? "The user selected verificationPolicy=skip. Do not add validation merely to satisfy a framework; report any unverified behavior accurately."
+		: getGoalVerificationPolicy(state) === "required"
+			? "The user selected verificationPolicy=required. Use proportionate validation when it is available; if it cannot run, preserve completed work and report the limitation as unverified."
+			: "Validation is best effort. Choose proportionate checks when useful and report clearly when work remains unverified.";
 	return [
 		"Continue the active Goal from its safe checkpoint.",
 		`Goal: ${state.condition}`,
@@ -456,7 +477,8 @@ function createContinuationPrompt(state: AgentGoalState, previousRuns: AgentRunS
 		`Next action: ${state.evaluation?.nextAction ?? "Inspect the current state and make the smallest useful progress."}`,
 		`Bounded execution journal: ${JSON.stringify(journal).slice(0, 16_000)}`,
 		`Successful write fingerprints: ${[...new Set(previousRuns.flatMap((run: AgentRunState): string[] => run.checkpoint.successfulWriteFingerprints))].slice(-32).join(", ") || "none"}`,
-		"Do not repeat an already successful equivalent write. Verify changes after the final relevant write."
+		"Choose the smallest useful next action yourself. Do not repeat an already successful equivalent write.",
+		verificationGuidance
 	].join("\n\n");
 }
 
@@ -561,15 +583,14 @@ async function runNextGoalCycle(goalId: string): Promise<void> {
 		approvalMode: state.modelSnapshot.approvalMode as ApprovalMode
 	});
 	const previousRuns = runtime.lastRunId === null ? [] : await readGoalRuns(goalId);
-	const childParams: AiChatParams = cycle === 1 && runtime.lastRunId === null
-		? { ...runtime.initialParams, mode: "agent" }
+	const childParams: AiChatParams = normalizeGoalAgentLoopParams(cycle === 1 && runtime.lastRunId === null
+		? runtime.initialParams
 		: {
 			...runtime.initialParams,
-			message: createContinuationPrompt(state, previousRuns),
-			mode: "agent",
+			message: createGoalContinuationPrompt(state, previousRuns),
 			retryOfRunId: runtime.lastRunId ?? undefined,
 			additionalContext: undefined
-		};
+		});
 	const childRequest: ClientRequest = { type: "request", id: requestId, method: "ai.chat", params: childParams };
 	try {
 		await runtime.runChat(runtime.socket, childRequest, runtime.session, runtime.mcpHost);
@@ -612,6 +633,9 @@ export function enforceGoalEvaluationGates(evaluation: GoalEvaluation, runs: Age
 	const hasPostWriteValidation = runs.some((run: AgentRunState): boolean => run.verificationStatus === "verified")
 		&& validationEvidence.some((item: ExecutionEvidence): boolean => Date.parse(item.observedAt) >= lastWriteMs);
 	const mutationIntent = runs.some((run: AgentRunState): boolean => run.intent === "mutate");
+	const hasHistoricalPhaseRun = runs.some((run: AgentRunState): boolean => (
+		run.lane === "workflow" || run.lane === "lightweight" || run.lane === "probe" || run.lane === "tool_assisted"
+	));
 	let parsed = structuredClone(evaluation);
 	const referencesUnknownEvidence = parsed.evidenceToolCallIds.some((id: string): boolean => !evidenceIds.has(id));
 	if (referencesUnknownEvidence) {
@@ -623,10 +647,10 @@ export function enforceGoalEvaluationGates(evaluation: GoalEvaluation, runs: Age
 			nextAction: null
 		};
 	}
-	if (parsed.disposition === "achieved" && mutationIntent && !hasWriteOrNoChange) {
+	if (parsed.disposition === "achieved" && hasHistoricalPhaseRun && mutationIntent && !hasWriteOrNoChange) {
 		parsed = { ...parsed, disposition: "continue", unmetCriteria: [...parsed.unmetCriteria, "No successful write or valid no-change decision exists."], nextAction: "Complete or prove the requested mutation." };
 	}
-	if (parsed.disposition === "achieved" && mutationIntent && hasActualWrite && !hasPostWriteValidation) {
+	if (parsed.disposition === "achieved" && hasHistoricalPhaseRun && mutationIntent && hasActualWrite && !hasPostWriteValidation) {
 		parsed = { ...parsed, disposition: "continue", unmetCriteria: [...parsed.unmetCriteria, "No matching verification ran after the final write."], nextAction: "Run a matching verification after the final change." };
 	}
 	if (parsed.disposition === "achieved" && (
@@ -964,13 +988,15 @@ export async function resumeAgentGoal(params: {
 		session: params.session,
 		mcpHost: params.mcpHost,
 		runChat: params.runChat,
-		initialParams: {
+		initialParams: normalizeGoalAgentLoopParams({
 			message: current.condition,
-			mode: "agent",
 			provider: current.modelSnapshot.provider,
 			model: current.modelSnapshot.model,
-			options: { reasoningEffort: current.modelSnapshot.reasoningEffort ?? undefined }
-		},
+			options: {
+				reasoningEffort: current.modelSnapshot.reasoningEffort ?? undefined,
+				verificationPolicy: getGoalVerificationPolicy(current)
+			}
+		}),
 		lastRunId: runIds.at(-1) ?? null,
 		cycleStartedAt: null,
 		evaluationInFlight: false,

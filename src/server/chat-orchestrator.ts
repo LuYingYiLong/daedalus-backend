@@ -231,7 +231,7 @@ import {
 	recordAgentRunToolEvent,
 	updateAgentRun
 } from "./agent-run-controller.js";
-import { attachGoalRun, continueAgentGoal, createAgentGoal, discardSessionGoalRuntimesForRewind, getCurrentAgentGoal, pauseAgentGoal } from "./goal-controller.js";
+import { attachGoalRun, continueAgentGoal, createAgentGoal, discardSessionGoalRuntimesForRewind, getCurrentAgentGoal, normalizeGoalAgentLoopParams, pauseAgentGoal } from "./goal-controller.js";
 import { getGoalRunBinding } from "./goal-run-observer.js";
 import {
 	validateExecutionDecisionEvidence,
@@ -2660,10 +2660,13 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				throwIfAborted(abortController.signal);
 				const storedUserPrompt: string = await getUserPrompt();
 				await mcpHost.ensureGlobalCustomServers();
-				const effectiveParams: AiChatParams = {
+				let effectiveParams: AiChatParams = {
 					...imagePreprocess.params,
 					systemPrompt: imagePreprocess.params.systemPrompt ?? (storedUserPrompt.length > 0 ? storedUserPrompt : undefined)
 				};
+				if (goalBinding !== undefined) {
+					effectiveParams = normalizeGoalAgentLoopParams(effectiveParams);
+				}
 				persistedParams = effectiveParams;
 				logger.info("ai", "chat_started", {
 					requestId: request.id,

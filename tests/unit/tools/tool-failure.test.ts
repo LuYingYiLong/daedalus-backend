@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import {
 	createToolFailure,
 	parseStructuredToolFailure,
@@ -33,6 +34,19 @@ test("unknown tool exceptions remain tool-scoped business failures", (): void =>
 	assert.equal(failure.category, "business");
 	assert.equal(failure.message, "class_name DamageNumber");
 	assert.equal(failure.retryable, true);
+});
+
+test("MCP request timeout uses the structured JSON-RPC code as an environment failure", (): void => {
+	const failure = createToolFailure(new McpError(ErrorCode.RequestTimeout, "Request timed out"), {
+		artifactRefs: ["scripts/verify.gd"],
+		sourceFolderId: "godot"
+	});
+
+	assert.equal(failure.code, "mcp_request_timeout");
+	assert.equal(failure.category, "environment");
+	assert.equal(failure.retryable, true);
+	assert.deepEqual(failure.artifactRefs, ["scripts/verify.gd"]);
+	assert.equal(failure.details?.mcpErrorCode, ErrorCode.RequestTimeout);
 });
 
 test("serialized environment failures round-trip without text classification", (): void => {

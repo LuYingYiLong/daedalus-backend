@@ -10,6 +10,7 @@ import { createTerminalCommandAuthorization, type TerminalCommandAuthorization }
 import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
 import { isGoalCheckpointCapableToolCall } from "./file-edit-snapshots.js";
+import { createToolFailure, serializeToolFailure } from "./tool-failure.js";
 import {
 	createDownloadAuthorizationScope,
 	createDownloadFingerprint,
@@ -44,6 +45,12 @@ export type ApprovalRequestOptions = {
 	downloadAuthorization?: DownloadAuthorizationScope | undefined;
 	networkAccessRequired?: NetworkAccessRequired | undefined;
 };
+
+function collectApprovalArtifactRefs(args: Record<string, unknown>): string[] {
+	return ["relativePath", "resourcePath", "scenePath", "scriptPath", "path"]
+		.map((key: string): unknown => args[key])
+		.filter((value: unknown): value is string => typeof value === "string" && value.length > 0);
+}
 
 export type ApprovalGatewayOptions = {
 	reviewCommand?: typeof reviewWorkspaceCommand | undefined;
@@ -304,19 +311,30 @@ export class ApprovalGateway {
 				args: pending.args
 			})
 			: undefined;
-		const result = await executeLlmToolWithIdempotency(
-			mcpHost,
-			pending.llmToolName,
-			pending.args,
-			pending.workspaceId,
-			pending.editorInstanceId,
-			pending.sessionId,
-			options.abortSignal,
-			commandAuthorization,
-			false,
-			options.onProgress
-		);
-		return { content: result.content, cached: result.reused, fileEditDraft: result.fileEditDraft, imageGeneration: result.imageGeneration };
+		try {
+			const result = await executeLlmToolWithIdempotency(
+				mcpHost,
+				pending.llmToolName,
+				pending.args,
+				pending.workspaceId,
+				pending.editorInstanceId,
+				pending.sessionId,
+				options.abortSignal,
+				commandAuthorization,
+				false,
+				options.onProgress
+			);
+			return { content: result.content, cached: result.reused, fileEditDraft: result.fileEditDraft, imageGeneration: result.imageGeneration };
+		} catch (error: unknown) {
+			if (options.abortSignal?.aborted) {
+				throw error;
+			}
+			const failure = createToolFailure(error, {
+				artifactRefs: collectApprovalArtifactRefs(pending.args),
+				sourceFolderId: typeof pending.args.sourceFolderId === "string" ? pending.args.sourceFolderId : undefined
+			});
+			return { content: serializeToolFailure(failure), cached: false };
+		}
 	}
 
 	reject(approvalId: string): PendingApproval {

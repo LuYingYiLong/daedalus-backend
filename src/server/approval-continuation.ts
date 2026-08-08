@@ -409,8 +409,9 @@ export async function validatePendingApprovalBeforeExecution(
 export function createApprovedWorkflowToolObservation(pendingApproval: PendingApproval, content: string): WorkflowToolObservation {
 	const parsedResult = parseToolResultSummary(pendingApproval.llmToolName, pendingApproval.args, content);
 	const semantics = getWorkflowToolSemantics(pendingApproval.llmToolName, pendingApproval.args);
-	const failed: boolean = parsedResult.validationStatus !== "not_applicable"
-		&& (parsedResult.validationStatus === "failed" || parsedResult.ok === false);
+	const failed: boolean = parsedResult.failure !== undefined
+		|| (parsedResult.validationStatus !== "not_applicable"
+			&& (parsedResult.validationStatus === "failed" || parsedResult.ok === false));
 	return {
 		toolCallId: pendingApproval.toolCallId,
 		toolName: pendingApproval.llmToolName,

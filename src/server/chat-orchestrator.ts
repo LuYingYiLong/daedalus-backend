@@ -231,7 +231,7 @@ import {
 	recordAgentRunToolEvent,
 	updateAgentRun
 } from "./agent-run-controller.js";
-import { attachGoalRun, continueAgentGoal, createAgentGoal, getCurrentAgentGoal, pauseAgentGoal } from "./goal-controller.js";
+import { attachGoalRun, continueAgentGoal, createAgentGoal, discardSessionGoalRuntimesForRewind, getCurrentAgentGoal, pauseAgentGoal } from "./goal-controller.js";
 import { getGoalRunBinding } from "./goal-run-observer.js";
 import {
 	validateExecutionDecisionEvidence,
@@ -2458,6 +2458,20 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				await promoteTemporarySession(session.sessionId);
 			}
 			const queueItemId: number | undefined = getQueueItemIdFromParams(params);
+			if (params.retryFromRequestId !== undefined && session.sessionId !== undefined) {
+				const retryTargetExists: boolean = session.messages.some((message: ChatMessage): boolean => (
+					message.requestId === params.retryFromRequestId
+				));
+				if (retryTargetExists) {
+					discardSessionGoalRuntimesForRewind(session.sessionId);
+				}
+				await waitForSessionEventPersistence(session);
+				const rewoundMessages: StoredMessage[] = await rewindSessionFromRequest(session.sessionId, params.retryFromRequestId);
+				session.messages = rewoundMessages.map(toChatMessage);
+				session.fullSessionLoadPromise = undefined;
+				session.summaryMessage = undefined;
+				session.summaryCoveredMessageCount = undefined;
+			}
 			const modelSnapshotChanged: boolean = applyChatRequestModelSnapshot(session, params);
 			if (modelSnapshotChanged && session.sessionId !== undefined) {
 				await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
@@ -2752,14 +2766,6 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					guidePromptSection,
 					fullSystemPrompt
 				});
-				if (effectiveParams.retryFromRequestId !== undefined && session.sessionId !== undefined) {
-					await waitForSessionEventPersistence(session);
-					const rewoundMessages: StoredMessage[] = await rewindSessionFromRequest(session.sessionId, effectiveParams.retryFromRequestId);
-					session.messages = rewoundMessages.map(toChatMessage);
-					session.fullSessionLoadPromise = undefined;
-					session.summaryMessage = undefined;
-					session.summaryCoveredMessageCount = undefined;
-				}
 				if (effectiveParams.retryOfRunId === undefined) {
 					await appendUserMessageToSession(
 						session,

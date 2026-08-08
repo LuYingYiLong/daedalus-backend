@@ -17,6 +17,11 @@ const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	EXECUTION_CONTROL_TOOL_NAME
 ]);
 
+export type AgentToolEventForwarderOptions = {
+	/** Internal planners must not persist or expose file edit batches. */
+	persistFileEditBatches?: boolean | undefined;
+};
+
 function isInternalToolEvent(toolName: string): boolean {
 	return INTERNAL_TOOL_NAMES.has(toolName);
 }
@@ -29,7 +34,8 @@ export function createAgentToolEventForwarder(
 	stepRunId: string,
 	persistRequestId: string = requestId,
 	mcpHost?: McpHost | undefined,
-	eventMetadata: Record<string, unknown> = {}
+	eventMetadata: Record<string, unknown> = {},
+	options: AgentToolEventForwarderOptions = {}
 ): OnToolEvent {
 	const createdSkillRefsByToolCallId: Map<string, string> = new Map();
 	return (event: ToolEvent): void => {
@@ -140,13 +146,15 @@ export function createAgentToolEventForwarder(
 				createdSkillRefsByToolCallId.delete(event.toolCallId);
 			}
 			const { fileEditDraft, ...publicEvent } = event;
-			const fileEditBatch = persistFileEditBatch(
-				session.sessionId,
-				persistRequestId,
-				event.toolCallId,
-				event.toolName,
-				fileEditDraft
-			);
+			const fileEditBatch = options.persistFileEditBatches === false
+				? undefined
+				: persistFileEditBatch(
+					session.sessionId,
+					persistRequestId,
+					event.toolCallId,
+					event.toolName,
+					fileEditDraft
+				);
 			if (
 				event.terminalJobStatus === "running"
 				&& event.terminalJobId !== undefined

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createApprovedPlanExecutionParams, createPlanDecision, createPlannerMessage, createPlannerSystemPrompt, createPlanVisibleDeltaFilter, normalizePlanDecision } from "../../../src/server/plan-mode.js";
+import { createApprovedPlanExecutionParams, createPlanDecision, createPlannerMessage, createPlannerSystemPrompt, normalizePlanDecision } from "../../../src/server/plan-mode.js";
 import { createPlanMetadata } from "../../../src/server/plan-store.js";
 import type { StoredPlan } from "../../../src/server/plan-store.js";
 import type { ProviderChatOptions } from "../../../src/providers/deepseek-client.js";
@@ -131,13 +131,34 @@ test("planner prompt anchors backend plans to actual repository conventions", as
 	assert.match(prompt, /不要.*gRPC/);
 });
 
-test("plan visible delta filter forwards preludes but suppresses final json", (): void => {
-	const filter = createPlanVisibleDeltaFilter();
+test("plan mode keeps internal planner deltas out of the user timeline", async (): Promise<void> => {
+	const planModeSource: string = await readFile(new URL("../../../src/server/plan-mode.ts", import.meta.url), "utf8");
 
-	assert.equal(filter.push("我先读取项目结构，再判断计划边界。\n"), "我先读取项目结构，再判断计划边界。\n");
-	assert.equal(filter.push("\n"), "");
-	assert.equal(filter.push("{\"decision\":\"plan_ready\""), "");
-	assert.equal(filter.push(",\"title\":\"测试\"}"), "");
+	assert.match(planModeSource, /event\.type === "ai\.delta"[\s\S]*internal JSON protocol[\s\S]*return;/);
+	assert.doesNotMatch(planModeSource, /createPlanVisibleDeltaFilter/);
+});
+
+test("plan mode retries malformed JSON with a strict protocol and recovers without a run error", async (): Promise<void> => {
+	const planModeSource: string = await readFile(new URL("../../../src/server/plan-mode.ts", import.meta.url), "utf8");
+
+	assert.match(planModeSource, /PLAN_RUNNER_MAX_ATTEMPTS: number = 3/);
+	assert.match(planModeSource, /Do not call tools and do not emit reasoning/);
+	assert.match(planModeSource, /createPlanFormatRecoveryDecision\(\)/);
+	assert.match(planModeSource, /temperature: extraInstruction === undefined \? 0\.2 : 0/);
+	assert.match(planModeSource, /const isFormatRetry: boolean = extraInstruction !== undefined/);
+	assert.match(planModeSource, /isFormatRetry\s*\? \[\]/);
+});
+
+test("chat retries rewind the branch before plan or goal mode dispatch", async (): Promise<void> => {
+	const orchestratorSource: string = await readFile(new URL("../../../src/server/chat-orchestrator.ts", import.meta.url), "utf8");
+	const rewindIndex: number = orchestratorSource.indexOf("await rewindSessionFromRequest(session.sessionId, params.retryFromRequestId)");
+	const goalModeIndex: number = orchestratorSource.indexOf('if (params.mode === "goal")');
+	const planModeIndex: number = orchestratorSource.indexOf('if (effectiveParams.mode === "plan")');
+
+	assert.ok(rewindIndex >= 0);
+	assert.ok(goalModeIndex > rewindIndex);
+	assert.ok(planModeIndex > rewindIndex);
+	assert.match(orchestratorSource, /discardSessionGoalRuntimesForRewind\(session\.sessionId\)/);
 });
 
 test("plan mode does not inject hardcoded visible status prose", async (): Promise<void> => {

@@ -29,7 +29,11 @@ import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
 const CLARIFICATION_REPLY_MAX_COUNT: number = 3;
-const PLAN_RUNNER_MAX_ATTEMPTS: number = 2;
+/**
+ * One initial run plus two strict formatting retries. This is separate from
+ * provider reconnects and intentionally bounded to control cost and latency.
+ */
+const PLAN_RUNNER_MAX_ATTEMPTS: number = 3;
 
 type PlanDecisionRuntime = {
 	socket: WebSocket;
@@ -95,37 +99,6 @@ export function sendPlanMessageDone(
 		operationRequestId: operationRequestId ?? requestId,
 		planId: planId ?? null
 	});
-}
-
-export type PlanVisibleDeltaFilter = {
-	push(text: string): string;
-};
-
-export function createPlanVisibleDeltaFilter(): PlanVisibleDeltaFilter {
-	let pendingWhitespace: string = "";
-	let suppressFinalJson: boolean = false;
-	return {
-		push(text: string): string {
-			if (suppressFinalJson || text.length === 0) {
-				return "";
-			}
-
-			const combinedText: string = pendingWhitespace + text;
-			const trimmedStart: string = combinedText.trimStart();
-			if (trimmedStart.startsWith("{")) {
-				suppressFinalJson = true;
-				pendingWhitespace = "";
-				return "";
-			}
-			if (combinedText.trim().length === 0) {
-				pendingWhitespace = combinedText;
-				return "";
-			}
-
-			pendingWhitespace = "";
-			return combinedText;
-		}
-	};
 }
 
 function isBroadGodotPluginGoal(message: string): boolean {
@@ -317,7 +290,10 @@ export async function createPlannerSystemPrompt(): Promise<string> {
 		"输出必须是 JSON object，不要输出 markdown fence。",
 		"需要澄清时格式：{\"decision\":\"needs_clarification\",\"title\":\"短标题\",\"question\":\"一个问题\",\"recommendedReplies\":[{\"label\":\"短按钮\",\"text\":\"用户可直接采用的澄清回复\",\"description\":\"可选说明\"}]}。",
 		"计划就绪时格式：{\"decision\":\"plan_ready\",\"title\":\"短标题\",\"planMarkdown\":\"完整 Markdown 计划\",\"assumptions\":[\"合理假设\"]}。",
-		"recommendedReplies 最多 3 条。planMarkdown 必须包含 Summary、Key Changes、Public Interfaces、Test Plan、Assumptions。"
+		"recommendedReplies 最多 3 条。planMarkdown 必须包含 Summary、Key Changes、Public Interfaces、Test Plan、Assumptions。",
+		"## Internal plan protocol",
+		"This planner call is internal. Do not emit user-facing prose, a pre-tool announcement, Markdown, or a Markdown fence.",
+		"When a read tool is needed, call it directly. After the necessary reads, output exactly one JSON object and no characters before or after it.",
 	].join("\n");
 }
 
@@ -479,11 +455,7 @@ export async function createPlanDecision(
 	let lastToolCallCount: number = 0;
 	let formatRetryInstruction: string | undefined;
 	for (let attempt: number = 0; attempt < PLAN_RUNNER_MAX_ATTEMPTS; attempt += 1) {
-		const extraInstruction: string | undefined = formatRetryInstruction !== undefined
-			? formatRetryInstruction
-			: attempt === 0
-				? undefined
-			: "你上一次没有先调用任何工具就给出了计划。请先使用一个最小必要的 read/verify 或 Plan-safe custom MCP 工具读取事实，再输出 JSON 决策。";
+		const extraInstruction: string | undefined = formatRetryInstruction;
 		let result: { decision: PlanDecision; toolCallCount: number };
 		try {
 			result = await runPlanAgentDecision(
@@ -498,10 +470,21 @@ export async function createPlanDecision(
 				abortSignal
 			);
 		} catch (error: unknown) {
-			if (!isPlanDecisionFormatError(error) || attempt + 1 >= PLAN_RUNNER_MAX_ATTEMPTS) {
+			if (!isPlanDecisionFormatError(error)) {
 				throw error;
 			}
+			if (attempt + 1 >= PLAN_RUNNER_MAX_ATTEMPTS) {
+				logger.warn("plan", "plan_decision_json_retry_exhausted", {
+					requestId: runtime.requestId,
+					sessionId: runtime.session.sessionId,
+					planId: runtime.planId,
+					attempts: PLAN_RUNNER_MAX_ATTEMPTS
+				});
+				return createPlanFormatRecoveryDecision();
+			}
 			formatRetryInstruction = [
+				"The previous response was not a parseable JSON decision. Do not call tools and do not emit reasoning, prose, Markdown, or a preamble in this retry.",
+				"Output exactly one JSON object. Do not use a Markdown fence or add any characters before or after the object.",
 				"你上一次没有输出可识别的最终 JSON 决策。现在必须只在最终答案中输出一个 JSON object。",
 				"如果需要用户澄清，必须包含 decision:\"needs_clarification\" 和 question；recommendedReplies 可以为空数组。",
 				"如果计划已经足够明确，必须包含 decision:\"plan_ready\" 和 planMarkdown。"
@@ -536,6 +519,20 @@ export async function createPlanDecision(
 	throw new Error("Plan runner did not produce a usable plan decision.");
 }
 
+function createPlanFormatRecoveryDecision(): Extract<PlanDecision, { decision: "needs_clarification" }> {
+	return {
+		decision: "needs_clarification",
+		title: "计划生成需要重试",
+		question: "规划模型没有返回可用的结构化计划。可以立即重新生成，或补充目标与约束后再生成。",
+		recommendedReplies: [
+			{
+				label: "重新生成",
+				text: "请基于已有目标和澄清直接重新生成计划，不再提出新的澄清问题。"
+			}
+		]
+	};
+}
+
 async function runPlanAgentDecision(
 	params: AiChatParams,
 	options: ProviderChatOptions,
@@ -551,7 +548,7 @@ async function runPlanAgentDecision(
 		message: createPlannerMessage(params.message, clarifications, skippedClarifications, revisions, currentPlanMarkdown, extraInstruction),
 		mode: "plan",
 		options: {
-			temperature: 0.2,
+			temperature: extraInstruction === undefined ? 0.2 : 0,
 			maxTokens: 3200,
 			responseFormat: "json",
 			stream: true,
@@ -560,9 +557,11 @@ async function runPlanAgentDecision(
 		}
 	};
 
-	const allowedToolNames: readonly string[] = resolveAllowedToolsForChatParams(plannerParams, undefined, runtime.session.activeWorkspace?.id) ?? [];
+	const isFormatRetry: boolean = extraInstruction !== undefined;
+	const allowedToolNames: readonly string[] = isFormatRetry
+		? []
+		: resolveAllowedToolsForChatParams(plannerParams, undefined, runtime.session.activeWorkspace?.id) ?? [];
 	const gateway = new ReadOnlyToolApprovalGateway(runtime.session.approvalGateway, allowedToolNames);
-	const visibleDeltaFilter: PlanVisibleDeltaFilter = createPlanVisibleDeltaFilter();
 	const planThreadRequestId: string = runtime.requestId;
 	const operationRequestId: string = runtime.operationRequestId ?? runtime.requestId;
 	const baseForwarder: OnToolEvent = createAgentToolEventForwarder(
@@ -577,15 +576,14 @@ async function runPlanAgentDecision(
 			requestId: planThreadRequestId,
 			operationRequestId,
 			planId: runtime.planId ?? null
-		}
+		},
+		{ persistFileEditBatches: false }
 	);
 	let toolCallCount: number = 0;
 	const onEvent: OnToolEvent = (event: ToolEvent): void => {
 		if (event.type === "ai.delta") {
-			const visibleText: string = visibleDeltaFilter.push(event.text);
-			if (visibleText.length > 0) {
-				sendPlanMessageDelta(runtime.socket, planThreadRequestId, runtime.session, visibleText, operationRequestId, runtime.planId);
-			}
+			// Planner output is an internal JSON protocol. Forwarding a partial
+			// response can create user-visible Markdown or malformed JSON parts.
 			return;
 		}
 		if (event.type === "tool.call") {

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type WebSocket from "ws";
 import { createClientSession } from "../../../src/server/client-session.js";
-import { cancelAgentRunForRejectedApproval } from "../../../src/server/approval-continuation.js";
+import { cancelAgentRunForRejectedApproval, createApprovedWorkflowToolObservation } from "../../../src/server/approval-continuation.js";
+import { serializeToolFailure } from "../../../src/tools/tool-failure.js";
 import { createAgentRunState, transitionAgentRunState } from "../../../src/workflow/agent-run-state.js";
 
 test("rejecting an approval terminalizes only the paused agent turn", (): void => {
@@ -44,4 +45,26 @@ test("an approval rejection cannot cancel an unrelated active turn", (): void =>
 
 	assert.equal(cancelAgentRunForRejectedApproval({} as WebSocket, session, "other-run"), undefined);
 	assert.equal(session.agentRuns.get("other-run")?.stage, "probing");
+});
+
+test("an approved environment failure remains a failed tool observation", (): void => {
+	const observation = createApprovedWorkflowToolObservation({
+		approvalId: "approval-test",
+		toolCallId: "tool-call-test",
+		toolName: "mcp_terminal_run_command",
+		llmToolName: "mcp_terminal_run_command",
+		args: { relativePath: "scripts/verify.gd", sourceFolderId: "godot" },
+		reason: "verify",
+		createdAt: 0
+	}, serializeToolFailure({
+		code: "mcp_request_timeout",
+		category: "environment",
+		message: "Request timed out",
+		retryable: true,
+		artifactRefs: ["scripts/verify.gd"],
+		sourceFolderId: "godot"
+	}));
+
+	assert.equal(observation.status, "failed");
+	assert.equal(observation.failure?.code, "mcp_request_timeout");
 });

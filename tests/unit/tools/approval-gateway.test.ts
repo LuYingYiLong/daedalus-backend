@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
@@ -13,7 +14,7 @@ const DOWNLOAD_ARGS: Record<string, unknown> = {
 	overwrite: false
 };
 
-test("an accepted approval is consumed even when tool execution fails", async (): Promise<void> => {
+test("an accepted approval returns a structured timeout failure instead of throwing", async (): Promise<void> => {
 	const gateway = new ApprovalGateway("manual");
 	const pending = gateway.requestApproval(
 		"mcp_workspace_read_text_file",
@@ -23,12 +24,16 @@ test("an accepted approval is consumed even when tool execution fails", async ()
 		"workspace-test"
 	);
 	const mcpHost = {
+		getActiveWorkspaceId: (): string => "workspace-test",
 		callTool: async (): Promise<never> => {
-			throw new Error("MCP request timed out");
+			throw new McpError(ErrorCode.RequestTimeout, "Request timed out");
 		}
 	} as unknown as McpHost;
 
-	await assert.rejects(gateway.approve(pending.approvalId, mcpHost));
+	const result = await gateway.approve(pending.approvalId, mcpHost);
+	const content = JSON.parse(result.content) as { failure?: { code?: unknown; category?: unknown } };
+	assert.equal(content.failure?.code, "mcp_request_timeout");
+	assert.equal(content.failure?.category, "environment");
 	assert.equal(gateway.getPending(pending.approvalId), undefined);
 	assert.equal(gateway.listPending().length, 0);
 });

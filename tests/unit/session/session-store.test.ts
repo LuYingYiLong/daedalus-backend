@@ -319,6 +319,66 @@ test("session rewind uses event-only retry checkpoints to remove later messages"
 	});
 });
 
+test("session rewind removes branch-owned plan, diff, run, and goal state", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Branch cleanup session");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "keep this turn",
+			requestId: "req-before",
+			createdAt: "2026-08-08T00:00:00.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-before", "agent.message.done", {});
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "replace this turn",
+			requestId: "req-branch",
+			createdAt: "2026-08-08T00:01:00.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "req-branch", "plan.generated", {
+			requestId: "req-branch",
+			planId: "plan-branch"
+		});
+		await store.appendSessionEvent(metadata.id, "goal-branch:cycle:2", "agent.run.state", {
+			goalId: "goal-branch",
+			rootRequestId: "req-branch"
+		});
+
+		const { getSessionDatabase } = await import("../../../src/session/session-database.js");
+		const db = await getSessionDatabase();
+		const now = "2026-08-08T00:02:00.000Z";
+		db.prepare(`
+			INSERT INTO plans(plan_id, session_id, request_id, status, metadata_json, markdown, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`).run("plan-branch", metadata.id, "req-branch", "ready", "{}", "# Branch plan", now, now);
+		db.prepare(`
+			INSERT INTO file_edit_batches(batch_id, session_id, request_id, tool_call_id, tool_name, payload_json, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`).run("batch-branch", metadata.id, "req-branch", "tool-branch", "mcp_workspace_overwrite_text_file", "{}", now);
+		db.prepare(`
+			INSERT INTO agent_runs(run_id, session_id, request_id, root_request_id, revision, stage, state_json, checkpoint_json, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`).run("goal-branch:cycle:2", metadata.id, "goal-branch:cycle:2", "req-branch", 1, "completed", "{}", "{}", now, now);
+		db.prepare(`
+			INSERT INTO agent_goals(goal_id, session_id, root_request_id, revision, stage, state_json, created_at, updated_at, completed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`).run("goal-branch", metadata.id, "req-branch", 1, "completed", "{}", now, now, now);
+		db.prepare(`
+			INSERT INTO agent_goal_runs(goal_id, run_id, cycle, created_at)
+			VALUES (?, ?, ?, ?)
+		`).run("goal-branch", "goal-branch:cycle:2", 2, now);
+
+		await store.rewindSessionFromRequest(metadata.id, "req-branch");
+
+		const count = (table: string): number => Number((db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE session_id = ?`).get(metadata.id) as { count: number }).count);
+		assert.equal(count("plans"), 0);
+		assert.equal(count("file_edit_batches"), 0);
+		assert.equal(count("agent_runs"), 0);
+		assert.equal(count("agent_goals"), 0);
+		assert.equal((db.prepare("SELECT COUNT(*) AS count FROM agent_goal_runs").get() as { count: number }).count, 0);
+	});
+});
+
 test("session metadata updates do not rewrite persisted messages", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const metadata = await store.createSession("Metadata only session");

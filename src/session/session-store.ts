@@ -976,6 +976,23 @@ function findRewindTimelineSequence(
 	return typeof sequence === "number" && Number.isInteger(sequence) ? sequence : null;
 }
 
+function collectTimelineRequestIdsFromSequence(
+	db: DatabaseSync,
+	sessionId: string,
+	timelineSequence: number | null
+): string[] {
+	if (timelineSequence === null) {
+		return [];
+	}
+	const rows = db.prepare(`
+		SELECT DISTINCT request_id FROM session_events
+		WHERE session_id = ? AND channel = 'timeline' AND sequence >= ?
+	`).all(sessionId, timelineSequence) as Record<string, unknown>[];
+	return rows
+		.map((row: Record<string, unknown>): string => String(row.request_id ?? "").trim())
+		.filter((requestId: string): boolean => requestId.length > 0);
+}
+
 export async function rewindSessionFromRequest(sessionId: string, requestId: string): Promise<StoredMessage[]> {
 	return enqueueTranscriptWrite(sessionId, async (): Promise<StoredMessage[]> => {
 		const stored: StoredSession = await openSession(sessionId);
@@ -998,10 +1015,14 @@ export async function rewindSessionFromRequest(sessionId: string, requestId: str
 		const db: DatabaseSync = await getSessionDatabase();
 		runSessionTransaction(db, (): void => {
 			replaceMessages(db, sessionId, keptMessages);
+			const initialIds: string[] = [...removedRequestIds];
+			const timelineSequence: number | null = findRewindTimelineSequence(db, sessionId, initialIds);
+			for (const timelineRequestId of collectTimelineRequestIdsFromSequence(db, sessionId, timelineSequence)) {
+				removedRequestIds.add(timelineRequestId);
+			}
 			const ids: string[] = [...removedRequestIds];
 			if (ids.length > 0) {
 				const placeholders: string = ids.map((): string => "?").join(",");
-				const timelineSequence: number | null = findRewindTimelineSequence(db, sessionId, ids);
 				db.prepare(`
 					DELETE FROM selection_ask_threads
 					WHERE session_id = ? AND source_request_id IN (${placeholders})
@@ -1017,7 +1038,16 @@ export async function rewindSessionFromRequest(sessionId: string, requestId: str
 				`).run(sessionId, ...ids);
 				db.prepare(`DELETE FROM plans WHERE session_id = ? AND request_id IN (${placeholders})`)
 					.run(sessionId, ...ids);
+				db.prepare(`DELETE FROM file_edit_batches WHERE session_id = ? AND request_id IN (${placeholders})`)
+					.run(sessionId, ...ids);
+				db.prepare(`DELETE FROM agent_goals WHERE session_id = ? AND root_request_id IN (${placeholders})`)
+					.run(sessionId, ...ids);
+				db.prepare(`
+					DELETE FROM agent_runs
+					WHERE session_id = ? AND (request_id IN (${placeholders}) OR root_request_id IN (${placeholders}))
+				`).run(sessionId, ...ids, ...ids);
 			}
+			db.prepare("DELETE FROM summaries WHERE session_id = ?").run(sessionId);
 			const updated: SessionMetadata = { ...stored.metadata, updatedAt: new Date().toISOString() };
 			writeMetadataRow(db, updated);
 		});

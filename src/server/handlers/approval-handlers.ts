@@ -626,10 +626,23 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const approvedResultContent: string = effectiveApprovedFailure === undefined
 				? result.content
 				: serializeToolFailure(effectiveApprovedFailure);
+			if (effectiveApprovedFailure !== undefined) {
+				approvalProgressForwarder({
+					type: "tool.error",
+					step: pendingContinuation?.continuation.nextStep ?? 0,
+					toolCallId: pending.toolCallId,
+					toolName: pending.llmToolName,
+					message: effectiveApprovedFailure.message,
+					failure: effectiveApprovedFailure,
+					recovery: approvedRecovery
+				});
+			}
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executed", {
 					resultChars: result.content.length,
 					cached: result.cached === true,
+					succeeded: approvedSucceeded,
+					...(effectiveApprovedFailure === undefined ? {} : { failure: effectiveApprovedFailure }),
 					executedAt: new Date().toISOString()
 				});
 			}
@@ -656,29 +669,30 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const continuationRunId: string = approvalRunId;
 			const continuationStepRunId: string = approvalStepRunId;
 			const resultPersistRequestId: string = pendingContinuation?.requestId ?? request.id;
-			const fileEditBatch = persistFileEditBatch(
-				session.sessionId,
-				resultPersistRequestId,
-				pending.toolCallId,
-				pending.llmToolName,
-				result.fileEditDraft
-			);
-			sendSessionEvent(socket, approvalPersistRequestId, session, "agent.tool.result", {
-				type: "agent.tool.result",
-				runId: continuationRunId,
-				stepRunId: continuationStepRunId,
-				step: pendingContinuation?.continuation.nextStep ?? 0,
-				toolCallId: pending.toolCallId,
-				toolName: pending.llmToolName,
-				resultChars: result.content.length,
-				truncated: false,
-				cached: result.cached === true,
-				imageGeneration: result.imageGeneration,
-				...approvedToolObservation.parsedResult,
-				...(effectiveApprovedFailure === undefined ? {} : { failure: effectiveApprovedFailure }),
-				recovery: approvedRecovery,
-				...(fileEditBatch === undefined ? {} : { fileEditBatch })
-			}, resultPersistRequestId);
+			if (effectiveApprovedFailure === undefined) {
+				const fileEditBatch = persistFileEditBatch(
+					session.sessionId,
+					resultPersistRequestId,
+					pending.toolCallId,
+					pending.llmToolName,
+					result.fileEditDraft
+				);
+				sendSessionEvent(socket, approvalPersistRequestId, session, "agent.tool.result", {
+					type: "agent.tool.result",
+					runId: continuationRunId,
+					stepRunId: continuationStepRunId,
+					step: pendingContinuation?.continuation.nextStep ?? 0,
+					toolCallId: pending.toolCallId,
+					toolName: pending.llmToolName,
+					resultChars: result.content.length,
+					truncated: false,
+					cached: result.cached === true,
+					imageGeneration: result.imageGeneration,
+					...approvedToolObservation.parsedResult,
+					recovery: approvedRecovery,
+					...(fileEditBatch === undefined ? {} : { fileEditBatch })
+				}, resultPersistRequestId);
+			}
 
 			if (pendingContinuation === undefined) {
 				session.messages.push({
@@ -697,7 +711,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					toolName: pending.llmToolName,
 					args: pending.args,
 					succeeded: approvedSucceeded,
-					summary: result.content.slice(0, 2000),
+					summary: effectiveApprovedFailure?.message ?? result.content.slice(0, 2000),
 					artifactRefs: approvedToolObservation.artifactRefs,
 					failure: effectiveApprovedFailure,
 					recovery: approvedRecovery,

@@ -96,6 +96,25 @@ export async function getCurrentAgentGoal(sessionId: string): Promise<AgentGoalS
 	return readCurrentAgentGoal(sessionId);
 }
 
+/**
+ * Editing an earlier user turn creates a new conversation branch. Goal cycles
+ * from the discarded branch must not schedule another run or repersist state.
+ */
+export function discardSessionGoalRuntimesForRewind(sessionId: string): void {
+	for (const [goalId, runtime] of runtimes) {
+		if (runtime.session.sessionId !== sessionId) {
+			continue;
+		}
+		runtime.continuationRequested = false;
+		runtime.continuationScheduled = false;
+		if (runtime.lastRunId !== null) {
+			releaseGoalRunBinding(runtime.lastRunId);
+		}
+		runtimes.delete(goalId);
+		latestGoalStates.delete(goalId);
+	}
+}
+
 export function createAgentGoalTelemetrySnapshot(
 	state: AgentGoalState,
 	runIds: readonly string[],

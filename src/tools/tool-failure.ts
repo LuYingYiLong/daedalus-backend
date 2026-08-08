@@ -1,4 +1,5 @@
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 export const TOOL_FAILURE_CATEGORIES = [
 	"business",
@@ -53,6 +54,7 @@ const ENVIRONMENT_FAILURE_CODES: ReadonlySet<string> = new Set([
 	"lsp_unavailable",
 	"dap_unavailable",
 	"workspace_unavailable",
+	"mcp_request_timeout",
 	"runtime_capability_unavailable_cached"
 ]);
 
@@ -93,6 +95,13 @@ function getString(value: unknown): string | undefined {
 
 function getBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+function getNumericErrorCode(value: unknown): number | undefined {
+	if (!isRecord(value)) return undefined;
+	return typeof value.code === "number" && Number.isFinite(value.code)
+		? value.code
+		: undefined;
 }
 
 function getStringArray(value: unknown): string[] {
@@ -185,6 +194,18 @@ export function createToolFailure(
 			artifactRefs: structuredFailure.artifactRefs.length > 0 ? structuredFailure.artifactRefs : [...(context.artifactRefs ?? [])],
 			artifactFileRefs: structuredFailure.artifactFileRefs ?? context.artifactFileRefs,
 			sourceFolderId: structuredFailure.sourceFolderId ?? context.sourceFolderId
+		};
+	}
+	if (getNumericErrorCode(error) === ErrorCode.RequestTimeout) {
+		return {
+			code: "mcp_request_timeout",
+			category: "environment",
+			message: error instanceof Error ? error.message : "MCP request timed out.",
+			retryable: true,
+			artifactRefs: [...(context.artifactRefs ?? [])],
+			artifactFileRefs: context.artifactFileRefs,
+			sourceFolderId: context.sourceFolderId,
+			details: { mcpErrorCode: ErrorCode.RequestTimeout }
 		};
 	}
 

@@ -118,6 +118,9 @@ test("execution and communication anchors are CORE requirements rather than a Go
 test("core prompt provides a human-centered expression contract without weakening truthfulness", async (): Promise<void> => {
 	const corePrompt: string = await loadCorePrompt();
 
+	assert.match(corePrompt, /可点击的 Markdown 文件链接/);
+	assert.match(corePrompt, /\[App\.tsx \(line 2942\)\]\(C:\/workspace\/src\/App\.tsx:2942\)/);
+	assert.match(corePrompt, /行号必须来自工具结果/);
 	assert.match(corePrompt, /#### 人文表达契约/);
 	assert.match(corePrompt, /事实与状态 > 用户当前目标 > 下一步行动 > 背景解释 > 礼貌修饰/);
 	assert.match(corePrompt, /准备执行.*正在执行.*等待审批.*已完成.*部分完成.*未验证.*已阻断.*已取消/);

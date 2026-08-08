@@ -34,7 +34,9 @@ function canCallMcpToolDirectly(toolName: string): boolean {
 }
 
 async function createMcpConfigListResult(mcpHost: McpHost, workspaceId?: string | undefined): Promise<Record<string, unknown>> {
-	await mcpHost.ensureGlobalCustomServers();
+	// Listing configuration must not wait for optional MCP processes. A server
+	// such as Context7 may be offline or slow; its persisted config and the
+	// latest known runtime status are still enough to render this page.
 	const summaries: CustomMcpServerSummary[] = await listCustomMcpServerSummaries();
 	const statusesById: Map<string, CustomMcpServerRuntimeStatus> = new Map(
 		mcpHost.getCustomServerStatusesForWorkspace(workspaceId).map((status: CustomMcpServerRuntimeStatus): [string, CustomMcpServerRuntimeStatus] => [status.id, status])

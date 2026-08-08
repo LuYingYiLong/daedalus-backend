@@ -20,6 +20,19 @@ export const PROVIDER_STALL_WARNING_MS: number = 12_000;
 export const PROVIDER_IDLE_RECONNECT_ATTEMPTS: 2 = 2;
 export const PROVIDER_RECONNECT_ATTEMPTS: 5 = 5;
 export const PROVIDER_EXTENDED_RECONNECT_ATTEMPTS: 15 = 15;
+/**
+ * Once a tool result has been returned, a half-open follow-up request must
+ * not occupy the run for the provider's full generic request timeout. The
+ * watchdog still resets for every real provider event, so a slow reasoning
+ * response is allowed to continue while a completely silent request is
+ * bounded.
+ */
+export const PROVIDER_POST_TOOL_INACTIVITY_TIMEOUT_MS: number = 20_000;
+export const PROVIDER_POST_TOOL_FIRST_ACTIVITY_TIMEOUT_MS: number = 20_000;
+export const PROVIDER_POST_TOOL_STALL_WARNING_MS: number = 5_000;
+export const PROVIDER_POST_TOOL_RECONNECT_ATTEMPTS: 2 = 2;
+
+export type ProviderReconnectBudget = "default" | "after_tool";
 
 const RETRYABLE_HTTP_STATUSES: ReadonlySet<number> = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 const GATEWAY_HTTP_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
@@ -137,18 +150,22 @@ export type ProviderReconnectState = {
 	autoExtended: boolean;
 };
 
-export function createProviderReconnectState(): ProviderReconnectState {
+export function createProviderReconnectState(
+	maxAttempts: 2 | 5 | 15 = PROVIDER_RECONNECT_ATTEMPTS
+): ProviderReconnectState {
 	return {
 		reconnectId: `provider-reconnect-${randomUUID()}`,
 		revision: 0,
 		attempt: 0,
-		maxAttempts: PROVIDER_RECONNECT_ATTEMPTS,
+		maxAttempts,
 		autoExtended: false
 	};
 }
 
 export type ProviderResilienceOptions<T> = {
 	providerOptions: ProviderChatOptions;
+	/** Use the shorter, non-extending budget after a tool result. */
+	reconnectBudget?: ProviderReconnectBudget | undefined;
 	onEvent?: OnToolEvent | undefined;
 	abortSignal?: AbortSignal | undefined;
 	execute: (context: ProviderAttemptContext) => Promise<T>;
@@ -344,11 +361,16 @@ function emitReconnectEvent(
 }
 
 export async function runProviderRequestWithResilience<T>(options: ProviderResilienceOptions<T>): Promise<T> {
-	const inactivityTimeoutMs: number = options.inactivityTimeoutMs ?? PROVIDER_INACTIVITY_TIMEOUT_MS;
+	const isPostToolRequest: boolean = options.reconnectBudget === "after_tool";
+	const inactivityTimeoutMs: number = options.inactivityTimeoutMs
+		?? (isPostToolRequest ? PROVIDER_POST_TOOL_INACTIVITY_TIMEOUT_MS : PROVIDER_INACTIVITY_TIMEOUT_MS);
 	const firstActivityTimeoutMs: number = Math.max(1, options.firstActivityTimeoutMs
-		?? (options.inactivityTimeoutMs === undefined ? PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS : inactivityTimeoutMs));
+		?? (options.inactivityTimeoutMs === undefined
+			? isPostToolRequest ? PROVIDER_POST_TOOL_FIRST_ACTIVITY_TIMEOUT_MS : PROVIDER_FIRST_ACTIVITY_TIMEOUT_MS
+			: inactivityTimeoutMs));
 	const watchInactivity: boolean = options.watchInactivity !== false;
-	const configuredStallWarningMs: number = options.stallWarningMs ?? PROVIDER_STALL_WARNING_MS;
+	const configuredStallWarningMs: number = options.stallWarningMs
+		?? (isPostToolRequest ? PROVIDER_POST_TOOL_STALL_WARNING_MS : PROVIDER_STALL_WARNING_MS);
 	const stallWarningMs: number = Math.max(1, Math.min(configuredStallWarningMs, Math.max(1, inactivityTimeoutMs - 1)));
 	const postReconnectInactivityTimeoutMs: number = Math.max(1, Math.min(
 		inactivityTimeoutMs,
@@ -365,7 +387,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 		? PROVIDER_EXTENDED_RECONNECT_ATTEMPTS
 		: reconnectState?.maxAttempts === PROVIDER_IDLE_RECONNECT_ATTEMPTS
 			? PROVIDER_IDLE_RECONNECT_ATTEMPTS
-			: PROVIDER_RECONNECT_ATTEMPTS;
+			: isPostToolRequest ? PROVIDER_POST_TOOL_RECONNECT_ATTEMPTS : PROVIDER_RECONNECT_ATTEMPTS;
 	let autoExtended: boolean = reconnectState?.autoExtended === true;
 	let revision: number = Math.max(0, Math.trunc(reconnectState?.revision ?? 0));
 	let lastReason: ProviderReconnectReason = "transport";
@@ -542,7 +564,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 				maxAttempts = PROVIDER_IDLE_RECONNECT_ATTEMPTS;
 				autoExtended = false;
 			}
-			if (currentAttempt >= maxAttempts && maxAttempts === PROVIDER_RECONNECT_ATTEMPTS && classification.extensionEligible) {
+			if (!isPostToolRequest && currentAttempt >= maxAttempts && maxAttempts === PROVIDER_RECONNECT_ATTEMPTS && classification.extensionEligible) {
 				maxAttempts = PROVIDER_EXTENDED_RECONNECT_ATTEMPTS;
 				autoExtended = true;
 			}

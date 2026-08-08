@@ -169,7 +169,11 @@ import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataR
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "./next-step-hints.js";
 import type { NextStepHint } from "./next-step-hints.js";
-import { hasProviderResponseStalledError, WorkflowExecutionError } from "./workflow/workflow-error.js";
+import {
+	hasProviderConnectionInterruptedError,
+	hasProviderResponseStalledError,
+	WorkflowExecutionError
+} from "./workflow/workflow-error.js";
 import type { WorkflowPhaseToolStats, WorkflowPhaseRunResult } from "./workflow/shared-types.js";
 import { MAX_WORKFLOW_AUTO_REPAIR_ROUNDS } from "./workflow/limits.js";
 import {
@@ -1786,14 +1790,17 @@ export async function finishQueueItemForRun(
 	await removeQueueItemForCompletedRun(socket, requestId, session, queueItemId);
 }
 
-function getProviderResponseStall(error: unknown): ProviderErrorInfo | null {
-	if (!hasProviderResponseStalledError(error)) {
-		return null;
+function getProviderResponseInterruption(error: unknown): ProviderErrorInfo | null {
+	if (hasProviderResponseStalledError(error)) {
+		return classifyProviderError({ code: "provider_response_stalled" });
 	}
-	return classifyProviderError({ code: "provider_response_stalled" });
+	if (hasProviderConnectionInterruptedError(error)) {
+		return classifyProviderError({ code: "provider_connection_interrupted" });
+	}
+	return null;
 }
 
-async function pauseProviderResponseStalledRun(params: {
+async function pauseProviderResponseInterruptedRun(params: {
 	socket: WebSocket;
 	requestId: string;
 	session: ClientSession;
@@ -1806,7 +1813,7 @@ async function pauseProviderResponseStalledRun(params: {
 	if (currentRun === undefined || currentRun.terminal !== null) {
 		return false;
 	}
-	// A stalled workflow can stop before its final summary persists the turn.
+	// A provider-interrupted run can stop before its final summary persists the turn.
 	// Save the user request first so the retry RPC and a later “continue” both
 	// have one authoritative source request after reconnecting or reopening.
 	await appendUserMessageToSession(
@@ -2999,17 +3006,17 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					});
 					break;
 				}
-				const stalledProviderError: ProviderErrorInfo | null = getProviderResponseStall(error);
-				if (stalledProviderError !== null && await pauseProviderResponseStalledRun({
+				const interruptedProviderError: ProviderErrorInfo | null = getProviderResponseInterruption(error);
+				if (interruptedProviderError !== null && await pauseProviderResponseInterruptedRun({
 					socket,
 					requestId: request.id,
 					session,
-					providerError: stalledProviderError,
+					providerError: interruptedProviderError,
 					userMessage: persistedParams.message,
 					userCreatedAt: turnStartedAt,
 					additionalContext: persistedParams.additionalContext
 				})) {
-					logger.warn("ai", "provider_response_stalled", {
+					logger.warn("ai", "provider_response_interrupted", {
 						requestId: request.id,
 						sessionId: runSessionId,
 						workspaceId: session.activeWorkspace?.id,

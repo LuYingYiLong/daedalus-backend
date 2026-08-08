@@ -32,7 +32,10 @@ export function filterLlmContextMessages(messages: readonly ChatMessage[]): Chat
 }
 
 const HIDDEN_AGENT_RUN_STAGES: ReadonlySet<AgentRunState["stage"]> = new Set(["failed"]);
-const CONTEXT_PRESERVING_INTERRUPTION_REASONS: ReadonlySet<string> = new Set(["provider_response_stalled"]);
+const CONTEXT_PRESERVING_INTERRUPTION_REASONS: ReadonlySet<string> = new Set([
+	"provider_response_stalled",
+	"provider_connection_interrupted"
+]);
 
 function createUnfinishedTurnContextMarker(requestId: string): ChatMessage {
 	return {

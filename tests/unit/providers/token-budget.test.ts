@@ -92,7 +92,7 @@ test("failed transcript-only turns persist but stay out of LLM context", async (
 	});
 });
 
-test("session history preserves cancelled and provider-stalled user intent with an unfinished-turn marker", async (): Promise<void> => {
+test("session history preserves cancelled and provider-interrupted user intent with an unfinished-turn marker", async (): Promise<void> => {
 	const transcriptHistory = await import("../../../src/server/transcript-history.js");
 	const session: ClientSession = createClientSession(undefined);
 	session.messages = [
@@ -100,6 +100,7 @@ test("session history preserves cancelled and provider-stalled user intent with 
 		{ role: "user", content: "cancelled task", requestId: "request-cancelled", excludeFromLlmContext: true },
 		{ role: "user", content: "interrupted task", requestId: "request-interrupted" },
 		{ role: "user", content: "stalled task", requestId: "request-stalled", excludeFromLlmContext: true },
+		{ role: "user", content: "connection task", requestId: "request-connection", excludeFromLlmContext: true },
 		{ role: "user", content: "completed task", requestId: "request-completed" },
 		{ role: "assistant", content: "completed answer", requestId: "request-completed" },
 		{ role: "user", content: "current task", requestId: "request-current" }
@@ -136,6 +137,12 @@ test("session history preserves cancelled and provider-stalled user intent with 
 	}), "interrupted", {
 		interruptedReason: "provider_response_stalled"
 	});
+	const connection = transitionAgentRunState(createAgentRunState({
+		sessionId: "session-history",
+		requestId: "request-connection"
+	}), "interrupted", {
+		interruptedReason: "provider_connection_interrupted"
+	});
 	const completed = transitionAgentRunState(
 		transitionAgentRunState(createAgentRunState({
 			sessionId: "session-history",
@@ -149,7 +156,7 @@ test("session history preserves cancelled and provider-stalled user intent with 
 			}
 		}
 	);
-	for (const run of [failed, cancelled, interrupted, stalled, completed]) {
+	for (const run of [failed, cancelled, interrupted, stalled, connection, completed]) {
 		session.agentRuns.set(run.runId, run);
 	}
 
@@ -159,6 +166,8 @@ test("session history preserves cancelled and provider-stalled user intent with 
 			"cancelled task",
 			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"stalled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
+			"connection task",
 			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"completed task",
 			"completed answer",
@@ -195,6 +204,8 @@ test("session history preserves cancelled and provider-stalled user intent with 
 			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"interrupted task",
 			"stalled task",
+			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
+			"connection task",
 			"[Previous turn state]\nThe preceding user request did not complete before the assistant response ended.\nIt remains unfinished user intent. Use it to resolve follow-ups such as 'continue', but do not claim it was completed or reuse incomplete assistant text as a result.",
 			"completed task",
 			"completed answer",

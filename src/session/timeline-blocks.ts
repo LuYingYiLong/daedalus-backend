@@ -1140,14 +1140,19 @@ function buildAssistantBodyParts(
 				markRunningImageGenerationFailed(parts, reason);
 			} else if (stage === "interrupted") {
 				const interruptedReason: string = asString(eventData.interruptedReason);
-				const providerResponseStalled: boolean = interruptedReason === "provider_response_stalled";
-				const reason: string = providerResponseStalled
-					? "The model provider stopped producing data before the response completed."
+				const providerReconnectInterrupted: boolean = interruptedReason === "provider_response_stalled"
+					|| interruptedReason === "provider_connection_interrupted";
+				const reason: string = providerReconnectInterrupted
+					? interruptedReason === "provider_connection_interrupted"
+						? "The model provider connection ended before the response completed."
+						: "The model provider stopped producing data before the response completed."
 					: "The backend stopped before this run reached a terminal state.";
 				markRunningImageGenerationFailed(parts, reason);
 				appendStatusPart(parts, {
 					status: "warning",
-					title: providerResponseStalled ? "Model response paused" : "Run interrupted",
+					title: interruptedReason === "provider_response_stalled"
+						? "Model response paused"
+						: providerReconnectInterrupted ? "Model response interrupted" : "Run interrupted",
 					details: `${reason} Retry it from its safe checkpoint.`,
 					code: "agent_run_interrupted",
 					actionLabel: "Retry from checkpoint",

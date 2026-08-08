@@ -51,7 +51,10 @@ import {
 } from "./tool-image-recognition.js";
 import {
 	createProviderReconnectState,
+	PROVIDER_POST_TOOL_RECONNECT_ATTEMPTS,
 	runProviderRequestWithResilience,
+	PROVIDER_RECONNECT_ATTEMPTS,
+	type ProviderReconnectBudget,
 	type ProviderReconnectState
 } from "./provider-resilience.js";
 
@@ -1116,10 +1119,12 @@ async function readStreamingAssistantMessage(
 	emitContentDeltas: boolean = true,
 	abortSignal?: AbortSignal | undefined,
 	toolContext?: ToolExecutionContext | undefined,
-	reconnectState?: ProviderReconnectState | undefined
+	reconnectState?: ProviderReconnectState | undefined,
+	reconnectBudget: ProviderReconnectBudget = "default"
 ): Promise<StreamedAssistantMessage> {
 	return runProviderRequestWithResilience({
 		providerOptions: options,
+		reconnectBudget,
 		onEvent,
 		abortSignal,
 		reconnectState,
@@ -1175,7 +1180,8 @@ async function createFinalAnswer(
 	abortSignal?: AbortSignal | undefined,
 	aliasContext?: ToolNameAliasContext | undefined,
 	toolImageReferences: readonly ProviderToolImageReference[] = [],
-	reconnectState?: ProviderReconnectState | undefined
+	reconnectState?: ProviderReconnectState | undefined,
+	reconnectBudget: ProviderReconnectBudget = "after_tool"
 ): Promise<string> {
 	const finalMessages: ChatCompletionMessageParam[] = await injectToolImagesIntoChatMessages([
 		...messages,
@@ -1196,9 +1202,10 @@ async function createFinalAnswer(
 	try {
 		completion = await runProviderRequestWithResilience({
 			providerOptions: options,
+			reconnectBudget,
 			abortSignal,
 			reconnectState,
-			watchInactivity: false,
+			watchInactivity: reconnectBudget === "after_tool" ? true : false,
 			execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 		});
 	} catch (error: unknown) {
@@ -1268,7 +1275,10 @@ async function runAgentLoop(
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
-		stepReconnectState ??= createProviderReconnectState();
+		const reconnectBudget: ProviderReconnectBudget = step > 0 || startStep > 0 ? "after_tool" : "default";
+		stepReconnectState ??= createProviderReconnectState(
+			reconnectBudget === "after_tool" ? PROVIDER_POST_TOOL_RECONNECT_ATTEMPTS : PROVIDER_RECONNECT_ATTEMPTS
+		);
 
 		const providerMessages: ChatCompletionMessageParam[] = await injectToolImagesIntoChatMessages(messages, toolImageReferences);
 		let toolCalls: ChatCompletionMessageToolCall[] | undefined;
@@ -1292,7 +1302,8 @@ async function runAgentLoop(
 					!requiredToolCallOnStep,
 					abortSignal,
 					toolContext,
-					stepReconnectState
+					stepReconnectState,
+					reconnectBudget
 				);
 			} catch (error: unknown) {
 				if (!imageFallbackAttempted && toolImageReferences.length > 0 && isProviderImageInputUnsupportedError(error)) {
@@ -1328,10 +1339,11 @@ async function runAgentLoop(
 			try {
 				completion = await runProviderRequestWithResilience({
 					providerOptions: options,
+					reconnectBudget,
 					onEvent,
 					abortSignal,
 					reconnectState: stepReconnectState,
-					watchInactivity: false,
+					watchInactivity: reconnectBudget === "after_tool" ? true : false,
 					execute: async (attempt) => client.chat.completions.create(requestBody, { signal: attempt.signal })
 				});
 			} catch (error: unknown) {

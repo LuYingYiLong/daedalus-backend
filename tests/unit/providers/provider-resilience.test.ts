@@ -83,6 +83,31 @@ test("eligible transport failures automatically extend from five to fifteen reco
 	assert.equal(extended?.type === "provider.reconnect" ? extended.autoExtended : false, true);
 });
 
+test("post-tool transport failures use a bounded budget and never auto-extend", async (): Promise<void> => {
+	const events: ToolEvent[] = [];
+	let calls: number = 0;
+	await assert.rejects(
+		runProviderRequestWithResilience({
+			providerOptions,
+			reconnectBudget: "after_tool",
+			onEvent: (event: ToolEvent): void => { events.push(event); },
+			sleep: immediateSleep,
+			execute: async (): Promise<string> => {
+				calls += 1;
+				throw Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+			}
+		}),
+		ProviderConnectionInterruptedError
+	);
+
+	assert.equal(calls, 3);
+	const reconnects = events.filter((event): event is Extract<ToolEvent, { type: "provider.reconnect" }> => event.type === "provider.reconnect");
+	assert.ok(reconnects.length > 0);
+	assert.ok(reconnects.every((event): boolean => event.maxAttempts === 2 && event.autoExtended === false));
+	assert.equal(reconnects.at(-1)?.status, "failed");
+	assert.equal(reconnects.at(-1)?.attempt, 2);
+});
+
 test("rate limiting stops after five reconnect attempts", async (): Promise<void> => {
 	const events: ToolEvent[] = [];
 	let calls: number = 0;

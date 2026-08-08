@@ -189,7 +189,7 @@ test("plan events are persisted for timeline recovery", (): void => {
 	assert.equal(shouldPersistSessionEvent("plan.revised"), true);
 });
 
-test("approved plan execution forces agent multi-phase workflow", (): void => {
+test("approved plan execution uses the free Agent Loop without a legacy workflow option", (): void => {
 	const plan: StoredPlan = {
 		metadata: createPlanMetadata({
 			sessionId: "session-20260712-test",
@@ -204,7 +204,9 @@ test("approved plan execution forces agent multi-phase workflow", (): void => {
 	const params = createApprovedPlanExecutionParams(plan, "moonshot", "kimi-k3");
 
 	assert.equal(params.mode, "agent");
-	assert.equal(params.options?.workflow, "multi_phase");
+	assert.equal(params.options?.workflow, undefined);
+	assert.equal(params.options?.executionPolicy, "auto");
+	assert.equal(params.options?.outputTarget, "workspace");
 	assert.equal(params.options?.toolBudget, "project_edit");
 	assert.equal(params.message, "执行计划。");
 	assert.equal(params.provider, "moonshot");
@@ -213,9 +215,8 @@ test("approved plan execution forces agent multi-phase workflow", (): void => {
 	assert.match(params.systemPrompt ?? "", /原始用户请求：\n审批/);
 });
 
-test("plan approval persists agent mode and streams every execution phase", async (): Promise<void> => {
+test("plan approval persists agent mode without phase execution modules", async (): Promise<void> => {
 	const planHandlersSource: string = await readFile(new URL("../../../src/server/handlers/plan-handlers.ts", import.meta.url), "utf8");
-	const continuationSource: string = await readFile(new URL("../../../src/server/workflow/continuation.ts", import.meta.url), "utf8");
 	const modeSwitchIndex: number = planHandlersSource.indexOf('session.workbenchComposer.chatMode = "agent"');
 	const executionStartIndex: number = planHandlersSource.indexOf("await handleChatRequest(socket, executionRequest");
 
@@ -223,7 +224,7 @@ test("plan approval persists agent mode and streams every execution phase", asyn
 	assert.ok(executionStartIndex > modeSwitchIndex);
 	assert.match(planHandlersSource, /updateSessionMetadata\(sessionId, createRuntimeSessionUiMetadata\(session\)\)/);
 	assert.match(planHandlersSource, /workbench: serializeWorkbench\(session\)/);
-	assert.match(continuationSource, /const streamPhase: boolean = streamFinal/);
+	assert.doesNotMatch(planHandlersSource, /continueWorkflowExecution|startWorkflowExecution/);
 });
 
 test("plan clarification and revision runs are cancellable active runs", async (): Promise<void> => {

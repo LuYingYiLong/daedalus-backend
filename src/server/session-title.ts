@@ -81,8 +81,7 @@ function createTitleParams(userMessage: string, maxTokens: number): AiChatParams
 		].join("\n"),
 		options: {
 			temperature: 0.2,
-			maxTokens,
-			workflow: "single"
+			maxTokens
 		}
 	};
 }

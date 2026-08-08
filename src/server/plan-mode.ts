@@ -552,8 +552,7 @@ async function runPlanAgentDecision(
 			maxTokens: 3200,
 			responseFormat: "json",
 			stream: true,
-			toolBudget: "normal",
-			workflow: "single"
+			toolBudget: "normal"
 		}
 	};
 
@@ -851,7 +850,8 @@ export function createApprovedPlanExecutionParams(
 		options: {
 			stream: true,
 			toolBudget: "project_edit",
-			workflow: "multi_phase"
+			executionPolicy: "auto",
+			outputTarget: "workspace"
 		}
 	};
 }

@@ -68,25 +68,7 @@ import {
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName } from "../../providers/provider-registry.js";
 import { classifyProviderError, createProviderStatusEvent } from "../../providers/provider-error.js";
 import { generateSessionTitle, shouldApplyGeneratedSessionTitle } from "../session-title.js";
-import { createSingleAnswerPlan, planWorkflow, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../../workflow/planner.js";
-import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../../workflow/llm-planner.js";
-import {
-	applyDeterministicVerificationGate,
-	applyToolEventToWorkflowObservations,
-	createWorkflowPhaseOutcome,
-	createWorkflowPhaseRunId
-} from "../../workflow/outcome.js";
-import {
-	appendPhaseOutput,
-	createPhaseMessage,
-	createPhaseParams,
-	createPhasePrompt,
-	createWorkflowTodoSnapshot,
-	markRemainingWorkflowTodos,
-	updateWorkflowPhaseStatus
-} from "../../workflow/runner.js";
-import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../../workflow/repair.js";
-import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../../workflow/types.js";
+import type { WorkflowToolObservation } from "../../workflow/types.js";
 import {
 	addLightweightActionObservation,
 	applyToolEventToLightweightActionState,
@@ -130,9 +112,6 @@ import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataR
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "../pending-guides.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "../next-step-hints.js";
 import type { NextStepHint } from "../next-step-hints.js";
-import { WorkflowExecutionError } from "../workflow/workflow-error.js";
-import type { WorkflowPhaseToolStats, WorkflowPhaseRunResult } from "../workflow/shared-types.js";
-import { MAX_WORKFLOW_AUTO_REPAIR_ROUNDS } from "../workflow/limits.js";
 import {
 	shouldPersistSessionEvent,
 	getThinkingEventBufferKey,
@@ -166,12 +145,8 @@ import {
 	sendContinuedAgentResult,
 	waitForPendingApprovalContinuationRegistration
 } from "../approval-continuation.js";
-import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "../workflow/tool-events.js";
+import { createAgentToolEventForwarder } from "../workflow/tool-events.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
-import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "../workflow/events.js";
-import { runWorkflowPhase, createWorkflowPhasePrompt } from "../workflow/phase-runner.js";
-import { createWorkflowPendingContinuation, continueWorkflowExecution } from "../workflow/continuation.js";
-import { startWorkflowExecution } from "../workflow/executor.js";
 import { ensureProviderConfigured } from "../../application/provider-session-service.js";
 import { findSessionWithPendingApproval } from "../client-connections.js";
 import { withMcpRequestContext } from "../../mcp/request-context.js";
@@ -181,6 +156,7 @@ import {
 	recordAgentRunToolEvent,
 	updateAgentRun
 } from "../agent-run-controller.js";
+import { assertNoLegacyWorkflow, LegacyWorkflowRemovedError } from "../legacy-workflow-guard.js";
 
 function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, historyTokensStored: number | null = null): Record<string, unknown> {
 	return {
@@ -267,6 +243,7 @@ async function continueAfterRejectedApproval(params: {
 	queueItemId?: number | undefined;
 }): Promise<void> {
 	const { socket, requestId, session, mcpHost, pending, pendingContinuation, queueItemId } = params;
+	assertNoLegacyWorkflow(pendingContinuation, "rejected approval continuation");
 	const abortController = new AbortController();
 	session.activeAbortControllers.set(pendingContinuation.requestId, abortController);
 	try {
@@ -282,7 +259,6 @@ async function continueAfterRejectedApproval(params: {
 			message: failure.message,
 			failure
 		};
-		const rejectedToolObservation: WorkflowToolObservation = createApprovedWorkflowToolObservation(pending, failureContent);
 		const currentRun = getAgentRun(session, pendingContinuation.requestId);
 		if (currentRun?.stage === "awaiting_approval") {
 			updateAgentRun(socket, session, pendingContinuation.requestId, "executing", { pause: null });
@@ -314,12 +290,6 @@ async function continueAfterRejectedApproval(params: {
 			hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
 			abortController.signal
 		);
-		const continuationWorkflowState = pendingContinuation.workflowState === undefined
-			? undefined
-			: {
-				...pendingContinuation.workflowState,
-				originalParams: continuationParams
-			};
 		const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
 			if (pendingContinuation.lightweightActionState !== undefined) {
 				applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, event);
@@ -366,30 +336,14 @@ async function continueAfterRejectedApproval(params: {
 				context
 			));
 
-		if (continuationWorkflowState !== undefined) {
-			await continueWorkflowExecution(
-				socket,
-				pendingContinuation.requestId,
-				session,
-				mcpHost,
-				pendingContinuation.options,
-				continuationWorkflowState,
-				pendingContinuation.userCreatedAt,
-				agentResult,
-				pendingContinuation.requestId,
-				abortController.signal,
-				[rejectedToolObservation]
-			);
-		} else {
-			await sendContinuedAgentResult(
-				socket,
-				pendingContinuation.requestId,
-				session,
-				mcpHost,
-				agentResult,
-				pendingContinuation
-			);
-		}
+		await sendContinuedAgentResult(
+			socket,
+			pendingContinuation.requestId,
+			session,
+			mcpHost,
+			agentResult,
+			pendingContinuation
+		);
 		setWorkbenchActiveRun(session, { status: "idle" });
 		const queueHelpers = await import("../chat-orchestrator.js");
 		await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
@@ -526,6 +480,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			if (pendingContinuation === undefined && pendingState?.continuation === undefined) {
 				pendingContinuation = await waitForPendingApprovalContinuationRegistration(session, request.params.approvalId);
 			}
+			assertNoLegacyWorkflow(
+				pendingContinuation ?? pendingState?.continuation,
+				"approval continuation"
+			);
 			continuationRequestId = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
 			pendingContinuationForRun = pendingContinuation;
 			queueItemId = pendingContinuation?.params.options?.queueItemId;
@@ -752,12 +710,6 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				abortController.signal
 			);
 			throwIfAborted(abortController.signal);
-			const continuationWorkflowState = pendingContinuation.workflowState !== undefined
-				? {
-					...pendingContinuation.workflowState,
-					originalParams: continuationParams
-				}
-				: undefined;
 			const agentResultPromise: Promise<ProviderAgentResult> = pendingContinuation.stream
 				? continueProviderAgentStreaming(
 					continuationParams,
@@ -812,29 +764,6 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
 			throwIfAborted(abortController.signal);
 
-			if (continuationWorkflowState !== undefined) {
-				await awaitWithAbort(continueWorkflowExecution(
-					socket,
-					pendingContinuation.requestId,
-					session,
-					mcpHost,
-					pendingContinuation.options,
-					continuationWorkflowState,
-					pendingContinuation.userCreatedAt,
-					agentResult,
-					pendingContinuation.requestId,
-					abortController.signal,
-					[approvedToolObservation]
-				), abortController.signal);
-				throwIfAborted(abortController.signal);
-				setWorkbenchActiveRun(session, { status: "idle" });
-				const queueHelpers = await import("../chat-orchestrator.js");
-				await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
-				void queueHelpers.drainMessageQueue(socket, request.id, session, mcpHost);
-				emitWorkbenchUpdated(socket, request.id, session);
-				break;
-			}
-
 			await sendContinuedAgentResult(
 				socket,
 				pendingContinuation.requestId,
@@ -853,25 +782,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				error instanceof LightweightActionScopeExceededError
 				&& pendingContinuationForRun !== undefined
 			) {
-				const queueHelpers = await import("../chat-orchestrator.js");
-				await queueHelpers.escalatePendingContinuationToWorkflow({
-					socket,
-					session,
-					mcpHost,
-					pendingContinuation: pendingContinuationForRun,
-					abortSignal: abortController.signal,
-					reason: error.reason
-				});
-				setWorkbenchActiveRun(session, { status: "idle" });
-				await queueHelpers.finishQueueItemForRun(
-					socket,
-					pendingContinuationForRun.requestId,
-					session,
-					queueItemId
+				error = new LegacyWorkflowRemovedError(
+					"The removed lightweight-to-phase workflow escalation was requested. Start a new Agent Loop run instead."
 				);
-				void queueHelpers.drainMessageQueue(socket, request.id, session, mcpHost);
-				emitWorkbenchUpdated(socket, request.id, session);
-				break;
 			}
 			if (isCancellationError(error, abortController.signal)) {
 				setWorkbenchActiveRun(session, { status: "idle" });
@@ -898,18 +811,17 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					message: errorMessage
 				}, continuationRequestId);
 			}
-			if (error instanceof WorkflowExecutionError) {
-				const workflowErrorMessage: string = error.message.length > 0
-					? error.message
-					: error.originalError instanceof Error
-						? error.originalError.message
-						: "Workflow failed";
-				sendWorkflowEvent(socket, continuationRequestId, session, "workflow.error", {
-					workflowId: error.plan.id,
+			if (error instanceof LegacyWorkflowRemovedError) {
+				if (pendingContinuationForRun !== undefined) {
+					session.pendingAiContinuations.delete(request.params.approvalId);
+					await removeAgentRunContinuation(pendingContinuationForRun.requestId);
+				}
+				sendSessionEvent(socket, continuationRequestId, session, "agent.run.error", {
+					runId: continuationRequestId,
 					requestId: continuationRequestId,
-					title: error.plan.title,
-					code: "agent_run_error",
-					message: workflowErrorMessage,
+					status: "error",
+					code: error.code,
+					message: error.message,
 					sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 				}, continuationRequestId);
 			} else if (error instanceof LightweightActionVerificationError) {

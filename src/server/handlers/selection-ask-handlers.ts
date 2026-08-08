@@ -145,7 +145,6 @@ async function runSelectionAskResponse(params: {
 		mode: "ask",
 		options: {
 			stream: true,
-			workflow: "single",
 			...(params.thread.reasoningEffort === undefined ? {} : { reasoningEffort: params.thread.reasoningEffort })
 		}
 	};

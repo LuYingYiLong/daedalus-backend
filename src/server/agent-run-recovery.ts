@@ -1,12 +1,14 @@
 import {
 	listAgentRunStates,
 	markActiveAgentRunsInterrupted,
-	readAgentRunContinuation
+	readAgentRunContinuation,
+	removeAgentRunContinuation
 } from "../session/agent-run-store.js";
 import type { PendingAiContinuation } from "../session/pending-continuation.js";
 import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ClientSession } from "./client-session.js";
+import { isLegacyWorkflowContinuation, isLegacyWorkflowRunState } from "./legacy-workflow-guard.js";
 
 function restoreApiKey<T extends PendingAiContinuation>(continuation: T, apiKey: string): T {
 	return {
@@ -33,6 +35,15 @@ export async function hydrateAgentRunRuntime(
 	for (const state of states) {
 		session.agentRuns.set(state.runId, state);
 		session.agentRunToolCalls.set(state.runId, new Map());
+		if (isLegacyWorkflowRunState(state)) {
+			const persistedLegacy = await readAgentRunContinuation(state.runId);
+			if (persistedLegacy !== null && isLegacyWorkflowContinuation(
+				persistedLegacy.kind === "approval" ? persistedLegacy.continuation : persistedLegacy.pending.continuation
+			)) {
+				await removeAgentRunContinuation(state.runId);
+			}
+			continue;
+		}
 		if (
 			apiKey === undefined
 			|| (state.stage !== "awaiting_approval" && state.stage !== "awaiting_tool_budget")

@@ -119,8 +119,7 @@ function createCompressionParams(message: string, maxTokens: number): Parameters
 	return {
 		message,
 		options: {
-			maxTokens,
-			workflow: "single"
+			maxTokens
 		}
 	};
 }

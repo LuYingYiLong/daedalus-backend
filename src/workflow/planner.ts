@@ -1,6 +1,7 @@
 import type { AiChatParams } from "../protocol/types.js";
-import { getDefaultWorkflowToolNames } from "../tools/tool-catalog.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../tools/tool-sentinels.js";
+export { READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./tool-sets.js";
+import { READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "./tool-sets.js";
 import type { WorkflowCompletionContract, WorkflowPhase, WorkflowPhaseId, WorkflowPlan, WorkflowTodoItem } from "./types.js";
 import { createVisibleWorkflowTodos } from "./todos.js";
 import { getExecutionPolicy } from "./router.js";
@@ -8,12 +9,6 @@ import { getWorkflowExecutionProfile, getWorkflowToolsForProfile, type WorkflowE
 import { applyWorkflowVerificationPolicy } from "./verification-policy.js";
 
 type FixedWorkflowPhaseId = "inspect" | "implement" | "review" | "verify" | "summarize";
-
-export const READ_TOOLS: string[] = getDefaultWorkflowToolNames("read");
-
-export const VERIFY_TOOLS: string[] = getDefaultWorkflowToolNames("verify");
-
-export const WRITE_TOOLS: string[] = getDefaultWorkflowToolNames("write");
 
 const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	inspect: {

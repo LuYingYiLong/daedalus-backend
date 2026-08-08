@@ -65,25 +65,6 @@ import {
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName } from "../providers/provider-registry.js";
 import { classifyProviderError, createProviderStatusEvent } from "../providers/provider-error.js";
 import { generateSessionTitle, shouldApplyGeneratedSessionTitle } from "./session-title.js";
-import { createSingleAnswerPlan, planWorkflow, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
-import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
-import {
-	applyDeterministicVerificationGate,
-	applyToolEventToWorkflowObservations,
-	createWorkflowPhaseOutcome,
-	createWorkflowPhaseRunId
-} from "../workflow/outcome.js";
-import {
-	appendPhaseOutput,
-	createPhaseMessage,
-	createPhaseParams,
-	createPhasePrompt,
-	createWorkflowTodoSnapshot,
-	markRemainingWorkflowTodos,
-	updateWorkflowPhaseStatus
-} from "../workflow/runner.js";
-import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../workflow/repair.js";
-import type { WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
 	clearActiveSession,
 	type ClientSession,
@@ -154,10 +135,6 @@ import {
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
-import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
-import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
-import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
-import { startWorkflowExecution } from "./workflow/executor.js";
 import { logger } from "../logger.js";
 
 function applyProviderConfigToSession(session: ClientSession, config: ProviderConfigWithSecret): void {

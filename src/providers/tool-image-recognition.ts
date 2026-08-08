@@ -56,7 +56,7 @@ export async function recognizeToolImageReferences(
 			`Current task context: ${contextText}`
 		].join("\n\n"),
 		additionalContext: hydrated.map(createImageContextFromHydratedReference),
-		options: { temperature: 0.1, maxTokens: MAX_OBSERVATION_CHARS, workflow: "single" }
+		options: { temperature: 0.1, maxTokens: MAX_OBSERVATION_CHARS }
 	};
 	const options: ProviderChatOptions = withProviderUsageContext(imageModel.options, {
 		operation: "tool_image_recognition"

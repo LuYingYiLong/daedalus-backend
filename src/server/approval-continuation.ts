@@ -40,6 +40,7 @@ import {
 } from "../workflow/agent-run-state.js";
 import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
 import { cloneAgentLoopState, type AgentLoopState } from "../workflow/agent-loop-state.js";
+import { isLegacyWorkflowContinuation, LegacyWorkflowRemovedError } from "./legacy-workflow-guard.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -56,6 +57,11 @@ export function createPendingAiContinuation(
 	chatCompletion?: PendingAiContinuation["chatCompletion"],
 	agentLoopState?: AgentLoopState | undefined
 ): PendingAiContinuation {
+	if (workflowState !== undefined) {
+		throw new LegacyWorkflowRemovedError(
+			"The removed phase-based workflow cannot create an approval continuation. Start a new Agent Loop run instead."
+		);
+	}
 	const pendingContinuation: PendingAiContinuation = {
 		params,
 		options,
@@ -80,11 +86,6 @@ export function createPendingAiContinuation(
 	}
 	if (agentLoopState !== undefined) {
 		pendingContinuation.agentLoopState = cloneAgentLoopState(agentLoopState);
-	}
-
-	if (workflowState !== undefined) {
-		pendingContinuation.agentRunState = workflowState;
-		pendingContinuation.workflowState = workflowState;
 	}
 
 	return pendingContinuation;
@@ -276,10 +277,26 @@ export async function loadHydratedPendingApprovalStates(
 
 	const memoryStates: PendingApprovalState[] = createMemoryPendingApprovalStates(session);
 	session.approvalGateway.replaceDownloadAuthorizations(collectApprovedDownloadAuthorizations(approvalEvents));
-	const states: PendingApprovalState[] = mergeHydratedPendingApprovalStates(
+	const hydratedStates: PendingApprovalState[] = mergeHydratedPendingApprovalStates(
 		foldPendingApprovalStates(approvalEvents),
 		memoryStates
 	);
+	const legacyStates: PendingApprovalState[] = hydratedStates.filter((state: PendingApprovalState): boolean => (
+		state.continuation !== undefined && isLegacyWorkflowContinuation(state.continuation)
+	));
+	for (const state of legacyStates) {
+		await appendApprovalEvent(
+			session.sessionId,
+			state.approval.approvalId,
+			state.requestId,
+			"cancelled",
+			{
+				code: "legacy_workflow_removed",
+				message: "The legacy phase-based workflow was removed and this approval cannot be resumed."
+			}
+		);
+	}
+	const states: PendingApprovalState[] = hydratedStates.filter((state: PendingApprovalState): boolean => !legacyStates.includes(state));
 	session.approvalGateway.replacePending(states.map((state: PendingApprovalState): PendingApproval => state.approval));
 	const pendingIds: Set<string> = new Set(states.map((state: PendingApprovalState): string => state.approval.approvalId));
 	for (const approvalId of session.pendingAiContinuations.keys()) {

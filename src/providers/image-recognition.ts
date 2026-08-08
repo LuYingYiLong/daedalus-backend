@@ -67,8 +67,7 @@ function createRecognitionPrompt(params: AiChatParams): AiChatParams {
 		additionalContext: params.additionalContext,
 		options: {
 			temperature: 0.1,
-			maxTokens: IMAGE_RECOGNITION_MAX_CHARS,
-			workflow: "single"
+			maxTokens: IMAGE_RECOGNITION_MAX_CHARS
 		}
 	};
 }

@@ -58,6 +58,7 @@ export function routeWorkflowExecution(
 ): WorkflowRouteDecision {
 	const executionPolicy: ExecutionPolicy = getExecutionPolicy(params);
 	const outputTarget: OutputTarget = getOutputTarget(params);
+	const workflowOption: WorkflowOption = params.options?.workflow ?? "auto";
 	if (params.mode === "ask" || params.mode === "plan") {
 		return createReadRoute("The selected chat mode is read-only.", "mode_read_only", outputTarget);
 	}
@@ -65,7 +66,6 @@ export function routeWorkflowExecution(
 		return createReadRoute("The request explicitly uses the read-only execution policy.", "execution_read_only", outputTarget);
 	}
 
-	const workflowOption: WorkflowOption = params.options?.workflow ?? "auto";
 	if (context.hasActiveWorkspace && (params.mode ?? "agent") === "agent") {
 		return {
 			intent: "answer",

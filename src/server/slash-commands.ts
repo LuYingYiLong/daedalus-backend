@@ -316,7 +316,7 @@ async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientReques
 		title: "Todo UI test",
 		intent: "mutate",
 		scope: "complex",
-		lane: "workflow"
+		lane: "agent_loop"
 	});
 	const todo: WorkflowTodoSnapshot = {
 		workflowId: runId,
@@ -536,18 +536,8 @@ export async function handleSlashCommand(params: {
 			await sendChatText(socket, request, "请在 `/workflow` 后提供要执行的任务。", session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
-		return {
-			type: "ai",
-			params: {
-				...request.params,
-				mode: "agent",
-				message: restText,
-				options: {
-					...(request.params.options ?? {}),
-					workflow: "multi_phase"
-				}
-			}
-		};
+		await sendChatText(socket, request, "The legacy Workflow command has been removed. Submit this task in Agent mode instead.", session, mcpHost, createSessionInfo);
+		return { type: "handled" };
 	}
 
 	if (command === "/test-approval") {

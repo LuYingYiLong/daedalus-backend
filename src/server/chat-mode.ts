@@ -1,7 +1,7 @@
 import type { AiChatParams } from "../protocol/types.js";
 import { getPlanSafeDynamicMcpToolNames } from "../tools/dynamic-mcp-tools.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../tools/tool-sentinels.js";
-import { READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
+import { READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/tool-sets.js";
 
 export function resolveAllowedToolsForChatParams(
 	params: AiChatParams,
@@ -32,12 +32,12 @@ export function normalizeChatParamsForMode(params: AiChatParams): AiChatParams {
 		return params;
 	}
 
+	const { workflow: _legacyWorkflow, ...modeOptions } = params.options ?? {};
 	return {
 		...params,
 		options: {
-			...params.options,
-			toolBudget: "normal",
-			workflow: "single"
+			...modeOptions,
+			toolBudget: "normal"
 		}
 	};
 }

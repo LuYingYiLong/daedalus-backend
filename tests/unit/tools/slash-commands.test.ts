@@ -307,7 +307,7 @@ test("mode slash commands strip their prefix and forward the requested chat mode
 	});
 });
 
-test("workflow slash command strips its prefix and opts into the explicit workflow lane", async (): Promise<void> => {
+test("removed workflow slash command is handled without starting a run", async (): Promise<void> => {
 	const socket = createSocketMock();
 	const session: ClientSession = createClientSession(undefined);
 	const request: ClientRequest = {
@@ -329,13 +329,5 @@ test("workflow slash command strips its prefix and opts into the explicit workfl
 		createSessionInfo: (): Record<string, unknown> => ({ ok: true })
 	});
 
-	assert.deepEqual(result, {
-		type: "ai",
-		params: {
-			...request.params,
-			mode: "agent",
-			message: "Refactor the authentication flow",
-			options: { stream: true, workflow: "multi_phase" }
-		}
-	});
+	assert.deepEqual(result, { type: "handled" });
 });

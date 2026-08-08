@@ -91,8 +91,7 @@ export async function createNextStepHints(
 			options: {
 				temperature: 0.35,
 				maxTokens: 600,
-				responseFormat: "json",
-				workflow: "single"
+				responseFormat: "json"
 			}
 		},
 		options,

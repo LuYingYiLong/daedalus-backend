@@ -12,7 +12,7 @@ import {
 	finalizeProviderAgentAfterToolBudgetStreaming,
 	runProviderAgentStreaming
 } from "../providers/provider-agent.js";
-import type { PendingToolBudget, PendingToolBudgetPhaseStats } from "../session/pending-tool-budget.js";
+import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import {
 	readAgentRunState,
 	removeAgentRunContinuation
@@ -28,8 +28,6 @@ import {
 } from "../mcp/custom-mcp-config-store.js";
 import { sendJson } from "./send-json.js";
 import { createHash } from "node:crypto";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-profiles.js";
 import { type TokenCounter } from "../tokens/token-counter.js";
 import { createTokenCounter } from "../tokens/token-counter-factory.js";
@@ -43,7 +41,6 @@ import {
 	getDefaultWorkspace,
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
-import type { WorkspaceConfig } from "../workspace/types.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
 	createSession, openSession, saveSession, listSessions,
@@ -74,34 +71,14 @@ import {
 } from "../providers/provider-image-content.js";
 import { preprocessImageAttachmentsForTextModel, type ImageRecognitionPreprocessResult } from "../providers/image-recognition.js";
 import { hydrateImageAttachmentContexts } from "../session/session-attachments.js";
-import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, isProviderId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent, type ProviderErrorInfo } from "../providers/provider-error.js";
 import { isFirstSessionUserTurn } from "./session-title.js";
-import { planWorkflow, planWorkflowAfterLlmPlannerFailure, READ_TOOLS, VERIFY_TOOLS, WRITE_TOOLS } from "../workflow/planner.js";
-import { createLlmWorkflowPlan, reviseLlmWorkflowPlan } from "../workflow/llm-planner.js";
-import { resolveWorkflowExecutionProfile, type WorkflowExecutionProfileId } from "../workflow/execution-profile.js";
 import { normalizeProjectSettingKey, normalizeWorkspaceRelativeArtifactPath } from "../workflow/completion-contract.js";
 import { getWorkflowToolSemantics, type WorkflowTargetKind } from "../workflow/tool-semantics.js";
 import { getExecutionPolicy, routeWorkflowExecution, type WorkflowRouteContext, type WorkflowRouteDecision } from "../workflow/router.js";
-import {
-	applyDeterministicVerificationGate,
-	applyToolEventToWorkflowObservations,
-	createWorkflowPhaseOutcome,
-	createWorkflowPhaseRunId
-} from "../workflow/outcome.js";
-import {
-	appendPhaseOutput,
-	createPhaseMessage,
-	createPhaseParams,
-	createPhasePrompt,
-	createWorkflowTodoSnapshot,
-	markRemainingWorkflowTodos,
-	updateWorkflowPhaseStatus
-} from "../workflow/runner.js";
-import { countWorkflowAutoRepairRounds, insertWorkflowAutoRepairPhases } from "../workflow/repair.js";
-import type { WorkflowCompletionContract, WorkflowCompletionTarget, WorkflowPhase, WorkflowPhaseOutput, WorkflowPlan, WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
+import type { WorkflowCompletionContract, WorkflowCompletionTarget } from "../workflow/types.js";
 import {
 	applyToolEventToLightweightActionState,
 	collectLightweightActionCompletionStatus,
@@ -171,11 +148,9 @@ import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObject
 import type { NextStepHint } from "./next-step-hints.js";
 import {
 	hasProviderConnectionInterruptedError,
-	hasProviderResponseStalledError,
-	WorkflowExecutionError
+	hasProviderResponseStalledError
 } from "./workflow/workflow-error.js";
-import type { WorkflowPhaseToolStats, WorkflowPhaseRunResult } from "./workflow/shared-types.js";
-import { MAX_WORKFLOW_AUTO_REPAIR_ROUNDS } from "./workflow/limits.js";
+import { assertNoLegacyWorkflow, isLegacyWorkflowRunState, LegacyWorkflowRemovedError } from "./legacy-workflow-guard.js";
 import {
 	shouldPersistSessionEvent,
 	getThinkingEventBufferKey,
@@ -214,11 +189,7 @@ import {
 	sendContinuedAgentResult
 } from "./approval-continuation.js";
 import { cancelPendingToolBudgetsForRequest, createPendingToolBudget, createToolBudgetStopReason, registerPendingToolBudget, sendToolBudgetRequired } from "./tool-budget-continuation.js";
-import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
-import { sendWorkflowEvent, sendWorkflowTodoSnapshot } from "./workflow/events.js";
-import { runWorkflowPhase, createWorkflowPhasePrompt } from "./workflow/phase-runner.js";
-import { createWorkflowPendingContinuation, continueWorkflowExecution } from "./workflow/continuation.js";
-import { startWorkflowExecution } from "./workflow/executor.js";
+import { createAgentToolEventForwarder, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
 import { ensureProviderConfigured } from "../application/provider-session-service.js";
 import { beginSessionRun, findSessionWithPendingToolBudget, finishSessionRun, getActiveSessionRunController, getClientConnection, registerSessionRunController } from "./client-connections.js";
 import { logger } from "../logger.js";
@@ -326,21 +297,6 @@ async function createWebSearchUnavailableMessage(): Promise<string> {
 		return `Configure ${getProviderDisplayName(status.provider)} API key in Provider settings before using web search.`;
 	}
 	return "Web search is unavailable. Check Search settings and provider configuration.";
-}
-
-function filterWebSearchFromWorkflowPlan(plan: WorkflowPlan): WorkflowPlan {
-	return {
-		...plan,
-		phases: plan.phases.map((phase: WorkflowPhase): WorkflowPhase => {
-			if (!phase.allowedTools.includes(WEB_SEARCH_TOOL_NAME)) {
-				return phase;
-			}
-			return {
-				...phase,
-				allowedTools: phase.allowedTools.filter((toolName: string): boolean => toolName !== WEB_SEARCH_TOOL_NAME)
-			};
-		})
-	};
 }
 
 function createWorkflowRouteContext(session: ClientSession): WorkflowRouteContext {
@@ -701,115 +657,6 @@ export function createHiddenAnswerSystemPrompt(
 	].join("\n\n");
 }
 
-async function createWorkflowPlanForRoute(
-	params: AiChatParams,
-	options: ProviderChatOptions,
-	history: ChatMessage[],
-	planningContext: string,
-	abortSignal?: AbortSignal | undefined,
-	runtimeContext?: { activeWorkspace?: WorkspaceConfig | undefined } | undefined,
-	executionDecision?: ExecutionDecision | undefined
-): Promise<WorkflowPlan | null> {
-	throwIfAborted(abortSignal);
-	const executionProfile: WorkflowExecutionProfileId = await resolveWorkflowExecutionProfileForWorkspace(runtimeContext?.activeWorkspace);
-
-	try {
-		const plannerOptions: ProviderChatOptions = withProviderUsageContext(
-			(await awaitWithAbort(resolveProviderTaskModelOptions("workflowPlanner", options), abortSignal)).options,
-			{ operation: "workflow_planner" }
-		);
-		throwIfAborted(abortSignal);
-		const plan: WorkflowPlan | null = await awaitWithAbort(
-			createLlmWorkflowPlan(params, plannerOptions, history, planningContext, abortSignal, executionProfile),
-			abortSignal
-		);
-		throwIfAborted(abortSignal);
-		if (plan !== null) {
-			return applyExecutionDecisionCompletionContract(plan, executionDecision);
-		}
-	} catch (error: unknown) {
-		if (isCancellationError(error, abortSignal)) {
-			throw error;
-		}
-		logger.warn("ai", "llm_workflow_planner_failed_fallback", {
-			message: error instanceof Error ? error.message : "LLM planner failed"
-		});
-	}
-
-	throwIfAborted(abortSignal);
-	const fallbackPlan: WorkflowPlan | null = planWorkflowAfterLlmPlannerFailure(
-		params,
-		executionProfile,
-		createExecutionDecisionCompletionContract(executionDecision)
-	);
-	return fallbackPlan === null ? null : applyExecutionDecisionCompletionContract(fallbackPlan, executionDecision);
-}
-
-function applyExecutionDecisionCompletionContract(
-	plan: WorkflowPlan,
-	decision: ExecutionDecision | undefined
-): WorkflowPlan {
-	if (
-		decision === undefined
-		|| (decision.disposition !== "use_workflow" && decision.disposition !== "use_lightweight")
-		|| decision.expectedArtifacts.length === 0
-	) {
-		return plan;
-	}
-	const expectedTargets: WorkflowCompletionTarget[] = createExecutionDecisionCompletionContract(decision)?.targets ?? [];
-	if (expectedTargets.length === 0) return plan;
-	const firstWritePhaseIndex: number = plan.phases.findIndex((phase: WorkflowPhase): boolean => phase.toolGroup === "write");
-	if (firstWritePhaseIndex < 0) {
-		return plan;
-	}
-
-	const firstWritePhase: WorkflowPhase = plan.phases[firstWritePhaseIndex]!;
-	const existingTargets: readonly WorkflowCompletionTarget[] = firstWritePhase.completionContract?.targets ?? [];
-	const targetKeys: Set<string> = new Set();
-	const targets: WorkflowCompletionTarget[] = [];
-	for (const target of [...existingTargets, ...expectedTargets]) {
-		const key: string = target.kind === "artifact"
-			? `artifact:${target.fileRef?.workspaceId ?? ""}:${target.fileRef?.sourceFolderId ?? target.sourceFolderId ?? ""}:${target.path.replace(/^res:\/\//iu, "").replace(/\\/g, "/").toLowerCase()}`
-			: `project_setting:${target.sourceFolderId ?? ""}:${target.key.toLowerCase()}`;
-		if (targetKeys.has(key)) {
-			continue;
-		}
-		targetKeys.add(key);
-		targets.push({ ...target });
-	}
-
-	const phases: WorkflowPhase[] = plan.phases.map((phase: WorkflowPhase, index: number): WorkflowPhase => (
-		index !== firstWritePhaseIndex
-			? phase
-			: {
-				...phase,
-				writeRequirement: "write",
-				completionContract: {
-					targets,
-					requireAll: true
-				}
-			}
-	));
-	return { ...plan, phases, semanticsVersion: 2 };
-}
-
-async function resolveWorkflowExecutionProfileForWorkspace(workspace: WorkspaceConfig | undefined): Promise<WorkflowExecutionProfileId> {
-	return resolveWorkflowExecutionProfile(await hasGodotProjectFile(workspace));
-}
-
-async function hasGodotProjectFile(workspace: WorkspaceConfig | undefined): Promise<boolean> {
-	if (workspace === undefined) {
-		return false;
-	}
-
-	try {
-		await fs.access(path.join(workspace.rootPath, "project.godot"));
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 type HiddenAnswerExecutionParams = {
 	socket: WebSocket;
 	requestId: string;
@@ -847,7 +694,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const agentLoopRecovery = agentLoopState === undefined
 		? undefined
 		: createAgentLoopRecoveryController(agentLoopState);
-	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.intent === "mutate"
+	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.lane === "lightweight"
 		? createLightweightActionState()
 		: undefined;
 	const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
@@ -1371,146 +1218,59 @@ async function runHiddenAnswerExecutionWithEscalation(
 	});
 	const escalationDecision: ExecutionDecision | undefined = escalationError.executionDecision
 		?? getAgentRun(params.session, params.requestId)?.executionDecision;
-	const workflowParams: AiChatParams = {
-		...params.chatParams,
-		options: {
-			...(params.chatParams.options ?? {}),
-			workflow: "multi_phase"
-		}
-	};
 	const escalationInstruction: string = escalationError.reason === "write_intent_not_completed"
 		? "轻量操作只完成了读取，没有执行用户要求的写入。先复核当前工作区状态，再完成实现和验证；不要把未来计划或下一步描述当成完成结果。"
 		: "轻量操作已经完成了部分必要修改，但下一步会超过两个逻辑写入。先检查当前工作区状态，不要重复已成功的写入，然后完成剩余工作和验证。";
-	const escalationContext: string = [
-		params.planningContext,
-		escalationInstruction
-	].filter((section: string): boolean => section.length > 0).join("\n\n");
-	let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
-		workflowParams,
-		params.options,
-		params.history,
-		escalationContext,
-		params.abortSignal,
-		{ activeWorkspace: params.session.activeWorkspace },
-		escalationDecision
-	);
-	if (workflowPlan === null) {
-		workflowPlan = planWorkflow(
-			workflowParams,
-			await resolveWorkflowExecutionProfileForWorkspace(params.session.activeWorkspace),
-			createExecutionDecisionCompletionContract(escalationDecision)
-		);
-	}
-	if (workflowPlan === null) {
-		await completeHiddenAnswerExecution(
-			params,
-			params.chatParams,
-			"The approved changes already completed in this run were preserved. The remaining operation was not executed because the provider did not return a structured plan and no exact pending target was available for a safe fallback.",
-			{
-				resultStatus: "completed_with_warnings",
-				verificationStatus: "unverified",
-				warnings: ["The remaining mutation could not be bound to an exact structured target, so it was safely left pending."]
+	const { workflow: _legacyWorkflow, ...nonWorkflowOptions } = params.chatParams.options ?? {};
+	const agentLoopParams: HiddenAnswerExecutionParams = {
+		...params,
+		chatParams: {
+			...params.chatParams,
+			options: {
+				...nonWorkflowOptions,
+				executionPolicy: "auto",
+				outputTarget: "workspace",
+				toolBudget: params.chatParams.options?.toolBudget ?? "project_edit"
 			}
-		);
-		return;
-	}
-	if (!params.webSearchEnabled) {
-		workflowPlan = filterWebSearchFromWorkflowPlan(workflowPlan);
-	}
-	await startWorkflowExecution(
-		params.socket,
-		params.requestId,
-		params.session,
-		params.mcpHost,
-		params.options,
-		workflowPlan,
-		workflowParams,
-		params.history,
-		params.historyBudgetTokens,
-		params.userCreatedAt,
-		escalationContext,
-		params.guidePromptSection,
-		params.abortSignal
-	);
-}
-
-export async function escalatePendingContinuationToWorkflow(params: {
-	socket: WebSocket;
-	session: ClientSession;
-	mcpHost: McpHost;
-	pendingContinuation: PendingAiContinuation;
-	abortSignal: AbortSignal;
-	reason: string;
-}): Promise<void> {
-	const requestId: string = params.pendingContinuation.requestId;
-	const workflowParams: AiChatParams = {
-		...params.pendingContinuation.params,
-		options: {
-			...(params.pendingContinuation.params.options ?? {}),
-			workflow: "multi_phase"
-		}
-	};
-	const checkpoint = getAgentRun(params.session, requestId)?.checkpoint;
-	const planningContext: string = [
-		"Continue this mutation as a full Workflow in the same run.",
-		"Inspect the current workspace state before writing. Do not replay writes that already succeeded.",
-		`Escalation reason: ${params.reason}`,
-		checkpoint === undefined
-			? ""
-			: `Successful write fingerprints: ${checkpoint.successfulWriteFingerprints.join(", ") || "none"}.`
-	].filter((item: string): boolean => item.length > 0).join("\n");
-	const history: ChatMessage[] = filterSessionLlmContextMessages(params.session)
-		.filter((message: ChatMessage): boolean => message.requestId !== requestId);
-	let plan: WorkflowPlan | null = await createWorkflowPlanForRoute(
-		workflowParams,
-		params.pendingContinuation.options,
-		history,
-		planningContext,
-		params.abortSignal,
-		{ activeWorkspace: params.session.activeWorkspace }
-	);
-	if (plan === null) {
-		await sendContinuedAgentResult(
-			params.socket,
-			requestId,
-			params.session,
-			params.mcpHost,
-			{
-				status: "completed",
-				text: "The approved changes already completed in this run were preserved. The remaining operation was not executed because no exact structured target was available after planning failed."
-			},
-			{
-				...params.pendingContinuation,
-				executionControl: undefined,
-				chatCompletion: undefined,
-				lightweightActionState: undefined
-			}
-		);
-		return;
-	}
-	const currentRun: AgentRunState | undefined = getAgentRun(params.session, requestId);
-	if (currentRun !== undefined) {
-		updateAgentRun(params.socket, params.session, requestId, "executing", {
+		},
+		fullSystemPrompt: [params.fullSystemPrompt, params.planningContext, escalationInstruction]
+			.filter((section: string): boolean => section.length > 0)
+			.join("\n\n"),
+		allowedToolNames: params.mutationToolNames,
+		approvalGateway: params.session.approvalGateway,
+		routeDecision: {
+			...params.routeDecision,
 			intent: "mutate",
 			scope: "complex",
-			lane: "workflow",
-			pause: null
+			lane: "agent_loop",
+			outputTarget: "workspace",
+			reason: escalationDecision?.summary ?? escalationInstruction,
+			planningHint: ""
+		}
+	};
+	const currentRun: AgentRunState | undefined = getAgentRun(params.session, params.requestId);
+	if (currentRun !== undefined) {
+		updateAgentRun(params.socket, params.session, params.requestId, "executing", {
+			intent: "mutate",
+			scope: "complex",
+			lane: "agent_loop",
+			agentLoopState: currentRun.agentLoopState ?? createAgentLoopState(),
+			pause: null,
+			todo: null,
+			planId: null
 		});
 	}
-	await startWorkflowExecution(
-		params.socket,
-		requestId,
-		params.session,
-		params.mcpHost,
-		params.pendingContinuation.options,
-		plan,
-		workflowParams,
-		history,
-		Math.max(0, params.session.modelProfile.contextWindowTokens - params.session.modelProfile.defaultOutputReserveTokens),
-		params.pendingContinuation.userCreatedAt,
-		planningContext,
-		"",
-		params.abortSignal
+	await runHiddenAnswerExecution(agentLoopParams);
+	return;
+}
+
+export async function rejectLegacyWorkflowContinuation(params: {
+	pendingContinuation: PendingAiContinuation;
+	reason: string;
+}): Promise<never> {
+	void params;
+	throw new LegacyWorkflowRemovedError(
+		"Legacy phase-based workflow continuation has been removed. Start a new Agent Loop run instead."
 	);
 }
 
@@ -1685,19 +1445,6 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 import { createProviderRuntimeContext, createSafeMarkdownFence, createMcpSystemContext } from "./prompt-context.js";
 
 type ToolBudgetDecision = "continue" | "stop";
-
-function cloneToolBudgetPhaseStats(stats: PendingToolBudgetPhaseStats | undefined): PendingToolBudgetPhaseStats {
-	const fallback: PendingToolBudgetPhaseStats = createEmptyWorkflowPhaseToolStats();
-	if (stats === undefined) {
-		return fallback;
-	}
-
-	return {
-		...fallback,
-		...stats,
-		toolCallRisks: { ...(stats.toolCallRisks ?? {}) }
-	};
-}
 
 function getQueueItemIdFromParams(params: AiChatParams): number | undefined {
 	return params.options?.queueItemId;
@@ -1894,6 +1641,22 @@ async function handleToolBudgetDecision(
 		});
 		return;
 	}
+	try {
+		assertNoLegacyWorkflow(pending.continuation, "tool budget request");
+	} catch (error: unknown) {
+		if (error instanceof LegacyWorkflowRemovedError) {
+			session.pendingToolBudgets.delete(budgetId);
+			await removeAgentRunContinuation(pending.requestId);
+			sendJson(socket, {
+				type: "response",
+				id: responseId,
+				ok: false,
+				error: { code: error.code, message: error.message }
+			});
+			return;
+		}
+		throw error;
+	}
 
 	await synchronizeSessionApprovalMode(session);
 	const sessionRun = beginSessionRun(session.sessionId, pending.requestId);
@@ -1987,13 +1750,12 @@ async function runToolBudgetDecisionContinuation(params: {
 
 	try {
 		const pendingContinuation: PendingAiContinuation = pending.continuation;
+		assertNoLegacyWorkflow(pendingContinuation, "tool budget continuation");
 		const continuationParams: AiChatParams = await awaitWithAbort(
 			hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
 			abortController.signal
 		);
 		throwIfAborted(abortController.signal);
-		const toolStats: PendingToolBudgetPhaseStats = cloneToolBudgetPhaseStats(pending.workflowPhaseToolStats);
-		let toolObservations: WorkflowToolObservation[] = pending.workflowToolObservations?.map((observation: WorkflowToolObservation): WorkflowToolObservation => ({ ...observation })) ?? [];
 		const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
 			socket,
 			pending.requestId,
@@ -2004,10 +1766,6 @@ async function runToolBudgetDecisionContinuation(params: {
 			mcpHost
 		);
 		const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
-			if (pendingContinuation.workflowState !== undefined) {
-				updateWorkflowPhaseToolStats(toolStats, event);
-				toolObservations = applyToolEventToWorkflowObservations(toolObservations, event);
-			}
 			if (pendingContinuation.lightweightActionState !== undefined) {
 				applyToolEventToLightweightActionState(
 					pendingContinuation.lightweightActionState,
@@ -2081,46 +1839,18 @@ async function runToolBudgetDecisionContinuation(params: {
 		const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
 		throwIfAborted(abortController.signal);
 
-		if (pendingContinuation.workflowState !== undefined) {
-			const continuationWorkflowState: WorkflowRunState = {
-				...pendingContinuation.workflowState,
-				originalParams: continuationParams
-			};
-			const phaseRunResult: WorkflowPhaseRunResult = {
-				agentResult,
-				toolStats,
-				toolObservations,
-				capturedAttachments: []
-			};
-			await awaitWithAbort(continueWorkflowExecution(
-				socket,
-				pending.requestId,
-				session,
-				mcpHost,
-				pendingContinuation.options,
-				continuationWorkflowState,
-				pendingContinuation.userCreatedAt,
-				undefined,
-				pending.requestId,
-				abortController.signal,
-				[],
-				phaseRunResult
-			), abortController.signal);
-			throwIfAborted(abortController.signal);
-		} else {
-			await awaitWithAbort(sendContinuedAgentResult(
-				socket,
-				pending.requestId,
-				session,
-				mcpHost,
-				agentResult,
-				{
-					...pendingContinuation,
-					params: continuationParams
-				}
-			), abortController.signal);
-			throwIfAborted(abortController.signal);
-		}
+		await awaitWithAbort(sendContinuedAgentResult(
+			socket,
+			pending.requestId,
+			session,
+			mcpHost,
+			agentResult,
+			{
+				...pendingContinuation,
+				params: continuationParams
+			}
+		), abortController.signal);
+		throwIfAborted(abortController.signal);
 
 		if (session.approvalGateway.listPending().length > 0 || session.pendingToolBudgets.size > 0) {
 			emitWorkbenchUpdated(socket, pending.requestId, session);
@@ -2133,17 +1863,25 @@ async function runToolBudgetDecisionContinuation(params: {
 		emitWorkbenchUpdated(socket, pending.requestId, session);
 	} catch (error: unknown) {
 		if (error instanceof LightweightActionScopeExceededError) {
-			await escalatePendingContinuationToWorkflow({
-				socket,
-				session,
-				mcpHost,
-				pendingContinuation: pending.continuation,
-				abortSignal: abortController.signal,
-				reason: error.reason
-			});
 			setWorkbenchActiveRun(session, { status: "idle" });
-			await finishQueueItemForRun(socket, pending.requestId, session, queueItemId);
-			shouldDrainQueueAfterRun = true;
+			await finishQueueItemForRun(socket, pending.requestId, session, queueItemId, "failed");
+			const legacyError = new LegacyWorkflowRemovedError(
+				"The removed lightweight-to-phase workflow escalation was requested. Start a new Agent Loop run instead."
+			);
+			sendSessionEvent(socket, pending.requestId, session, "agent.run.error", {
+				runId,
+				requestId: pending.requestId,
+				status: "error",
+				code: legacyError.code,
+				message: legacyError.message,
+				sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+			}, pending.requestId);
+			sendJson(socket, {
+				type: "response",
+				id: pending.requestId,
+				ok: false,
+				error: { code: legacyError.code, message: legacyError.message }
+			});
 			emitWorkbenchUpdated(socket, pending.requestId, session);
 			return;
 		}
@@ -2166,6 +1904,24 @@ async function runToolBudgetDecisionContinuation(params: {
 		}
 		setWorkbenchActiveRun(session, { status: "idle" });
 		await finishQueueItemForRun(socket, pending.requestId, session, queueItemId, "failed");
+		if (error instanceof LegacyWorkflowRemovedError) {
+			sendSessionEvent(socket, pending.requestId, session, "agent.run.error", {
+				runId,
+				requestId: pending.requestId,
+				status: "error",
+				code: error.code,
+				message: error.message,
+				sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+			}, pending.requestId);
+			emitWorkbenchUpdated(socket, pending.requestId, session);
+			sendJson(socket, {
+				type: "response",
+				id: pending.requestId,
+				ok: false,
+				error: { code: error.code, message: error.message }
+			});
+			return;
+		}
 		if (error instanceof LightweightActionVerificationError) {
 			sendSessionEvent(socket, pending.requestId, session, "agent.run.error", {
 				runId,
@@ -2183,32 +1939,6 @@ async function runToolBudgetDecisionContinuation(params: {
 				error: {
 					code: error.code,
 					message: error.message
-				}
-			});
-			return;
-		}
-		if (error instanceof WorkflowExecutionError) {
-			const workflowErrorMessage: string = error.message.length > 0
-				? error.message
-				: error.originalError instanceof Error
-					? error.originalError.message
-					: "Workflow failed";
-			sendWorkflowEvent(socket, pending.requestId, session, "workflow.error", {
-				workflowId: error.plan.id,
-				requestId: pending.requestId,
-				title: error.plan.title,
-				code: "agent_run_error",
-				message: workflowErrorMessage,
-				sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
-			}, pending.requestId);
-			emitWorkbenchUpdated(socket, pending.requestId, session);
-			sendJson(socket, {
-				type: "response",
-				id: pending.requestId,
-				ok: false,
-				error: {
-					code: "agent_run_error",
-					message: workflowErrorMessage
 				}
 			});
 			return;
@@ -2398,6 +2128,25 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						code: "agent_run_not_retryable",
 						message: "Only an interrupted run in the active session can be retried from a safe checkpoint."
 					}
+				});
+				break;
+			}
+			if (isLegacyWorkflowRunState(interruptedRun)) {
+				const message: string = "This interrupted run belongs to the removed phase-based workflow and cannot be resumed. Start a new Agent Loop run instead.";
+				if (getAgentRun(session, interruptedRun.runId) !== undefined) {
+					updateAgentRun(socket, session, interruptedRun.runId, "failed", {
+						lane: "agent_loop",
+						todo: null,
+						planId: null,
+						pause: null,
+						warnings: [...interruptedRun.warnings, message]
+					});
+				}
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "legacy_workflow_removed", message }
 				});
 				break;
 			}
@@ -2693,9 +2442,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				if (effectiveParams.mode === "plan") {
 					if (getAgentRun(session, request.id) !== undefined) {
 						updateAgentRun(socket, session, request.id, "executing", {
-							intent: "mutate",
-							scope: "complex",
-							lane: "workflow"
+							intent: "inspect",
+							scope: "bounded",
+							lane: "read"
 						});
 					}
 					const plan: StoredPlan = await createInitialPlan(
@@ -2866,96 +2615,31 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					: session.approvalGateway;
 				{
 					if (routeDecision.lane === "workflow") {
-						let workflowPlan: WorkflowPlan | null = await createWorkflowPlanForRoute(
-							effectiveParams,
-							options,
-							history,
-							[planningContext, routeDecision.planningHint].filter((section: string): boolean => section.length > 0).join("\n\n"),
-							abortController.signal,
-							{ activeWorkspace: session.activeWorkspace }
+						throw new LegacyWorkflowRemovedError(
+							"The legacy phase-based workflow was requested. Start a new Agent Loop run instead."
 						);
-						if (workflowPlan !== null && !webSearchEnabled) {
-							workflowPlan = filterWebSearchFromWorkflowPlan(workflowPlan);
-						}
-						if (workflowPlan !== null) {
-							logger.info("ai", "workflow_planned", {
-								requestId: request.id,
-								sessionId: session.sessionId,
-								workflowSource: workflowPlan.source ?? null,
-								workflowPhaseCount: workflowPlan.phases.length,
-								workflowPhaseIds: workflowPlan.phases.map((phase: WorkflowPhase): string => phase.id),
-								historyMessages: history.length,
-								historyBudgetTokens,
-								allowedToolCount: allowedToolNames?.length ?? null
-							});
-							throwIfAborted(abortController.signal);
-							await awaitWithAbort(startWorkflowExecution(
-								socket,
-								request.id,
-								session,
-								mcpHost,
-								options,
-								workflowPlan,
-								effectiveParams,
-								history,
-								historyBudgetTokens,
-								turnStartedAt,
-								planningContext,
-								guidePromptSection,
-								abortController.signal
-							), abortController.signal);
-						} else {
-							const fallbackRoute: WorkflowRouteDecision = {
-								...routeDecision,
-								intent: "answer",
-								scope: "bounded",
-								lane: "tool_assisted",
-								reason: "The planner did not return a structured plan; continue with bounded tool-assisted execution."
-							};
-							await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
-								socket,
-								requestId: request.id,
-								session,
-								mcpHost,
-								options,
-								chatParams: effectiveParams,
-								routeDecision: fallbackRoute,
-								history,
-								historyBudgetTokens,
-								fullSystemPrompt,
-								allowedToolNames: mutationToolNames,
-								mutationToolNames,
-								approvalGateway: session.approvalGateway,
-								userCreatedAt: turnStartedAt,
-								abortSignal: abortController.signal,
-								planningContext,
-								guidePromptSection,
-								webSearchEnabled
-							}), abortController.signal);
-						}
-					} else {
-						throwIfAborted(abortController.signal);
-						await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
-							socket,
-							requestId: request.id,
-							session,
-							mcpHost,
-							options,
-							chatParams: effectiveParams,
-							routeDecision,
-							history,
-							historyBudgetTokens,
-							fullSystemPrompt,
-							allowedToolNames: hiddenAnswerToolNames,
-							mutationToolNames,
-							approvalGateway: hiddenAnswerApprovalGateway,
-							userCreatedAt: turnStartedAt,
-							abortSignal: abortController.signal,
-							planningContext,
-							guidePromptSection,
-							webSearchEnabled
-						}), abortController.signal);
 					}
+					throwIfAborted(abortController.signal);
+					await awaitWithAbort(runHiddenAnswerExecutionWithEscalation({
+						socket,
+						requestId: request.id,
+						session,
+						mcpHost,
+						options,
+						chatParams: effectiveParams,
+						routeDecision,
+						history,
+						historyBudgetTokens,
+						fullSystemPrompt,
+						allowedToolNames: hiddenAnswerToolNames,
+						mutationToolNames,
+						approvalGateway: hiddenAnswerApprovalGateway,
+						userCreatedAt: turnStartedAt,
+						abortSignal: abortController.signal,
+						planningContext,
+						guidePromptSection,
+						webSearchEnabled
+					}), abortController.signal);
 				}
 				const returnedRun: AgentRunState | undefined = getAgentRun(session, request.id);
 				if (returnedRun !== undefined && shouldTerminalizeReturnedAgentRun(returnedRun)) {
@@ -3003,6 +2687,41 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							cancelled: true,
 							requestId: request.id
 						}
+					});
+					break;
+				}
+				if (error instanceof LegacyWorkflowRemovedError) {
+					queuedRunForcedStatus = "failed";
+					logger.warn("ai", "legacy_workflow_removed", {
+						requestId: request.id,
+						sessionId: runSessionId,
+						workspaceId: session.activeWorkspace?.id
+					});
+					sendSessionEvent(socket, request.id, session, "agent.run.error", {
+						runId: request.id,
+					requestId: request.id,
+					status: "error",
+					code: error.code,
+					message: error.message,
+					sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
+					});
+					await waitForSessionEventPersistence(session);
+					await appendFailedChatTurnToSession(
+						session,
+						persistedParams.message,
+						{ code: error.code, message: error.message },
+						request.id,
+						turnStartedAt,
+						undefined,
+						persistedParams.additionalContext,
+						"",
+						persistedParams.retryOfRunId === undefined
+					);
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: { code: error.code, message: error.message }
 					});
 					break;
 				}
@@ -3167,54 +2886,6 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						error: {
 							code: error.code,
 							message: error.message
-						}
-					});
-					break;
-				}
-				if (error instanceof WorkflowExecutionError) {
-					queuedRunForcedStatus = "failed";
-					const workflowErrorMessage: string = error.message.length > 0
-						? error.message
-						: error.originalError instanceof Error
-							? error.originalError.message
-							: "Workflow failed";
-					logger.error("ai", "workflow_failed", error, {
-						requestId: request.id,
-						sessionId: runSessionId,
-						workspaceId: session.activeWorkspace?.id,
-						durationMs: Date.now() - runStartedAtMs
-					});
-					sendSessionEvent(socket, request.id, session, "agent.run.error", {
-						runId: error.plan.id,
-						requestId: request.id,
-						status: "error",
-						title: error.plan.title,
-						code: "agent_run_error",
-						message: workflowErrorMessage,
-						sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
-					});
-					await waitForSessionEventPersistence(session);
-					await appendFailedChatTurnToSession(
-						session,
-						persistedParams.message,
-						{
-							code: "agent_run_error",
-							message: workflowErrorMessage
-						},
-						request.id,
-						turnStartedAt,
-						undefined,
-						persistedParams.additionalContext,
-						workflowErrorMessage,
-						persistedParams.retryOfRunId === undefined
-					);
-					sendJson(socket, {
-						type: "response",
-						id: request.id,
-						ok: false,
-						error: {
-							code: "agent_run_error",
-							message: workflowErrorMessage
 						}
 					});
 					break;

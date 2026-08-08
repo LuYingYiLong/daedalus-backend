@@ -54,7 +54,7 @@ test("ai.chat schema accepts only explicit verification policies", (): void => {
 	}).success, false);
 });
 
-test("ask mode normalizes workflow and tool budget without mutating agent mode", (): void => {
+test("ask mode removes legacy workflow selection and normalizes tool budget", (): void => {
 	const askParams: AiChatParams = {
 		message: "直接帮我修一下",
 		mode: "ask",
@@ -65,7 +65,7 @@ test("ask mode normalizes workflow and tool budget without mutating agent mode",
 		}
 	};
 	const normalizedAskParams: AiChatParams = normalizeChatParamsForMode(askParams);
-	assert.equal(normalizedAskParams.options?.workflow, "single");
+	assert.equal(normalizedAskParams.options?.workflow, undefined);
 	assert.equal(normalizedAskParams.options?.toolBudget, "normal");
 	assert.equal(normalizedAskParams.options?.stream, true);
 	assert.equal(askParams.options?.workflow, "llm_planned");

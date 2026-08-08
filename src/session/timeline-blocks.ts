@@ -534,6 +534,10 @@ function normalizeToolEventData(eventName: string, eventData: Record<string, unk
 	const normalizedData: Record<string, unknown> = cloneRecord(eventData);
 	if (eventName.startsWith("agent.tool.")) {
 		normalizedData.type = eventName.replace("agent.tool.", "tool.");
+	} else if (eventName === "tool.call" || eventName === "tool.result" || eventName === "tool.error" || eventName === "tool.approval_required" || eventName === "tool.approved" || eventName === "tool.rejected" || eventName === "tool.progress") {
+		// Legacy rows may carry an agent.* type in their payload even when the
+		// event name is already canonical. Normalize the discriminator as well.
+		normalizedData.type = eventName;
 	} else if (normalizedData.type === undefined) {
 		normalizedData.type = eventName;
 	}

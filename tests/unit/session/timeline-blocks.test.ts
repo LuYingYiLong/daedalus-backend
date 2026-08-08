@@ -170,6 +170,29 @@ test("canonical timeline retains a tool card's original activity group when its 
 	}
 });
 
+test("canonical timeline normalizes legacy agent-prefixed tool payload types", (): void => {
+	const stored: StoredSession = session([], [
+		event("tool-call", "request-legacy-tool-type", "tool.call", "2026-08-06T00:00:00.000Z", {
+			toolCallId: "read-legacy",
+			toolName: "mcp_godot_lsp_get_file_diagnostics",
+			type: "agent.tool.call"
+		}),
+		event("tool-result", "request-legacy-tool-type", "tool.result", "2026-08-06T00:00:01.000Z", {
+			toolCallId: "read-legacy",
+			toolName: "mcp_godot_lsp_get_file_diagnostics",
+			type: "agent.tool.result",
+			ok: true
+		})
+	]);
+
+	const assistant = assistantBlock(buildCanonicalTimelineBlocks(stored).blocks[0]);
+	const tool = assistant.bodyParts.find((part) => part.type === "tool");
+	assert.equal(tool?.type, "tool");
+	if (tool?.type === "tool") {
+		assert.deepEqual(tool.events.map((item: Record<string, unknown>): unknown => item.type), ["tool.call", "tool.result"]);
+	}
+});
+
 test("a body prelude closes the prior thinking group without fragmenting the following tool batch", (): void => {
 	const stored: StoredSession = session([], [
 		event("thinking-delta", "request-prelude", "agent.thinking.delta", "2026-08-06T00:00:00.000Z", { text: "inspect" }),

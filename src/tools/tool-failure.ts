@@ -58,7 +58,10 @@ const ENVIRONMENT_FAILURE_CODES: ReadonlySet<string> = new Set([
 
 const POLICY_FAILURE_CODES: ReadonlySet<string> = new Set([
 	"approval_denied",
+	"approval_rejected",
 	"command_review_denied",
+	"network_access_required",
+	"network_download_declined",
 	"path_traversal_denied",
 	"path_outside_workspace",
 	"source_required",
@@ -70,7 +73,8 @@ const PROTOCOL_FAILURE_CODES: ReadonlySet<string> = new Set([
 	"invalid_arguments",
 	"invalid_tool_result",
 	"unsupported_tool_call_type",
-	"tool_protocol_violation"
+	"tool_protocol_violation",
+	"retry_exhausted"
 ]);
 
 const LEGACY_EXACT_FAILURES: ReadonlyMap<string, Pick<ToolFailure, "code" | "category" | "retryable">> = new Map([

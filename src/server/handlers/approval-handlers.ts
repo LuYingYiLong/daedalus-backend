@@ -102,6 +102,7 @@ import {
 } from "../client-session.js";
 import { getToolPolicy, type ApprovalMode } from "../../tools/tool-policy.js";
 import type { PendingApproval } from "../../tools/approval-gateway.js";
+import { serializeToolFailure, type ToolFailure } from "../../tools/tool-failure.js";
 import { getLlmToolExecutionIdentity } from "../../tools/tool-idempotency.js";
 import { resolveToolMapping } from "../../tools/tool-mapping.js";
 import {
@@ -221,6 +222,8 @@ import { setApprovalMode } from "../../approval-settings-store.js";
 import { getActiveConnectionSessions } from "../client-connections.js";
 import { emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun } from "../workbench.js";
 import { synchronizeSessionApprovalMode } from "../approval-mode-sync.js";
+import { createAgentLoopRecoveryController } from "../../workflow/agent-loop-state.js";
+import type { AgentLoopRecoveryStatus } from "../../workflow/agent-loop-state.js";
 
 const FULL_TRUST_CONFIRMATION_TEXT: string = "ENABLE FULL TRUST";
 
@@ -231,6 +234,169 @@ async function applyGlobalApprovalMode(session: ClientSession): Promise<Approval
 function applyApprovalModeToActiveSessions(mode: ApprovalMode): void {
 	for (const activeSession of getActiveConnectionSessions()) {
 		activeSession.approvalGateway.setMode(mode);
+	}
+}
+
+function createApprovalRejectedFailure(pending: PendingApproval): ToolFailure {
+	const artifactRefs: string[] = ["relativePath", "resourcePath", "scenePath", "scriptPath", "path"]
+		.map((key: string): unknown => pending.args[key])
+		.filter((value: unknown): value is string => typeof value === "string" && value.length > 0);
+	const isNetworkDownload: boolean = pending.approvalKind === "network_download";
+	return {
+		code: isNetworkDownload ? "network_download_declined" : "approval_rejected",
+		category: "policy",
+		message: isNetworkDownload
+			? "The user declined this network download. The file was not downloaded, installed, or run."
+			: "The user declined this approved tool call. The tool was not executed.",
+		retryable: true,
+		artifactRefs,
+		sourceFolderId: typeof pending.args.sourceFolderId === "string" ? pending.args.sourceFolderId : undefined,
+		details: {
+			approvalKind: pending.approvalKind ?? "tool"
+		}
+	};
+}
+
+async function continueAfterRejectedApproval(params: {
+	socket: WebSocket;
+	requestId: string;
+	session: ClientSession;
+	mcpHost: McpHost;
+	pending: PendingApproval;
+	pendingContinuation: PendingAiContinuation;
+	queueItemId?: number | undefined;
+}): Promise<void> {
+	const { socket, requestId, session, mcpHost, pending, pendingContinuation, queueItemId } = params;
+	const abortController = new AbortController();
+	session.activeAbortControllers.set(pendingContinuation.requestId, abortController);
+	try {
+		const runId: string = pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId;
+		const stepRunId: string = pendingContinuation.workflowState?.activePhaseRunId ?? pendingContinuation.requestId;
+		const failure: ToolFailure = createApprovalRejectedFailure(pending);
+		const failureContent: string = serializeToolFailure(failure);
+		const failureEvent: ToolEvent = {
+			type: "tool.error",
+			step: pendingContinuation.continuation.nextStep,
+			toolCallId: pending.toolCallId,
+			toolName: pending.llmToolName,
+			message: failure.message,
+			failure
+		};
+		const rejectedToolObservation: WorkflowToolObservation = createApprovedWorkflowToolObservation(pending, failureContent);
+		const currentRun = getAgentRun(session, pendingContinuation.requestId);
+		if (currentRun?.stage === "awaiting_approval") {
+			updateAgentRun(socket, session, pendingContinuation.requestId, "executing", { pause: null });
+		}
+
+		setWorkbenchActiveRun(session, {
+			status: "streaming",
+			requestId: pendingContinuation.requestId,
+			queueItemId
+		});
+		const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
+			socket,
+			pendingContinuation.requestId,
+			session,
+			runId,
+			stepRunId,
+			pendingContinuation.requestId,
+			mcpHost
+		);
+		if (pendingContinuation.lightweightActionState !== undefined) {
+			applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, failureEvent);
+		}
+		recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, failureEvent);
+		forwardToolEvent(failureEvent);
+
+		session.pendingAiContinuations.delete(pending.approvalId);
+		await removeAgentRunContinuation(pendingContinuation.requestId);
+		const continuationParams: AiChatParams = await awaitWithAbort(
+			hydrateImageAttachmentContexts(session.sessionId, pendingContinuation.params),
+			abortController.signal
+		);
+		const continuationWorkflowState = pendingContinuation.workflowState === undefined
+			? undefined
+			: {
+				...pendingContinuation.workflowState,
+				originalParams: continuationParams
+			};
+		const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
+			if (pendingContinuation.lightweightActionState !== undefined) {
+				applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, event);
+			}
+			recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, event);
+			if (!(pendingContinuation.chatCompletion?.requireSubmission === true && event.type === "ai.delta")) {
+				forwardToolEvent(event);
+			}
+		};
+		const context = {
+			workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+			editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
+			sessionId: pending.sessionId ?? session.sessionId,
+			requestId: pendingContinuation.requestId,
+			executionControl: pendingContinuation.executionControl,
+			chatCompletion: pendingContinuation.chatCompletion,
+			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
+				? undefined
+				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
+		};
+		const agentResult: ProviderAgentResult = await (pendingContinuation.stream
+			? continueProviderAgentStreaming(
+				continuationParams,
+				pendingContinuation.options,
+				pendingContinuation.continuation,
+				{ toolCallId: pending.toolCallId, content: failureContent },
+				mcpHost,
+				session.approvalGateway,
+				pendingContinuation.allowedToolNames,
+				onToolEvent,
+				abortController.signal,
+				context
+			)
+			: continueProviderAgent(
+				continuationParams,
+				pendingContinuation.options,
+				pendingContinuation.continuation,
+				{ toolCallId: pending.toolCallId, content: failureContent },
+				mcpHost,
+				session.approvalGateway,
+				pendingContinuation.allowedToolNames,
+				onToolEvent,
+				abortController.signal,
+				context
+			));
+
+		if (continuationWorkflowState !== undefined) {
+			await continueWorkflowExecution(
+				socket,
+				pendingContinuation.requestId,
+				session,
+				mcpHost,
+				pendingContinuation.options,
+				continuationWorkflowState,
+				pendingContinuation.userCreatedAt,
+				agentResult,
+				pendingContinuation.requestId,
+				abortController.signal,
+				[rejectedToolObservation]
+			);
+		} else {
+			await sendContinuedAgentResult(
+				socket,
+				pendingContinuation.requestId,
+				session,
+				mcpHost,
+				agentResult,
+				pendingContinuation
+			);
+		}
+		setWorkbenchActiveRun(session, { status: "idle" });
+		const queueHelpers = await import("../chat-orchestrator.js");
+		await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
+		void queueHelpers.drainMessageQueue(socket, requestId, session, mcpHost);
+		emitWorkbenchUpdated(socket, requestId, session);
+	} finally {
+		session.activeAbortControllers.delete(pendingContinuation.requestId);
 	}
 }
 
@@ -386,7 +552,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "approved", {
 					approvedAt: new Date().toISOString(),
-					...(request.params.consentText === undefined ? {} : { consentText: request.params.consentText })
+					...(request.params.consentText === undefined ? {} : { consentText: request.params.consentText }),
+					...(pending.approvalKind === undefined ? {} : { approvalKind: pending.approvalKind }),
+					...(pending.downloadAuthorization === undefined ? {} : { downloadAuthorization: pending.downloadAuthorization })
 				});
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executing", {
 					startedAt: new Date().toISOString()
@@ -444,6 +612,20 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			throwIfAborted(abortController.signal);
 			approvedToolExecuted = true;
 			const approvedToolObservation: WorkflowToolObservation = createApprovedWorkflowToolObservation(pending, result.content);
+			const recoveryController = pendingContinuation?.agentLoopState === undefined
+				? undefined
+				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState);
+			const approvedFailure: ToolFailure | undefined = approvedToolObservation.failure;
+			const effectiveApprovedFailure: ToolFailure | undefined = approvedFailure === undefined
+				? undefined
+				: recoveryController?.recordFailure(pending.llmToolName, pending.args, approvedFailure) ?? approvedFailure;
+			const approvedRecovery: AgentLoopRecoveryStatus | undefined = effectiveApprovedFailure === undefined
+				? recoveryController?.recordSuccess(pending.llmToolName, pending.args)
+				: effectiveApprovedFailure.details?.recovery as AgentLoopRecoveryStatus | undefined;
+			const approvedSucceeded: boolean = approvedToolObservation.status === "succeeded";
+			const approvedResultContent: string = effectiveApprovedFailure === undefined
+				? result.content
+				: serializeToolFailure(effectiveApprovedFailure);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "executed", {
 					resultChars: result.content.length,
@@ -493,6 +675,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				cached: result.cached === true,
 				imageGeneration: result.imageGeneration,
 				...approvedToolObservation.parsedResult,
+				...(effectiveApprovedFailure === undefined ? {} : { failure: effectiveApprovedFailure }),
+				recovery: approvedRecovery,
 				...(fileEditBatch === undefined ? {} : { fileEditBatch })
 			}, resultPersistRequestId);
 
@@ -512,9 +696,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					toolCallId: pending.toolCallId,
 					toolName: pending.llmToolName,
 					args: pending.args,
-					succeeded: true,
+					succeeded: approvedSucceeded,
 					summary: result.content.slice(0, 2000),
 					artifactRefs: approvedToolObservation.artifactRefs,
+					failure: effectiveApprovedFailure,
+					recovery: approvedRecovery,
 					writeCheckpointCovered: result.fileEditDraft !== undefined
 				}
 			);
@@ -565,7 +751,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pendingContinuation.continuation,
 					{
 						toolCallId: pending.toolCallId,
-						content: result.content
+						content: approvedResultContent
 					},
 					mcpHost,
 					session.approvalGateway,
@@ -578,7 +764,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
 						executionControl: pendingContinuation.executionControl,
-						chatCompletion: pendingContinuation.chatCompletion
+						chatCompletion: pendingContinuation.chatCompletion,
+						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
+							? undefined
+							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
 					}
 				)
 				: continueProviderAgent(
@@ -587,7 +776,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					pendingContinuation.continuation,
 					{
 						toolCallId: pending.toolCallId,
-						content: result.content
+						content: approvedResultContent
 					},
 					mcpHost,
 					session.approvalGateway,
@@ -600,7 +789,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
 						executionControl: pendingContinuation.executionControl,
-						chatCompletion: pendingContinuation.chatCompletion
+						chatCompletion: pendingContinuation.chatCompletion,
+						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
+							? undefined
+							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
 					}
 				);
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
@@ -765,25 +957,63 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			break;
 		}
 		try {
-			const hydrated = await loadHydratedPendingApprovalStates(session);
+			await synchronizeSessionApprovalMode(session);
+			let apiKey: string | undefined;
+			try {
+				apiKey = await ensureProviderConfigured(session);
+			} catch {
+				// Rejection remains a valid user action even when the provider cannot resume.
+			}
+			const hydrated = await loadHydratedPendingApprovalStates(session, apiKey);
 			const pendingState: PendingApprovalState | undefined = findPendingApprovalState(hydrated.states, request.params.approvalId);
-			const pendingContinuation: PendingAiContinuation | undefined = session.pendingAiContinuations.get(request.params.approvalId);
+			const pendingContinuation: PendingAiContinuation | undefined = session.pendingAiContinuations.get(request.params.approvalId)
+				?? await restorePendingContinuationForApproval(session, pendingState, apiKey);
 			const continuationRequestId: string = pendingContinuation?.requestId ?? pendingState?.requestId ?? request.id;
 			const queueItemId: number | undefined = pendingContinuation?.params.options?.queueItemId;
 			const rejected = session.approvalGateway.reject(request.params.approvalId);
-			const cancelledRun = pendingContinuation === undefined
-				? undefined
-				: cancelAgentRunForRejectedApproval(socket, session, continuationRequestId);
-			session.pendingAiContinuations.delete(request.params.approvalId);
-			await removeAgentRunContinuation(continuationRequestId);
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, request.params.approvalId, pendingState?.requestId ?? request.id, "rejected", {
-					rejectedAt: new Date().toISOString()
+					rejectedAt: new Date().toISOString(),
+					...(rejected.approvalKind === undefined ? {} : { approvalKind: rejected.approvalKind }),
+					failureCode: rejected.approvalKind === "network_download" ? "network_download_declined" : "approval_rejected"
 				});
 			}
-			setWorkbenchActiveRun(session, { status: "idle" });
-			const queueHelpers = await import("../chat-orchestrator.js");
-			await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "rejected");
+			sendSessionEvent(socket, request.id, session, "agent.tool.rejected", {
+				type: "agent.tool.rejected",
+				runId: continuationRequestId,
+				stepRunId: continuationRequestId,
+				approvalId: request.params.approvalId,
+				toolName: rejected.llmToolName
+			}, continuationRequestId);
+			if (pendingContinuation !== undefined) {
+				await continueAfterRejectedApproval({
+					socket,
+					requestId: request.id,
+					session,
+					mcpHost,
+					pending: rejected,
+					pendingContinuation,
+					queueItemId
+				});
+			} else {
+				const cancelledRun = cancelAgentRunForRejectedApproval(socket, session, continuationRequestId);
+				session.pendingAiContinuations.delete(request.params.approvalId);
+				await removeAgentRunContinuation(continuationRequestId);
+				session.messages.push({
+					role: "system",
+					content: `[工具审批被拒绝] ${createApprovalRejectedFailure(rejected).message}`
+				});
+				setWorkbenchActiveRun(session, { status: "idle" });
+				const queueHelpers = await import("../chat-orchestrator.js");
+				await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "rejected");
+				sendAgentCancelled(
+					socket,
+					continuationRequestId,
+					session,
+					cancelledRun?.runId ?? continuationRequestId,
+					"approval_rejected"
+				);
+			}
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -796,22 +1026,6 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				}
 			});
 			emitWorkbenchUpdated(socket, request.id, session);
-			sendSessionEvent(socket, request.id, session, "agent.tool.rejected", {
-				type: "agent.tool.rejected",
-				runId: continuationRequestId,
-				stepRunId: continuationRequestId,
-				approvalId: request.params.approvalId,
-				toolName: rejected.llmToolName
-			}, continuationRequestId);
-			if (pendingContinuation !== undefined) {
-				sendAgentCancelled(
-					socket,
-					continuationRequestId,
-					session,
-					cancelledRun?.runId ?? continuationRequestId,
-					"approval_rejected"
-				);
-			}
 		} catch (error: unknown) {
 			sendJson(socket, {
 				type: "response",

@@ -29,6 +29,7 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 	"mcp_workspace_replace_text_in_file": { serverId: "workspace", toolName: "replace_text_in_file" },
 	"mcp_workspace_propose_replace_line_in_file": { serverId: "workspace", toolName: "propose_replace_line_in_file" },
 	"mcp_workspace_replace_line_in_file": { serverId: "workspace", toolName: "replace_line_in_file" },
+	"mcp_workspace_download_file": { serverId: "workspace", toolName: "download_file" },
 	"mcp_workspace_delete_file": { serverId: "workspace", toolName: "delete_file" },
 	"mcp_godot_get_runtime_status": {
 		serverId: "godot",

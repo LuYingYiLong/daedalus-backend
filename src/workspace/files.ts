@@ -1,10 +1,14 @@
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import { StructuredToolError } from "../tools/tool-failure.js";
 
 export const DEFAULT_WORKSPACE_TEXT_FILE_BYTES: number = 512 * 1024;
 export const DEFAULT_WORKSPACE_NEW_FILE_BYTES: number = 64 * 1024;
+export const DEFAULT_WORKSPACE_DOWNLOAD_BYTES: number = 100 * 1024 * 1024;
+const DEFAULT_WORKSPACE_DOWNLOAD_TIMEOUT_MS: number = 60_000;
+const MAX_WORKSPACE_DOWNLOAD_REDIRECTS: number = 5;
 
 const DEFAULT_IGNORED_DIRECTORIES: ReadonlySet<string> = new Set([
 	".git",
@@ -60,6 +64,13 @@ export type WorkspaceListFilesInput = {
 	extensions?: string[] | undefined;
 	includeIgnored?: boolean | undefined;
 	limit?: number | undefined;
+};
+
+export type WorkspaceDownloadInput = {
+	url: string;
+	relativePath: string;
+	expectedSha256?: string | undefined;
+	overwrite?: boolean | undefined;
 };
 
 export type WorkspaceListFilesResult = {
@@ -169,6 +180,76 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 	const readMaxBytes: number = options.readMaxBytes ?? DEFAULT_WORKSPACE_TEXT_FILE_BYTES;
 	const newFileMaxBytes: number = options.newFileMaxBytes ?? DEFAULT_WORKSPACE_NEW_FILE_BYTES;
 	const writeMaxBytes: number = options.writeMaxBytes ?? readMaxBytes;
+	const downloadMaxBytes: number = Math.max(writeMaxBytes, DEFAULT_WORKSPACE_DOWNLOAD_BYTES);
+
+	function createDownloadFailure(
+		code: string,
+		category: "business" | "environment" | "policy" | "protocol",
+		message: string,
+		retryable: boolean,
+		relativePath: string
+	): StructuredToolError {
+		return new StructuredToolError({
+			code,
+			category,
+			message,
+			retryable,
+			artifactRefs: [relativePath]
+		});
+	}
+
+	function normalizeDownloadUrl(value: string): URL {
+		let url: URL;
+		try {
+			url = new URL(value);
+		} catch {
+			throw createDownloadFailure("download_url_invalid", "protocol", "Download URL must be an absolute HTTPS URL.", false, value);
+		}
+		if (url.protocol !== "https:") {
+			throw createDownloadFailure("download_url_unsupported", "policy", "Only HTTPS workspace downloads are allowed.", false, value);
+		}
+		if (url.username.length > 0 || url.password.length > 0) {
+			throw createDownloadFailure("download_url_credentials_denied", "policy", "Download URLs must not include credentials.", false, value);
+		}
+		return url;
+	}
+
+	async function fetchWorkspaceDownload(inputUrl: URL, signal: AbortSignal, relativePath: string): Promise<{ response: Response; finalUrl: URL }> {
+		let currentUrl: URL = inputUrl;
+		for (let redirectCount: number = 0; redirectCount <= MAX_WORKSPACE_DOWNLOAD_REDIRECTS; redirectCount += 1) {
+			let response: Response;
+			try {
+				response = await fetch(currentUrl, {
+					credentials: "omit",
+					redirect: "manual",
+					signal
+				});
+			} catch (error: unknown) {
+				if (signal.aborted) {
+					throw createDownloadFailure("download_timeout", "environment", "The workspace download timed out.", true, relativePath);
+				}
+				throw createDownloadFailure(
+					"download_network_unavailable",
+					"environment",
+					`The workspace download could not reach ${currentUrl.origin}: ${error instanceof Error ? error.message : "network error"}`,
+					true,
+					relativePath
+				);
+			}
+			if (response.status < 300 || response.status >= 400) {
+				return { response, finalUrl: currentUrl };
+			}
+			if (redirectCount === MAX_WORKSPACE_DOWNLOAD_REDIRECTS) {
+				throw createDownloadFailure("download_redirect_limit", "environment", "The workspace download exceeded the redirect limit.", true, relativePath);
+			}
+			const location: string | null = response.headers.get("location");
+			if (location === null) {
+				throw createDownloadFailure("download_redirect_invalid", "environment", "The workspace download returned a redirect without a destination.", true, relativePath);
+			}
+			currentUrl = normalizeDownloadUrl(new URL(location, currentUrl).toString());
+		}
+		throw createDownloadFailure("download_redirect_limit", "environment", "The workspace download exceeded the redirect limit.", true, relativePath);
+	}
 
 	async function resolveReadPath(relativePath: string): Promise<ResolvedWorkspacePath> {
 		const normalizedPath: string = normalizeRelativePath(relativePath);
@@ -540,6 +621,102 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		};
 	}
 
+	async function downloadFile(input: WorkspaceDownloadInput): Promise<{
+		ok: true;
+		downloaded: true;
+		path: string;
+		size: number;
+		sha256: string;
+		sourceUrl: string;
+		finalUrl: string;
+		overwritten: boolean;
+	}> {
+		const resolved = await resolveWritePath(input.relativePath);
+		const sourceUrl: URL = normalizeDownloadUrl(input.url);
+		const expectedSha256: string | undefined = input.expectedSha256?.trim().toLowerCase();
+		if (expectedSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(expectedSha256)) {
+			throw createDownloadFailure("download_checksum_invalid", "protocol", "expectedSha256 must be a 64-character SHA-256 hex digest.", false, resolved.relativePath);
+		}
+
+		let overwritten: boolean = false;
+		try {
+			const existing = await fs.stat(resolved.absolutePath);
+			if (!existing.isFile()) {
+				throw createDownloadFailure("download_target_not_file", "business", `Download target is not a file: ${resolved.relativePath}`, false, resolved.relativePath);
+			}
+			overwritten = true;
+			if (input.overwrite !== true) {
+				throw createDownloadFailure("download_target_exists", "business", `Download target already exists: ${resolved.relativePath}`, false, resolved.relativePath);
+			}
+		} catch (error: unknown) {
+			if (error instanceof StructuredToolError) throw error;
+			const code: string | undefined = error instanceof Error && "code" in error
+				? String((error as NodeJS.ErrnoException).code)
+				: undefined;
+			if (code !== "ENOENT") throw error;
+		}
+
+		await fs.mkdir(path.dirname(resolved.absolutePath), { recursive: true });
+		const controller = new AbortController();
+		const timeout = setTimeout((): void => controller.abort(), DEFAULT_WORKSPACE_DOWNLOAD_TIMEOUT_MS);
+		const temporaryPath: string = `${resolved.absolutePath}.daedalus-download-${process.pid}-${randomBytes(6).toString("hex")}.tmp`;
+		let handle: fs.FileHandle | undefined;
+		try {
+			const { response, finalUrl } = await fetchWorkspaceDownload(sourceUrl, controller.signal, resolved.relativePath);
+			if (!response.ok) {
+				throw createDownloadFailure(
+					"download_http_error",
+					"environment",
+					`The workspace download failed with HTTP ${response.status}.`,
+					response.status >= 500 || response.status === 429,
+					resolved.relativePath
+				);
+			}
+			if (response.body === null) {
+				throw createDownloadFailure("download_empty_response", "environment", "The workspace download returned no response body.", true, resolved.relativePath);
+			}
+			const declaredSizeText: string | null = response.headers.get("content-length");
+			const declaredSize: number | undefined = declaredSizeText === null ? undefined : Number(declaredSizeText);
+			if (declaredSize !== undefined && (!Number.isFinite(declaredSize) || declaredSize < 0 || declaredSize > downloadMaxBytes)) {
+				throw createDownloadFailure("download_too_large", "policy", `The workspace download exceeds the ${downloadMaxBytes} byte limit.`, false, resolved.relativePath);
+			}
+
+			handle = await fs.open(temporaryPath, "wx");
+			const hash = createHash("sha256");
+			let size: number = 0;
+			for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+				const bytes: Uint8Array = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+				size += bytes.byteLength;
+				if (size > downloadMaxBytes) {
+					throw createDownloadFailure("download_too_large", "policy", `The workspace download exceeds the ${downloadMaxBytes} byte limit.`, false, resolved.relativePath);
+				}
+				hash.update(bytes);
+				await handle.write(bytes);
+			}
+			await handle.close();
+			handle = undefined;
+			const sha256: string = hash.digest("hex");
+			if (expectedSha256 !== undefined && sha256 !== expectedSha256) {
+				throw createDownloadFailure("download_checksum_mismatch", "business", "The downloaded file did not match expectedSha256.", false, resolved.relativePath);
+			}
+			await fs.rename(temporaryPath, resolved.absolutePath);
+			return {
+				ok: true,
+				downloaded: true,
+				path: resolved.relativePath,
+				size,
+				sha256,
+				sourceUrl: sourceUrl.toString(),
+				finalUrl: finalUrl.toString(),
+				overwritten
+			};
+		} finally {
+			clearTimeout(timeout);
+			await handle?.close().catch((): void => undefined);
+			await fs.rm(temporaryPath, { force: true }).catch((): void => undefined);
+		}
+	}
+
 	return {
 		rootPath,
 		listFiles,
@@ -553,6 +730,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		replaceTextInFile,
 		replaceLineInFile,
 		deleteFile,
+		downloadFile,
 		resolveReadPath,
 		resolveWritePath
 	};

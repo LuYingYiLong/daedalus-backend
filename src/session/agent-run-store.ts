@@ -70,9 +70,10 @@ function parsePersistedAgentRunState(value: unknown): AgentRunState {
 	if (record.schemaVersion === AGENT_RUN_STATE_SCHEMA_VERSION) {
 		return record as AgentRunState;
 	}
-	if (record.schemaVersion === 1) {
-		// Version 1 has the same core state shape. New failure/blocked fields are
-		// optional, so migration is structural and never infers data from text.
+	if (record.schemaVersion === 1 || record.schemaVersion === 2) {
+		// Older runs keep their recorded lane and continuation semantics. New
+		// agent-loop state is optional, so migration is structural and never
+		// infers execution state from titles, prompts, or model prose.
 		return { ...record, schemaVersion: AGENT_RUN_STATE_SCHEMA_VERSION } as AgentRunState;
 	}
 	throw new Error(`agent_run_state_corrupted: unsupported schema version ${String(record.schemaVersion)}`);

@@ -7,6 +7,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import {
 	createPersistedApprovalRequestedData,
 	createRuntimePendingContinuation,
+	collectApprovedDownloadAuthorizations,
 	foldPendingApprovalStates,
 	mergeHydratedPendingApprovalStates
 } from "../../../src/session/approval-persistence.js";
@@ -177,6 +178,31 @@ test("hydrated approval states keep in-memory approvals created during continuat
 		mergedStates.map((state) => state.approval.approvalId).sort(),
 		["approval-memory-race", "approval-test"]
 	);
+});
+
+test("approved download authorization scopes survive persistence while pending cards do not", (): void => {
+	const scope = {
+		kind: "network_download" as const,
+		requestId: "request-test",
+		workspaceId: "workspace-a",
+		fingerprints: ["a".repeat(64)],
+		downloads: [{
+			url: "https://downloads.example.test/tool.bin",
+			sourceFolderId: "tools",
+			relativePath: "bin/tool.bin",
+			dependency: "tool",
+			purpose: "Run this request's verifier.",
+			criticality: "required" as const,
+			overwrite: false
+		}]
+	};
+	const scopes = collectApprovedDownloadAuthorizations([
+		createApprovalEvent("requested", createPersistedApprovalRequestedData(createPendingApproval(), undefined, "workspace-a"), "2026-07-03T00:00:00.000Z"),
+		createApprovalEvent("approved", { approvedAt: "2026-07-03T00:00:01.000Z", downloadAuthorization: scope }, "2026-07-03T00:00:01.000Z"),
+		createApprovalEvent("approved", { approvedAt: "2026-07-03T00:00:02.000Z", downloadAuthorization: { kind: "network_download" } }, "2026-07-03T00:00:02.000Z")
+	]);
+
+	assert.deepEqual(scopes, [scope]);
 });
 
 test("cancelling a request clears pending approval continuation and persistence", async (): Promise<void> => {

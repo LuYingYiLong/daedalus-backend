@@ -25,6 +25,7 @@ import { resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { createAgentToolEventForwarder } from "./workflow/tool-events.js";
 import { loadCorePrompt } from "../prompts/registry.js";
 import { getClientConnection } from "./client-connections.js";
+import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
 const CLARIFICATION_REPLY_MAX_COUNT: number = 3;
@@ -605,6 +606,7 @@ async function runPlanAgentDecision(
 		undefined,
 		{
 			workspaceId: runtime.session.activeWorkspace?.id,
+			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(runtime.session.activeWorkspace),
 			editorInstanceId: runtime.session.editorInstanceId,
 			sessionId: runtime.session.sessionId,
 			requestId: planThreadRequestId,

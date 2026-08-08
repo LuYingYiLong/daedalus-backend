@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createWorkspaceFileService } from "../../../src/workspace/files.js";
+import { StructuredToolError } from "../../../src/tools/tool-failure.js";
 
 test("workspace file service creates, reads, searches and edits text files inside root", async (): Promise<void> => {
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-workspace-files-"));
@@ -104,6 +105,43 @@ test("workspace file listing is bounded and omits generated caches by default", 
 		assert.equal(result.files.some((file: string): boolean => file.startsWith(".cache/")), false);
 		assert.equal((await service.listFilesDetailed({ includeIgnored: true, limit: 500 })).files.includes(".cache/generated.txt"), true);
 	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("workspace downloader writes an HTTPS response atomically without running it", async (): Promise<void> => {
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-workspace-download-"));
+	const originalFetch: typeof fetch = globalThis.fetch;
+	globalThis.fetch = async (): Promise<Response> => new Response("downloaded-tool", {
+		status: 200,
+		headers: { "content-length": "15" }
+	});
+	try {
+		const service = createWorkspaceFileService({ rootPath: root });
+		const result = await service.downloadFile({
+			url: "https://downloads.example.test/tool.bin",
+			relativePath: "tools/tool.bin"
+		});
+
+		assert.equal(result.downloaded, true);
+		assert.equal(result.path, "tools/tool.bin");
+		assert.equal(await readFile(join(root, "tools", "tool.bin"), "utf8"), "downloaded-tool");
+		await assert.rejects(
+			() => service.downloadFile({
+				url: "https://downloads.example.test/tool.bin",
+				relativePath: "tools/tool.bin"
+			}),
+			(error: unknown): boolean => error instanceof StructuredToolError && error.failure.code === "download_target_exists"
+		);
+		await assert.rejects(
+			() => service.downloadFile({
+				url: "http://downloads.example.test/tool.bin",
+				relativePath: "tools/insecure.bin"
+			}),
+			(error: unknown): boolean => error instanceof StructuredToolError && error.failure.code === "download_url_unsupported"
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
 		await rm(root, { recursive: true, force: true });
 	}
 });

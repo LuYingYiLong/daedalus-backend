@@ -24,7 +24,7 @@ test("explicit read-only policy wins over workflow options", (): void => {
 	assert.equal(route.safetyOverride, "execution_read_only");
 });
 
-test("agent auto requests with a workspace use tool-assisted chat independent of prose", (): void => {
+test("agent auto requests with a workspace use the free agent loop independent of prose", (): void => {
 	const messages = [
 		"Explain e2e testing; do not edit files.",
 		"Refactor multiple files and migrate configuration.",
@@ -33,8 +33,8 @@ test("agent auto requests with a workspace use tool-assisted chat independent of
 	for (const message of messages) {
 		const route = routeWorkflowExecution({ message, mode: "agent", options: { executionPolicy: "auto" } }, workspaceContext);
 		assert.equal(route.intent, "answer");
-		assert.equal(route.scope, "bounded");
-		assert.equal(route.lane, "tool_assisted");
+		assert.equal(route.scope, "unknown");
+		assert.equal(route.lane, "agent_loop");
 		assert.equal(route.outputTarget, "chat");
 	}
 });
@@ -54,14 +54,14 @@ test("workspace output is granted only by a structured target", (): void => {
 	assert.equal(canWriteToWorkspace({ message: "任意文本", mode: "agent", options: { outputTarget: "workspace" } }), true);
 });
 
-test("explicit chat output wins over a workflow option", (): void => {
+test("explicit chat output keeps the agent loop read-only through its structured target", (): void => {
 	const route = routeWorkflowExecution({
 		message: "任意文本",
 		mode: "agent",
 		options: { outputTarget: "chat", workflow: "multi_phase" }
 	}, workspaceContext);
-	assert.equal(route.lane, "read");
-	assert.equal(route.safetyOverride, "output_chat_only");
+	assert.equal(route.lane, "agent_loop");
+	assert.equal(route.outputTarget, "chat");
 	assert.equal(canWriteToWorkspace({
 		message: "任意文本",
 		mode: "agent",
@@ -73,7 +73,7 @@ test("legacy explicit workflow remains a structured workspace authorization", ()
 	const params = { message: "任意文本", mode: "agent" as const, options: { workflow: "multi_phase" as const } };
 	const route = routeWorkflowExecution(params, workspaceContext);
 	assert.equal(getOutputTarget(params), "workspace");
-	assert.equal(route.lane, "workflow");
+	assert.equal(route.lane, "agent_loop");
 	assert.equal(canWriteToWorkspace(params), true);
 });
 
@@ -83,18 +83,18 @@ test("a tool budget never acts as workspace authorization", (): void => {
 	assert.equal(canWriteToWorkspace(params), false);
 });
 
-test("explicit multi-phase and llm-planned options start workflows only with a workspace", (): void => {
+test("legacy workflow options map new workspace requests to the free agent loop", (): void => {
 	for (const workflow of ["multi_phase", "llm_planned"] as const) {
 		const route = routeWorkflowExecution({ message: "Any request", mode: "agent", options: { workflow } }, workspaceContext);
-		assert.equal(route.lane, "workflow");
+		assert.equal(route.lane, "agent_loop");
 		assert.equal(route.forcedByOption, workflow);
 		assert.equal(routeWorkflowExecution({ message: "Any request", mode: "agent", options: { workflow } }, noWorkspaceContext).lane, "direct");
 	}
 });
 
-test("single keeps the bounded tool-assisted policy", (): void => {
+test("single also uses the free agent loop", (): void => {
 	const route = routeWorkflowExecution({ message: "Change a file", mode: "agent", options: { workflow: "single" } }, workspaceContext);
-	assert.equal(route.lane, "tool_assisted");
+	assert.equal(route.lane, "agent_loop");
 });
 
 test("missing execution policy is explicitly auto", (): void => {

@@ -17,11 +17,18 @@ function isResolvedByLaterEvidence(
 	const failureTargets: Set<string> = collectEvidenceTargetKeys(failure);
 	return evidence.slice(index + 1).some((candidate: ExecutionEvidence): boolean => {
 		if (candidate.status !== "succeeded") return false;
+		if (
+			failure.recovery?.recoveryKey !== undefined
+			&& candidate.recovery?.status === "recovered"
+			&& candidate.recovery.recoveryKey === failure.recovery.recoveryKey
+		) {
+			return true;
+		}
 		const candidateTargets: Set<string> = collectEvidenceTargetKeys(candidate);
 		if (failureTargets.size > 0 && candidateTargets.size > 0) {
 			return [...failureTargets].some((target: string): boolean => candidateTargets.has(target));
 		}
-		return failure.toolName === candidate.toolName;
+		return false;
 	});
 }
 

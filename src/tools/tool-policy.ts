@@ -1,6 +1,8 @@
 import { isDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { HARD_BLOCKED_TOOLS, TOOL_POLICIES } from "./tool-policy-table.js";
 import { findWorkspace, isPathInsideWorkspaceSources } from "../workspace/registry.js";
+import type { DownloadAuthorizationScope } from "./download-authorization.js";
+import type { NetworkAccessRequired } from "./download-authorization.js";
 
 export type ApprovalMode = "manual" | "auto-safe" | "full-trust";
 
@@ -71,8 +73,16 @@ export function isHardBlocked(toolName: string): boolean {
 
 export type ApprovalDecision =
 	| { action: "allow"; review?: ToolReviewAudit | undefined }
-	| { action: "request_approval"; reason: string; requiredConsent?: ToolRequiredConsent | undefined; review?: ToolReviewAudit | undefined }
-	| { action: "deny"; reason: string; review?: ToolReviewAudit | undefined };
+	| {
+		action: "request_approval";
+		reason: string;
+		requiredConsent?: ToolRequiredConsent | undefined;
+		review?: ToolReviewAudit | undefined;
+		approvalKind?: "network_download" | undefined;
+		downloadAuthorization?: DownloadAuthorizationScope | undefined;
+		networkAccessRequired?: NetworkAccessRequired | undefined;
+	}
+	| { action: "deny"; reason: string; code?: string | undefined; review?: ToolReviewAudit | undefined };
 
 export type ToolReviewAudit = {
 	source: "model" | "policy";

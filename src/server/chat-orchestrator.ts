@@ -44,6 +44,7 @@ import {
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
 	createSession, openSession, saveSession, listSessions,
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
@@ -190,6 +191,11 @@ import {
 } from "./session-events.js";
 import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
 import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
+import {
+	createAgentLoopRecoveryController,
+	createAgentLoopState,
+	type AgentLoopState
+} from "../workflow/agent-loop-state.js";
 
 import {
 	createPendingAiContinuation,
@@ -286,6 +292,7 @@ function isImageGenerationOnlyToolRestriction(toolNames: readonly string[] | und
 function removeWebSearchToolName(allowedToolNames: readonly string[] | undefined, session: ClientSession): readonly string[] {
 	const toolNames: readonly string[] = allowedToolNames ?? createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace?.id,
+		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		editorInstanceId: session.editorInstanceId,
 		sessionId: session.sessionId
 	}).getEntries().map((entry): string => entry.id);
@@ -447,6 +454,7 @@ function getAllRuntimeToolNames(session: ClientSession): readonly string[] {
 
 	return createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace.id,
+		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		editorInstanceId: session.editorInstanceId,
 		sessionId: session.sessionId
 	}).getEntries().map((entry): string => entry.id);
@@ -477,7 +485,10 @@ function resolveHiddenAnswerToolNames(
 	if (routeDecision.lane === "lightweight") {
 		return sourceToolNames;
 	}
-	if (routeDecision.lane === "tool_assisted" && routeDecision.outputTarget === "workspace") {
+	if (
+		(routeDecision.lane === "agent_loop" || routeDecision.lane === "tool_assisted")
+		&& routeDecision.outputTarget === "workspace"
+	) {
 		return sourceToolNames;
 	}
 
@@ -513,7 +524,7 @@ function createChatCompletionContext(routeDecision: WorkflowRouteDecision): Chat
 	return undefined;
 }
 
-function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: WorkflowRouteDecision): AiChatParams {
+export function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: WorkflowRouteDecision): AiChatParams {
 	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
 		return params;
 	}
@@ -530,6 +541,17 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 		return {
 			...params,
 			options
+		};
+	}
+	if (routeDecision.lane === "agent_loop") {
+		return {
+			...params,
+			options: {
+				...options,
+				toolBudget: routeDecision.outputTarget === "workspace"
+					? (params.options?.toolBudget ?? "project_edit")
+					: (params.options?.toolBudget ?? "normal")
+			}
 		};
 	}
 	if (routeDecision.lane === "tool_assisted") {
@@ -553,9 +575,10 @@ function createHiddenAnswerChatParams(params: AiChatParams, routeDecision: Workf
 	};
 }
 
-function createHiddenAnswerSystemPrompt(
+export function createHiddenAnswerSystemPrompt(
 	fullSystemPrompt: string,
 	routeDecision: WorkflowRouteDecision,
+	verificationPolicy: NonNullable<NonNullable<AiChatParams["options"]>["verificationPolicy"]> = "best_effort",
 	executionControl?: ExecutionControlContext | undefined
 ): string {
 	if (routeDecision.lane === "direct" || routeDecision.lane === "workflow") {
@@ -570,10 +593,34 @@ function createHiddenAnswerSystemPrompt(
 				"- This is a read-only discovery stage. It never grants mutation permission by itself.",
 				"- The execution-decision tool is intentionally unavailable during this first pass.",
 				"- Use the minimum read or verify tools when the answer depends on current workspace or runtime facts. For general knowledge that does not depend on this workspace, answer directly without inventing inspection results.",
-				"- mcp_terminal_run_command is available only for a needed general command. It follows the configured terminal approval policy: auto-safe commands are reviewed before execution; a denied or uncertain review is returned to you as a tool error. Do not use it when a read or verify tool can establish the answer.",
+				"- mcp_terminal_run_command is available only for a needed general command. It follows the configured terminal approval policy: auto-safe commands are reviewed before execution; a denied or uncertain review is returned to you as a tool error. Do not use it when a read or verify tool can establish the answer. Do not use terminal download commands; use the structured workspace downloader only when a workspace file is genuinely needed.",
 				"- Do not write, propose a patch, or claim that a mutation path is authorized during this probe.",
 				"- After inspection, return concise factual findings only. Daedalus will open one control-only pass that records the execution decision from the evidence."
 			].join("\n")
+		].join("\n\n");
+	}
+
+	if (routeDecision.lane === "agent_loop") {
+		const verificationGuidance: string = verificationPolicy === "skip"
+			? "- The user selected verificationPolicy=skip. Do not run validation solely to satisfy a framework rule. Clearly distinguish completed edits from unverified behavior."
+			: verificationPolicy === "required"
+				? "- The user selected verificationPolicy=required. Run proportionate available validation before claiming verified completion. If it cannot run, preserve completed work and report an unverified warning; do not create an automatic repair phase."
+				: "- Validation is best effort: run proportionate checks when useful. If checks are unavailable or omitted, preserve completed work and state that it is unverified; do not create an automatic repair phase.";
+		return [
+			fullSystemPrompt,
+			[
+				"## Daedalus free Agent Loop",
+				"- You own the execution flow. Choose the smallest useful sequence of reading, editing, commands, validation, questions, retries, and explanation for the user's actual request.",
+				"- There are no fixed inspect, implement, verify, or summarize phases. Do not report artificial phase completion and do not create a workflow Todo merely to mirror those steps.",
+				"- Tools are optional. General questions may be answered directly. Workspace claims must come from actual observations, and workspace mutations must use the available policy-governed tools.",
+				"- A structured tool failure is an observation, not a request-level crash. Read its code and target, then correct the arguments, gather more context, use another equally authorized approach, ask the user when authority is missing, or continue with unaffected work.",
+				"- Never broaden source-folder, path, network, destructive, or approval scope while retrying. A retry_exhausted result means that exact operation must not be repeated; choose a materially different safe approach or explain the limitation.",
+				"- Ordinary visible assistant text may complete the turn. Do not call an execution-decision tool and do not end on a progress announcement when useful work remains.",
+				routeDecision.outputTarget === "chat"
+					? "- The output target is chat: use only read or verify tools and do not mutate the workspace."
+					: "- The output target is workspace: read, write, destructive, terminal, and download tools retain their existing policy and approval boundaries.",
+				verificationGuidance
+			].filter((line: string): boolean => line.length > 0).join("\n")
 		].join("\n\n");
 	}
 
@@ -596,7 +643,7 @@ function createHiddenAnswerSystemPrompt(
 				"## Daedalus tool-assisted chat",
 				"- Answer normally when tools are unnecessary. Never invent workspace observations.",
 				"- Use the smallest relevant tool call when current workspace facts are needed.",
-				"- Read, verify, write, destructive, and terminal tools retain their normal policy and approval checks.",
+				"- Read, verify, write, destructive, terminal, and network-download tools retain their normal policy and approval checks. A downloader call only stores a file in the approved workspace path; it never installs or runs the download.",
 				"- A single bounded approved change may be completed here. If more work is needed, Daedalus will safely continue it as a workflow.",
 				"- This request explicitly targets the workspace. Do not finish with a progress announcement or a promise to make a change later. After inspection, either perform the bounded authorized change, or clearly state that no workspace change was made and why.",
 				"- Verification is optional in this chat lane. If no verifier is run after a change, state that the result is unverified."
@@ -784,7 +831,18 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
 	const executionControl: ExecutionControlContext | undefined = createExecutionControlContext(chatParams, params.routeDecision);
 	const chatCompletion: ChatCompletionContext | undefined = createChatCompletionContext(params.routeDecision);
-	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(params.fullSystemPrompt, params.routeDecision, executionControl);
+	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(
+		params.fullSystemPrompt,
+		params.routeDecision,
+		chatParams.options?.verificationPolicy ?? "best_effort",
+		executionControl
+	);
+	const agentLoopState: AgentLoopState | undefined = params.routeDecision.lane === "agent_loop"
+		? (getAgentRun(params.session, runId)?.agentLoopState ?? createAgentLoopState())
+		: undefined;
+	const agentLoopRecovery = agentLoopState === undefined
+		? undefined
+		: createAgentLoopRecoveryController(agentLoopState);
 	const lightweightActionState: LightweightActionState | undefined = params.routeDecision.intent === "mutate"
 		? createLightweightActionState()
 		: undefined;
@@ -844,13 +902,15 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		sceneViewEnricher.enricher,
 		{
 			workspaceId: params.session.activeWorkspace?.id,
+			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 			editorInstanceId: params.session.editorInstanceId,
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
 			executionControl,
 			executionControlAvailable: params.routeDecision.lane !== "probe",
-			chatCompletion
+			chatCompletion,
+			agentLoopRecovery
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -910,6 +970,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			undefined,
 			{
 				workspaceId: params.session.activeWorkspace?.id,
+				hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 				editorInstanceId: params.session.editorInstanceId,
 				sessionId: params.session.sessionId,
 				requestId: params.requestId,
@@ -937,7 +998,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			undefined,
 			lightweightActionState,
 			executionControl,
-			chatCompletion
+			chatCompletion,
+			agentLoopState
 		);
 		await pauseRunForApproval({
 			socket: params.socket,
@@ -964,7 +1026,8 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			stream: true,
 			lightweightActionState,
 			executionControl,
-			chatCompletion
+			chatCompletion,
+			agentLoopState
 		});
 		registerPendingToolBudget(params.session, pendingBudget);
 		sendToolBudgetRequired(params.socket, params.requestId, params.session, runId, pendingBudget);
@@ -1134,7 +1197,7 @@ function collectToolAssistedCompletionStatus(
 	verificationStatus?: "verified" | "unverified" | undefined;
 	warnings: string[];
 } {
-	if (lane !== "tool_assisted") {
+	if (lane !== "tool_assisted" && lane !== "agent_loop") {
 		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const evidence: readonly ExecutionEvidence[] = getAgentRun(session, runId)?.checkpoint.evidence ?? [];
@@ -1142,18 +1205,31 @@ function collectToolAssistedCompletionStatus(
 	const environmentWarnings: string[] = evidence
 		.filter((item: ExecutionEvidence): boolean => item.status === "failed" && item.failure?.category === "environment")
 		.map(formatExecutionFailure);
-	if (unresolvedFailures.length > 0) {
+	const unresolvedWarnings: string[] = unresolvedFailures.map(formatExecutionFailure);
+	const changedWorkspace: boolean = evidence.some((item: ExecutionEvidence): boolean => (
+		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
+	));
+	const verified: boolean = evidence.some((item: ExecutionEvidence): boolean => (
+		item.status === "succeeded"
+			&& item.risk === "verify"
+			&& item.validationStatus !== "not_applicable"
+	));
+	if (unresolvedFailures.length > 0 && lane === "tool_assisted") {
 		return {
 			resultStatus: "blocked",
 			verificationStatus: "unverified",
 			warnings: unresolvedFailures.map(formatExecutionFailure)
 		};
 	}
-	const changedWorkspace: boolean = evidence.some((item: ExecutionEvidence): boolean => (
-		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
-	));
+	if (lane === "agent_loop" && unresolvedWarnings.length > 0) {
+		return {
+			resultStatus: "completed_with_warnings",
+			verificationStatus: changedWorkspace ? (verified ? "verified" : "unverified") : undefined,
+			warnings: [...environmentWarnings, ...unresolvedWarnings]
+		};
+	}
 	if (!changedWorkspace) {
-		return outputTarget === "workspace"
+		return outputTarget === "workspace" && lane === "tool_assisted"
 			? {
 				resultStatus: "completed_with_warnings",
 				verificationStatus: "unverified",
@@ -1163,11 +1239,6 @@ function collectToolAssistedCompletionStatus(
 				? { resultStatus: "completed_with_warnings", verificationStatus: "unverified", warnings: environmentWarnings }
 				: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
-	const verified: boolean = evidence.some((item: ExecutionEvidence): boolean => (
-		item.status === "succeeded"
-			&& item.risk === "verify"
-			&& item.validationStatus !== "not_applicable"
-	));
 	return verified
 		? environmentWarnings.length > 0
 			? { resultStatus: "completed_with_warnings", verificationStatus: "verified", warnings: environmentWarnings }
@@ -1944,12 +2015,16 @@ async function runToolBudgetDecisionContinuation(params: {
 
 		const toolContext = {
 			workspaceId: session.activeWorkspace?.id,
+			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 			editorInstanceId: session.editorInstanceId,
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
 			clientType: getClientConnection(socket)?.clientType,
 			executionControl: pendingContinuation.executionControl,
-			chatCompletion: pendingContinuation.chatCompletion
+			chatCompletion: pendingContinuation.chatCompletion,
+			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
+				? undefined
+				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2752,14 +2827,21 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						{
 							intent: routeDecision.intent,
 							scope: routeDecision.scope,
-							lane: routeDecision.lane
+							lane: routeDecision.lane,
+							agentLoopState: routeDecision.lane === "agent_loop" ? createAgentLoopState() : undefined,
+							todo: null,
+							planId: null
 						}
 					);
 				}
 
 				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, effectiveParams, allowedToolNames, session);
 				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
-				const hiddenAnswerApprovalGateway: ApprovalGateway = routeDecision.lane !== "lightweight" && routeDecision.lane !== "tool_assisted"
+				const hiddenAnswerApprovalGateway: ApprovalGateway = (
+					routeDecision.lane !== "lightweight"
+					&& routeDecision.lane !== "tool_assisted"
+					&& !(routeDecision.lane === "agent_loop" && routeDecision.outputTarget === "workspace")
+				)
 					? new ReadOnlyToolApprovalGateway(session.approvalGateway, hiddenAnswerToolNames, {
 					delegatedToolNames: routeDecision.lane === "probe" && getExecutionPolicy(effectiveParams) === "auto"
 							? ["mcp_terminal_run_command"]

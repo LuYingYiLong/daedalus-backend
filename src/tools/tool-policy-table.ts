@@ -24,6 +24,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_workspace_replace_text_in_file": { risk: "write" },
 	"mcp_workspace_propose_replace_line_in_file": { risk: "propose" },
 	"mcp_workspace_replace_line_in_file": { risk: "write" },
+	"mcp_workspace_download_file": { risk: "write" },
 	"mcp_workspace_delete_file": { risk: "destructive" },
 	"mcp_godot_get_runtime_status": { risk: "read" },
 	"mcp_godot_get_godot_version": { risk: "read" },

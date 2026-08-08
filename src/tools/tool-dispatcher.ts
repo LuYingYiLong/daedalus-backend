@@ -2,6 +2,7 @@ import type { ChatCompletionMessageToolCall, ChatCompletionToolMessageParam } fr
 import type { McpHost } from "../mcp/mcp-host.js";
 import { type ApprovalGateway, type PendingApproval } from "./approval-gateway.js";
 import type { ToolRequiredConsent, ToolReviewAudit } from "./tool-policy.js";
+import type { DownloadAuthorizationScope, NetworkAccessRequired } from "./download-authorization.js";
 import { describeToolEvent, type ToolEventDisplay } from "./tool-event-describer.js";
 import { executeLlmToolWithIdempotency } from "./tool-idempotency.js";
 import type { IdempotentToolExecutionResult } from "./tool-idempotency.js";
@@ -32,6 +33,7 @@ import {
 	serializeToolFailure,
 	type ToolFailure
 } from "./tool-failure.js";
+import type { AgentLoopRecoveryStatus } from "../workflow/agent-loop-state.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -42,10 +44,10 @@ export type ToolEvent =
 	| ({ type: "tool.preparing"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.call"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
-	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined } & ParsedToolResultSummary)
-	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined }
+	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined; recovery?: AgentLoopRecoveryStatus | undefined } & ParsedToolResultSummary)
+	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined; recovery?: AgentLoopRecoveryStatus | undefined }
 	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"]; provider?: string | undefined; model?: string | undefined }
-	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined } & ToolEventDisplay);
+	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined; approvalKind?: "network_download" | undefined; downloadAuthorization?: DownloadAuthorizationScope | undefined; networkAccessRequired?: NetworkAccessRequired | undefined } & ToolEventDisplay);
 
 export type OnToolEvent = (event: ToolEvent) => void;
 
@@ -174,6 +176,18 @@ function collectToolArgumentArtifactRefs(args: Record<string, unknown>): string[
 	return [...refs];
 }
 
+function getRecoveryStatus(failure: ToolFailure): AgentLoopRecoveryStatus | undefined {
+	const recovery: unknown = failure.details?.recovery;
+	if (recovery === null || typeof recovery !== "object") return undefined;
+	const value = recovery as Record<string, unknown>;
+	return typeof value.recoveryKey === "string"
+		&& typeof value.attempt === "number"
+		&& typeof value.maxAttempts === "number"
+		&& (value.status === "failed" || value.status === "recovered" || value.status === "exhausted")
+		? value as AgentLoopRecoveryStatus
+		: undefined;
+}
+
 async function executeSingleToolCall(
 	mcpHost: McpHost,
 	toolCall: ChatCompletionMessageToolCall,
@@ -220,19 +234,29 @@ async function executeSingleToolCall(
 		argsParsed = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
 	} catch {
 		const message: string = `Invalid JSON arguments: ${toolCall.function.arguments}`;
-		const failure: ToolFailure = {
+		const baseFailure: ToolFailure = {
 			code: "invalid_arguments",
 			category: "protocol",
 			message,
 			retryable: true,
 			artifactRefs: []
 		};
+		const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, {});
+		const failure: ToolFailure = exhaustedFailure ?? toolContext?.agentLoopRecovery?.recordFailure(functionName, {}, baseFailure) ?? baseFailure;
 		logger.warn("tool", "arguments_invalid", {
 			toolCallId: toolCall.id,
 			toolName: functionName,
 			step
 		});
-		onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message, failure });
+		onEvent?.({
+			type: "tool.error",
+			step,
+			toolCallId: toolCall.id,
+			toolName: functionName,
+			message: failure.message,
+			failure,
+			recovery: getRecoveryStatus(failure)
+		});
 		return {
 			role: "tool",
 			tool_call_id: toolCall.id,
@@ -242,6 +266,23 @@ async function executeSingleToolCall(
 
 	const workspaceId: string | undefined = toolContext?.workspaceId ?? mcpHost.getActiveWorkspaceId();
 	const executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
+	const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, executionArgs);
+	if (exhaustedFailure !== undefined) {
+		onEvent?.({
+			type: "tool.error",
+			step,
+			toolCallId: toolCall.id,
+			toolName: functionName,
+			message: exhaustedFailure.message,
+			failure: exhaustedFailure,
+			recovery: getRecoveryStatus(exhaustedFailure)
+		});
+		return {
+			role: "tool",
+			tool_call_id: toolCall.id,
+			content: serializeToolFailure(exhaustedFailure)
+		};
+	}
 	const approvalReason: string = getApprovalReasonFromArgs(argsParsed, "");
 	const activeScenePath: string | undefined = typeof mcpHost.getEditorBridge === "function"
 		? mcpHost.getEditorBridge().getActiveScenePath()
@@ -275,7 +316,7 @@ async function executeSingleToolCall(
 
 	if (decision.action === "deny") {
 		const failure: ToolFailure = {
-			code: "command_review_denied",
+			code: decision.code ?? "command_review_denied",
 			category: "policy",
 			message: decision.reason,
 			retryable: false,
@@ -307,7 +348,12 @@ async function executeSingleToolCall(
 			toolContext?.editorInstanceId,
 			toolContext?.sessionId,
 			decision.requiredConsent,
-			toolContext?.requestId
+			toolContext?.requestId,
+			{
+				approvalKind: decision.approvalKind,
+				downloadAuthorization: decision.downloadAuthorization,
+				networkAccessRequired: decision.networkAccessRequired
+			}
 		);
 		logger.info("tool", "approval_required", {
 			toolCallId: toolCall.id,
@@ -327,6 +373,9 @@ async function executeSingleToolCall(
 			reason,
 			args: executionArgs,
 			requiredConsent: pending.requiredConsent,
+			approvalKind: pending.approvalKind,
+			downloadAuthorization: pending.downloadAuthorization,
+			networkAccessRequired: pending.networkAccessRequired,
 			...describeToolEvent(functionName, executionArgs, workspaceId)
 		});
 
@@ -348,7 +397,7 @@ async function executeSingleToolCall(
 	const cachedCapabilityFailure: string | null = getCachedRuntimeCapabilityFailure(toolContext?.requestId, runtimeCapabilityKind);
 	if (cachedCapabilityFailure !== null) {
 		const applicabilityCode: ToolApplicabilityCode | undefined = getRuntimeCapabilityApplicabilityCode(runtimeCapabilityKind);
-		const failure: ToolFailure = {
+		const baseFailure: ToolFailure = {
 			code: "runtime_capability_unavailable_cached",
 			category: "environment",
 			message: cachedCapabilityFailure,
@@ -357,6 +406,7 @@ async function executeSingleToolCall(
 			sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
 			details: { applicabilityCode }
 		};
+		const failure: ToolFailure = toolContext?.agentLoopRecovery?.recordFailure(functionName, executionArgs, baseFailure) ?? baseFailure;
 		const content: string = JSON.stringify({
 			ok: false,
 			code: "runtime_capability_unavailable_cached",
@@ -381,7 +431,8 @@ async function executeSingleToolCall(
 			summary: cachedCapabilityFailure,
 			failure,
 			failedChecks: [cachedCapabilityFailure],
-			artifactRefs: []
+			artifactRefs: [],
+			recovery: getRecoveryStatus(failure)
 		});
 		return {
 			role: "tool",
@@ -492,7 +543,7 @@ async function executeSingleToolCall(
 			parsedSummary.failure === undefined
 			&& (parsedSummary.ok === false || parsedSummary.validationStatus === "failed")
 		) {
-			const failure: ToolFailure = {
+			const baseFailure: ToolFailure = {
 				code: parsedSummary.failureCode ?? "tool_execution_failed",
 				category: parsedSummary.environmentIssue === true ? "environment" : "business",
 				message: parsedSummary.summary ?? `${functionName} failed`,
@@ -502,6 +553,7 @@ async function executeSingleToolCall(
 				sourceFolderId: parsedSummary.sourceFolderId,
 				details: { originalResult: result.content }
 			};
+			const failure: ToolFailure = toolContext?.agentLoopRecovery?.recordFailure(functionName, executionArgs, baseFailure) ?? baseFailure;
 			parsedSummary = { ...parsedSummary, failure, failureCode: failure.code };
 			modelResultContent = JSON.stringify({
 				ok: false,
@@ -513,6 +565,24 @@ async function executeSingleToolCall(
 				result: result.content
 			});
 		}
+		if (parsedSummary.failure !== undefined) {
+			const recoveryStatus: AgentLoopRecoveryStatus | undefined = getRecoveryStatus(parsedSummary.failure);
+			if (recoveryStatus === undefined) {
+				const enrichedFailure: ToolFailure = toolContext?.agentLoopRecovery?.recordFailure(
+					functionName,
+					executionArgs,
+					parsedSummary.failure
+				) ?? parsedSummary.failure;
+				parsedSummary = { ...parsedSummary, failure: enrichedFailure, failureCode: enrichedFailure.code };
+				modelResultContent = serializeToolFailure(enrichedFailure);
+			}
+		}
+		const successRecovery: AgentLoopRecoveryStatus | undefined = parsedSummary.failure === undefined
+			&& parsedSummary.ok !== false
+			&& parsedSummary.validationStatus !== "failed"
+			&& parsedSummary.validationStatus !== "not_applicable"
+			? toolContext?.agentLoopRecovery?.recordSuccess(functionName, executionArgs)
+			: undefined;
 		if (parsedSummary.environmentIssue === true) {
 			cacheRuntimeCapabilityFailure(
 				toolContext?.requestId,
@@ -536,7 +606,7 @@ async function executeSingleToolCall(
 		});
 
 		if (onEvent) {
-			onEvent({
+				onEvent({
 				type: "tool.result",
 				step,
 				toolCallId: toolCall.id,
@@ -546,7 +616,8 @@ async function executeSingleToolCall(
 				cached: result.reused,
 				fileEditDraft: result.fileEditDraft,
 				imageGeneration: result.imageGeneration,
-				...parsedSummary
+				...parsedSummary,
+				recovery: successRecovery ?? (parsedSummary.failure === undefined ? undefined : getRecoveryStatus(parsedSummary.failure))
 			});
 		}
 
@@ -567,7 +638,7 @@ async function executeSingleToolCall(
 		const message: string = error instanceof WorkspaceSourceResolutionError
 			? `${error.code}: ${error.message}`
 			: error instanceof Error ? error.message : "MCP tool call failed";
-		const failure: ToolFailure = createToolFailure(
+		const baseFailure: ToolFailure = createToolFailure(
 			error instanceof WorkspaceSourceResolutionError
 				? {
 					code: error.code,
@@ -584,6 +655,7 @@ async function executeSingleToolCall(
 				sourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined
 			}
 		);
+		const failure: ToolFailure = toolContext?.agentLoopRecovery?.recordFailure(functionName, executionArgs, baseFailure) ?? baseFailure;
 		logger.error("tool", "call_failed", error, {
 			toolCallId: toolCall.id,
 			toolName: functionName,
@@ -593,7 +665,15 @@ async function executeSingleToolCall(
 		});
 
 		if (onEvent) {
-			onEvent({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message, failure });
+			onEvent({
+				type: "tool.error",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				message: failure.message,
+				failure,
+				recovery: getRecoveryStatus(failure)
+			});
 		}
 
 		return {

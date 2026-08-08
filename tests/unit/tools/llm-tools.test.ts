@@ -77,6 +77,19 @@ test("approval-gated write tools expose approval reason metadata", (): void => {
 	assert.equal("approvalReason" in getToolProperties("mcp_godot_propose_create_scene"), false);
 });
 
+test("workspace downloader requires a structured source-scoped target", (): void => {
+	const tool = getToolDefinitionsForNames(["mcp_workspace_download_file"])
+		.filter(isFunctionTool)
+		.find((item: FunctionTool): boolean => item.function.name === "mcp_workspace_download_file");
+	assert.notEqual(tool, undefined);
+	const parameters = tool?.function.parameters as Record<string, unknown>;
+	const required = parameters.required as string[];
+	assert.ok(required.includes("url"));
+	assert.ok(required.includes("sourceFolderId"));
+	assert.ok(required.includes("relativePath"));
+	assert.ok("approvalReason" in getToolProperties("mcp_workspace_download_file"));
+});
+
 test("dynamic MCP tools are included only through the custom sentinel", (): void => {
 	replaceDynamicMcpToolsForWorkspace(WORKSPACE_ID, [
 		{

@@ -66,33 +66,17 @@ export function routeWorkflowExecution(
 	}
 
 	const workflowOption: WorkflowOption = params.options?.workflow ?? "auto";
-	if (outputTarget === "chat" && (workflowOption === "multi_phase" || workflowOption === "llm_planned")) {
-		return createReadRoute(
-			"The chat output target does not authorize workspace mutation.",
-			"output_chat_only",
-			outputTarget
-		);
-	}
-	if (context.hasActiveWorkspace && (workflowOption === "multi_phase" || workflowOption === "llm_planned")) {
-		return {
-			intent: "inspect",
-			scope: "complex",
-			lane: "workflow",
-			outputTarget,
-			reason: `Explicit workflow=${workflowOption} starts a workspace workflow.`,
-			planningHint: "",
-			forcedByOption: workflowOption
-		};
-	}
-
 	if (context.hasActiveWorkspace && (params.mode ?? "agent") === "agent") {
 		return {
 			intent: "answer",
-			scope: "bounded",
-			lane: "tool_assisted",
+			scope: "unknown",
+			lane: "agent_loop",
 			outputTarget,
-			reason: "Workspace Agent requests use tool-assisted chat until a structural execution boundary requires workflow.",
-			planningHint: ""
+			reason: "Workspace Agent requests use the free agent loop; tools remain governed by structured policy and approval.",
+			planningHint: "",
+			forcedByOption: workflowOption === "multi_phase" || workflowOption === "llm_planned"
+				? workflowOption
+				: undefined
 		};
 	}
 

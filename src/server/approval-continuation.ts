@@ -7,7 +7,7 @@ import {
 	removeAgentRunContinuation,
 	saveAgentRunApprovalPause
 } from "../session/agent-run-store.js";
-import { createPersistedApprovalRequestedData, createRuntimePendingContinuation, foldPendingApprovalStates, mergeHydratedPendingApprovalStates, type PendingApprovalState } from "../session/approval-persistence.js";
+import { collectApprovedDownloadAuthorizations, createPersistedApprovalRequestedData, createRuntimePendingContinuation, foldPendingApprovalStates, mergeHydratedPendingApprovalStates, type PendingApprovalState } from "../session/approval-persistence.js";
 import type { WorkflowRunState, WorkflowToolObservation } from "../workflow/types.js";
 import {
 	cloneLightweightActionState,
@@ -21,6 +21,7 @@ import { getWorkflowToolSemantics } from "../workflow/tool-semantics.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError } from "../tools/execution-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
+import { isTerminalDownloadCommand } from "../tools/download-authorization.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { McpHost } from "../mcp/mcp-host.js";
@@ -38,6 +39,7 @@ import {
 	type ExecutionEvidence
 } from "../workflow/agent-run-state.js";
 import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
+import { cloneAgentLoopState, type AgentLoopState } from "../workflow/agent-loop-state.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -51,7 +53,8 @@ export function createPendingAiContinuation(
 	workflowState?: WorkflowRunState | undefined,
 	lightweightActionState?: LightweightActionState | undefined,
 	executionControl?: PendingAiContinuation["executionControl"],
-	chatCompletion?: PendingAiContinuation["chatCompletion"]
+	chatCompletion?: PendingAiContinuation["chatCompletion"],
+	agentLoopState?: AgentLoopState | undefined
 ): PendingAiContinuation {
 	const pendingContinuation: PendingAiContinuation = {
 		params,
@@ -74,6 +77,9 @@ export function createPendingAiContinuation(
 	}
 	if (chatCompletion !== undefined) {
 		pendingContinuation.chatCompletion = { ...chatCompletion };
+	}
+	if (agentLoopState !== undefined) {
+		pendingContinuation.agentLoopState = cloneAgentLoopState(agentLoopState);
 	}
 
 	if (workflowState !== undefined) {
@@ -215,6 +221,7 @@ export async function cancelPendingApprovalsForRequest(session: ClientSession, r
 			});
 		}
 	}
+	session.approvalGateway.clearDownloadAuthorizations(requestId);
 
 	return cancelledApprovalIds;
 }
@@ -268,6 +275,7 @@ export async function loadHydratedPendingApprovalStates(
 	}
 
 	const memoryStates: PendingApprovalState[] = createMemoryPendingApprovalStates(session);
+	session.approvalGateway.replaceDownloadAuthorizations(collectApprovedDownloadAuthorizations(approvalEvents));
 	const states: PendingApprovalState[] = mergeHydratedPendingApprovalStates(
 		foldPendingApprovalStates(approvalEvents),
 		memoryStates
@@ -358,6 +366,13 @@ export async function validatePendingApprovalBeforeExecution(
 	mcpHost: McpHost,
 	pendingApproval: PendingApproval
 ): Promise<string | null> {
+	if (
+		pendingApproval.llmToolName === "mcp_terminal_run_command"
+		&& session.approvalGateway.getMode() !== "full-trust"
+		&& isTerminalDownloadCommand(pendingApproval.args)
+	) {
+		return "Network downloads in terminal commands must use mcp_workspace_download_file and a structured download approval.";
+	}
 	const decision = evaluateToolCall(
 		session.approvalGateway.getMode(),
 		pendingApproval.llmToolName,
@@ -456,7 +471,8 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.workflowState,
 			pendingContinuation.lightweightActionState,
 			pendingContinuation.executionControl,
-			pendingContinuation.chatCompletion
+			pendingContinuation.chatCompletion,
+			pendingContinuation.agentLoopState
 		);
 		await pauseRunForApproval({
 			socket,
@@ -483,7 +499,8 @@ export async function sendContinuedAgentResult(
 			workflowState: pendingContinuation.workflowState,
 			lightweightActionState: pendingContinuation.lightweightActionState,
 			executionControl: pendingContinuation.executionControl,
-			chatCompletion: pendingContinuation.chatCompletion
+			chatCompletion: pendingContinuation.chatCompletion,
+			agentLoopState: pendingContinuation.agentLoopState
 		});
 		registerPendingToolBudget(session, pendingBudget);
 		sendToolBudgetRequired(socket, requestId, session, pendingContinuation.workflowState?.plan.id ?? pendingContinuation.requestId, pendingBudget, pendingContinuation.requestId);
@@ -624,31 +641,38 @@ function collectContinuationCompletionStatus(
 	warnings: string[];
 } {
 	const run: AgentRunState | undefined = getAgentRun(session, requestId);
-	if (run?.lane !== "tool_assisted") {
+	if (run?.lane !== "tool_assisted" && run?.lane !== "agent_loop") {
 		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const unresolvedFailures: ExecutionEvidence[] = collectUnresolvedExecutionFailures(run.checkpoint.evidence);
 	const environmentWarnings: string[] = run.checkpoint.evidence
 		.filter((item: ExecutionEvidence): boolean => item.status === "failed" && item.failure?.category === "environment")
 		.map(formatExecutionFailure);
+	const changedWorkspace: boolean = run.checkpoint.evidence.some((item): boolean => (
+		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
+	));
+	const verified: boolean = run.checkpoint.evidence.some((item): boolean => (
+		item.status === "succeeded" && item.risk === "verify" && item.validationStatus !== "not_applicable"
+	));
 	if (unresolvedFailures.length > 0) {
+		if (run.lane === "agent_loop") {
+			return {
+				resultStatus: "completed_with_warnings",
+				verificationStatus: changedWorkspace ? (verified ? "verified" : "unverified") : undefined,
+				warnings: [...environmentWarnings, ...unresolvedFailures.map(formatExecutionFailure)]
+			};
+		}
 		return {
 			resultStatus: "blocked",
 			verificationStatus: "unverified",
 			warnings: unresolvedFailures.map(formatExecutionFailure)
 		};
 	}
-	const changedWorkspace: boolean = run.checkpoint.evidence.some((item): boolean => (
-		item.status === "succeeded" && (item.risk === "write" || item.risk === "destructive")
-	));
 	if (!changedWorkspace) {
 		return environmentWarnings.length > 0
 			? { resultStatus: "completed_with_warnings", verificationStatus: "unverified", warnings: environmentWarnings }
 			: { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
-	const verified: boolean = run.checkpoint.evidence.some((item): boolean => (
-		item.status === "succeeded" && item.risk === "verify" && item.validationStatus !== "not_applicable"
-	));
 	return verified
 		? environmentWarnings.length > 0
 			? { resultStatus: "completed_with_warnings", verificationStatus: "verified", warnings: environmentWarnings }

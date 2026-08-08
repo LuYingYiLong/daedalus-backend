@@ -5,13 +5,18 @@ import type { WorkflowTodoSnapshot } from "./types.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
 import type { WorkflowTargetKind, WorkflowValidationCapability } from "./tool-semantics.js";
 import type { ToolFailure } from "../tools/tool-failure.js";
+import type { AgentLoopState } from "./agent-loop-state.js";
+import type { AgentLoopRecoveryStatus } from "./agent-loop-state.js";
 
-export const AGENT_RUN_STATE_SCHEMA_VERSION = 2 as const;
+export const AGENT_RUN_STATE_SCHEMA_VERSION = 3 as const;
 
 export type AgentRunIntent = "answer" | "inspect" | "mutate";
 export type AgentRunScope = "bounded" | "unknown" | "complex";
-/** Normal workspace chat: tools are optional and no workflow control signal is required. */
-export type AgentRunLane = "direct" | "read" | "tool_assisted" | "probe" | "lightweight" | "workflow";
+/**
+ * `agent_loop` is the default lane for new workspace Agent/Goal turns. The
+ * remaining execution lanes are retained for historical continuation replay.
+ */
+export type AgentRunLane = "direct" | "read" | "agent_loop" | "tool_assisted" | "probe" | "lightweight" | "workflow";
 export type AgentRunStage =
 	| "routing"
 	| "probing"
@@ -62,6 +67,7 @@ export type ExecutionEvidence = {
 	validationCapabilities?: WorkflowValidationCapability[] | undefined;
 	repairFamilies?: WorkflowTargetKind[] | undefined;
 	failure?: ToolFailure | undefined;
+	recovery?: AgentLoopRecoveryStatus | undefined;
 	/** A completed, approval-governed terminal command may support complete_read only. */
 	terminalObservation?: boolean | undefined;
 	resultExcerpt?: string | undefined;
@@ -98,6 +104,7 @@ export type AgentRunState = {
 	checkpoint: AgentRunCheckpoint;
 	executionDecision?: ExecutionDecision | undefined;
 	interruptedReason?: string | undefined;
+	agentLoopState?: AgentLoopState | undefined;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -214,6 +221,7 @@ export function createAgentRunState(params: {
 			evidence: []
 		},
 		executionDecision: undefined,
+		agentLoopState: undefined,
 		createdAt: now,
 		updatedAt: now
 	};

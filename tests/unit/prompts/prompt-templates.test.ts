@@ -115,6 +115,30 @@ test("execution and communication anchors are CORE requirements rather than a Go
 	assert.doesNotMatch(godotPrompt, /## 2\. 执行与沟通锚点/);
 });
 
+test("core prompt provides a human-centered expression contract without weakening truthfulness", async (): Promise<void> => {
+	const corePrompt: string = await loadCorePrompt();
+
+	assert.match(corePrompt, /#### 人文表达契约/);
+	assert.match(corePrompt, /事实与状态 > 用户当前目标 > 下一步行动 > 背景解释 > 礼貌修饰/);
+	assert.match(corePrompt, /准备执行.*正在执行.*等待审批.*已完成.*部分完成.*未验证.*已阻断.*已取消/);
+	assert.match(corePrompt, /只在状态真正变化时更新正文/);
+	assert.match(corePrompt, /工具失败时说明失败步骤、具体原因、是否产生修改以及是否可以继续/);
+	assert.match(corePrompt, /人文表达不改变执行边界/);
+	assert.match(corePrompt, /普通问答应该：/);
+	assert.match(corePrompt, /工具失败应该：/);
+	assert.match(corePrompt, /用户中断后继续应该：/);
+	assert.match(corePrompt, /没有实际成功结果时，不使用“已完成”“已修复”“已生效”/);
+});
+
+test("role prompts defer global expression rules to CORE", async (): Promise<void> => {
+	const godotPrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/godot-assistant.md"), "utf8");
+	const workspacePrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/workspace-assistant.md"), "utf8");
+
+	assert.match(godotPrompt, /表达方式、状态真实性和工具沟通遵循 CORE/);
+	assert.doesNotMatch(godotPrompt, /你的气质是：/);
+	assert.match(workspacePrompt, /表达方式与状态真实性遵循 CORE/);
+});
+
 test("all user-facing role prompts inherit CORE before mode and custom instructions", async (): Promise<void> => {
 	for (const template of listPromptTemplates()) {
 		const prompt: string = await composeSystemPrompt(

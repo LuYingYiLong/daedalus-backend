@@ -61,7 +61,7 @@ test("workspace tool catalog keeps dynamic MCP definitions isolated", (): void =
 });
 
 test("workspace tool catalog keeps builtin metadata complete", (): void => {
-	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a" });
+	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a", hasGodotWorkspaceCapability: true });
 	const sceneCapture = catalog.getEntry("mcp_godot_editor_capture_scene_view");
 	const healthAudit = catalog.getEntry("mcp_godot_audit_project_health");
 	assert.deepEqual(sceneCapture?.mapping, { serverId: "godot_editor", toolName: "capture_scene_view" });
@@ -87,7 +87,7 @@ test("workspace tool catalog exposes approval reason schema for write tools", ()
 	}]);
 
 	try {
-		const catalog = createWorkspaceToolCatalog({ workspaceId: "catalog-approval" });
+		const catalog = createWorkspaceToolCatalog({ workspaceId: "catalog-approval", hasGodotWorkspaceCapability: true });
 		const createScene = catalog.getDefinitionsForNames(["mcp_godot_create_scene"])[0];
 		const readText = catalog.getDefinitionsForNames(["mcp_godot_read_text_file"])[0];
 		const dynamicWrite = catalog.getDefinitionsForNames([CUSTOM_MCP_TOOLS_SENTINEL])[0];
@@ -186,6 +186,28 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 	assert.deepEqual(filterToolNamesForWorkspace(getDefaultWorkflowToolNames("write"), undefined), ["mcp_image_generate"]);
 });
 
+test("workspace tool catalog hides every Godot tool for a non-Godot workspace", (): void => {
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "workspace-web",
+		hasGodotWorkspaceCapability: false
+	});
+	const names: string[] = catalog.getEntries().map((entry) => entry.id);
+
+	assert.equal(names.some((name: string): boolean => name.startsWith("mcp_godot_")), false);
+	assert.notEqual(catalog.getEntry("mcp_workspace_read_text_file"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_terminal_run_command"), undefined);
+});
+
+test("workspace tool catalog exposes Godot tools only when the workspace capability is present", (): void => {
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "workspace-godot",
+		hasGodotWorkspaceCapability: true
+	});
+
+	assert.notEqual(catalog.getEntry("mcp_godot_read_text_file"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_inspect_scene_tree"), undefined);
+});
+
 test("workspace tool catalog exposes global dynamic MCP tools without workspace", (): void => {
 	replaceGlobalDynamicMcpTools([{
 		serverId: "context7",
@@ -208,7 +230,7 @@ test("workspace tool catalog exposes global dynamic MCP tools without workspace"
 });
 
 test("workflow defaults are catalog-backed and resolve to known tools", (): void => {
-	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a" });
+	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a", hasGodotWorkspaceCapability: true });
 	for (const group of ["read", "verify", "write"] as const) {
 		for (const toolName of getDefaultWorkflowToolNames(group)) {
 			if (toolName === CUSTOM_MCP_TOOLS_SENTINEL) {

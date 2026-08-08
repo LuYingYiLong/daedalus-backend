@@ -343,6 +343,39 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		["relativePath", "lineNumber", "expectedText", "newText"]
 	),
 	createSceneToolDefinition(
+		"mcp_workspace_download_file",
+		"下载一个 HTTPS 文件到当前 workspace。只下载到明确的相对路径，不会安装、执行或修改系统环境。manual 和 auto-safe 模式必须先获得用户的网络下载授权；需要多个下载时，在第一次调用的 downloadScope 中列出本轮所有明确依赖，之后不能新增 URL、路径或覆盖行为。",
+		{
+			url: { type: "string", description: "要下载的 HTTPS URL，不能包含凭据。" },
+			relativePath: { type: "string", description: "目标 workspace 相对路径。" },
+			dependency: { type: "string", description: "要下载的工具或依赖名称，用于向用户说明。" },
+			purpose: { type: "string", description: "此下载对当前任务的具体用途。" },
+			criticality: { type: "string", enum: ["required", "recommended", "optional"], description: "required 表示无法完整交付，recommended 表示影响验证或质量，optional 表示可跳过。" },
+			expectedSha256: { type: "string", description: "可选 SHA-256 十六进制校验和。" },
+			overwrite: { type: "boolean", description: "是否允许覆盖已有目标文件，默认 false。" },
+			downloadScope: {
+				type: "array",
+				maxItems: 20,
+				description: "仅第一次下载时使用：列出当前请求中所有需要用户授权的精确下载项。批准后只覆盖这些 URL、源目录、目标路径、校验和与覆盖行为。",
+				items: {
+					type: "object",
+					properties: {
+						url: { type: "string" },
+						sourceFolderId: { type: "string" },
+						relativePath: { type: "string" },
+						dependency: { type: "string" },
+						purpose: { type: "string" },
+						criticality: { type: "string", enum: ["required", "recommended", "optional"] },
+						expectedSha256: { type: "string" },
+						overwrite: { type: "boolean" }
+					},
+					required: ["url", "sourceFolderId", "relativePath", "dependency", "purpose", "criticality"]
+				}
+			}
+		},
+		["url", "sourceFolderId", "relativePath", "dependency", "purpose", "criticality"]
+	),
+	createSceneToolDefinition(
 		"mcp_workspace_delete_file",
 		"删除当前 workspace 中的文件。此操作不可逆，需要审批；不允许删除 workspace 外路径。",
 		{

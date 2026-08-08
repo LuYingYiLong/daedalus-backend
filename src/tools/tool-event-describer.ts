@@ -614,6 +614,17 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		});
 	}
 
+	if (toolName === "mcp_workspace_download_file") {
+		const relativePath: string = getStringArg(args, "relativePath") ?? "workspace file";
+		const dependency: string = getStringArg(args, "dependency") ?? "file";
+		const targetPath: string = formatSourcePath(args, relativePath);
+		return createDisplay("workspace", "Workspace", "write", "下载文件", `下载 ${dependency} 到 ${targetPath}`, {
+			kind: "file",
+			path: relativePath,
+			label: targetPath
+		});
+	}
+
 	if (toolName === "mcp_terminal_get_capabilities") {
 		return createDisplay("terminal", "Terminal", "read", "查看终端能力", "查看可用终端预设", {
 			kind: "command",

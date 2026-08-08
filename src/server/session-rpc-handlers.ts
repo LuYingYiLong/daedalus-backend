@@ -30,6 +30,7 @@ import {
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
 	createSession, openSession, listSessions,
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
@@ -445,7 +446,11 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 	}
 	const mcpContextPart = await estimateTextPart(providerOptions, mcpContext);
 	const allowedToolNames = resolveAllowedToolsForChatParams(chatParams, undefined, session.activeWorkspace?.id);
-	const toolCatalog = createWorkspaceToolCatalog({ workspaceId: session.activeWorkspace?.id, sessionId: session.sessionId });
+	const toolCatalog = createWorkspaceToolCatalog({
+		workspaceId: session.activeWorkspace?.id,
+		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
+		sessionId: session.sessionId
+	});
 	const toolDefinitions = allowedToolNames === undefined
 		? toolCatalog.getDefinitions()
 		: toolCatalog.getDefinitionsForNames(filterToolNamesForWorkspace(allowedToolNames, session.activeWorkspace?.id));

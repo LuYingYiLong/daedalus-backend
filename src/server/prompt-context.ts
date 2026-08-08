@@ -32,6 +32,7 @@ import {
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
 	createSession, openSession, saveSession, listSessions,
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
@@ -308,7 +309,13 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	await mcpHost.ensureGlobalCustomServers();
 	const workspaceId: string | undefined = session.activeWorkspace?.id;
 	const serverIds: string[] = mcpHost.getConnectedServerIds(workspaceId);
-	const godotRuntime: Record<string, unknown> = createGodotRuntimeStatus(session, mcpHost);
+	const workspaceHasGodot: boolean = hasGodotWorkspaceCapability(session.activeWorkspace);
+	const shouldIncludeGodotContext: boolean = session.activeWorkspace === undefined
+		? session.godotExecutablePath !== undefined || session.godotProjectPath !== undefined
+		: workspaceHasGodot;
+	const godotRuntime: Record<string, unknown> | undefined = shouldIncludeGodotContext
+		? createGodotRuntimeStatus(session, mcpHost)
+		: undefined;
 	const sections: string[] = [];
 
 	if (session.activeWorkspace === undefined) {
@@ -331,7 +338,10 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 			sections.push(`- Source folder \`${source.id}\`：\`${source.path}\`（${capabilities}）。访问非主目录时必须显式传入该 \`sourceFolderId\`。`);
 		}
 		sections.push("- 已声明的 Source folders 都属于当前项目，在这些目录之间操作不构成跨 workspace；声明目录之外仍需用户授权。");
-		sections.push("- 普通非 Godot 文件任务（列文件、读文件、搜索文本、新建/覆盖/替换/删除文本文件）优先使用 `mcp_workspace_*` 工具。Godot 项目内的脚本、场景、资源、项目配置和其它会被编辑器导入/扫描的文件写入，优先使用 `mcp_godot_*` 写入工具；这些工具会在写入后请求在线 Godot 编辑器重新扫描文件系统。");
+		sections.push("- 文件任务（列文件、读文件、搜索文本、新建/覆盖/替换/删除文本文件）优先使用 `mcp_workspace_*` 工具。");
+		if (workspaceHasGodot) {
+			sections.push("- Godot 源目录内的脚本、场景、资源、项目配置和其它会被编辑器导入/扫描的文件写入，优先使用 `mcp_godot_*` 写入工具；这些工具会在写入后请求在线 Godot 编辑器重新扫描文件系统。");
+		}
 		sections.push("- 终端验证、构建、测试和长任务优先使用 `mcp_terminal_run_command`。正常安全模式下命令只能在当前 workspace 的 OS 沙箱内运行；需要跨 workspace 或绝对路径执行时，必须触发带确认短语的审批。Full Trust 模式下仍要谨慎说明风险。");
 		sections.push("- `mcp_workspace_replace_line_in_file` 的 `lineNumber` 是 1-based；必须提供和当前行完全一致的 `expectedText`，避免行号漂移误改。");
 		sections.push("");
@@ -346,7 +356,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 		}
 
 		// Godot environment section
-	if (session.godotExecutablePath || session.godotProjectPath || session.activeWorkspace) {
+	if (shouldIncludeGodotContext) {
 		sections.push("## Godot 开发环境");
 
 		if (session.activeWorkspace) {
@@ -378,6 +388,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 		sections.push("");
 	}
 
+	if (godotRuntime !== undefined) {
 	const runtimeEditor: Record<string, unknown> = godotRuntime.editor as Record<string, unknown>;
 	const runtimeDiagnostics: Record<string, unknown> = godotRuntime.diagnostics as Record<string, unknown>;
 	const runtimeWarnings: unknown[] = Array.isArray(godotRuntime.warnings) ? godotRuntime.warnings : [];
@@ -394,17 +405,20 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 			sections.push(`  - ${String(record.code ?? "warning")}: ${String(record.message ?? "")}`);
 		}
 	}
-	if (session.activeWorkspace && !serverIds.some((serverId: string): boolean => serverId === "godot" || serverId.startsWith("godot:"))) {
-		sections.push("- 当前 workspace 不是 Godot 项目或没有 `project.godot`，Godot Project MCP 不会连接；不要尝试用 Godot MCP 读取后端 TypeScript 仓库文件。");
+	if (workspaceHasGodot && !serverIds.some((serverId: string): boolean => serverId === "godot" || serverId.startsWith("godot:"))) {
+		sections.push("- 当前 workspace 包含 Godot 源目录，但 Godot Project MCP 尚未连接；不要把 Godot 工具用于其它 source folder。");
 	}
 	sections.push("如果 LSP/DAP 返回 no active workspace 或不可用，先依据以上运行时状态判断是 workspace 绑定、editor 在线状态、端口探测还是诊断服务问题；不要笼统归因成用户环境问题。");
 	sections.push("");
+	}
 
-	const documentationSettings = getGodotDocumentationSnapshot();
-	const documentationPrompt: string = createGodotDocumentationPromptSection(documentationSettings);
-	if (documentationPrompt.length > 0) {
-		sections.push(documentationPrompt);
-		sections.push("");
+	if (shouldIncludeGodotContext) {
+		const documentationSettings = getGodotDocumentationSnapshot();
+		const documentationPrompt: string = createGodotDocumentationPromptSection(documentationSettings);
+		if (documentationPrompt.length > 0) {
+			sections.push(documentationPrompt);
+			sections.push("");
+		}
 	}
 
 	// Project instruction files (AGENTS.md / CLAUDE.md)
@@ -461,9 +475,11 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	} else {
 		sections.push("## MCP 工具上下文");
 		sections.push("当前 TypeScript 后端已经连接以下 MCP server。你不能直接连接 MCP server；所有 MCP 数据都由后端读取后注入到本系统提示词中。回答时可以基于这些已注入的 MCP 上下文说明当前可见能力。");
-		sections.push("Godot 路径规则：遇到 `user://`、项目日志或 `debug/file_logging/log_path` 时，不要猜真实系统路径；必须优先使用 Godot 日志配置/日志读取工具解析。修改 `project.godot` 项目设置前，先读取当前值并使用 propose 项目设置工具预览，再调用实际 set/unset 工具等待审批。");
-		sections.push("Godot 编辑器配置可能包含本机隐私路径。读取编辑器设置、最近项目或 `.godot/editor` 状态时，默认使用摘要/脱敏结果；只有用户明确要求原始配置或原始路径时，才把工具参数 `raw` 设为 true。");
-		sections.push("Godot 诊断规则：修改 `.gd` 后优先调用 LSP diagnostics 获取行列诊断，再运行 Godot check-only；遇到运行时报错时优先尝试 DAP last error / stack trace，DAP 不可用时再回退到项目日志。DAP 工具只读，不要尝试 launch、continue、pause、setBreakpoints 或 evaluate。");
+		if (shouldIncludeGodotContext) {
+			sections.push("Godot 路径规则：遇到 `user://`、项目日志或 `debug/file_logging/log_path` 时，不要猜真实系统路径；必须优先使用 Godot 日志配置/日志读取工具解析。修改 `project.godot` 项目设置前，先读取当前值并使用 propose 项目设置工具预览，再调用实际 set/unset 工具等待审批。");
+			sections.push("Godot 编辑器配置可能包含本机隐私路径。读取编辑器设置、最近项目或 `.godot/editor` 状态时，默认使用摘要/脱敏结果；只有用户明确要求原始配置或原始路径时，才把工具参数 `raw` 设为 true。");
+			sections.push("Godot 诊断规则：修改 `.gd` 后优先调用 LSP diagnostics 获取行列诊断，再运行 Godot check-only；遇到运行时报错时优先尝试 DAP last error / stack trace，DAP 不可用时再回退到项目日志。DAP 工具只读，不要尝试 launch、continue、pause、setBreakpoints 或 evaluate。");
+		}
 		sections.push("用户自定义 MCP server 的工具会以 `mcp_custom_*` 包装函数提供；这些工具一律按写风险处理，调用前必须经过后端审批，不要尝试用原始 MCP 工具名直接调用。");
 
 		for (const serverId of serverIds) {

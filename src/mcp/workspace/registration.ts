@@ -64,6 +64,16 @@ const replaceLineSchema = z.object({
 	newText: z.string().describe("Replacement line text.")
 });
 
+const downloadFileSchema = z.object({
+	url: z.string().url().describe("HTTPS URL to download. Credentials are not allowed."),
+	relativePath: z.string().min(1).describe("Workspace-relative destination path."),
+	dependency: z.string().min(1).max(240).describe("Short dependency name shown in the approval card."),
+	purpose: z.string().min(1).max(1000).describe("Why the current task needs this download."),
+	criticality: z.enum(["required", "recommended", "optional"]),
+	expectedSha256: z.string().regex(/^[a-fA-F0-9]{64}$/u).optional().describe("Optional SHA-256 checksum in hexadecimal."),
+	overwrite: z.boolean().optional().describe("Allow replacing an existing file. Defaults to false.")
+});
+
 export function registerWorkspaceTools(server: McpServer): void {
 	server.registerTool(
 		"list_files",
@@ -243,6 +253,21 @@ export function registerWorkspaceTools(server: McpServer): void {
 		},
 		async ({ relativePath, lineNumber, expectedText, newText }) =>
 			asJsonTextResult(await service.replaceLineInFile(relativePath, lineNumber, expectedText, newText))
+	);
+
+	server.registerTool(
+		"download_file",
+		{
+			title: "Download Workspace File",
+			description: "Download one HTTPS file into the active workspace. This writes a file but never installs or runs it.",
+			inputSchema: downloadFileSchema
+		},
+		async ({ url, relativePath, expectedSha256, overwrite }) => asJsonTextResult(await service.downloadFile({
+			url,
+			relativePath,
+			expectedSha256,
+			overwrite
+		}))
 	);
 
 	server.registerTool(

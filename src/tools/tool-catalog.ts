@@ -23,6 +23,9 @@ import {
 } from "./chat-completion-control.js";
 import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
+import type { AgentLoopRecoveryController } from "../workflow/agent-loop-state.js";
+import { findWorkspace } from "../workspace/registry.js";
+import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -38,6 +41,9 @@ export type ToolExecutionContext = {
 		options: ProviderChatOptions;
 		contextText: string;
 	} | undefined;
+	/** True only when the active workspace contains a source folder with project.godot. */
+	hasGodotWorkspaceCapability?: boolean | undefined;
+	agentLoopRecovery?: AgentLoopRecoveryController | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -124,6 +130,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_replace_text_in_file",
 		"mcp_workspace_propose_replace_line_in_file",
 		"mcp_workspace_replace_line_in_file",
+		"mcp_workspace_download_file",
 		"mcp_workspace_delete_file",
 		"mcp_godot_propose_create_text_file",
 		"mcp_godot_create_text_file",
@@ -206,6 +213,43 @@ export type ToolCatalogEntry = {
 
 function getToolName(definition: ChatCompletionTool): string | undefined {
 	return definition.type === "function" ? definition.function.name : undefined;
+}
+
+function isGodotToolName(toolName: string | undefined): boolean {
+	return toolName?.startsWith("mcp_godot_") === true;
+}
+
+function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
+	if (!isGodotToolName(toolName)) {
+		return true;
+	}
+	// External MCP catalog discovery is workspace-agnostic and retains its
+	// historical complete tool surface. Chat entry points apply the stricter
+	// no-workspace list before reaching this catalog.
+	if (context.workspaceId === undefined) {
+		return toolName !== "mcp_godot_search_documentation" || isGodotDocumentationEnabled();
+	}
+
+	// Documentation remains usable in a workspace-free chat, but a bound
+	// non-Godot workspace must not receive any Godot tool definitions.
+	if (toolName === "mcp_godot_search_documentation") {
+		return resolveGodotWorkspaceCapability(context) && isGodotDocumentationEnabled();
+	}
+
+	return resolveGodotWorkspaceCapability(context);
+}
+
+function resolveGodotWorkspaceCapability(context: ToolExecutionContext): boolean {
+	if (context.hasGodotWorkspaceCapability !== undefined) {
+		return context.hasGodotWorkspaceCapability;
+	}
+
+	const workspace = context.workspaceId === undefined ? undefined : findWorkspace(context.workspaceId);
+	// Low-level callers created before capability propagation may still pass an
+	// opaque test/runtime workspace id. Production session entry points always
+	// provide the explicit flag; retain the old catalog shape only for that
+	// unknown legacy context.
+	return workspace === undefined || hasGodotWorkspaceCapability(workspace);
 }
 
 function getPhaseEligibility(risk: ToolRisk): ToolPhaseEligibility[] {
@@ -305,7 +349,7 @@ export class WorkspaceToolCatalog {
 	getEntries(): ToolCatalogEntry[] {
 		const staticEntries: ToolCatalogEntry[] = BUILTIN_TOOL_DEFINITIONS
 			.filter((definition: ChatCompletionTool): boolean => {
-				return getToolName(definition) !== "mcp_godot_search_documentation" || isGodotDocumentationEnabled();
+				return isStaticToolAvailableInContext(getToolName(definition), this.context);
 			})
 			.map(createStaticEntry);
 		const dynamicEntries: ToolCatalogEntry[] = getDynamicMcpToolDefinitions(this.context.workspaceId)

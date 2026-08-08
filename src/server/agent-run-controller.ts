@@ -24,6 +24,7 @@ import { notifyGoalRunState } from "./goal-run-observer.js";
 import { enqueueGoalWriteCheckpointUnavailable } from "./goal-checkpoints.js";
 import type { WorkspaceFileRef } from "../workspace/source-context.js";
 import { parseStructuredToolFailure, type ToolFailure } from "../tools/tool-failure.js";
+import type { AgentLoopRecoveryStatus } from "../workflow/agent-loop-state.js";
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) {
@@ -159,6 +160,14 @@ export function recordAgentRunToolEvent(
 					&& typeof (item as Record<string, unknown>).relativePath === "string"
 			))
 			: failure?.artifactFileRefs ?? [];
+	const recoveryValue: unknown = eventRecord.recovery ?? failure?.details?.recovery;
+	const recovery: AgentLoopRecoveryStatus | undefined = recoveryValue !== null && typeof recoveryValue === "object"
+		&& typeof (recoveryValue as Record<string, unknown>).recoveryKey === "string"
+		&& typeof (recoveryValue as Record<string, unknown>).attempt === "number"
+		&& typeof (recoveryValue as Record<string, unknown>).maxAttempts === "number"
+		&& ["failed", "recovered", "exhausted"].includes(String((recoveryValue as Record<string, unknown>).status))
+		? recoveryValue as AgentLoopRecoveryStatus
+		: undefined;
 	const evidence: ExecutionEvidence = {
 		toolCallId: event.toolCallId,
 		toolName: event.toolName,
@@ -188,6 +197,7 @@ export function recordAgentRunToolEvent(
 		validationCapabilities: semantics.validationCapabilities === undefined ? undefined : [...semantics.validationCapabilities],
 		repairFamilies: semantics.repairFamilies === undefined ? undefined : [...semantics.repairFamilies],
 		failure,
+		recovery,
 		terminalObservation: event.type === "tool.result"
 			&& current.lane === "probe"
 			&& event.toolName === "mcp_terminal_run_command"
@@ -252,6 +262,8 @@ export function recordAgentRunApprovedToolResult(
 		succeeded: boolean;
 		summary?: string | undefined;
 		artifactRefs?: string[] | undefined;
+		failure?: ToolFailure | undefined;
+		recovery?: AgentLoopRecoveryStatus | undefined;
 		writeCheckpointCovered?: boolean | undefined;
 	}
 ): void {
@@ -277,13 +289,16 @@ export function recordAgentRunApprovedToolResult(
 			resultChars: params.summary?.length ?? 0,
 			truncated: false,
 			ok: true,
-			artifactRefs: params.artifactRefs
+			artifactRefs: params.artifactRefs,
+			recovery: params.recovery
 		}
 		: {
 			type: "tool.error",
 			step: 0,
 			toolCallId: params.toolCallId,
 			toolName: params.toolName,
-			message: params.summary ?? "Approved tool execution failed."
+			message: params.summary ?? "Approved tool execution failed.",
+			failure: params.failure,
+			recovery: params.recovery
 		}, params.writeCheckpointCovered === true);
 }

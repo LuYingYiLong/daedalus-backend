@@ -10,6 +10,7 @@ import { createPendingAiContinuation } from "./approval-continuation.js";
 import { enqueueSessionEventWrite, sendSessionEvent } from "./session-events.js";
 import { setWorkbenchActiveRun } from "./workbench.js";
 import { getAgentRun } from "./agent-run-controller.js";
+import type { AgentLoopState } from "../workflow/agent-loop-state.js";
 
 export function createPendingToolBudget(
 	params: {
@@ -27,6 +28,7 @@ export function createPendingToolBudget(
 		workflowToolObservations?: WorkflowToolObservation[] | undefined;
 		executionControl?: PendingAiContinuation["executionControl"];
 		chatCompletion?: PendingAiContinuation["chatCompletion"];
+		agentLoopState?: AgentLoopState | undefined;
 	}
 ): PendingToolBudget {
 	const continuation: PendingAiContinuation = createPendingAiContinuation(
@@ -41,7 +43,8 @@ export function createPendingToolBudget(
 		params.workflowState,
 		params.lightweightActionState,
 		params.executionControl,
-		params.chatCompletion
+		params.chatCompletion,
+		params.agentLoopState
 	);
 	return {
 		budgetId: params.agentResult.budgetId,

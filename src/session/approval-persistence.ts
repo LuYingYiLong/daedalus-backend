@@ -7,10 +7,19 @@ import type { PendingAiContinuation } from "./pending-continuation.js";
 import type { ExecutionControlContext } from "../tools/execution-control.js";
 import type { ChatCompletionContext } from "../tools/chat-completion-control.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
+import {
+	isDownloadAuthorizationScope,
+	type DownloadAuthorizationScope
+} from "../tools/download-authorization.js";
 import { cloneLightweightActionState, type LightweightActionState } from "../workflow/lightweight-action.js";
 import type { WorkflowRunState } from "../workflow/types.js";
 import { migratePendingWorkflowRunState } from "../workflow/semantics-migration.js";
 import type { StoredApprovalEvent } from "./session-store.js";
+import {
+	cloneAgentLoopState,
+	isAgentLoopState,
+	type AgentLoopState
+} from "../workflow/agent-loop-state.js";
 
 export type PersistedProviderChatOptions = {
 	provider?: ProviderId | undefined;
@@ -32,6 +41,7 @@ export type PersistedPendingAiContinuation = {
 	workflowState?: WorkflowRunState | undefined;
 	executionControl?: ExecutionControlContext | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
+	agentLoopState?: AgentLoopState | undefined;
 };
 
 export type PersistedApprovalRequestedData = {
@@ -120,6 +130,9 @@ export function createRuntimePendingContinuation(
 	}
 	if (isChatCompletionContext(persisted.chatCompletion)) {
 		continuation.chatCompletion = { ...persisted.chatCompletion };
+	}
+	if (isAgentLoopState(persisted.agentLoopState)) {
+		continuation.agentLoopState = cloneAgentLoopState(persisted.agentLoopState);
 	}
 
 	return continuation;
@@ -264,6 +277,9 @@ function createPersistedPendingContinuation(continuation: PendingAiContinuation)
 	if (continuation.chatCompletion !== undefined) {
 		persisted.chatCompletion = { ...continuation.chatCompletion };
 	}
+	if (continuation.agentLoopState !== undefined) {
+		persisted.agentLoopState = cloneAgentLoopState(continuation.agentLoopState);
+	}
 
 	return persisted;
 }
@@ -333,6 +349,21 @@ function isPersistedContinuation(value: unknown): value is PersistedPendingAiCon
 		&& typeof value.requestId === "string"
 		&& typeof value.userCreatedAt === "string"
 		&& typeof value.stream === "boolean";
+}
+
+/** Restore only approval scopes explicitly recorded when a download was approved. */
+export function collectApprovedDownloadAuthorizations(events: StoredApprovalEvent[]): DownloadAuthorizationScope[] {
+	const scopes: DownloadAuthorizationScope[] = [];
+	for (const event of events) {
+		if (event.schemaVersion !== 1 || event.event !== "approved" || !isRecord(event.data)) {
+			continue;
+		}
+		const scope: unknown = event.data.downloadAuthorization;
+		if (isDownloadAuthorizationScope(scope)) {
+			scopes.push(scope);
+		}
+	}
+	return scopes;
 }
 
 function isExecutionControlContext(value: unknown): value is ExecutionControlContext {

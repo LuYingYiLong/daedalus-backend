@@ -10,6 +10,15 @@ import { createTerminalCommandAuthorization, type TerminalCommandAuthorization }
 import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
 import { isGoalCheckpointCapableToolCall } from "./file-edit-snapshots.js";
+import {
+	createDownloadAuthorizationScope,
+	createDownloadFingerprint,
+	createNetworkAccessRequired,
+	getDownloadRequest,
+	isTerminalDownloadCommand,
+	type DownloadAuthorizationScope,
+	type NetworkAccessRequired
+} from "./download-authorization.js";
 
 export type PendingApproval = {
 	approvalId: string;
@@ -25,6 +34,19 @@ export type PendingApproval = {
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
 	requiredConsent?: ToolRequiredConsent | undefined;
+	approvalKind?: "network_download" | undefined;
+	downloadAuthorization?: DownloadAuthorizationScope | undefined;
+	networkAccessRequired?: NetworkAccessRequired | undefined;
+};
+
+export type ApprovalRequestOptions = {
+	approvalKind?: "network_download" | undefined;
+	downloadAuthorization?: DownloadAuthorizationScope | undefined;
+	networkAccessRequired?: NetworkAccessRequired | undefined;
+};
+
+export type ApprovalGatewayOptions = {
+	reviewCommand?: typeof reviewWorkspaceCommand | undefined;
 };
 
 export type ApprovalResult =
@@ -41,10 +63,13 @@ export type ApprovalScope = {
 
 export class ApprovalGateway {
 	private pendingApprovals: Map<string, PendingApproval> = new Map();
+	private downloadAuthorizations: Map<string, Map<string, DownloadAuthorizationScope>> = new Map();
 	private mode: ApprovalMode;
+	private readonly reviewCommand: typeof reviewWorkspaceCommand;
 
-	constructor(mode: ApprovalMode = "manual") {
+	constructor(mode: ApprovalMode = "manual", options: ApprovalGatewayOptions = {}) {
 		this.mode = mode;
+		this.reviewCommand = options.reviewCommand ?? reviewWorkspaceCommand;
 	}
 
 	setMode(mode: ApprovalMode): void {
@@ -83,6 +108,31 @@ export class ApprovalGateway {
 		return pending;
 	}
 
+	hasDownloadAuthorization(requestId: string | undefined, fingerprint: string): boolean {
+		if (requestId === undefined) return false;
+		return this.downloadAuthorizations.get(requestId)?.has(fingerprint) === true;
+	}
+
+	grantDownloadAuthorization(scope: DownloadAuthorizationScope | undefined): void {
+		if (scope === undefined) return;
+		const grants = this.downloadAuthorizations.get(scope.requestId) ?? new Map<string, DownloadAuthorizationScope>();
+		for (const fingerprint of scope.fingerprints) {
+			grants.set(fingerprint, scope);
+		}
+		this.downloadAuthorizations.set(scope.requestId, grants);
+	}
+
+	replaceDownloadAuthorizations(scopes: readonly DownloadAuthorizationScope[]): void {
+		this.downloadAuthorizations.clear();
+		for (const scope of scopes) {
+			this.grantDownloadAuthorization(scope);
+		}
+	}
+
+	clearDownloadAuthorizations(requestId: string): void {
+		this.downloadAuthorizations.delete(requestId);
+	}
+
 	async evaluate(
 		llmToolName: string,
 		args: Record<string, unknown>,
@@ -97,6 +147,37 @@ export class ApprovalGateway {
 		const requestId: string | undefined = context.requestId;
 		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
 		const effectiveMode: ApprovalMode = goalBinding?.approvalMode ?? this.mode;
+		if (llmToolName === "mcp_workspace_download_file") {
+			const download = getDownloadRequest(args);
+			if (download === null) {
+				return { action: "deny", reason: "Invalid structured workspace download request." };
+			}
+			if (effectiveMode === "full-trust") {
+				return { action: "allow" };
+			}
+			const fingerprint: string = createDownloadFingerprint(download);
+			if (effectiveMode === "auto-safe" && this.hasDownloadAuthorization(requestId, fingerprint)) {
+				return { action: "allow" };
+			}
+			return {
+				action: "request_approval",
+				reason: `下载 ${download.dependency} 到 [${download.sourceFolderId}] ${download.relativePath}；只会下载文件，不会自动安装或运行。`,
+				approvalKind: "network_download",
+				downloadAuthorization: createDownloadAuthorizationScope(args, requestId, workspaceId),
+				...(workspaceId === undefined ? {} : { networkAccessRequired: createNetworkAccessRequired(download, workspaceId) })
+			};
+		}
+		if (
+			llmToolName === "mcp_terminal_run_command"
+			&& effectiveMode !== "full-trust"
+			&& isTerminalDownloadCommand(args)
+		) {
+			return {
+				action: "deny",
+				code: "network_access_required",
+				reason: "Network downloads in terminal commands require explicit download approval. Use mcp_workspace_download_file with a structured URL and workspace target instead."
+			};
+		}
 		const risk = getEffectiveToolPolicy(llmToolName, args, workspaceId)?.risk;
 		if (
 			requestId !== undefined
@@ -139,11 +220,14 @@ export class ApprovalGateway {
 					: [],
 				reason: typeof args.reason === "string" ? args.reason : undefined
 			};
-			const review = await reviewWorkspaceCommand(reviewInput);
+			const review = await this.reviewCommand(reviewInput);
 			if (review.decision === "allow") {
 				return { action: "allow", review: review.audit };
 			}
-			if (review.decision === "deny" || review.decision === "ask_user") {
+			if (review.decision === "ask_user") {
+				return { action: "request_approval", reason: review.reason, review: review.audit };
+			}
+			if (review.decision === "deny") {
 				return { action: "deny", reason: review.reason, review: review.audit };
 			}
 			return { action: "deny", reason: review.reason, review: review.audit };
@@ -160,7 +244,8 @@ export class ApprovalGateway {
 		editorInstanceId?: string | undefined,
 		sessionId?: string | undefined,
 		requiredConsent?: ToolRequiredConsent | undefined,
-		requestId?: string | undefined
+		requestId?: string | undefined,
+		options: ApprovalRequestOptions = {}
 	): PendingApproval {
 		const executionScope: string = workspaceId ?? "workspace:none";
 		const executionFingerprint: string | undefined = getLlmToolExecutionIdentity(llmToolName, args, executionScope, workspaceId)?.fingerprint;
@@ -187,7 +272,10 @@ export class ApprovalGateway {
 			editorInstanceId,
 			sessionId,
 			requestId,
-			requiredConsent
+			requiredConsent,
+			approvalKind: options.approvalKind,
+			downloadAuthorization: options.downloadAuthorization,
+			networkAccessRequired: options.networkAccessRequired
 		};
 
 		this.pendingApprovals.set(approvalId, pending);
@@ -205,6 +293,7 @@ export class ApprovalGateway {
 		}
 		// 审批决定不可重试；先消费再执行，避免超时后把同一审批重新弹给用户。
 		this.pendingApprovals.delete(approvalId);
+		this.grantDownloadAuthorization(pending.downloadAuthorization);
 
 		const commandAuthorization: TerminalCommandAuthorization | undefined = pending.llmToolName === "mcp_terminal_run_command"
 			? createTerminalCommandAuthorization({
@@ -337,7 +426,8 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 		editorInstanceId?: string | undefined,
 		sessionId?: string | undefined,
 		requiredConsent?: ToolRequiredConsent | undefined,
-		requestId?: string | undefined
+		requestId?: string | undefined,
+		options: ApprovalRequestOptions = {}
 	): PendingApproval {
 		if (this.delegatedToolNames.has(llmToolName) && this.allowedToolNames.has(llmToolName)) {
 			return this.baseGateway.requestApproval(
@@ -349,9 +439,26 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 				editorInstanceId,
 				sessionId,
 				requiredConsent,
-				requestId
+				requestId,
+				options
 			);
 		}
 		throw new Error("只读上下文不允许触发人工审批。");
+	}
+
+	override hasDownloadAuthorization(requestId: string | undefined, fingerprint: string): boolean {
+		return this.baseGateway.hasDownloadAuthorization(requestId, fingerprint);
+	}
+
+	override grantDownloadAuthorization(scope: DownloadAuthorizationScope | undefined): void {
+		this.baseGateway.grantDownloadAuthorization(scope);
+	}
+
+	override replaceDownloadAuthorizations(scopes: readonly DownloadAuthorizationScope[]): void {
+		this.baseGateway.replaceDownloadAuthorizations(scopes);
+	}
+
+	override clearDownloadAuthorizations(requestId: string): void {
+		this.baseGateway.clearDownloadAuthorizations(requestId);
 	}
 }

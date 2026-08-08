@@ -14,6 +14,7 @@ import { getApprovalMode } from "../../approval-settings-store.js";
 import { logger } from "../../logger.js";
 import { isWebSearchToolAvailable } from "../../web-search-settings-store.js";
 import { getApprovalReasonFromArgs, stripApprovalReasonArg } from "../../tools/approval-reason.js";
+import { hasGodotWorkspaceCapability } from "../../workspace/capabilities.js";
 
 function getToolDefinitionName(definition: ChatCompletionTool): string {
 	return definition.type === "function" ? definition.function.name : "";
@@ -38,6 +39,7 @@ function createCatalogToolResult(entry: ToolCatalogEntry, mode: ExternalMcpMode)
 async function getAllowedCatalogEntries(session: ClientSession, mode: ExternalMcpMode): Promise<ToolCatalogEntry[]> {
 	const catalog = createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace?.id,
+		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		editorInstanceId: session.editorInstanceId
 	});
 	const webSearchAvailable: boolean = await isWebSearchToolAvailable();
@@ -56,6 +58,7 @@ async function findCatalogEntry(session: ClientSession, toolName: string): Promi
 	}
 	const catalog = createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace?.id,
+		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		editorInstanceId: session.editorInstanceId
 	});
 	return catalog.getEntry(toolName);

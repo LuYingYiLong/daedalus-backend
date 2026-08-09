@@ -1,6 +1,11 @@
 import type { AiChatParams, ProviderId } from "../protocol/types.js";
 import type { AgentContinuation } from "../providers/agent-types.js";
 import type { ProviderChatOptions } from "../providers/deepseek-client.js";
+import {
+	cloneProviderRequestOverrides,
+	normalizeProviderRequestOverrides,
+	type ProviderRequestBodyOverrides
+} from "../providers/provider-request-overrides.js";
 import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointTypeForModel } from "../providers/provider-registry.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 import type { PendingAiContinuation } from "./pending-continuation.js";
@@ -25,6 +30,7 @@ export type PersistedProviderChatOptions = {
 	provider?: ProviderId | undefined;
 	model?: string | undefined;
 	baseUrl?: string | undefined;
+	requestBodyOverrides?: ProviderRequestBodyOverrides | undefined;
 };
 
 export type PersistedPendingAiContinuation = {
@@ -86,7 +92,8 @@ export function createPersistedApprovalRequestedData(
 
 export function createRuntimePendingContinuation(
 	persisted: PersistedPendingAiContinuation,
-	apiKey: string
+	apiKey: string,
+	currentRequestOverrides?: ProviderChatOptions["requestOverrides"]
 ): PendingAiContinuation {
 	const provider = persisted.options.provider ?? "deepseek";
 	const model: string = persisted.options.model ?? getProviderDefaultModel(provider);
@@ -101,6 +108,13 @@ export function createRuntimePendingContinuation(
 	};
 	if (persisted.options.baseUrl !== undefined) {
 		options.baseUrl = persisted.options.baseUrl;
+	}
+	const requestOverrides = normalizeProviderRequestOverrides({
+		headers: currentRequestOverrides?.headers,
+		body: persisted.options.requestBodyOverrides ?? currentRequestOverrides?.body
+	});
+	if (requestOverrides !== undefined) {
+		options.requestOverrides = requestOverrides;
 	}
 
 	const continuation: PendingAiContinuation = {
@@ -246,6 +260,10 @@ function createPersistedPendingContinuation(continuation: PendingAiContinuation)
 	}
 	if (continuation.options.baseUrl !== undefined) {
 		options.baseUrl = continuation.options.baseUrl;
+	}
+	const requestBodyOverrides: ProviderRequestBodyOverrides | undefined = continuation.options.requestOverrides?.body;
+	if (requestBodyOverrides !== undefined && Object.keys(requestBodyOverrides).length > 0) {
+		options.requestBodyOverrides = cloneProviderRequestOverrides(continuation.options.requestOverrides)?.body;
 	}
 
 	const persisted: PersistedPendingAiContinuation = {

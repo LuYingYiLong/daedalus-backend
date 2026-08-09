@@ -1,5 +1,6 @@
 import type { ModelProfile, ProviderId } from "../protocol/types.js";
 import type { ProviderUsageContext } from "../usage/metrics-types.js";
+import type { ProviderRequestOverrides } from "./provider-request-overrides.js";
 
 export type EndpointType = "openai-chat-completions" | "openai-responses" | "anthropic-messages";
 
@@ -88,6 +89,7 @@ export type ProviderChatOptions = {
 	 */
 	reasoningMode?: "auto" | "disabled" | undefined;
 	usageContext?: ProviderUsageContext | undefined;
+	requestOverrides?: ProviderRequestOverrides | undefined;
 };
 
 export type ProviderReconnectReason =

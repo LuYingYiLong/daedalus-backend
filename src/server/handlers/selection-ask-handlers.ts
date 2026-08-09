@@ -69,9 +69,14 @@ function createInitialQuestion(anchor: MessageTextAnchor, locale: "zh-CN" | "en-
 	].join("\n");
 }
 
-function createThreadOptions(thread: SelectionAskThread, apiKey: string, requestId: string): ProviderChatOptions {
+function createThreadOptions(
+	thread: SelectionAskThread,
+	apiKey: string,
+	requestId: string,
+	requestOverrides?: ProviderChatOptions["requestOverrides"]
+): ProviderChatOptions {
 	const endpointType = getProviderEndpointTypeForModel(thread.provider, thread.model);
-	return withProviderUsageContext({
+	const options: ProviderChatOptions = {
 		provider: thread.provider,
 		apiKey,
 		model: thread.model,
@@ -79,7 +84,11 @@ function createThreadOptions(thread: SelectionAskThread, apiKey: string, request
 		endpointType,
 		adapterFamily: getProviderAdapterFamily(thread.provider, endpointType),
 		modelProfile: resolveModelProfile(thread.provider, thread.model)
-	}, {
+	};
+	if (requestOverrides !== undefined) {
+		options.requestOverrides = requestOverrides;
+	}
+	return withProviderUsageContext(options, {
 		requestId,
 		runId: thread.threadId,
 		sessionId: thread.sessionId,
@@ -128,9 +137,15 @@ async function runSelectionAskResponse(params: {
 	userMessage: string;
 	history: ChatMessage[];
 	apiKey: string;
+	requestOverrides?: ProviderChatOptions["requestOverrides"];
 	abortSignal: AbortSignal;
 }): Promise<void> {
-	const options: ProviderChatOptions = createThreadOptions(params.thread, params.apiKey, params.requestId);
+	const options: ProviderChatOptions = createThreadOptions(
+		params.thread,
+		params.apiKey,
+		params.requestId,
+		params.requestOverrides
+	);
 	const storedUserPrompt: string = await getUserPrompt();
 	const selectionBoundary: string = createSelectionAskSystemPromptSuffix(params.thread.anchor);
 	const extraPrompt: string = [storedUserPrompt.trim(), selectionBoundary].filter(Boolean).join("\n\n");
@@ -286,6 +301,7 @@ async function prepareSelectionAskTurn(params: {
 	thread: SelectionAskThread;
 	userMessage: string;
 	apiKey: string;
+	requestOverrides?: ProviderChatOptions["requestOverrides"];
 }): Promise<{
 	userMessage: SelectionAskMessage;
 	assistantMessage: SelectionAskMessage;
@@ -313,6 +329,7 @@ async function prepareSelectionAskTurn(params: {
 				userMessage: params.userMessage,
 				history,
 				apiKey: params.apiKey,
+				requestOverrides: params.requestOverrides,
 				abortSignal: controller.signal
 			}).finally((): void => {
 				if (activeSelectionAskRuns.get(params.thread.threadId) === activeRun) {
@@ -323,12 +340,12 @@ async function prepareSelectionAskTurn(params: {
 	};
 }
 
-async function loadThreadProviderSecret(thread: SelectionAskThread): Promise<string> {
+async function loadThreadProviderConfig(thread: SelectionAskThread): Promise<ProviderConfigWithSecret & { apiKey: string }> {
 	const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret(thread.provider);
 	if (config?.apiKey === undefined) {
 		throw new Error(`provider_not_configured: ${thread.provider} API key is not configured.`);
 	}
-	return config.apiKey;
+	return { ...config, apiKey: config.apiKey };
 }
 
 export async function handleSelectionAskRequest(
@@ -395,7 +412,14 @@ export async function handleSelectionAskRequest(
 					return;
 				}
 				const initialQuestion: string = createInitialQuestion(anchor, request.params.locale ?? "zh-CN");
-				const turn = await prepareSelectionAskTurn({ socket, request, thread: result.thread, userMessage: initialQuestion, apiKey });
+				const turn = await prepareSelectionAskTurn({
+					socket,
+					request,
+					thread: result.thread,
+					userMessage: initialQuestion,
+					apiKey,
+					requestOverrides: session.providerRequestOverrides ?? config?.requestOverrides
+				});
 				sendJson(socket, {
 					type: "response",
 					id: request.id,
@@ -412,13 +436,16 @@ export async function handleSelectionAskRequest(
 				if (thread === null) {
 					throw new Error("selection_ask_not_found: Selection Ask thread not found.");
 				}
-				const apiKey: string = await loadThreadProviderSecret(thread);
+				const config: ProviderConfigWithSecret & { apiKey: string } = await loadThreadProviderConfig(thread);
 				const turn = await prepareSelectionAskTurn({
 					socket,
 					request,
 					thread,
 					userMessage: request.params.message,
-					apiKey
+					apiKey: config.apiKey,
+					requestOverrides: thread.provider === session.activeProvider
+						? session.providerRequestOverrides ?? config.requestOverrides
+						: config.requestOverrides
 				});
 				sendJson(socket, {
 					type: "response",

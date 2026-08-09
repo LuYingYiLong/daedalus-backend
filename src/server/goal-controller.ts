@@ -251,9 +251,14 @@ async function readLatestGoalState(goalId: string): Promise<AgentGoalState | nul
 	return latestGoalStates.get(goalId) ?? readAgentGoalState(goalId);
 }
 
-function createCurrentOptions(state: AgentGoalState, apiKey: string, baseUrl?: string | undefined): ProviderChatOptions {
+function createCurrentOptions(
+	state: AgentGoalState,
+	apiKey: string,
+	baseUrl?: string | undefined,
+	requestOverrides?: ProviderChatOptions["requestOverrides"]
+): ProviderChatOptions {
 	const endpointType = getProviderEndpointTypeForModel(state.modelSnapshot.provider, state.modelSnapshot.model);
-	return {
+	const options: ProviderChatOptions = {
 		provider: state.modelSnapshot.provider,
 		apiKey,
 		model: state.modelSnapshot.model,
@@ -262,6 +267,10 @@ function createCurrentOptions(state: AgentGoalState, apiKey: string, baseUrl?: s
 		adapterFamily: getProviderAdapterFamily(state.modelSnapshot.provider, endpointType),
 		modelProfile: resolveModelProfile(state.modelSnapshot.provider, state.modelSnapshot.model)
 	};
+	if (requestOverrides !== undefined) {
+		options.requestOverrides = requestOverrides;
+	}
+	return options;
 }
 
 async function checkReadiness(state: AgentGoalState, runtime: GoalRuntime): Promise<GoalReadinessReport> {
@@ -329,7 +338,7 @@ async function checkReadiness(state: AgentGoalState, runtime: GoalRuntime): Prom
 	});
 	try {
 		if (config?.apiKey) {
-			await resolveProviderTaskModelOptions("goalEvaluator", createCurrentOptions(state, config.apiKey, config.baseUrl));
+			await resolveProviderTaskModelOptions("goalEvaluator", createCurrentOptions(state, config.apiKey, config.baseUrl, config.requestOverrides));
 		}
 		checks.push({ id: "evaluator", status: "passed", message: "The Goal evaluator model is available or can fall back to the Goal model." });
 	} catch (error: unknown) {
@@ -688,7 +697,7 @@ async function evaluateGoal(state: AgentGoalState, runs: AgentRunState[]): Promi
 
 	const config = await loadProviderConfigWithSecret(state.modelSnapshot.provider);
 	if (config?.apiKey === undefined) throw new Error("Goal provider API key is unavailable during evaluation.");
-	const currentOptions = createCurrentOptions(state, config.apiKey, config.baseUrl);
+	const currentOptions = createCurrentOptions(state, config.apiKey, config.baseUrl, config.requestOverrides);
 	const evaluator = await resolveProviderTaskModelOptions("goalEvaluator", currentOptions);
 	const prompt = [
 		"Evaluate whether the Goal is actually complete. Return only the requested JSON object.",

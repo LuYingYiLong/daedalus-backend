@@ -20,6 +20,13 @@ import {
 } from "./provider-registry.js";
 import type { CustomProviderType } from "./provider-customizations-store.js";
 import type { ModelRef } from "./provider-types.js";
+import {
+	cloneProviderRequestOverrides,
+	normalizeProviderRequestOverrides,
+	type ProviderRequestBodyOverrides,
+	type ProviderRequestOverrides,
+	type ProviderRequestOverridesInput
+} from "./provider-request-overrides.js";
 
 const KEYTAR_SERVICE: string = "Godot Daedalus";
 
@@ -28,8 +35,10 @@ export type ProviderConfigInput = {
 	apiKey?: string | null | undefined;
 	model?: string | undefined;
 	baseUrl?: string | null | undefined;
+	enabled?: boolean | undefined;
 	activate?: boolean | undefined;
 	modelRouting?: ProviderModelRoutingInput | undefined;
+	requestOverrides?: ProviderRequestOverridesInput | null | undefined;
 };
 
 export type ProviderTaskModelRef = {
@@ -57,9 +66,12 @@ export type StoredProviderModelsCache = {
 export type StoredProviderEntry = {
 	model?: string | undefined;
 	baseUrl?: string | undefined;
+	/** Omitted remains enabled for compatibility. */
+	enabled?: false | undefined;
 	keyStorage: "keytar";
 	updatedAt: string;
 	modelsCache?: StoredProviderModelsCache | undefined;
+	requestBodyOverrides?: ProviderRequestBodyOverrides | undefined;
 };
 
 export type StoredProviderConfig = {
@@ -74,6 +86,7 @@ export type ProviderConfigWithSecret = {
 	model?: string | undefined;
 	baseUrl?: string | undefined;
 	apiKey?: string | undefined;
+	requestOverrides?: ProviderRequestOverrides | undefined;
 };
 
 export type ProviderConfigProviderStatus = {
@@ -85,6 +98,7 @@ export type ProviderConfigProviderStatus = {
 	defaultModel: string | null;
 	defaultBaseUrl: string;
 	custom: boolean;
+	enabled: boolean;
 	providerType: CustomProviderType | null;
 	ready: boolean;
 	modelsCache: ProviderModelInfo[];
@@ -93,6 +107,7 @@ export type ProviderConfigProviderStatus = {
 	keyStorage: "keytar";
 	updatedAt: string | null;
 	modelsCacheUpdatedAt: string | null;
+	requestOverrides?: ProviderRequestOverrides | undefined;
 };
 
 export type CurrentProviderConfigStatus = {
@@ -117,12 +132,14 @@ export type ProviderModelSelectionProviderStatus = {
 	defaultModel: string | null;
 	baseUrl: string;
 	custom: boolean;
+	enabled: boolean;
 	providerType: CustomProviderType | null;
 	ready: boolean;
 	apiKeyMasked: string | null;
 	models: ProviderModelInfo[];
 	modelsSource: "cache" | "fallback";
 	modelsCacheUpdatedAt: string | null;
+	requestOverrides?: ProviderRequestOverrides | undefined;
 };
 
 export type ProviderModelSelectionStatus = {
@@ -130,6 +147,17 @@ export type ProviderModelSelectionStatus = {
 	current: CurrentProviderConfigStatus;
 	providers: ProviderModelSelectionProviderStatus[];
 	modelRouting: ProviderModelRouting;
+};
+
+export type ProviderModelUsage = {
+	kind: "activeModel" | "taskRouting";
+	model: string;
+	task?: keyof ProviderModelRouting | undefined;
+};
+
+export type ProviderMutationResult = {
+	updated: boolean;
+	usages: ProviderModelUsage[];
 };
 
 export type ProviderConfigStatus = {
@@ -163,6 +191,10 @@ function getKeytarAccount(provider: ProviderId): string {
 	return `provider:${provider}:api_key`;
 }
 
+function getRequestHeadersKeytarAccount(provider: ProviderId): string {
+	return `provider:${provider}:request_headers`;
+}
+
 function maskApiKey(apiKey: string | null): string | null {
 	if (apiKey === null || apiKey.length === 0) {
 		return null;
@@ -177,6 +209,37 @@ function maskApiKey(apiKey: string | null): string | null {
 
 async function readKeytarPassword(provider: ProviderId): Promise<string | null> {
 	return readSecret(KEYTAR_SERVICE, getKeytarAccount(provider));
+}
+
+async function readProviderRequestHeaders(provider: ProviderId): Promise<Record<string, string>> {
+	const raw: string | null = await readSecret(KEYTAR_SERVICE, getRequestHeadersKeytarAccount(provider));
+	if (raw === null) {
+		return {};
+	}
+
+	try {
+		return normalizeProviderRequestOverrides({ headers: JSON.parse(raw) })?.headers ?? {};
+	} catch {
+		return {};
+	}
+}
+
+async function writeProviderRequestHeaders(provider: ProviderId, headers: Record<string, string>): Promise<void> {
+	if (Object.keys(headers).length === 0) {
+		await deleteSecret(KEYTAR_SERVICE, getRequestHeadersKeytarAccount(provider));
+		return;
+	}
+	await writeSecret(KEYTAR_SERVICE, getRequestHeadersKeytarAccount(provider), JSON.stringify(headers));
+}
+
+async function resolveProviderRequestOverrides(
+	provider: ProviderId,
+	entry: StoredProviderEntry | undefined
+): Promise<ProviderRequestOverrides | undefined> {
+	return normalizeProviderRequestOverrides({
+		headers: await readProviderRequestHeaders(provider),
+		body: entry?.requestBodyOverrides
+	});
 }
 
 function getModelDisplayName(models: readonly ProviderModelInfo[], modelId: string): string {
@@ -284,6 +347,9 @@ function validateModelRouting(routing: ProviderModelRouting, stored: StoredProvi
 		if (value === null) {
 			continue;
 		}
+		if (!isProviderEnabled(stored, value.provider)) {
+			throw new Error(`provider_disabled: Provider ${value.provider} must be enabled before it can be used for ${key}.`);
+		}
 		const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(
 			value.provider,
 			stored.providers[value.provider]?.modelsCache?.models ?? []
@@ -292,6 +358,45 @@ function validateModelRouting(routing: ProviderModelRouting, stored: StoredProvi
 			throw new Error(`provider_model_not_found: Model ${value.model} is not enabled for ${key}.`);
 		}
 	}
+}
+
+function isProviderEnabled(stored: StoredProviderConfig, provider: ProviderId): boolean {
+	return stored.providers[provider]?.enabled !== false;
+}
+
+function collectProviderModelUsages(stored: StoredProviderConfig, provider: ProviderId): ProviderModelUsage[] {
+	const usages: ProviderModelUsage[] = [];
+	if (stored.activeModel.providerId === provider) {
+		usages.push({ kind: "activeModel", model: stored.activeModel.modelId });
+	}
+	for (const key of Object.keys(stored.modelRouting) as Array<keyof ProviderModelRouting>) {
+		const routedModel: ProviderTaskModelRef | null = stored.modelRouting[key];
+		if (routedModel?.provider === provider) {
+			usages.push({ kind: "taskRouting", task: key, model: routedModel.model });
+		}
+	}
+	return usages;
+}
+
+function assertProvider(provider: ProviderId): void {
+	if (!isProviderId(provider)) {
+		throw new Error(`Unknown provider: ${provider}`);
+	}
+}
+
+function assertCustomProvider(provider: ProviderId): void {
+	assertProvider(provider);
+	if (!isCustomProvider(provider)) {
+		throw new Error(`provider_not_custom: Provider ${provider} cannot be removed.`);
+	}
+}
+
+function hasStoredProviderData(entry: StoredProviderEntry): boolean {
+	return entry.model !== undefined
+		|| entry.baseUrl !== undefined
+		|| entry.modelsCache !== undefined
+		|| entry.requestBodyOverrides !== undefined
+		|| entry.enabled === false;
 }
 
 function parseModelInfo(value: unknown): ProviderModelInfo | null {
@@ -378,9 +483,22 @@ function parseStoredEntry(value: unknown): StoredProviderEntry | undefined {
 	if (typeof record.baseUrl === "string" && record.baseUrl.trim().length > 0) {
 		entry.baseUrl = record.baseUrl.trim();
 	}
+	if (record.enabled === false) {
+		entry.enabled = false;
+	}
 	const modelsCache: StoredProviderModelsCache | undefined = parseModelsCache(record.modelsCache);
 	if (modelsCache !== undefined) {
 		entry.modelsCache = modelsCache;
+	}
+	try {
+		const requestOverrides: ProviderRequestOverrides | undefined = normalizeProviderRequestOverrides({
+			body: record.requestBodyOverrides
+		});
+		if (requestOverrides?.body !== undefined && Object.keys(requestOverrides.body).length > 0) {
+			entry.requestBodyOverrides = requestOverrides.body;
+		}
+	} catch {
+		// Invalid persisted overrides must not prevent the provider configuration from loading
 	}
 
 	return entry;
@@ -469,17 +587,31 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 	if (!isProviderId(input.provider)) {
 		throw new Error(`Unknown provider: ${input.provider}`);
 	}
+	const requestedOverrides: ProviderRequestOverrides | undefined = input.requestOverrides === undefined
+		? undefined
+		: input.requestOverrides === null
+			? undefined
+			: normalizeProviderRequestOverrides(input.requestOverrides);
 
+	const stored: StoredProviderConfig = await readStoredProviderConfig();
+	const existing: StoredProviderEntry | undefined = stored.providers[input.provider];
 	const apiKey: string | undefined = input.apiKey === null ? undefined : normalizeOptionalString(input.apiKey);
+	const disablesProvider: boolean = input.apiKey === null || input.enabled === false;
+	if (disablesProvider) {
+		const usages: ProviderModelUsage[] = collectProviderModelUsages(stored, input.provider);
+		if (usages.length > 0) {
+			throw new Error(`provider_in_use: Provider ${input.provider} is still assigned to active or task models.`);
+		}
+	}
+	if (input.enabled === true && apiKey === undefined && await readKeytarPassword(input.provider) === null) {
+		throw new Error(`provider_api_key_required: Provider ${input.provider} requires an API key before it can be enabled.`);
+	}
 	if (input.apiKey === null) {
 		await deleteSecret(KEYTAR_SERVICE, getKeytarAccount(input.provider));
 	}
 	if (apiKey !== undefined) {
 		await writeSecret(KEYTAR_SERVICE, getKeytarAccount(input.provider), apiKey);
 	}
-
-	const stored: StoredProviderConfig = await readStoredProviderConfig();
-	const existing: StoredProviderEntry | undefined = stored.providers[input.provider];
 	const entry: StoredProviderEntry = {
 		keyStorage: "keytar",
 		updatedAt: new Date().toISOString()
@@ -513,11 +645,29 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 	if (existing?.modelsCache !== undefined) {
 		entry.modelsCache = existing.modelsCache;
 	}
+	if (disablesProvider) {
+		entry.enabled = false;
+	} else if (input.enabled !== true && existing?.enabled === false) {
+		entry.enabled = false;
+	}
+	if (input.requestOverrides === undefined) {
+		if (existing?.requestBodyOverrides !== undefined) {
+			entry.requestBodyOverrides = existing.requestBodyOverrides;
+		}
+	} else if (requestedOverrides?.body !== undefined && Object.keys(requestedOverrides.body).length > 0) {
+		entry.requestBodyOverrides = requestedOverrides.body;
+	}
+	if (input.requestOverrides !== undefined) {
+		await writeProviderRequestHeaders(input.provider, requestedOverrides?.headers ?? {});
+	}
 
 	stored.providers[input.provider] = entry;
 	stored.modelRouting = mergeModelRouting(stored.modelRouting, input.modelRouting);
 	validateModelRouting(stored.modelRouting, stored);
 	if (input.activate !== false) {
+		if (!isProviderEnabled(stored, input.provider)) {
+			throw new Error(`provider_disabled: Provider ${input.provider} must be enabled before it can be activated.`);
+		}
 		if (model === undefined) {
 			throw new Error(`provider_not_ready: Provider ${input.provider} has no models.`);
 		}
@@ -552,6 +702,10 @@ export async function loadProviderConfigWithSecret(provider?: ProviderId | undef
 	if (entry?.baseUrl !== undefined) {
 		result.baseUrl = entry.baseUrl;
 	}
+	const requestOverrides: ProviderRequestOverrides | undefined = await resolveProviderRequestOverrides(activeProvider, entry);
+	if (requestOverrides !== undefined) {
+		result.requestOverrides = requestOverrides;
+	}
 	return result;
 }
 
@@ -562,12 +716,14 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 	for (const provider of getProviderIds()) {
 		const entry: StoredProviderEntry | undefined = stored.providers[provider];
 		const apiKey: string | null = await readKeytarPassword(provider);
+		const requestOverrides: ProviderRequestOverrides | undefined = await resolveProviderRequestOverrides(provider, entry);
 		const fallbackModels: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, []);
 		const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, entry?.modelsCache?.models ?? []);
 		const defaultBaseUrl: string = getProviderDefaultBaseUrl(provider);
 		const resolvedBaseUrl: string = entry?.baseUrl ?? defaultBaseUrl;
 		const custom: boolean = isCustomProvider(provider);
-		providers.push({
+		const enabled: boolean = apiKey !== null && isProviderEnabled(stored, provider);
+		const status: ProviderConfigProviderStatus = {
 			provider,
 			displayName: getProviderDisplayName(provider),
 			configured: apiKey !== null,
@@ -576,15 +732,20 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 			defaultModel: getProviderDefaultModelOrNull(provider),
 			defaultBaseUrl,
 			custom,
+			enabled,
 			providerType: getCustomProviderType(provider),
-			ready: models.length > 0 && (!custom || resolvedBaseUrl.trim().length > 0),
+			ready: enabled && models.length > 0 && (!custom || resolvedBaseUrl.trim().length > 0),
 			modelsCache: entry?.modelsCache?.models ?? [],
 			fallbackModels,
 			apiKeyMasked: maskApiKey(apiKey),
 			keyStorage: "keytar",
 			updatedAt: entry?.updatedAt ?? null,
 			modelsCacheUpdatedAt: entry?.modelsCache?.updatedAt ?? null
-		});
+		};
+		if (requestOverrides !== undefined) {
+			status.requestOverrides = requestOverrides;
+		}
+		providers.push(status);
 	}
 
 	const activeStatus: ProviderConfigProviderStatus = providers.find((item: ProviderConfigProviderStatus): boolean => item.provider === stored.activeModel.providerId)
@@ -640,7 +801,7 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 				? status.activeModel.modelId
 				: providerStatus.model ?? null;
 
-			return {
+			const selectionProvider: ProviderModelSelectionProviderStatus = {
 				provider: providerStatus.provider,
 				displayName: providerStatus.displayName,
 				configured: providerStatus.configured,
@@ -650,6 +811,7 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 				defaultModel: providerStatus.defaultModel,
 				baseUrl: providerStatus.baseUrl ?? providerStatus.defaultBaseUrl,
 				custom: providerStatus.custom,
+				enabled: providerStatus.enabled,
 				providerType: providerStatus.providerType,
 				ready: providerStatus.ready,
 				apiKeyMasked: providerStatus.apiKeyMasked,
@@ -657,6 +819,10 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 				modelsSource,
 				modelsCacheUpdatedAt: providerStatus.modelsCacheUpdatedAt
 			};
+			if (providerStatus.requestOverrides !== undefined) {
+				selectionProvider.requestOverrides = cloneProviderRequestOverrides(providerStatus.requestOverrides);
+			}
+			return selectionProvider;
 		}),
 		modelRouting: status.modelRouting
 	};
@@ -670,7 +836,16 @@ export async function clearProviderConfig(provider?: ProviderId | undefined): Pr
 	}
 
 	await deleteSecret(KEYTAR_SERVICE, getKeytarAccount(providerToClear));
-	delete stored.providers[providerToClear];
+	await deleteSecret(KEYTAR_SERVICE, getRequestHeadersKeytarAccount(providerToClear));
+	if (stored.providers[providerToClear]?.enabled === false) {
+		stored.providers[providerToClear] = {
+			keyStorage: "keytar",
+			updatedAt: new Date().toISOString(),
+			enabled: false
+		};
+	} else {
+		delete stored.providers[providerToClear];
+	}
 
 	if (Object.keys(stored.providers).length === 0) {
 		await rm(getProviderConfigPath(), { force: true });
@@ -682,14 +857,71 @@ export async function clearProviderConfig(provider?: ProviderId | undefined): Pr
 			if (!isProviderId(value)) {
 				return false;
 			}
-			const nextEntry: StoredProviderEntry | undefined = stored.providers[value];
-			return nextEntry?.model !== undefined && (!isCustomProvider(value) || (nextEntry.baseUrl?.trim().length ?? 0) > 0);
+		const nextEntry: StoredProviderEntry | undefined = stored.providers[value];
+			return isProviderEnabled(stored, value)
+				&& nextEntry?.model !== undefined
+				&& (!isCustomProvider(value) || (nextEntry.baseUrl?.trim().length ?? 0) > 0);
 		}) ?? DEFAULT_PROVIDER_ID;
 		stored.activeModel = createModelRef(nextProvider, stored.providers[nextProvider]?.model);
 	}
 
 	await writeStoredProviderConfig(stored);
 	return getProviderConfigStatus();
+}
+
+export async function setProviderEnabled(provider: ProviderId, enabled: boolean): Promise<ProviderMutationResult> {
+	assertProvider(provider);
+	const stored: StoredProviderConfig = await readStoredProviderConfig();
+	if (enabled && await readKeytarPassword(provider) === null) {
+		throw new Error(`provider_api_key_required: Provider ${provider} requires an API key before it can be enabled.`);
+	}
+	const usages: ProviderModelUsage[] = enabled ? [] : collectProviderModelUsages(stored, provider);
+	if (usages.length > 0) {
+		return { updated: false, usages };
+	}
+	const existing: StoredProviderEntry | undefined = stored.providers[provider];
+	const entry: StoredProviderEntry = {
+		keyStorage: "keytar",
+		updatedAt: new Date().toISOString(),
+		...(existing ?? {})
+	};
+	if (enabled) {
+		delete entry.enabled;
+	} else {
+		entry.enabled = false;
+	}
+	entry.updatedAt = new Date().toISOString();
+	if (hasStoredProviderData(entry)) {
+		stored.providers[provider] = entry;
+	} else {
+		delete stored.providers[provider];
+	}
+	await writeStoredProviderConfig(stored);
+	return { updated: true, usages: [] };
+}
+
+export async function getProviderUsage(provider: ProviderId): Promise<ProviderModelUsage[]> {
+	assertProvider(provider);
+	return collectProviderModelUsages(await readStoredProviderConfig(), provider);
+}
+
+export async function removeCustomProviderConfig(provider: ProviderId): Promise<ProviderMutationResult> {
+	assertCustomProvider(provider);
+	const stored: StoredProviderConfig = await readStoredProviderConfig();
+	const usages: ProviderModelUsage[] = collectProviderModelUsages(stored, provider);
+	if (usages.length > 0) {
+		return { updated: false, usages };
+	}
+
+	await deleteSecret(KEYTAR_SERVICE, getKeytarAccount(provider));
+	await deleteSecret(KEYTAR_SERVICE, getRequestHeadersKeytarAccount(provider));
+	delete stored.providers[provider];
+	if (Object.keys(stored.providers).length === 0) {
+		await rm(getProviderConfigPath(), { force: true });
+	} else {
+		await writeStoredProviderConfig(stored);
+	}
+	return { updated: true, usages: [] };
 }
 
 export async function getProviderModelsCache(provider: ProviderId): Promise<StoredProviderModelsCache | undefined> {

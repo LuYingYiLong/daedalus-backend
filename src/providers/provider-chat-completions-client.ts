@@ -15,6 +15,7 @@ import { resolveReasoningEffort } from "./reasoning-effort.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
+import { createProviderRequestOverrideFetch } from "./provider-request-overrides.js";
 
 export type ProviderTransportActivity = () => void;
 
@@ -79,8 +80,11 @@ export function createOpenAICompatibleClient(options: ProviderChatOptions, onTra
 		maxRetries: 0,
 		timeout: 60_000
 	};
+	const requestFetch: typeof fetch = createProviderRequestOverrideFetch(globalThis.fetch, options.requestOverrides);
 	if (onTransportActivity !== undefined) {
-		clientOptions.fetch = createTransportActivityFetch(globalThis.fetch, onTransportActivity);
+		clientOptions.fetch = createTransportActivityFetch(requestFetch, onTransportActivity);
+	} else if (requestFetch !== globalThis.fetch) {
+		clientOptions.fetch = requestFetch;
 	}
 	return new OpenAI(clientOptions);
 }

@@ -8,6 +8,7 @@ import {
 	addCustomProvider,
 	ensureCustomProviderDefaultModel,
 	ProviderCustomizationError,
+	removeCustomProvider,
 	updateProviderModelSelection,
 	updateModelCustomization
 } from "../../../src/providers/provider-customizations-service.js";
@@ -24,8 +25,10 @@ import {
 import {
 	getProviderModelSelectionStatus,
 	getProviderModelsCache,
+	removeCustomProviderConfig,
 	saveProviderConfig,
-	saveProviderModelsCache
+	saveProviderModelsCache,
+	setProviderEnabled
 } from "../../../src/providers/provider-config-store.js";
 import { installMemorySecretStore, resetSecretStoreDriver } from "../../helpers/secret-store.js";
 
@@ -318,19 +321,98 @@ test("custom providers report readiness and cannot activate without model or bas
 
 		await saveProviderConfig({
 			provider,
+			apiKey: "ready-key",
 			model: "ready-model",
 			baseUrl: "https://gateway.example/v1",
+			enabled: true,
 			activate: false
 		});
 		const selection = await getProviderModelSelectionStatus();
 		const status = selection.providers.find((candidate): boolean => candidate.provider === provider);
 		assert.equal(status?.custom, true);
 		assert.equal(status?.providerType, "openai");
+		assert.equal(status?.enabled, true);
 		assert.equal(status?.ready, true);
 		assert.equal(status?.defaultModel, "ready-model");
 
 		await saveProviderConfig({ provider, model: "ready-model" });
 		assert.equal((await getProviderModelSelectionStatus()).activeModel.providerId, provider);
+	});
+});
+
+test("providers cannot be disabled while active or task-routed, while unused custom providers can be removed", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		installMemorySecretStore();
+		await assert.rejects(
+			() => setProviderEnabled("moonshot", true),
+			/provider_api_key_required/u
+		);
+		const provider: string = await addCustomProvider({
+			displayName: "Guarded Gateway",
+			providerType: "openai"
+		});
+		await addCustomModel({ provider, id: "guarded-model", displayName: "Guarded Model" });
+		await saveProviderConfig({
+			provider,
+			apiKey: "custom-key",
+			baseUrl: "https://gateway.example/v1",
+			model: "guarded-model",
+			modelRouting: {
+				sessionTitle: { provider, model: "guarded-model" }
+			}
+		});
+
+		const activeBlocked = await setProviderEnabled(provider, false);
+		assert.deepEqual(activeBlocked, {
+			updated: false,
+			usages: [
+				{ kind: "activeModel", model: "guarded-model" },
+				{ kind: "taskRouting", task: "sessionTitle", model: "guarded-model" }
+			]
+		});
+
+		await saveProviderConfig({
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash",
+			modelRouting: {
+				sessionTitle: null
+			}
+		});
+		const builtInBlocked = await setProviderEnabled("deepseek", false);
+		assert.deepEqual(builtInBlocked, {
+			updated: false,
+			usages: [{ kind: "activeModel", model: "deepseek-v4-flash" }]
+		});
+
+		const disabled = await setProviderEnabled(provider, false);
+		assert.deepEqual(disabled, { updated: true, usages: [] });
+		const status = (await getProviderModelSelectionStatus()).providers
+			.find((candidate): boolean => candidate.provider === provider);
+		assert.equal(status?.enabled, false);
+		assert.equal(status?.ready, false);
+		await assert.rejects(
+			() => saveProviderConfig({ provider, model: "guarded-model" }),
+			/provider_disabled/u
+		);
+
+		await saveProviderConfig({
+			provider: "moonshot",
+			apiKey: "moonshot-key",
+			model: "kimi-k3"
+		});
+		assert.deepEqual(await setProviderEnabled("deepseek", false), { updated: true, usages: [] });
+		const deepseekStatus = (await getProviderModelSelectionStatus()).providers
+			.find((candidate): boolean => candidate.provider === "deepseek");
+		assert.equal(deepseekStatus?.enabled, false);
+
+		const removedConfig = await removeCustomProviderConfig(provider);
+		assert.deepEqual(removedConfig, { updated: true, usages: [] });
+		await removeCustomProvider(provider);
+		assert.equal(
+			(await getProviderModelSelectionStatus()).providers.some((candidate): boolean => candidate.provider === provider),
+			false
+		);
 	});
 });
 

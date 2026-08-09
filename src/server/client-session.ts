@@ -10,6 +10,7 @@ import type { WorkspaceConfig } from "../workspace/types.js";
 import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ToolRisk } from "../tools/tool-policy.js";
 import { createActivityGroupAccumulator, type ActivityGroupAccumulator } from "../session/activity-groups.js";
+import type { ProviderRequestOverrides } from "../providers/provider-request-overrides.js";
 
 export type PendingGuide = {
 	id: string;
@@ -87,6 +88,7 @@ export type ClientSession = {
 	providerApiKey?: string | undefined;
 	providerModel?: string | undefined;
 	providerBaseUrl?: string | undefined;
+	providerRequestOverrides?: ProviderRequestOverrides | undefined;
 	godotExecutablePath?: string | undefined;
 	godotProjectPath?: string | undefined;
 	messages: ChatMessage[];
@@ -220,6 +222,7 @@ export function applySessionMetadata(session: ClientSession, metadata: SessionMe
 		session.modelProfile = resolveModelProfile(metadata.provider, session.providerModel);
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;
+		session.providerRequestOverrides = undefined;
 	}
 	if (metadata.reasoningEffort !== undefined) {
 		const model: string = session.providerModel ?? session.modelProfile.model;

@@ -111,22 +111,30 @@ const SKILL_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		"mcp_skills_propose_create",
 		"校验并预览新的 SKILL.md，不写入磁盘。创建 skill 时必须先调用此工具。",
 		{
-			scope: { type: "string", enum: ["project", "personal"] },
+			scope: {
+				type: "string",
+				enum: ["project", "personal"],
+				description: "Optional. Omit to use project in an active workspace or personal otherwise. project stores the skill with the project; personal stores it in the user's Daedalus skills."
+			},
 			slug: { type: "string", description: "小写 kebab-case 目录名" },
 			skillMd: { type: "string", description: "完整 SKILL.md，必须包含 name 和 description frontmatter" }
 		},
-		["scope", "slug", "skillMd"]
+		["slug", "skillMd"]
 	),
 	createSceneToolDefinition(
 		"mcp_skills_create",
 		"在受控项目或个人 skills 目录创建 SKILL.md，不覆盖现有目录，需要审批。",
 		{
-			scope: { type: "string", enum: ["project", "personal"] },
+			scope: {
+				type: "string",
+				enum: ["project", "personal"],
+				description: "Optional. Must match the scope used by propose_create. Omit to use project in an active workspace or personal otherwise."
+			},
 			slug: { type: "string", description: "小写 kebab-case 目录名" },
 			skillMd: { type: "string", description: "已经通过 propose_create 校验的完整 SKILL.md" },
 			proposalToken: { type: "string", description: "propose_create 返回的 proposalToken" }
 		},
-		["scope", "slug", "skillMd", "proposalToken"]
+		["slug", "skillMd", "proposalToken"]
 	)
 ];
 

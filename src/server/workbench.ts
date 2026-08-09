@@ -302,6 +302,7 @@ function applyWorkbenchModelSelection(
 	if (providerChanged) {
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;
+		session.providerRequestOverrides = undefined;
 	}
 	return true;
 }

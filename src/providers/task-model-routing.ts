@@ -80,6 +80,9 @@ export async function resolveProviderTaskModelOptions(
 	if (normalizedBaseUrl !== undefined) {
 		options.baseUrl = normalizedBaseUrl;
 	}
+	if (config.requestOverrides !== undefined) {
+		options.requestOverrides = config.requestOverrides;
+	}
 
 	return {
 		kind,
@@ -120,6 +123,9 @@ export async function resolveConfiguredProviderTaskModelOptions(kind: ProviderTa
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(config.baseUrl);
 	if (normalizedBaseUrl !== undefined) {
 		options.baseUrl = normalizedBaseUrl;
+	}
+	if (config.requestOverrides !== undefined) {
+		options.requestOverrides = config.requestOverrides;
 	}
 
 	return {

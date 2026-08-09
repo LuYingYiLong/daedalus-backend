@@ -90,6 +90,20 @@ test("workspace downloader requires a structured source-scoped target", (): void
 	assert.ok("approvalReason" in getToolProperties("mcp_workspace_download_file"));
 });
 
+test("skill creation tools default a structured scope instead of requiring the model to invent one", (): void => {
+	const tool = getToolDefinitionsForNames(["mcp_skills_propose_create"])
+		.filter(isFunctionTool)
+		.find((item: FunctionTool): boolean => item.function.name === "mcp_skills_propose_create");
+	assert.notEqual(tool, undefined);
+	const parameters = tool?.function.parameters as Record<string, unknown>;
+	const required = parameters.required as string[];
+	const scope = getToolProperties("mcp_skills_propose_create").scope as Record<string, unknown>;
+
+	assert.equal(required.includes("scope"), false);
+	assert.deepEqual(scope.enum, ["project", "personal"]);
+	assert.match(String(scope.description), /Optional/u);
+});
+
 test("dynamic MCP tools are included only through the custom sentinel", (): void => {
 	replaceDynamicMcpToolsForWorkspace(WORKSPACE_ID, [
 		{

@@ -1236,6 +1236,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			if (providerChanged) {
 				session.providerApiKey = undefined;
 				session.providerBaseUrl = undefined;
+				session.providerRequestOverrides = undefined;
 			}
 			bumpWorkbenchRevision(session);
 			await waitForSessionEventPersistence(session);

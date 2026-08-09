@@ -25,6 +25,8 @@ import {
 } from "./provider-customizations-service.js";
 import { resolveProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderChatOptions } from "./provider-types.js";
+import type { ProviderRequestOverrides } from "./provider-request-overrides.js";
+import { createProviderRequestOverrideFetch } from "./provider-request-overrides.js";
 import { resolveProviderAdapter } from "./provider-adapter.js";
 import type { ProviderTaskModelKind } from "./task-model-routing.js";
 import { getWebSearchSettings, type WebSearchSettings } from "../web-search-settings-store.js";
@@ -186,7 +188,8 @@ function parseApiModels(provider: ProviderId, value: unknown): ProviderModelInfo
 
 export async function fetchOpenAICompatibleModels(options: ProviderChatOptions): Promise<ProviderModelInfo[]> {
 	const endpoint: string = `${resolveProviderBaseUrl(options.provider, options.baseUrl)}${getProviderDefinition(options.provider).modelsPath}`;
-	const response: Response = await fetch(endpoint, {
+	const requestFetch: typeof fetch = createProviderRequestOverrideFetch(globalThis.fetch, options.requestOverrides);
+	const response: Response = await requestFetch(endpoint, {
 		method: "GET",
 		headers: {
 			"Authorization": `Bearer ${options.apiKey}`
@@ -310,13 +313,14 @@ function normalizeModelIds(modelIds: readonly string[], fieldName: string): stri
 export async function discoverProviderModels(
 	provider: ProviderId,
 	apiKey: string | undefined,
-	baseUrl: string | undefined
+	baseUrl: string | undefined,
+	requestOverrides?: ProviderRequestOverrides | undefined
 ): Promise<ProviderModelsDiscoverResult> {
 	if (!isProviderId(provider)) {
 		throw new Error(`Unknown provider: ${provider}`);
 	}
 
-	const options: ProviderChatOptions = { provider, apiKey: apiKey ?? "", baseUrl };
+	const options: ProviderChatOptions = { provider, apiKey: apiKey ?? "", baseUrl, requestOverrides };
 	try {
 		const models: ProviderModelInfo[] = deduplicateModels(
 			mergeProviderModelsWithCatalog(
@@ -487,13 +491,14 @@ export async function listProviderModels(
 	provider: ProviderId,
 	apiKey: string | undefined,
 	baseUrl: string | undefined,
-	refresh: boolean = false
+	refresh: boolean = false,
+	requestOverrides?: ProviderRequestOverrides | undefined
 ): Promise<ProviderModelsListResult> {
 	if (getProviderDefinition(provider).modelListMode === "catalog-only") {
 		return { provider, models: mergeProviderModelsWithCatalog(provider, []), stale: false, source: "fallback" };
 	}
 
-	const options: ProviderChatOptions = { provider, apiKey: apiKey ?? "", baseUrl };
+	const options: ProviderChatOptions = { provider, apiKey: apiKey ?? "", baseUrl, requestOverrides };
 	if (apiKey !== undefined && refresh) {
 		try {
 			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, await resolveProviderAdapter(options).listModels(options, refresh));

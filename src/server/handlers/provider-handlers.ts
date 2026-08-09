@@ -6,7 +6,7 @@ import { sendJson } from "../send-json.js";
 import type { ProviderId } from "../../protocol/types.js";
 import { resolveModelProfile } from "../../tokens/model-profiles.js";
 import { getProviderDefaultModel } from "../../providers/provider-registry.js";
-import { clearProviderConfig, getProviderConfigStatus, getProviderModelSelectionStatus, loadProviderConfigWithSecret, saveProviderConfig, type ProviderConfigWithSecret } from "../../providers/provider-config-store.js";
+import { clearProviderConfig, getProviderConfigStatus, getProviderModelSelectionStatus, getProviderUsage, loadProviderConfigWithSecret, removeCustomProviderConfig, saveProviderConfig, setProviderEnabled, type ProviderConfigWithSecret } from "../../providers/provider-config-store.js";
 import {
 	discoverProviderModels,
 	importProviderModels,
@@ -23,6 +23,7 @@ import {
 	addCustomModel,
 	addCustomProvider,
 	ProviderCustomizationError,
+	removeCustomProvider,
 	updateModelCustomization
 } from "../../providers/provider-customizations-service.js";
 
@@ -32,6 +33,9 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 	if (
 		(
 			request.method === "provider.custom.add"
+			|| request.method === "provider.usage.get"
+			|| request.method === "provider.setEnabled"
+			|| request.method === "provider.custom.remove"
 			|| request.method === "provider.model.add"
 			|| request.method === "provider.model.update"
 			|| request.method === "provider.models.discover"
@@ -58,6 +62,7 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 		session.providerApiKey = request.params.apiKey;
 		session.providerModel = request.params.model;
 		session.providerBaseUrl = normalizeConfiguredProviderBaseUrl(request.params.baseUrl);
+		session.providerRequestOverrides = undefined;
 		session.modelProfile = resolveModelProfile(request.params.provider, request.params.model ?? getProviderDefaultModel(request.params.provider));
 		logger.info("provider", "configured_runtime", {
 			provider: request.params.provider,
@@ -145,6 +150,7 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 				model: request.params.model,
 				hasApiKey: request.params.apiKey !== undefined,
 				hasBaseUrl: request.params.baseUrl !== undefined,
+				hasRequestOverrides: request.params.requestOverrides !== undefined,
 				sessionId: session.sessionId
 			});
 
@@ -219,11 +225,15 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 			const baseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(provider === session.activeProvider
 				? session.providerBaseUrl ?? config?.baseUrl
 				: config?.baseUrl);
+			const requestOverrides = provider === session.activeProvider
+				? session.providerRequestOverrides ?? config?.requestOverrides
+				: config?.requestOverrides;
 			const result = await listProviderModels(
 				provider,
 				apiKey,
 				baseUrl,
-				request.params?.refresh === true
+				request.params?.refresh === true,
+				requestOverrides
 			);
 			logger.info("provider", "models_listed", {
 				provider,
@@ -271,7 +281,7 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 				? undefined
 				: request.params.baseUrl ?? config?.baseUrl;
 			const baseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(baseUrlInput);
-			const result = await discoverProviderModels(provider, apiKey, baseUrl);
+			const result = await discoverProviderModels(provider, apiKey, baseUrl, config?.requestOverrides);
 			logger.info("provider", "models_discovered", {
 				provider,
 				hasTransientApiKey: request.params.apiKey !== undefined,
@@ -398,6 +408,82 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 				error: {
 					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
 					message: error instanceof Error ? error.message : "Failed to add custom provider"
+				}
+			});
+		}
+		break;
+
+	case "provider.setEnabled":
+		try {
+			const mutation = await setProviderEnabled(request.params.provider, request.params.enabled);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: {
+					...mutation,
+					selection: await getProviderModelSelectionStatus()
+				}
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_state_error",
+					message: error instanceof Error ? error.message : "Failed to update provider state"
+				}
+			});
+		}
+		break;
+
+	case "provider.usage.get":
+		try {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: {
+					usages: await getProviderUsage(request.params.provider)
+				}
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_state_error",
+					message: error instanceof Error ? error.message : "Failed to read provider usage"
+				}
+			});
+		}
+		break;
+
+	case "provider.custom.remove":
+		try {
+			const mutation = await removeCustomProviderConfig(request.params.provider);
+			if (mutation.updated) {
+				await removeCustomProvider(request.params.provider);
+			}
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: {
+					...mutation,
+					selection: await getProviderModelSelectionStatus()
+				}
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
+					message: error instanceof Error ? error.message : "Failed to remove custom provider"
 				}
 			});
 		}

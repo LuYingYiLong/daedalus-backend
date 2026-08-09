@@ -17,6 +17,7 @@ export type AgentLoopRecoveryEntry = {
 	attempts: number;
 	status: "unresolved" | "recovered" | "exhausted";
 	lastFailureCode?: string | undefined;
+	lastFailureArgsFingerprint?: string | undefined;
 	updatedAt: string;
 };
 
@@ -106,6 +107,7 @@ export function isAgentLoopState(value: unknown): value is AgentLoopState {
 				&& typeof item.toolName === "string"
 				&& typeof item.attempts === "number"
 				&& (item.status === "unresolved" || item.status === "recovered" || item.status === "exhausted")
+				&& (item.lastFailureArgsFingerprint === undefined || typeof item.lastFailureArgsFingerprint === "string")
 				&& typeof item.updatedAt === "string";
 		});
 }
@@ -119,6 +121,29 @@ export function createAgentLoopRecoveryController(state: AgentLoopState): AgentL
 		beforeCall(toolName: string, args: Record<string, unknown>): ToolFailure | undefined {
 			const recoveryKey: string = createAgentLoopRecoveryKey(toolName, args);
 			const entry: AgentLoopRecoveryEntry | undefined = findEntry(recoveryKey);
+			if (
+				entry?.status === "unresolved"
+				&& entry.lastFailureCode === "invalid_arguments"
+				&& entry.lastFailureArgsFingerprint === stableJson(args)
+			) {
+				entry.status = "exhausted";
+				entry.updatedAt = new Date().toISOString();
+				return {
+					code: "retry_exhausted",
+					category: "protocol",
+					message: "The previous tool arguments were rejected and have not changed. Do not repeat this call; correct the structured arguments or choose another safe approach.",
+					retryable: false,
+					artifactRefs: [],
+					details: {
+						recovery: {
+							recoveryKey,
+							attempt: entry.attempts,
+							maxAttempts: MAX_AGENT_LOOP_RECOVERY_ATTEMPTS,
+							status: "exhausted"
+						} satisfies AgentLoopRecoveryStatus
+					}
+				};
+			}
 			if (entry === undefined || entry.attempts < MAX_AGENT_LOOP_RECOVERY_ATTEMPTS || entry.status === "recovered") {
 				return undefined;
 			}
@@ -159,6 +184,7 @@ export function createAgentLoopRecoveryController(state: AgentLoopState): AgentL
 			entry.attempts += 1;
 			entry.status = entry.attempts >= MAX_AGENT_LOOP_RECOVERY_ATTEMPTS ? "exhausted" : "unresolved";
 			entry.lastFailureCode = failure.code;
+			entry.lastFailureArgsFingerprint = failure.code === "invalid_arguments" ? stableJson(args) : undefined;
 			entry.updatedAt = new Date().toISOString();
 			return {
 				...cloneToolFailure(failure),

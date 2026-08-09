@@ -100,6 +100,37 @@ test("provider config saves keys under provider-scoped keytar accounts", async (
 	});
 });
 
+test("provider request configuration stores headers in keytar and preserves body extensions in the provider entry", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const secrets: Map<string, string> = installMemorySecretStore();
+		await saveProviderConfig({
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			requestOverrides: {
+				headers: { "HTTP-Referer": "https://daedalus.example" },
+				body: { enable_thinking: false }
+			}
+		});
+
+		const config = await loadProviderConfigWithSecret("deepseek");
+		const selection = await getProviderModelSelectionStatus();
+		const rawConfig = await readFile(join(process.env.USERPROFILE!, ".daedalus", "config", "provider.json"), "utf8");
+
+		assert.equal(secrets.get("provider:deepseek:request_headers"), JSON.stringify({ "HTTP-Referer": "https://daedalus.example" }));
+		assert.doesNotMatch(rawConfig, /HTTP-Referer|daedalus\.example/u);
+		assert.match(rawConfig, /enable_thinking/u);
+		assert.deepEqual(config?.requestOverrides, {
+			headers: { "HTTP-Referer": "https://daedalus.example" },
+			body: { enable_thinking: false }
+		});
+		assert.deepEqual(selection.providers.find((provider) => provider.provider === "deepseek")?.requestOverrides, config?.requestOverrides);
+
+		await saveProviderConfig({ provider: "deepseek", requestOverrides: null, activate: false });
+		assert.equal(secrets.has("provider:deepseek:request_headers"), false);
+		assert.equal((await loadProviderConfigWithSecret("deepseek"))?.requestOverrides, undefined);
+	});
+});
+
 test("provider config clears only the provider api key when apiKey is null", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const deletedAccounts: string[] = [];
@@ -124,6 +155,11 @@ test("provider config clears only the provider api key when apiKey is null", asy
 			maxOutputTokens: 8_192,
 			capabilities: { tools: true }
 		}]);
+		await saveProviderConfig({
+			provider: "moonshot",
+			apiKey: "moonshot-key",
+			model: "kimi-k3"
+		});
 
 		await saveProviderConfig({
 			provider: "deepseek",
@@ -137,6 +173,7 @@ test("provider config clears only the provider api key when apiKey is null", asy
 		const deepseek = status.providers.find((provider): boolean => provider.provider === "deepseek");
 		assert.deepEqual(deletedAccounts, ["provider:deepseek:api_key"]);
 		assert.equal(deepseek?.configured, false);
+		assert.equal(deepseek?.enabled, false);
 		assert.equal(deepseek?.apiKeyMasked, null);
 		assert.equal(deepseek?.model, "deepseek-v4-pro");
 		assert.equal(deepseek?.baseUrl, "https://proxy.example/v1");

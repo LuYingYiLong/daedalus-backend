@@ -308,7 +308,10 @@ export async function loadHydratedPendingApprovalStates(
 	if (apiKey !== undefined) {
 		for (const state of states) {
 			if (state.continuation !== undefined) {
-				session.pendingAiContinuations.set(state.approval.approvalId, createRuntimePendingContinuation(state.continuation, apiKey));
+				session.pendingAiContinuations.set(
+					state.approval.approvalId,
+					createRuntimePendingContinuation(state.continuation, apiKey, session.providerRequestOverrides)
+				);
 			}
 		}
 	}
@@ -373,7 +376,11 @@ export async function restorePendingContinuationForApproval(
 		return undefined;
 	}
 
-	const restoredContinuation: PendingAiContinuation = createRuntimePendingContinuation(state.continuation, apiKey);
+	const restoredContinuation: PendingAiContinuation = createRuntimePendingContinuation(
+		state.continuation,
+		apiKey,
+		session.providerRequestOverrides
+	);
 	session.pendingAiContinuations.set(state.approval.approvalId, restoredContinuation);
 	return restoredContinuation;
 }

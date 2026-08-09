@@ -55,3 +55,23 @@ test("same relative path in another source folder has an independent recovery ke
 	assert.equal(recovery.recordSuccess("mcp_workspace_overwrite_text_file", frontend), undefined);
 	assert.equal(state.recoveryEntries[0]?.status, "unresolved");
 });
+
+test("an unchanged invalid-argument call is blocked before it reaches the tool again", (): void => {
+	const state = createAgentLoopState();
+	const recovery = createAgentLoopRecoveryController(state);
+	const args = { scope: "workspace", slug: "release-helper", skillMd: "---\nname: Release\ndescription: x\n---" };
+	const failure = recovery.recordFailure("mcp_skills_propose_create", args, {
+		code: "invalid_arguments",
+		category: "protocol",
+		message: "scope is invalid",
+		retryable: true,
+		artifactRefs: []
+	});
+
+	assert.equal((failure.details?.recovery as { attempt: number }).attempt, 1);
+	assert.equal(recovery.beforeCall("mcp_skills_propose_create", args)?.code, "retry_exhausted");
+	assert.equal(recovery.beforeCall("mcp_skills_propose_create", {
+		...args,
+		scope: "project"
+	}), undefined);
+});

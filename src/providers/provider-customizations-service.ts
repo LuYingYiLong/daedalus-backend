@@ -105,6 +105,18 @@ export async function addCustomProvider(input: AddCustomProviderInput): Promise<
 	return providerId;
 }
 
+export async function removeCustomProvider(provider: ProviderId): Promise<void> {
+	await initializeProviderCustomizations();
+	if (!isProviderId(provider) || getCustomProviderRecord(provider) === undefined) {
+		throw new ProviderCustomizationError("provider_not_custom", `Provider ${provider} is not a custom provider.`);
+	}
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		delete draft.providers[provider];
+		delete draft.models[provider];
+		delete draft.excludedModelIds[provider];
+	});
+}
+
 export async function addCustomModel(input: AddCustomModelInput): Promise<void> {
 	await initializeProviderCustomizations();
 	const provider: ProviderId = input.provider;

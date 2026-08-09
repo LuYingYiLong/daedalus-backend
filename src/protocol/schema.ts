@@ -63,6 +63,20 @@ const providerModelRoutingSchema = z.object({
 	goalEvaluator: providerTaskModelRefSchema.nullable().optional()
 });
 
+const providerRequestJsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
+	z.string().max(16_000),
+	z.number().finite(),
+	z.boolean(),
+	z.null(),
+	z.array(providerRequestJsonValueSchema).max(512),
+	z.record(z.string().min(1).max(160), providerRequestJsonValueSchema)
+]));
+
+const providerRequestOverridesSchema = z.object({
+	headers: z.record(z.string().min(1).max(160), z.string().max(8_000)).optional(),
+	body: z.record(z.string().min(1).max(160), providerRequestJsonValueSchema).optional()
+}).strict();
+
 const providerModelCapabilitiesSchema = z.object({
 	imageInput: z.boolean().optional(),
 	videoInput: z.boolean().optional(),
@@ -552,8 +566,10 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			apiKey: z.string().min(1).nullable().optional(),
 			model: z.string().min(1).optional(),
 			baseUrl: z.string().min(1).max(1000).nullable().optional(),
+			enabled: z.boolean().optional(),
 			activate: z.boolean().optional(),
 			modelRouting: providerModelRoutingSchema.optional(),
+			requestOverrides: providerRequestOverridesSchema.nullable().optional(),
 		}),
 	}),
 	z.object({
@@ -611,6 +627,31 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			displayName: z.string().trim().min(1).max(80),
 			providerType: z.enum(["openai", "openai-responses", "anthropic"]),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.usage.get"),
+		params: z.object({
+			provider: providerIdSchema
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.setEnabled"),
+		params: z.object({
+			provider: providerIdSchema,
+			enabled: z.boolean()
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.custom.remove"),
+		params: z.object({
+			provider: providerIdSchema
+		}).strict()
 	}),
 	z.object({
 		type: z.literal("request"),

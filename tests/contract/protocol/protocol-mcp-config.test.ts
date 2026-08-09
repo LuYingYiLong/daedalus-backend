@@ -25,6 +25,29 @@ test("mcp.config.update schema accepts stdio and http updates", (): void => {
 
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
+		id: "provider-request-overrides",
+		method: "provider.config.set",
+		params: {
+			provider: "deepseek",
+			requestOverrides: {
+				headers: { "HTTP-Referer": "https://daedalus.example" },
+				body: { enable_thinking: false }
+			}
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-request-overrides-bad",
+		method: "provider.config.set",
+		params: {
+			provider: "deepseek",
+			requestOverrides: { body: ["not-an-object"] }
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
 		id: "mcp-update-http",
 		method: "mcp.config.update",
 		params: {
@@ -185,6 +208,46 @@ test("provider customization schemas accept valid fields and reject invalid capa
 			provider: "custom-demo",
 			id: "model-1",
 			displayName: "Model 1"
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-disable",
+		method: "provider.setEnabled",
+		params: {
+			provider: "deepseek",
+			enabled: false
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-config-enable",
+		method: "provider.config.set",
+		params: {
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			enabled: true,
+			activate: false
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-usage",
+		method: "provider.usage.get",
+		params: {
+			provider: "deepseek"
+		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-remove",
+		method: "provider.custom.remove",
+		params: {
+			provider: "custom-demo"
 		}
 	}).success, true);
 

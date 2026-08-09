@@ -549,6 +549,9 @@ function createProviderOptions(session: ClientSession, provider: ProviderId, mod
 	if (normalizedBaseUrl !== undefined) {
 		options.baseUrl = normalizedBaseUrl;
 	}
+	if (provider === session.activeProvider && session.providerRequestOverrides !== undefined) {
+		options.requestOverrides = session.providerRequestOverrides;
+	}
 	return options;
 }
 
@@ -586,6 +589,9 @@ export async function resolveGitCommitProviderOptions(
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(config.baseUrl);
 	if (normalizedBaseUrl !== undefined) {
 		options.baseUrl = normalizedBaseUrl;
+	}
+	if (config.requestOverrides !== undefined) {
+		options.requestOverrides = config.requestOverrides;
 	}
 	return options;
 }

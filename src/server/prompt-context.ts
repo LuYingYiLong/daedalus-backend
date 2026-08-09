@@ -136,6 +136,7 @@ import {
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
 import { logger } from "../logger.js";
+import { cloneProviderRequestOverrides } from "../providers/provider-request-overrides.js";
 
 function applyProviderConfigToSession(session: ClientSession, config: ProviderConfigWithSecret): void {
 	session.activeProvider = config.provider;
@@ -145,6 +146,7 @@ function applyProviderConfigToSession(session: ClientSession, config: ProviderCo
 
 	session.providerModel = config.model;
 	session.providerBaseUrl = normalizeConfiguredProviderBaseUrl(config.baseUrl);
+	session.providerRequestOverrides = cloneProviderRequestOverrides(config.requestOverrides);
 
 	session.modelProfile = resolveModelProfile(config.provider, config.model ?? getProviderDefaultModel(config.provider));
 }

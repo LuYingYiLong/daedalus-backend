@@ -208,6 +208,18 @@ export function createToolFailure(
 			details: { mcpErrorCode: ErrorCode.RequestTimeout }
 		};
 	}
+	if (getNumericErrorCode(error) === ErrorCode.InvalidParams) {
+		return {
+			code: "invalid_arguments",
+			category: "protocol",
+			message: error instanceof Error ? error.message : "The tool arguments are invalid.",
+			retryable: true,
+			artifactRefs: [...(context.artifactRefs ?? [])],
+			artifactFileRefs: context.artifactFileRefs,
+			sourceFolderId: context.sourceFolderId,
+			details: { mcpErrorCode: ErrorCode.InvalidParams }
+		};
+	}
 
 	const message: string = error instanceof Error ? error.message : typeof error === "string" ? error : "Tool execution failed";
 	const legacyFailure = LEGACY_EXACT_FAILURES.get(message);

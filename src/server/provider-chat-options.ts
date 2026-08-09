@@ -18,6 +18,9 @@ export function createProviderChatOptions(session: ClientSession, apiKey: string
 	if (normalizedBaseUrl !== undefined) {
 		options.baseUrl = normalizedBaseUrl;
 	}
+	if (session.providerRequestOverrides !== undefined) {
+		options.requestOverrides = session.providerRequestOverrides;
+	}
 
 	return options;
 }

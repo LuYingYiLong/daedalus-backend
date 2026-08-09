@@ -9,6 +9,7 @@ import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProvid
 import { parseAnthropicUsage } from "../usage/usage-parser.js";
 import { ProviderHttpError, ProviderIncompleteStreamError } from "./provider-resilience.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
+import { applyProviderRequestOverridesToFetchInit } from "./provider-request-overrides.js";
 
 export type AnthropicTextBlock = {
 	type: "text";
@@ -299,7 +300,7 @@ export async function createAnthropicMessage(
 	const startedAtMs: number = Date.now();
 	let response: Response;
 	try {
-		response = await fetch(createAnthropicEndpoint(options), requestInit);
+		response = await fetch(createAnthropicEndpoint(options), applyProviderRequestOverridesToFetchInit(requestInit, options.requestOverrides));
 	} catch (error: unknown) {
 		await recordProviderUsage({
 			options,
@@ -386,7 +387,7 @@ export async function* streamAnthropicMessage(
 	let finalUsage: NormalizedLlmUsage | null = null;
 	let response: Response;
 	try {
-		response = await fetch(createAnthropicEndpoint(options), requestInit);
+		response = await fetch(createAnthropicEndpoint(options), applyProviderRequestOverridesToFetchInit(requestInit, options.requestOverrides));
 	} catch (error: unknown) {
 		await recordProviderUsage({
 			options,

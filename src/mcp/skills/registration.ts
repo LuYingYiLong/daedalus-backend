@@ -7,6 +7,34 @@ import { resolveCatalogSkill } from "../../skills/catalog.js";
 import { isGlobalSkillWorkspace } from "../../skills/runtime.js";
 import type { SkillWorkspace } from "../../skills/types.js";
 
+export const SKILL_CREATION_SCOPES = ["project", "personal"] as const;
+
+export type SkillCreationScope = typeof SKILL_CREATION_SCOPES[number];
+
+const SKILL_CREATION_SCOPE_ALIASES: Readonly<Record<string, SkillCreationScope>> = {
+	project: "project",
+	workspace: "project",
+	repository: "project",
+	personal: "personal",
+	user: "personal",
+	global: "personal"
+};
+
+/**
+ * Normalizes a finite set of legacy or provider-facing scope aliases.
+ * Unknown values intentionally remain invalid and are rejected by Zod.
+ */
+export function normalizeSkillCreationScopeInput(value: unknown): unknown {
+	if (typeof value !== "string") {
+		return value;
+	}
+	return SKILL_CREATION_SCOPE_ALIASES[value.trim().toLowerCase()] ?? value;
+}
+
+export function resolveSkillCreationScope(scope: SkillCreationScope | undefined, workspace: SkillWorkspace): SkillCreationScope {
+	return scope ?? (isGlobalSkillWorkspace(workspace) ? "personal" : "project");
+}
+
 function asJsonResult(value: unknown): { content: Array<{ type: "text"; text: string }> } {
 	return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
 }
@@ -22,8 +50,12 @@ export function registerSkillTools(server: McpServer, workspace: SkillWorkspace)
 		return asJsonResult({ ref: skill.ref, name: skill.name, description: skill.description, activation: "automatic", instructions: skill.document!.body });
 	});
 
+	const skillScopeSchema = z.preprocess(
+		normalizeSkillCreationScopeInput,
+		z.enum(SKILL_CREATION_SCOPES).optional()
+	);
 	const proposalInput = z.object({
-		scope: z.enum(["project", "personal"]),
+		scope: skillScopeSchema,
 		slug: z.string().min(1).max(64),
 		skillMd: z.string().min(1).max(65536)
 	});
@@ -34,7 +66,8 @@ export function registerSkillTools(server: McpServer, workspace: SkillWorkspace)
 		title: "Propose Skill Creation",
 		description: "校验并预览新 skill，不写入磁盘。",
 		inputSchema: proposalInput
-	}, async ({ scope, slug, skillMd }) => {
+	}, async ({ scope: requestedScope, slug, skillMd }) => {
+		const scope: SkillCreationScope = resolveSkillCreationScope(requestedScope, workspace);
 		if (scope === "project" && isGlobalSkillWorkspace(workspace)) {
 			throw new Error("Project skill creation requires an active workspace.");
 		}
@@ -48,7 +81,8 @@ export function registerSkillTools(server: McpServer, workspace: SkillWorkspace)
 		title: "Create Skill",
 		description: "创建项目或个人 SKILL.md。该写操作必须经过审批，且不会覆盖已有目录。",
 		inputSchema: proposalInput.extend({ proposalToken: z.string().length(64) })
-	}, async ({ scope, slug, skillMd, proposalToken }) => {
+	}, async ({ scope: requestedScope, slug, skillMd, proposalToken }) => {
+		const scope: SkillCreationScope = resolveSkillCreationScope(requestedScope, workspace);
 		if (scope === "project" && isGlobalSkillWorkspace(workspace)) {
 			throw new Error("Project skill creation requires an active workspace.");
 		}

@@ -49,6 +49,18 @@ test("MCP request timeout uses the structured JSON-RPC code as an environment fa
 	assert.equal(failure.details?.mcpErrorCode, ErrorCode.RequestTimeout);
 });
 
+test("MCP invalid parameters stay tool-scoped protocol failures", (): void => {
+	const failure = createToolFailure(new McpError(
+		ErrorCode.InvalidParams,
+		'Invalid option: expected one of "project"|"personal" at scope'
+	));
+
+	assert.equal(failure.code, "invalid_arguments");
+	assert.equal(failure.category, "protocol");
+	assert.equal(failure.retryable, true);
+	assert.equal(failure.details?.mcpErrorCode, ErrorCode.InvalidParams);
+});
+
 test("serialized environment failures round-trip without text classification", (): void => {
 	const content = serializeToolFailure({
 		code: "godot_runtime_unavailable",

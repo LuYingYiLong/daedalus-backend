@@ -25,7 +25,12 @@ import {
 	createOpenAIResponsesClient,
 	resolveOpenAIResponsesModel
 } from "./openai-responses-client.js";
-import { createToolResultLimitFallback, createToolResultLimitReason, fitToolResultContent } from "./tool-result-budget.js";
+import {
+	compactToolResultEntries,
+	createToolResultLimitFallback,
+	createToolResultLimitReason,
+	fitToolResultContent
+} from "./tool-result-budget.js";
 import {
 	createToolBudgetRequiredResult,
 	getContinuationMaxSteps,
@@ -65,9 +70,7 @@ type ResponsesAssistantMessage = {
 };
 
 type AppendToolResultItemsResult = {
-	addedChars: number;
-	limitReached: boolean;
-	reason: string | null;
+	totalToolResultChars: number;
 };
 
 function shouldRequireToolCallOnStep(params: AiChatParams, step: number, startStep: number): boolean {
@@ -168,33 +171,61 @@ function appendResponseOutputItems(inputItems: ResponseInputItem[], outputItems:
 	}
 }
 
+function isFunctionCallOutputItem(item: ResponseInputItem): boolean {
+	return (item as { type?: unknown }).type === "function_call_output";
+}
+
+function compactOpenAIResponsesToolResults(inputItems: ResponseInputItem[]): number {
+	const toolResultItems: ResponseInputItem[] = inputItems.filter(isFunctionCallOutputItem);
+	if (toolResultItems.length === 0) {
+		return 0;
+	}
+
+	const compacted = compactToolResultEntries(
+		toolResultItems,
+		(item: ResponseInputItem): string => {
+			const output: unknown = (item as { output?: unknown }).output;
+			return typeof output === "string" ? output : JSON.stringify(output);
+		},
+		(item: ResponseInputItem, output: string): ResponseInputItem => ({
+			...(item as unknown as Record<string, unknown>),
+			output
+		}) as ResponseInputItem
+	);
+	if (compacted.compactedCount === 0) {
+		return compacted.totalChars;
+	}
+
+	let toolResultIndex: number = 0;
+	for (let index: number = 0; index < inputItems.length; index += 1) {
+		if (isFunctionCallOutputItem(inputItems[index]!)) {
+			inputItems[index] = compacted.entries[toolResultIndex]!;
+			toolResultIndex += 1;
+		}
+	}
+	return compacted.totalChars;
+}
+
 function appendToolResultItems(
 	inputItems: ResponseInputItem[],
 	toolResults: Awaited<ReturnType<typeof dispatchToolCalls>>,
 	currentTotalChars: number,
 	maxTotalChars: number
 ): AppendToolResultItemsResult {
-	let addedChars: number = 0;
-	let limitReached: boolean = false;
-	let reason: string | null = null;
+	let totalToolResultChars: number = currentTotalChars;
 	for (const result of toolResults) {
+		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 		const content: string = typeof result.content === "string" ? result.content : JSON.stringify(result.content);
-		const budgetedResult = fitToolResultContent(content, currentTotalChars + addedChars, maxTotalChars);
-		addedChars += budgetedResult.chars;
+		const budgetedResult = fitToolResultContent(content, totalToolResultChars, maxTotalChars);
 		inputItems.push({
 			type: "function_call_output",
 			call_id: result.tool_call_id,
 			output: budgetedResult.content
 		} as ResponseInputItem);
-		if (budgetedResult.limitReached) {
-			limitReached = true;
-			reason = budgetedResult.reason ?? createToolResultLimitReason(currentTotalChars + addedChars, maxTotalChars);
-		}
+		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 	}
 	return {
-		addedChars,
-		limitReached,
-		reason
+		totalToolResultChars
 	};
 }
 
@@ -471,6 +502,7 @@ async function runResponsesAgentLoop(
 	initialToolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<ProviderAgentResult> {
 	let totalToolResultChars: number = initialToolResultChars;
+	totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const tools: Tool[] = convertToolDefinitions(chatTools);
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(chatTools);
@@ -552,9 +584,9 @@ async function runResponsesAgentLoop(
 				}
 			}
 			const appendResult: AppendToolResultItemsResult = appendToolResultItems(inputItems, toolResults, totalToolResultChars, maxTotalToolResultChars);
-			totalToolResultChars += appendResult.addedChars;
-			if (appendResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
-				const reason: string = appendResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+			totalToolResultChars = appendResult.totalToolResultChars;
+			if (totalToolResultChars >= maxTotalToolResultChars) {
+				const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 				if (shouldPauseForToolBudget(gateway)) {
 					return createToolBudgetRequiredResult({
 						limitKind: "tool_result_chars",
@@ -800,16 +832,17 @@ export async function continueOpenAIResponsesAgent(
 		: toolCatalog.getDefinitions();
 	const inputItems: ResponseInputItem[] = [...continuation.inputItems];
 	const maxTotalToolResultChars: number = getContinuationToolResultCharLimit(continuation);
-	const budgetedResult = fitToolResultContent(approvedToolResult.content, continuation.totalToolResultChars, maxTotalToolResultChars);
-	const totalToolResultChars: number = continuation.totalToolResultChars + budgetedResult.chars;
+	let totalToolResultChars: number = compactOpenAIResponsesToolResults(inputItems);
+	const budgetedResult = fitToolResultContent(approvedToolResult.content, totalToolResultChars, maxTotalToolResultChars);
 	inputItems.push({
 		type: "function_call_output",
 		call_id: approvedToolResult.toolCallId,
 		output: budgetedResult.content
 	} as ResponseInputItem);
+	totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 
-	if (budgetedResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+	if (totalToolResultChars >= maxTotalToolResultChars) {
+		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 		if (shouldPauseForToolBudget(gateway)) {
 			return createToolBudgetRequiredResult({
 				limitKind: "tool_result_chars",
@@ -882,16 +915,17 @@ export async function continueOpenAIResponsesAgentStreaming(
 		: toolCatalog.getDefinitions();
 	const inputItems: ResponseInputItem[] = [...continuation.inputItems];
 	const maxTotalToolResultChars: number = getContinuationToolResultCharLimit(continuation);
-	const budgetedResult = fitToolResultContent(approvedToolResult.content, continuation.totalToolResultChars, maxTotalToolResultChars);
-	const totalToolResultChars: number = continuation.totalToolResultChars + budgetedResult.chars;
+	let totalToolResultChars: number = compactOpenAIResponsesToolResults(inputItems);
+	const budgetedResult = fitToolResultContent(approvedToolResult.content, totalToolResultChars, maxTotalToolResultChars);
 	inputItems.push({
 		type: "function_call_output",
 		call_id: approvedToolResult.toolCallId,
 		output: budgetedResult.content
 	} as ResponseInputItem);
+	totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 
-	if (budgetedResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+	if (totalToolResultChars >= maxTotalToolResultChars) {
+		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 		if (shouldPauseForToolBudget(gateway)) {
 			return createToolBudgetRequiredResult({
 				limitKind: "tool_result_chars",
@@ -961,17 +995,19 @@ async function continueOpenAIResponsesAgentAfterToolBudgetInternal(
 	const tools = allowedToolNames !== undefined
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
+	const inputItems: ResponseInputItem[] = [...continuation.inputItems];
+	const totalToolResultChars: number = compactOpenAIResponsesToolResults(inputItems);
 	return runResponsesAgentLoop(
 		params,
 		options,
 		continuation.instructions,
-		[...continuation.inputItems],
+		inputItems,
 		mcpHost,
 		gateway,
 		tools,
 		continuation.nextStep,
 		getContinuedMaxSteps(params, continuation),
-		continuation.totalToolResultChars,
+		totalToolResultChars,
 		getContinuedToolResultCharLimit(continuation),
 		streamAssistant,
 		onEvent,

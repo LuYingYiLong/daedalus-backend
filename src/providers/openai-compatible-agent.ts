@@ -27,7 +27,12 @@ import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { containsDsmlToolCalls } from "./deepseek-dsml-tools.js";
 import { containsLooseToolCalls, isKnownLooseToolTagName, isPotentialLooseToolTagName, normalizeKnownToolName } from "./deepseek-loose-tools.js";
 import type { ApprovedToolResult, ChatCompletionsAgentContinuation, ProviderAgentResult } from "./agent-types.js";
-import { createToolResultLimitFallback, createToolResultLimitReason, fitToolResultContent } from "./tool-result-budget.js";
+import {
+	compactToolResultEntries,
+	createToolResultLimitFallback,
+	createToolResultLimitReason,
+	fitToolResultContent
+} from "./tool-result-budget.js";
 import { getProviderEndpointConfig } from "./provider-registry.js";
 import {
 	createToolBudgetRequiredResult,
@@ -1171,6 +1176,43 @@ function hasToolResultMessages(messages: readonly ChatCompletionMessageParam[]):
 	});
 }
 
+function isToolResultMessage(message: ChatCompletionMessageParam): message is ChatCompletionToolMessageParam {
+	return (message as { role?: unknown }).role === "tool";
+}
+
+/**
+ * Keeps tool-call IDs intact while replacing only older tool output with a
+ * bounded evidence capsule. This runs before another provider turn so the
+ * agent can continue instead of being forced into a no-tools final answer.
+ */
+function compactOpenAICompatibleToolResults(messages: ChatCompletionMessageParam[]): number {
+	const toolMessages: ChatCompletionToolMessageParam[] = messages.filter(isToolResultMessage);
+	if (toolMessages.length === 0) {
+		return 0;
+	}
+
+	const compacted = compactToolResultEntries(
+		toolMessages,
+		(message: ChatCompletionToolMessageParam): string => extractTextContent(message.content),
+		(message: ChatCompletionToolMessageParam, content: string): ChatCompletionToolMessageParam => ({
+			...message,
+			content
+		})
+	);
+	if (compacted.compactedCount === 0) {
+		return compacted.totalChars;
+	}
+
+	let toolMessageIndex: number = 0;
+	for (let index: number = 0; index < messages.length; index += 1) {
+		if (isToolResultMessage(messages[index]!)) {
+			messages[index] = compacted.entries[toolMessageIndex] as ChatCompletionMessageParam;
+			toolMessageIndex += 1;
+		}
+	}
+	return compacted.totalChars;
+}
+
 async function createFinalAnswer(
 	client: OpenAI,
 	params: AiChatParams,
@@ -1264,6 +1306,9 @@ async function runAgentLoop(
 	initialToolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<OpenAICompatibleAgentResult> {
 	let totalToolResultChars: number = initialToolResultChars;
+	if (hasToolResultMessages(messages)) {
+		totalToolResultChars = compactOpenAICompatibleToolResults(messages);
+	}
 	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const aliasContext: ToolNameAliasContext = createToolNameAliasContext(options, tools);
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(tools);
@@ -1552,26 +1597,23 @@ async function runAgentLoop(
 			throw error;
 		}
 
-		let toolResultLimitReason: string | null = null;
 		for (const result of toolResults) {
 			if (result.imageReferences !== undefined) {
 				toolImageReferences.push(...result.imageReferences);
 			}
+			totalToolResultChars = compactOpenAICompatibleToolResults(messages);
 			const contentText: string = extractTextContent(result.content);
 			const budgetedResult = fitToolResultContent(contentText, totalToolResultChars, maxTotalToolResultChars);
-			totalToolResultChars += budgetedResult.chars;
 			const { imageReferences: _imageReferences, ...toolMessage } = result;
 			messages.push({
 				...toolMessage,
 				content: budgetedResult.content
 			});
-			if (budgetedResult.limitReached) {
-				toolResultLimitReason = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars);
-			}
+			totalToolResultChars = compactOpenAICompatibleToolResults(messages);
 		}
 
-		if (toolResultLimitReason !== null || totalToolResultChars >= maxTotalToolResultChars) {
-			const reason: string = toolResultLimitReason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+		if (totalToolResultChars >= maxTotalToolResultChars) {
+			const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 			if (shouldPauseForToolBudget(gateway)) {
 				return createToolBudgetRequiredResult({
 					limitKind: "tool_result_chars",
@@ -1729,18 +1771,19 @@ export async function continueOpenAICompatibleAgent(
 	const aliasContext: ToolNameAliasContext = createToolNameAliasContext(options, tools);
 	const messages: ChatCompletionMessageParam[] = [...continuation.messages];
 	const maxTotalToolResultChars: number = getContinuationToolResultCharLimit(continuation);
-	const budgetedResult = fitToolResultContent(approvedToolResult.content, continuation.totalToolResultChars, maxTotalToolResultChars);
+	let totalToolResultChars: number = compactOpenAICompatibleToolResults(messages);
+	const budgetedResult = fitToolResultContent(approvedToolResult.content, totalToolResultChars, maxTotalToolResultChars);
 	const toolMessage: ChatCompletionToolMessageParam = {
 		role: "tool",
 		tool_call_id: approvedToolResult.toolCallId,
 		content: budgetedResult.content
 	};
-	const totalToolResultChars: number = continuation.totalToolResultChars + budgetedResult.chars;
 
 	messages.push(toolMessage);
+	totalToolResultChars = compactOpenAICompatibleToolResults(messages);
 
-	if (budgetedResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+	if (totalToolResultChars >= maxTotalToolResultChars) {
+		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 		if (shouldPauseForToolBudget(gateway)) {
 			return createToolBudgetRequiredResult({
 				limitKind: "tool_result_chars",
@@ -1817,18 +1860,19 @@ export async function continueOpenAICompatibleAgentStreaming(
 	const aliasContext: ToolNameAliasContext = createToolNameAliasContext(options, tools);
 	const messages: ChatCompletionMessageParam[] = [...continuation.messages];
 	const maxTotalToolResultChars: number = getContinuationToolResultCharLimit(continuation);
-	const budgetedResult = fitToolResultContent(approvedToolResult.content, continuation.totalToolResultChars, maxTotalToolResultChars);
+	let totalToolResultChars: number = compactOpenAICompatibleToolResults(messages);
+	const budgetedResult = fitToolResultContent(approvedToolResult.content, totalToolResultChars, maxTotalToolResultChars);
 	const toolMessage: ChatCompletionToolMessageParam = {
 		role: "tool",
 		tool_call_id: approvedToolResult.toolCallId,
 		content: budgetedResult.content
 	};
-	const totalToolResultChars: number = continuation.totalToolResultChars + budgetedResult.chars;
 
 	messages.push(toolMessage);
+	totalToolResultChars = compactOpenAICompatibleToolResults(messages);
 
-	if (budgetedResult.limitReached || totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+	if (totalToolResultChars >= maxTotalToolResultChars) {
+		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 		if (shouldPauseForToolBudget(gateway)) {
 			return createToolBudgetRequiredResult({
 				limitKind: "tool_result_chars",
@@ -1905,17 +1949,19 @@ async function continueOpenAICompatibleAgentAfterToolBudgetInternal(
 	const tools = allowedToolNames !== undefined
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
+	const messages: ChatCompletionMessageParam[] = [...continuation.messages];
+	const totalToolResultChars: number = compactOpenAICompatibleToolResults(messages);
 	return runAgentLoop(
 		client,
 		params,
 		options,
-		[...continuation.messages],
+		messages,
 		mcpHost,
 		gateway,
 		tools,
 		continuation.nextStep,
 		getContinuedMaxSteps(params, continuation),
-		continuation.totalToolResultChars,
+		totalToolResultChars,
 		getContinuedToolResultCharLimit(continuation),
 		streamAssistant,
 		onEvent,

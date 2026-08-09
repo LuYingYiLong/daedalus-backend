@@ -11,7 +11,12 @@ import { ExecutionDecisionSignal } from "../tools/execution-control.js";
 import { ChatAnswerSignal } from "../tools/chat-completion-control.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import type { ApprovedToolResult, AnthropicMessagesAgentContinuation, ProviderAgentResult } from "./agent-types.js";
-import { createToolResultLimitFallback, createToolResultLimitReason, fitToolResultContent } from "./tool-result-budget.js";
+import {
+	compactToolResultEntries,
+	createToolResultLimitFallback,
+	createToolResultLimitReason,
+	fitToolResultContent
+} from "./tool-result-budget.js";
 import type { ProviderChatOptions } from "./provider-types.js";
 import {
 	convertChatToolsToAnthropicTools,
@@ -91,30 +96,13 @@ function createAnthropicToolResultBlock(result: ChatCompletionToolMessageParam):
 	};
 }
 
-function createApprovedToolResultBlock(result: ApprovedToolResult, totalToolResultChars: number, maxTotalToolResultChars: number): {
-	block: AnthropicToolResultBlock;
-	totalToolResultChars: number;
-	limitReached: boolean;
-	reason?: string | undefined;
-} {
+function createApprovedToolResultBlock(result: ApprovedToolResult, totalToolResultChars: number, maxTotalToolResultChars: number): AnthropicToolResultBlock {
 	const budgetedResult = fitToolResultContent(result.content, totalToolResultChars, maxTotalToolResultChars);
-	const created: {
-		block: AnthropicToolResultBlock;
-		totalToolResultChars: number;
-		limitReached: boolean;
-	} = {
-		block: {
-			type: "tool_result",
-			tool_use_id: result.toolCallId,
-			content: budgetedResult.content
-		},
-		totalToolResultChars: totalToolResultChars + budgetedResult.chars,
-		limitReached: budgetedResult.limitReached
+	return {
+		type: "tool_result",
+		tool_use_id: result.toolCallId,
+		content: budgetedResult.content
 	};
-	if (budgetedResult.reason !== null) {
-		return { ...created, reason: budgetedResult.reason };
-	}
-	return created;
 }
 
 function createAssistantMessage(content: string, toolUseBlocks: readonly AnthropicToolUseBlock[]): AnthropicMessageParam {
@@ -150,6 +138,48 @@ function createFinalAnswerMessage(reason: string): AnthropicMessageParam {
 
 function extractToolResultText(result: ChatCompletionToolMessageParam): string {
 	return typeof result.content === "string" ? result.content : JSON.stringify(result.content);
+}
+
+function compactAnthropicToolResults(messages: AnthropicMessageParam[]): number {
+	const resultBlocks: AnthropicToolResultBlock[] = [];
+	for (const message of messages) {
+		if (!Array.isArray(message.content)) {
+			continue;
+		}
+		for (const block of message.content) {
+			if (block.type === "tool_result") {
+				resultBlocks.push(block);
+			}
+		}
+	}
+	if (resultBlocks.length === 0) {
+		return 0;
+	}
+
+	const compacted = compactToolResultEntries(
+		resultBlocks,
+		(block: AnthropicToolResultBlock): string => block.content,
+		(block: AnthropicToolResultBlock, content: string): AnthropicToolResultBlock => ({ ...block, content })
+	);
+	if (compacted.compactedCount === 0) {
+		return compacted.totalChars;
+	}
+
+	let resultIndex: number = 0;
+	for (const message of messages) {
+		if (!Array.isArray(message.content)) {
+			continue;
+		}
+		message.content = message.content.map((block: AnthropicContentBlock): AnthropicContentBlock => {
+			if (block.type !== "tool_result") {
+				return block;
+			}
+			const replacement: AnthropicToolResultBlock = compacted.entries[resultIndex]!;
+			resultIndex += 1;
+			return replacement;
+		});
+	}
+	return compacted.totalChars;
 }
 
 function createAnthropicTools(tools: readonly ChatCompletionTool[]): AnthropicToolDefinition[] {
@@ -269,6 +299,7 @@ async function runAgentLoop(
 	initialToolImageReferences: readonly ProviderToolImageReference[] = []
 ): Promise<AnthropicCompatibleAgentResult> {
 	let totalToolResultChars: number = initialToolResultChars;
+	totalToolResultChars = compactAnthropicToolResults(messages);
 	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const anthropicTools: AnthropicToolDefinition[] = createAnthropicTools(tools);
 	let imageFallbackAttempted: boolean = false;
@@ -377,26 +408,27 @@ async function runAgentLoop(
 			throw error;
 		}
 
-		const resultBlocks: AnthropicToolResultBlock[] = [];
-		let toolResultLimitReason: string | null = null;
+		const resultMessage: AnthropicMessageParam = createToolResultMessage([]);
+		messages.push(resultMessage);
 		for (const result of toolResults) {
 			if (result.imageReferences !== undefined) {
 				toolImageReferences.push(...result.imageReferences);
 			}
+			totalToolResultChars = compactAnthropicToolResults(messages);
 			const budgetedResult = fitToolResultContent(extractToolResultText(result), totalToolResultChars, maxTotalToolResultChars);
-			totalToolResultChars += budgetedResult.chars;
-			resultBlocks.push(createAnthropicToolResultBlock({
+			if (!Array.isArray(resultMessage.content)) {
+				throw new Error("Anthropic tool result message has invalid content");
+			}
+			resultMessage.content.push(createAnthropicToolResultBlock({
 				...result,
 				content: budgetedResult.content
 			}));
-			if (budgetedResult.limitReached) {
-				toolResultLimitReason = budgetedResult.reason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-			}
+			totalToolResultChars = compactAnthropicToolResults(messages);
 		}
-		messages.push(createToolResultMessage(resultBlocks));
+		totalToolResultChars = compactAnthropicToolResults(messages);
 
-		if (toolResultLimitReason !== null || totalToolResultChars >= maxTotalToolResultChars) {
-			const reason: string = toolResultLimitReason ?? createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
+		if (totalToolResultChars >= maxTotalToolResultChars) {
+			const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 			if (shouldPauseForToolBudget(gateway)) {
 				return createToolBudgetRequiredResult({
 					limitKind: "tool_result_chars",
@@ -565,26 +597,26 @@ async function continueAnthropicCompatibleAgentInternal(
 	streamAssistant: boolean
 ): Promise<AnthropicCompatibleAgentResult> {
 	const maxTotalToolResultChars: number = getContinuationToolResultCharLimit(continuation);
-	const approvedResult = createApprovedToolResultBlock(approvedToolResult, continuation.totalToolResultChars, maxTotalToolResultChars);
-	const messages: AnthropicMessageParam[] = [
-		...continuation.messages,
-		createToolResultMessage([approvedResult.block])
-	];
+	const messages: AnthropicMessageParam[] = [...continuation.messages];
+	let totalToolResultChars: number = compactAnthropicToolResults(messages);
+	const approvedResult: AnthropicToolResultBlock = createApprovedToolResultBlock(approvedToolResult, totalToolResultChars, maxTotalToolResultChars);
+	messages.push(createToolResultMessage([approvedResult]));
+	totalToolResultChars = compactAnthropicToolResults(messages);
 
-	if (approvedResult.limitReached || approvedResult.totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = approvedResult.reason ?? createToolResultLimitReason(approvedResult.totalToolResultChars, maxTotalToolResultChars);
+	if (totalToolResultChars >= maxTotalToolResultChars) {
+		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
 		if (shouldPauseForToolBudget(gateway)) {
 			return createToolBudgetRequiredResult({
 				limitKind: "tool_result_chars",
 				reason,
 				usedSteps: continuation.nextStep,
 				maxSteps: getContinuationMaxSteps(params, continuation),
-				totalToolResultChars: approvedResult.totalToolResultChars,
+				totalToolResultChars,
 				toolResultCharLimit: maxTotalToolResultChars,
 				continuation: {
 					...continuation,
 					messages,
-					totalToolResultChars: approvedResult.totalToolResultChars,
+					totalToolResultChars,
 					maxSteps: getContinuationMaxSteps(params, continuation),
 					toolResultCharLimit: maxTotalToolResultChars
 				}
@@ -615,7 +647,7 @@ async function continueAnthropicCompatibleAgentInternal(
 		getTools(allowedToolNames, toolContext),
 		continuation.nextStep,
 		getContinuationMaxSteps(params, continuation),
-		approvedResult.totalToolResultChars,
+		totalToolResultChars,
 		maxTotalToolResultChars,
 		streamAssistant,
 		onEvent,
@@ -671,17 +703,19 @@ async function continueAnthropicCompatibleAgentAfterToolBudgetInternal(
 	toolContext: ToolExecutionContext | undefined,
 	streamAssistant: boolean
 ): Promise<AnthropicCompatibleAgentResult> {
+	const messages: AnthropicMessageParam[] = [...continuation.messages];
+	const totalToolResultChars: number = compactAnthropicToolResults(messages);
 	return runAgentLoop(
 		params,
 		options,
-		[...continuation.messages],
+		messages,
 		continuation.systemPrompt,
 		mcpHost,
 		gateway,
 		getTools(allowedToolNames, toolContext),
 		continuation.nextStep,
 		getContinuedMaxSteps(params, continuation),
-		continuation.totalToolResultChars,
+		totalToolResultChars,
 		getContinuedToolResultCharLimit(continuation),
 		streamAssistant,
 		onEvent,

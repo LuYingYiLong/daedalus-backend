@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	compactToolResultEntries,
 	createToolResultLimitFallback,
 	createToolResultLimitReason,
 	fitToolResultContent
@@ -41,6 +42,46 @@ test("tool result limit fallback returns a usable final response", (): void => {
 
 	assert.match(fallback, /读取范围已达到安全上限/u);
 	assert.match(fallback, /工具结果总量达到 48001 字符/u);
+});
+
+test("tool context compaction preserves recent raw results and stable result identities", (): void => {
+	const entries: Array<{ id: string; content: string }> = Array.from(
+		{ length: 6 },
+		(_value: unknown, index: number): { id: string; content: string } => ({
+			id: `call-${index + 1}`,
+			content: `${index + 1}: ${"x".repeat(2_000)}`
+		})
+	);
+
+	const compacted = compactToolResultEntries(
+		entries,
+		(entry: { id: string; content: string }): string => entry.content,
+		(entry: { id: string; content: string }, content: string): { id: string; content: string } => ({ ...entry, content })
+	);
+
+	assert.equal(compacted.compactedCount, 4);
+	assert.deepEqual(compacted.entries.map((entry: { id: string; content: string }): string => entry.id), entries.map((entry: { id: string; content: string }): string => entry.id));
+	assert.match(compacted.entries[0]!.content, /^\[\[daedalus_tool_context_compacted\]\]/u);
+	assert.ok(compacted.entries[0]!.content.length <= 96);
+	assert.equal(compacted.entries[4]!.content, entries[4]!.content);
+	assert.equal(compacted.entries[5]!.content, entries[5]!.content);
+});
+
+test("tool context compaction does not rewrite a short recent-only result set", (): void => {
+	const entries: Array<{ id: string; content: string }> = [
+		{ id: "call-1", content: "one" },
+		{ id: "call-2", content: "two" },
+		{ id: "call-3", content: "three" }
+	];
+	const compacted = compactToolResultEntries(
+		entries,
+		(entry: { id: string; content: string }): string => entry.content,
+		(entry: { id: string; content: string }, content: string): { id: string; content: string } => ({ ...entry, content })
+	);
+
+	assert.equal(compacted.compactedCount, 0);
+	assert.deepEqual(compacted.entries, entries);
+	assert.equal(compacted.totalChars, 11);
 });
 
 test("one oversized chat read cannot consume the entire final-answer budget", (): void => {

@@ -538,6 +538,58 @@ test("timeline navigation index returns every user turn with a compact preview a
 	});
 });
 
+test("timeline navigation index uses canonical offsets for merged Goal cycles", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Goal navigation index");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "start the goal",
+			requestId: "request-goal-root",
+			createdAt: "2026-08-01T00:00:00.000Z"
+		});
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "follow-up turn",
+			requestId: "request-follow-up",
+			createdAt: "2026-08-01T00:00:03.000Z"
+		});
+		await store.appendSessionEvent(metadata.id, "goal-a:cycle:1", "agent.run.state", {
+			goalId: "goal-a",
+			rootRequestId: "request-goal-root",
+			stage: "completed"
+		});
+		await store.appendSessionEvent(metadata.id, "goal-a:cycle:2", "agent.run.state", {
+			goalId: "goal-a",
+			rootRequestId: "request-goal-root",
+			stage: "completed"
+		});
+
+		const { getSessionDatabase } = await import("../../../src/session/session-database.js");
+		const db = await getSessionDatabase();
+		db.prepare("UPDATE session_events SET created_at = ? WHERE session_id = ? AND request_id = ?")
+			.run("2026-08-01T00:00:01.000Z", metadata.id, "goal-a:cycle:1");
+		db.prepare("UPDATE session_events SET created_at = ? WHERE session_id = ? AND request_id = ?")
+			.run("2026-08-01T00:00:02.000Z", metadata.id, "goal-a:cycle:2");
+
+		const page = await store.openSessionRecentTimeline(metadata.id, 100);
+		const index = await store.getSessionTimelineNavigationIndex(metadata.id);
+		const renderedUserBlocks = page.timelineBlocks
+			.map((block, blockOffset) => ({ block, blockOffset }))
+			.filter(({ block }) => block.type === "user");
+
+		assert.equal(index.blockCount, page.blockCount);
+		assert.deepEqual(index.entries.map((entry) => ({
+			entryId: entry.entryId,
+			requestId: entry.requestId,
+			blockOffset: entry.blockOffset
+		})), renderedUserBlocks.map(({ block, blockOffset }) => ({
+			entryId: block.id,
+			requestId: block.requestId,
+			blockOffset
+		})));
+	});
+});
+
 test("workspace deletion reassigns every session kind to the most specific remaining project", async (): Promise<void> => {
 	await withTempAppData(async (store, appDataDir): Promise<void> => {
 		const broadRoot: string = path.join(appDataDir, "projects");

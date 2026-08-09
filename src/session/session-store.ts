@@ -719,49 +719,26 @@ export async function openSessionRecentTimeline(sessionId: string, limit: number
 	return createTimelinePage(stored, Math.max(0, blockCount - limit), limit);
 }
 
-/** Returns the complete, lightweight user-turn index without hydrating assistant timeline content. */
+/** Returns user-turn anchors from the same canonical block sequence used by timeline pages. */
 export async function getSessionTimelineNavigationIndex(sessionId: string): Promise<SessionTimelineNavigationIndex> {
 	const safeSessionId: string = assertSafeSessionId(sessionId);
-	const db: DatabaseSync = await getSessionDatabase();
-	rowMetadata(
-		db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ? AND archived_at IS NULL").get(safeSessionId) as Record<string, unknown> | undefined,
-		safeSessionId
-	);
-	const blockIndex: TimelineBlockIndex[] | null = buildTimelineBlockIndex(db, safeSessionId);
-	if (blockIndex === null) {
-		throw new Error(`Timeline index is unavailable for session: ${safeSessionId}`);
-	}
-	const userRows = db.prepare(`
-		SELECT request_id, created_at, payload_json
-		FROM messages
-		WHERE session_id = ? AND role = 'user'
-		ORDER BY sequence
-	`).all(safeSessionId) as Record<string, unknown>[];
-	const userMessages = new Map<string, StoredMessage>();
-	for (const row of userRows) {
-		const message: StoredMessage = parseSqlJson<StoredMessage>(row.payload_json);
-		userMessages.set(String(row.request_id), message);
-	}
-
+	const stored: StoredSession = await openSession(safeSessionId);
+	const timeline: ReturnType<typeof buildCanonicalTimelineBlocks> = getTimelineBuildResult(stored);
 	const entries: SessionTimelineNavigationEntry[] = [];
-	for (let blockOffset: number = 0; blockOffset < blockIndex.length; blockOffset += 1) {
-		const block: TimelineBlockIndex = blockIndex[blockOffset]!;
+	for (let blockOffset: number = 0; blockOffset < timeline.blocks.length; blockOffset += 1) {
+		const block: TimelineBlock = timeline.blocks[blockOffset]!;
 		if (block.type !== "user") {
 			continue;
 		}
-		const message: StoredMessage | undefined = userMessages.get(block.requestId);
-		if (message === undefined) {
-			continue;
-		}
 		entries.push({
-			entryId: `message:${block.requestId}:user:${message.createdAt}`,
+			entryId: block.id,
 			requestId: block.requestId,
 			blockOffset,
-			sentAtUtc: message.createdAt,
-			preview: createTimelineNavigationPreview(message.content)
+			sentAtUtc: block.sentAtUtc,
+			preview: createTimelineNavigationPreview(block.content)
 		});
 	}
-	return { sessionId: safeSessionId, blockCount: blockIndex.length, entries };
+	return { sessionId: safeSessionId, blockCount: timeline.blocks.length, entries };
 }
 
 export async function openSessionTimelinePage(sessionId: string, beforeOffset: number, limit: number): Promise<StoredSessionTimelinePage> {

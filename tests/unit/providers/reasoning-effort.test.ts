@@ -26,7 +26,14 @@ test("reasoning efforts are exposed only for adjustable catalog models", (): voi
 			{ id: "max", fallback: "max" }
 		]
 	);
-	assert.equal(getProviderFallbackModels("moonshot").find((model) => model.id === "kimi-k3")?.capabilities.reasoningEfforts, undefined);
+	assert.deepEqual(
+		getProviderFallbackModels("moonshot").find((model) => model.id === "kimi-k3")?.capabilities.reasoningEfforts,
+		[
+			{ id: "low", fallback: "low" },
+			{ id: "high", fallback: "high" },
+			{ id: "max", fallback: "max", default: true }
+		]
+	);
 });
 
 test("reasoning effort normalizes model-specific strength during a model switch", (): void => {
@@ -39,7 +46,8 @@ test("reasoning effort normalizes model-specific strength during a model switch"
 		resolveReasoningEffortForModelChange("openai", "gpt-5.6-sol", "medium", "deepseek", "deepseek-v4-pro"),
 		"high"
 	);
-	assert.equal(resolveReasoningEffort("moonshot", "kimi-k3", "high"), undefined);
+	assert.equal(resolveReasoningEffort("moonshot", "kimi-k3", "high"), "high");
+	assert.equal(resolveReasoningEffort("moonshot", "kimi-k3", undefined), "max");
 });
 
 test("provider request builders forward only supported reasoning parameters", (): void => {
@@ -73,7 +81,8 @@ test("provider request builders forward only supported reasoning parameters", ()
 		messages: []
 	} as unknown as ChatCompletionCreateParamsBase;
 	applyChatOptions(kimiRequest, params, { provider: "moonshot", apiKey: "test", model: "kimi-k3" });
-	assert.equal("reasoning_effort" in (kimiRequest as unknown as Record<string, unknown>), false);
+	assert.equal((kimiRequest as unknown as Record<string, unknown>).reasoning_effort, "max");
+	assert.equal("thinking" in (kimiRequest as unknown as Record<string, unknown>), false);
 });
 
 test("auxiliary provider requests can disable reasoning without changing model defaults", (): void => {

@@ -34,7 +34,9 @@ export function resolveReasoningEffort(
 			return exact.id;
 		}
 	}
-	return findOptionByFallback(options, DEFAULT_REASONING_EFFORT)?.id ?? options[0]?.id;
+	return options.find((option: ProviderReasoningEffortOption): boolean => option.default === true)?.id
+		?? findOptionByFallback(options, DEFAULT_REASONING_EFFORT)?.id
+		?? options[0]?.id;
 }
 
 /** Maps a model-specific level such as xhigh to the closest supported level on the next model. */

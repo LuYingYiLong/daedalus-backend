@@ -42,7 +42,13 @@
     "maxOutputTokens": 131072,
     "capabilities": {
       "imageInput": true,
+      "videoInput": true,
       "reasoning": true,
+      "reasoningEfforts": [
+        { "id": "low", "fallback": "low" },
+        { "id": "high", "fallback": "high" },
+        { "id": "max", "fallback": "max", "default": true }
+      ],
       "tools": true,
       "vision": true
     },
@@ -56,7 +62,11 @@
     "contextWindowTokens": 256000,
     "maxOutputTokens": 32000,
     "capabilities": {
-      "reasoning": true
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
     },
     "ownedBy": "moonshot"
   },
@@ -68,7 +78,11 @@
     "contextWindowTokens": 256000,
     "maxOutputTokens": 32000,
     "capabilities": {
-      "reasoning": true
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
     },
     "ownedBy": "moonshot"
   },
@@ -83,6 +97,7 @@
       "imageInput": true,
       "videoInput": true,
       "reasoning": true,
+      "tools": true,
       "vision": true
     },
     "ownedBy": "moonshot"
@@ -95,7 +110,10 @@
     "contextWindowTokens": 256000,
     "maxOutputTokens": 32000,
     "capabilities": {
-      "reasoning": true
+      "imageInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
     },
     "ownedBy": "moonshot"
   },

@@ -47,9 +47,27 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.contextWindowTokens, 1_048_576);
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.maxOutputTokens, 131_072);
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.imageInput, true);
+	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.videoInput, true);
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.reasoning, true);
+	assert.deepEqual(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.reasoningEfforts, [
+		{ id: "low", fallback: "low" },
+		{ id: "high", fallback: "high" },
+		{ id: "max", fallback: "max", default: true }
+	]);
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.tools, true);
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k3")?.capabilities.vision, true);
+	for (const modelId of ["kimi-k2.7-code", "kimi-k2.7-code-highspeed"]) {
+		const model = moonshotModels.find((candidate) => candidate.id === modelId);
+		assert.equal(model?.capabilities.imageInput, true);
+		assert.equal(model?.capabilities.videoInput, true);
+		assert.equal(model?.capabilities.reasoning, true);
+		assert.equal(model?.capabilities.tools, true);
+		assert.equal(model?.capabilities.vision, true);
+	}
+	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.6")?.capabilities.tools, true);
+	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.imageInput, true);
+	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.tools, true);
+	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.vision, true);
 	assert.equal(getProviderDefaultModel("zhipu"), "glm-5.2");
 	assert.equal(getProviderDefaultEndpointType("zhipu"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("zhipu"), "openai-compatible");

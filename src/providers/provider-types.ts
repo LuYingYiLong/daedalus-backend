@@ -32,6 +32,8 @@ export type ProviderReasoningEffortOption = {
 	id: string;
 	/** Normalized strength used when the user switches to another model. */
 	fallback: BaseReasoningEffort;
+	/** Whether the provider's documented default should be used when no effort is selected. */
+	default?: boolean | undefined;
 };
 
 export type ProviderModelInfo = {
@@ -148,6 +150,7 @@ function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOptio
 		const record: Record<string, unknown> = item as Record<string, unknown>;
 		const id: string | undefined = typeof record.id === "string" ? record.id.trim() : undefined;
 		const fallback: unknown = record.fallback;
+		const isDefault: unknown = record.default;
 		if (
 			id === undefined
 			|| id.length === 0
@@ -158,7 +161,7 @@ function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOptio
 			continue;
 		}
 		seen.add(id);
-		options.push({ id, fallback });
+		options.push({ id, fallback, ...(isDefault === true ? { default: true } : {}) });
 	}
 	return options.length > 0 ? options : undefined;
 }

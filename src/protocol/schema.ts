@@ -83,7 +83,8 @@ const providerModelCapabilitiesSchema = z.object({
 	reasoning: z.boolean().optional(),
 	reasoningEfforts: z.array(z.object({
 		id: z.string().trim().min(1).max(32),
-		fallback: z.enum(["low", "medium", "high", "max"])
+		fallback: z.enum(["low", "medium", "high", "max"]),
+		default: z.boolean().optional()
 	}).strict()).max(16).optional(),
 	tools: z.boolean().optional(),
 	webSearch: z.boolean().optional(),

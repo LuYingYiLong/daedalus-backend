@@ -68,6 +68,18 @@ test("builtin tool definitions expose representative Godot tools", (): void => {
 	assert.ok(names.includes("mcp_web_search"));
 });
 
+test("Godot tools expose an explicit source folder for multi-source routing", (): void => {
+	for (const toolName of [
+		"mcp_godot_list_project_files",
+		"mcp_godot_read_text_file",
+		"mcp_godot_search_text",
+		"mcp_godot_create_text_file",
+		"mcp_godot_apply_scene_patch"
+	]) {
+		assert.ok("sourceFolderId" in getToolProperties(toolName), `${toolName} is missing sourceFolderId`);
+	}
+});
+
 test("approval-gated write tools expose approval reason metadata", (): void => {
 	assert.ok("approvalReason" in getToolProperties("mcp_godot_create_text_file"));
 	assert.ok("approvalReason" in getToolProperties("mcp_godot_create_scene"));

@@ -288,8 +288,8 @@ export function resolveWorkspaceReadSource(
 		return { workspace, source: selection.source, relativePath: normalizedPath, autoSelected: false };
 	}
 
-	const matches: WorkspaceSourceFolder[] = workspace.sourceFolders.filter((source): boolean => {
-		assertSourceAvailable(workspace, source);
+	const availableSources: WorkspaceSourceFolder[] = workspace.sourceFolders.filter((source): boolean => isWorkspaceSourceAvailable(source));
+	const matches: WorkspaceSourceFolder[] = availableSources.filter((source): boolean => {
 		const candidatePath: string = resolve(source.path, normalizedPath);
 		const candidateRelative: string = relative(source.path, candidatePath);
 		if (candidateRelative.startsWith("..") || isAbsolute(candidateRelative)) return false;
@@ -309,6 +309,14 @@ export function resolveWorkspaceReadSource(
 			workspace,
 			`The file exists in multiple source folders: ${normalizedPath}`,
 			candidates
+		);
+	}
+	if (availableSources.length === 0) {
+		throw new WorkspaceSourceResolutionError(
+			"source_unavailable",
+			workspace,
+			"No workspace source folders are currently available.",
+			workspace.sourceFolders.map(describeWorkspaceSource)
 		);
 	}
 	throw new WorkspaceSourceResolutionError(

@@ -75,6 +75,22 @@ test("multi-source file reads auto-select unique paths and reject ambiguous path
 	}
 });
 
+test("an unavailable sibling source does not block a unique file read", async (): Promise<void> => {
+	const root: string = await mkdtemp(join(tmpdir(), "daedalus-source-unavailable-"));
+	const accessible: string = join(root, "accessible");
+	const unavailable: string = join(root, "unavailable");
+	await mkdir(join(accessible, "src"), { recursive: true });
+	await writeFile(join(accessible, "src", "only.ts"), "export const only = true;\n", "utf8");
+	const workspace: WorkspaceConfig = createWorkspace(accessible, unavailable);
+	try {
+		const resolved = resolveWorkspaceReadSource(workspace, "src/only.ts", {});
+		assert.equal(resolved.source.id, "frontend");
+		assert.equal(resolved.autoSelected, true);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 test("terminal source resolution only auto-selects a unique cwd or preset capability", async (): Promise<void> => {
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-terminal-source-"));
 	const first: string = join(root, "frontend");

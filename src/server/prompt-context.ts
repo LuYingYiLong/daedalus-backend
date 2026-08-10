@@ -328,6 +328,8 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 
 		if (session.activeWorkspace !== undefined && session.activeWorkspace.sourceFolders.length > 1) {
 			sections.push("- Multi-source rules: omit sourceFolderId for list_files/search_text to inspect all source folders; include sourceFolderId for writes, terminal commands, Godot/editor operations, and any operation targeting one source.");
+			sections.push("- To inspect a file from an added folder, start with mcp_workspace_list_files or mcp_workspace_search_text. Their results carry the exact sourceFolderId; pass it to mcp_workspace_read_text_file instead of assuming the primary source contains the file.");
+			sections.push("- mcp_godot_* tools also accept sourceFolderId. Use them only for a source whose capability snapshot says godot; otherwise use mcp_workspace_* tools. Do not claim an added source is unreadable unless a source-scoped tool returns source_unavailable.");
 			sections.push("- For terminal commands in a multi-source workspace, use the exact sourceFolderId from mcp_workspace_list_source_folders and keep cwd inside that source. If a terminal call returns source_required, inspect source folders and retry the same command with sourceFolderId; do not stop the request or put another source's absolute path into git -C.");
 			sections.push("- read_text_file without sourceFolderId is allowed only when the relative path exists in exactly one source folder; multiple matches return structured ambiguous_source and must not be guessed.");
 			sections.push("- scope all is read/list/search only. Never use it for create, overwrite, replace, delete, terminal, Godot, or workflow writes.");

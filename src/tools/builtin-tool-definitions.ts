@@ -6,19 +6,28 @@ import { APPROVAL_REASON_ARG, APPROVAL_REASON_SCHEMA_PROPERTY } from "./approval
 
 type ChatCompletionFunctionTool = Extract<ChatCompletionTool, { type: "function" }>;
 
-function createSceneToolDefinition(
-	name: string,
-	description: string,
-	properties: Record<string, unknown>,
-	required: string[]
-): ChatCompletionTool {
-	const supportsSourceFolder: boolean = name.startsWith("mcp_workspace_")
+const SOURCE_FOLDER_ID_SCHEMA_PROPERTY: Record<string, unknown> = {
+	type: "string",
+	description: "Source folder id. In a multi-source workspace, pass the exact id returned by mcp_workspace_list_source_folders when this operation targets one source folder."
+};
+
+function supportsSourceFolderParameter(name: string): boolean {
+	return name.startsWith("mcp_workspace_")
 		|| name.startsWith("mcp_godot_")
 		|| name.startsWith("mcp_terminal_")
 		|| name.startsWith("mcp_skills_")
 		|| name === "mcp_image_propose_import_to_workspace"
 		|| name === "mcp_image_import_to_workspace"
 		|| name === "mcp_image_replace_workspace_asset";
+}
+
+function createSceneToolDefinition(
+	name: string,
+	description: string,
+	properties: Record<string, unknown>,
+	required: string[]
+): ChatCompletionTool {
+	const supportsSourceFolder: boolean = supportsSourceFolderParameter(name);
 	const scopeProperty: Record<string, unknown> = name === "mcp_workspace_read_text_file"
 		? { scope: { type: "string", enum: ["primary", "source"], description: "Source scope for an explicit file read." } }
 		: name === "mcp_workspace_list_files"
@@ -38,10 +47,7 @@ function createSceneToolDefinition(
 				type: "object",
 				properties: supportsSourceFolder
 					? {
-						sourceFolderId: {
-							type: "string",
-							description: "Source folder id. Multi-source writes require it; list/search may omit to use all sources, and reads may auto-select a unique match."
-						},
+						sourceFolderId: SOURCE_FOLDER_ID_SCHEMA_PROPERTY,
 						...scopeProperty,
 						...paginationProperty,
 						...properties
@@ -59,6 +65,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFunctionTool(tool: ChatCompletionTool): tool is ChatCompletionFunctionTool {
 	return tool.type === "function";
+}
+
+function withSourceFolderSchema(tool: ChatCompletionTool): ChatCompletionTool {
+	if (!isFunctionTool(tool) || !supportsSourceFolderParameter(tool.function.name)) {
+		return tool;
+	}
+
+	const parameters: unknown = tool.function.parameters;
+	if (!isRecord(parameters)) {
+		return tool;
+	}
+
+	const properties: Record<string, unknown> = isRecord(parameters.properties) ? parameters.properties : {};
+	if ("sourceFolderId" in properties) {
+		return tool;
+	}
+
+	return {
+		...tool,
+		function: {
+			...tool.function,
+			parameters: {
+				...parameters,
+				properties: {
+					sourceFolderId: SOURCE_FOLDER_ID_SCHEMA_PROPERTY,
+					...properties
+				}
+			}
+		}
+	};
+}
+
+function withSourceFolderSchemas(tools: ChatCompletionTool[]): ChatCompletionTool[] {
+	return tools.map(withSourceFolderSchema);
 }
 
 export function withApprovalReasonSchema(tool: ChatCompletionTool): ChatCompletionTool {
@@ -1975,7 +2015,9 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	}
 ];
 
-export const BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = withApprovalReasonSchemas(BASE_BUILTIN_TOOL_DEFINITIONS);
+export const BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = withApprovalReasonSchemas(
+	withSourceFolderSchemas(BASE_BUILTIN_TOOL_DEFINITIONS)
+);
 
 export function getToolDefinitions(workspaceId?: string | undefined): ChatCompletionTool[] {
 	return withApprovalReasonSchemas([...BUILTIN_TOOL_DEFINITIONS, ...getDynamicMcpToolDefinitions(workspaceId)]);

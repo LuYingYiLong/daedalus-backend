@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -44,6 +44,29 @@ test("non-Godot workspaces do not inject Godot MCP availability context", async 
 
 		assert.doesNotMatch(context, /Godot/u);
 		assert.match(context, /mcp_workspace_\*/u);
+	} finally {
+		await rm(rootPath, { recursive: true, force: true });
+	}
+});
+
+test("multi-source context tells the model how to read an added source folder", async (): Promise<void> => {
+	const rootPath: string = await mkdtemp(join(tmpdir(), "daedalus-multi-source-context-"));
+	const addedPath: string = join(rootPath, "added");
+	try {
+		await mkdir(addedPath, { recursive: true });
+		const workspace: WorkspaceConfig = {
+			...createWorkspace(rootPath, false),
+			sourceFolders: [
+				{ id: "primary", path: rootPath, capabilities: { git: false, godot: false } },
+				{ id: "added", path: addedPath, capabilities: { git: false, godot: false } }
+			],
+			primarySourceFolderId: "primary"
+		};
+		const context: string = await createMcpSystemContext(createEmptyMcpHost(), createClientSession(workspace));
+
+		assert.match(context, /mcp_workspace_list_files/u);
+		assert.match(context, /mcp_workspace_read_text_file/u);
+		assert.match(context, /sourceFolderId/u);
 	} finally {
 		await rm(rootPath, { recursive: true, force: true });
 	}

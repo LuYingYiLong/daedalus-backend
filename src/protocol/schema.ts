@@ -60,7 +60,8 @@ const providerModelRoutingSchema = z.object({
 	imageGeneration: providerTaskModelRefSchema.nullable().optional(),
 	gitCommit: providerTaskModelRefSchema.nullable().optional(),
 	commandReview: providerTaskModelRefSchema.nullable().optional(),
-	goalEvaluator: providerTaskModelRefSchema.nullable().optional()
+	goalEvaluator: providerTaskModelRefSchema.nullable().optional(),
+	contextCompression: providerTaskModelRefSchema.nullable().optional()
 });
 
 const providerRequestJsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([

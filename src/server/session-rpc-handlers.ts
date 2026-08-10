@@ -35,7 +35,7 @@ import {
 	createSession, openSession, listSessions,
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
 	rewindSessionFromRequest,
-	readSummary, writeSummary,
+	readSummary, writeSummary, deleteSummary,
 	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents,
 	checkSessionIntegrity,
 	updateSessionMetadata,
@@ -110,7 +110,11 @@ import {
 import { hydrateMessageQueue, serializeMessageQueue } from "./message-queue.js";
 import { bumpWorkbenchRevision, emitWorkbenchUpdated, serializeWorkbench } from "./workbench.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
-import { compressSessionHistory } from "./session-compression.js";
+import { compressSessionHistory, hydrateSessionContextLedger } from "./session-compression.js";
+import { createContextBudgetSnapshot } from "../context/context-budget-manager.js";
+import type { ContextBudgetSnapshot } from "../context/context-types.js";
+import { clearContextLedger } from "../context/context-ledger.js";
+import { CONTEXT_CONTROL_TOOL_DEFINITIONS } from "../tools/context-control.js";
 import { createSessionOverview } from "./session-overview.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
@@ -428,9 +432,12 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		sessionId: session.sessionId
 	});
-	const toolDefinitions = allowedToolNames === undefined
+	const baseToolDefinitions = allowedToolNames === undefined
 		? toolCatalog.getDefinitions()
 		: toolCatalog.getDefinitionsForNames(filterToolNamesForWorkspace(allowedToolNames, session.activeWorkspace?.id));
+	const toolDefinitions = mode === "agent" || mode === "goal"
+		? [...baseToolDefinitions, ...CONTEXT_CONTROL_TOOL_DEFINITIONS]
+		: baseToolDefinitions;
 	const toolDefinitionsPart = await estimateTextPart(providerOptions, JSON.stringify(toolDefinitions));
 	const systemAndContextPart: TokenEstimatePart = {
 		tokens: baseSystemPart.tokens + customInstructionsTokens + skillsPart.tokens + mcpContextPart.tokens + toolDefinitionsPart.tokens + additionalContextPart.tokens,
@@ -452,20 +459,23 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 	const ordinaryHistoryMessages = historyMessages.filter((item: ChatMessage): boolean => item !== session.summaryMessage);
 	const summaryTokens = await estimateMessagesTokens(summaryMessages);
 	const historyTokens: number = await estimateMessagesTokens(ordinaryHistoryMessages);
-	const usedTokens: number = Math.max(
+	const inputTokens: number = Math.max(
 		0,
 		systemAndContextPart.tokens
 		+ currentMessagePart.tokens
 		+ historyTokens
 		+ summaryTokens
-		+ outputReserveTokens
-		+ profile.safetyMarginTokens
 	);
 	const contextWindowTokens: number = profile.contextWindowTokens;
-	const availableTokens: number = Math.max(0, contextWindowTokens - usedTokens);
-	const percent: number = contextWindowTokens > 0
-		? Math.min(100, Math.round((usedTokens / contextWindowTokens) * 1000) / 10)
-		: 0;
+	const budget: ContextBudgetSnapshot = createContextBudgetSnapshot({
+		inputTokens,
+		outputReserveTokens,
+		safetyMarginTokens: profile.safetyMarginTokens,
+		contextWindowTokens
+	});
+	const usedTokens: number = budget.committedTokens;
+	const availableTokens: number = budget.availableTokens;
+	const percent: number = budget.committedPercent;
 	const compressionConfig: ProviderConfigWithSecret | null = activeSession ? await loadProviderConfigWithSecret(session.activeProvider) : null;
 	const hasCompressionKey: boolean = session.providerApiKey !== undefined || compressionConfig?.apiKey !== undefined;
 	const compressReason: string | null = createCompressReason(session, activeSession, session.messages.length, hasCompressionKey);
@@ -490,6 +500,13 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 
 	return {
 		usedTokens,
+		inputTokens: budget.inputTokens,
+		inputPercent: budget.inputPercent,
+		committedTokens: budget.committedTokens,
+		committedPercent: budget.committedPercent,
+		outputReservePercent: budget.outputReservePercent,
+		safetyMarginPercent: budget.safetyMarginPercent,
+		availablePercent: budget.availablePercent,
 		contextWindowTokens,
 		percent,
 		availableTokens,
@@ -500,13 +517,19 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 		outputReserveTokens,
 		safetyMarginTokens: profile.safetyMarginTokens,
 		breakdown,
-		pressure: percent >= 90 ? "critical" : percent >= 75 ? "high" : percent >= 50 ? "moderate" : "low",
+		pressure: budget.pressure,
 		largestContributor: [...breakdown].sort((left, right): number => right.tokens - left.tokens)[0] ?? null,
 		modelLabel: `${getProviderDisplayName(provider)} / ${model}`,
 		estimationSource: systemAndContextPart.source === "provider" || currentMessagePart.source === "provider" ? "provider" : "local",
 		canCompress: compressReason === null,
 		compressReason,
-		summaryActive: session.summaryMessage !== undefined
+		summaryActive: session.summaryMessage !== undefined,
+		contextGeneration: session.contextLedger?.generation ?? 0,
+		contextCompressionLevel: session.contextLedger?.activeSummaries.at(-1)?.level ?? null,
+		restorableBlockCount: session.contextLedger?.activeSummaries.reduce(
+			(total: number, block): number => total + block.coveredBlockIds.length,
+			0
+		) ?? 0
 	};
 }
 
@@ -557,6 +580,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			session.fullSessionLoadPromise = undefined;
 			session.summaryMessage = undefined;
 			session.summaryCoveredMessageCount = undefined;
+			session.contextLedger = undefined;
 			session.pendingGuides = [];
 			session.queuedMessages = [];
 			session.messageQueueNextId = 0;
@@ -569,6 +593,8 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			session.workbenchNextStepHints = { hints: [] };
 			bumpWorkbenchRevision(session);
 			if (session.sessionId) {
+				await clearContextLedger(session.sessionId);
+				await deleteSummary(session.sessionId);
 				await clearSessionEvents(session.sessionId);
 			}
 			sendJson(socket, {
@@ -767,9 +793,12 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					session.workbenchNextStepHints = { hints: [] };
 					startFullSessionLoad(session, timeline.metadata.id);
 
-					const summary = await readSummary(request.params.sessionId);
-					session.summaryMessage = summary !== null ? createSummaryMessage(summary) : undefined;
-					session.summaryCoveredMessageCount = summary?.messageCount;
+					const ledgerHydrated: boolean = await hydrateSessionContextLedger(session);
+					if (!ledgerHydrated) {
+						const summary = await readSummary(request.params.sessionId);
+						session.summaryMessage = summary !== null ? createSummaryMessage(summary) : undefined;
+						session.summaryCoveredMessageCount = summary?.messageCount;
+					}
 
 					session = bindConnectionToSessionRuntime(socket, timeline.metadata.id, session);
 				}
@@ -1411,7 +1440,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: true,
-					result: await compressSessionHistory(session, apiKey, keepRecent, request.id)
+					result: await compressSessionHistory(session, apiKey, keepRecent, request.id, {
+						compressionSource: "manual"
+					})
 				});
 			} catch (error: unknown) {
 				sendJson(socket, {

@@ -14,7 +14,6 @@ import type { ApprovedToolResult, AnthropicMessagesAgentContinuation, ProviderAg
 import {
 	compactToolResultEntries,
 	createToolResultLimitFallback,
-	createToolResultLimitReason,
 	fitToolResultContent
 } from "./tool-result-budget.js";
 import type { ProviderChatOptions } from "./provider-types.js";
@@ -53,6 +52,7 @@ import {
 	runProviderRequestWithResilience,
 	type ProviderReconnectState
 } from "./provider-resilience.js";
+import { prepareProviderContextLengthRetry } from "./provider-context-recovery.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -140,7 +140,7 @@ function extractToolResultText(result: ChatCompletionToolMessageParam): string {
 	return typeof result.content === "string" ? result.content : JSON.stringify(result.content);
 }
 
-function compactAnthropicToolResults(messages: AnthropicMessageParam[]): number {
+function compactAnthropicToolResults(messages: AnthropicMessageParam[], emergency: boolean = false): number {
 	const resultBlocks: AnthropicToolResultBlock[] = [];
 	for (const message of messages) {
 		if (!Array.isArray(message.content)) {
@@ -159,7 +159,13 @@ function compactAnthropicToolResults(messages: AnthropicMessageParam[]): number 
 	const compacted = compactToolResultEntries(
 		resultBlocks,
 		(block: AnthropicToolResultBlock): string => block.content,
-		(block: AnthropicToolResultBlock, content: string): AnthropicToolResultBlock => ({ ...block, content })
+		(block: AnthropicToolResultBlock, content: string): AnthropicToolResultBlock => ({ ...block, content }),
+		{
+			recentRawCount: emergency ? 0 : undefined,
+			createCapsule: (block: AnthropicToolResultBlock, content: string): string => (
+				`${content}\nRecover with blockId tool:${block.tool_use_id}.`
+			)
+		}
 	);
 	if (compacted.compactedCount === 0) {
 		return compacted.totalChars;
@@ -303,6 +309,7 @@ async function runAgentLoop(
 	const toolImageReferences: ProviderToolImageReference[] = [...initialToolImageReferences];
 	const anthropicTools: AnthropicToolDefinition[] = createAnthropicTools(tools);
 	let imageFallbackAttempted: boolean = false;
+	let contextLengthRetryUsed: boolean = false;
 	let toolProtocolViolationRetries: number = 0;
 	let stepReconnectState: ProviderReconnectState | undefined;
 
@@ -331,6 +338,19 @@ async function runAgentLoop(
 				messages.push({ role: "user", content: createDelegatedObservationText(observation) });
 				toolImageReferences.splice(0, toolImageReferences.length);
 				imageFallbackAttempted = true;
+				step -= 1;
+				continue;
+			}
+			if (await prepareProviderContextLengthRetry({
+				error,
+				retryUsed: contextLengthRetryUsed,
+				contextControl: toolContext?.contextControl,
+				compactProviderToolResults: (): void => {
+					totalToolResultChars = compactAnthropicToolResults(messages, true);
+				}
+			})) {
+				contextLengthRetryUsed = true;
+				stepReconnectState = undefined;
 				step -= 1;
 				continue;
 			}
@@ -401,7 +421,8 @@ async function runAgentLoop(
 						totalToolResultChars,
 						maxSteps,
 						toolResultCharLimit: maxTotalToolResultChars,
-						toolImageReferences: [...toolImageReferences]
+						toolImageReferences: [...toolImageReferences],
+						contextState: toolContext?.contextControl?.getState()
 					}
 				};
 			}
@@ -428,40 +449,7 @@ async function runAgentLoop(
 		totalToolResultChars = compactAnthropicToolResults(messages);
 
 		if (totalToolResultChars >= maxTotalToolResultChars) {
-			const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-			if (shouldPauseForToolBudget(gateway)) {
-				return createToolBudgetRequiredResult({
-					limitKind: "tool_result_chars",
-					reason,
-					usedSteps: step + 1,
-					maxSteps,
-					totalToolResultChars,
-					toolResultCharLimit: maxTotalToolResultChars,
-					continuation: {
-						kind: "anthropic_messages",
-						systemPrompt,
-						messages: [...messages],
-						nextStep: step + 1,
-						totalToolResultChars,
-						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars,
-						toolImageReferences: [...toolImageReferences]
-					}
-				});
-			}
-			const finalText: string = await createFinalAnswer(
-				params,
-				options,
-				messages,
-				systemPrompt,
-				reason,
-				abortSignal,
-				toolImageReferences
-			);
-			if (streamAssistant) {
-				onEvent?.({ type: "ai.delta", text: finalText });
-			}
-			return { status: "completed", text: finalText };
+			totalToolResultChars = compactAnthropicToolResults(messages, true);
 		}
 
 		// 工具执行成功后进入新的模型步骤，新的步骤使用新的重连链。
@@ -485,7 +473,8 @@ async function runAgentLoop(
 				totalToolResultChars,
 				maxSteps,
 				toolResultCharLimit: maxTotalToolResultChars,
-				toolImageReferences: [...toolImageReferences]
+				toolImageReferences: [...toolImageReferences],
+				contextState: toolContext?.contextControl?.getState()
 			}
 		});
 	}
@@ -604,37 +593,7 @@ async function continueAnthropicCompatibleAgentInternal(
 	totalToolResultChars = compactAnthropicToolResults(messages);
 
 	if (totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-		if (shouldPauseForToolBudget(gateway)) {
-			return createToolBudgetRequiredResult({
-				limitKind: "tool_result_chars",
-				reason,
-				usedSteps: continuation.nextStep,
-				maxSteps: getContinuationMaxSteps(params, continuation),
-				totalToolResultChars,
-				toolResultCharLimit: maxTotalToolResultChars,
-				continuation: {
-					...continuation,
-					messages,
-					totalToolResultChars,
-					maxSteps: getContinuationMaxSteps(params, continuation),
-					toolResultCharLimit: maxTotalToolResultChars
-				}
-			});
-		}
-		const finalText: string = await createFinalAnswer(
-			params,
-			options,
-			messages,
-			continuation.systemPrompt,
-			reason,
-			abortSignal,
-			continuation.toolImageReferences ?? []
-		);
-		if (streamAssistant) {
-			onEvent?.({ type: "ai.delta", text: finalText });
-		}
-		return { status: "completed", text: finalText };
+		totalToolResultChars = compactAnthropicToolResults(messages, true);
 	}
 
 	return runAgentLoop(

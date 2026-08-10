@@ -3,6 +3,44 @@ export type ProviderErrorInfo = {
 	message: string;
 };
 
+const PROVIDER_CONTEXT_LENGTH_ERROR_CODES: ReadonlySet<string> = new Set([
+	"context_length_exceeded",
+	"context_window_exceeded",
+	"max_context_length_exceeded",
+	"prompt_too_long",
+	"input_too_long",
+	"too_many_tokens",
+	"request_too_large"
+]);
+
+function collectStructuredErrorCodes(error: unknown, codes: string[], seen: Set<object>, depth: number = 0): void {
+	if (depth > 5 || typeof error !== "object" || error === null || seen.has(error)) {
+		return;
+	}
+
+	seen.add(error);
+	const source: Record<string, unknown> = error as Record<string, unknown>;
+	for (const key of ["code", "type", "errorCode", "reason"] as const) {
+		const value: unknown = source[key];
+		if (typeof value === "string" && value.length > 0) {
+			codes.push(value.toLowerCase());
+		}
+	}
+	for (const nested of [source.error, source.cause, source.body, source.response, source.data]) {
+		collectStructuredErrorCodes(nested, codes, seen, depth + 1);
+	}
+}
+
+/**
+ * Context recovery is intentionally gated by provider-owned structured fields.
+ * Arbitrary error text must not trigger a destructive retry or replay a model step.
+ */
+export function isProviderContextLengthError(error: unknown): boolean {
+	const codes: string[] = [];
+	collectStructuredErrorCodes(error, codes, new Set<object>());
+	return codes.some((code: string): boolean => PROVIDER_CONTEXT_LENGTH_ERROR_CODES.has(code));
+}
+
 const QUOTA_ERROR_PATTERN: RegExp = /\b(insufficient[_ -]?(quota|balance|credits?)|quota[_ -]?exceeded|billing|payment required|balance not enough|not enough balance)\b|余额不足|额度不足|欠费/i;
 
 const RETRYABLE_TRANSPORT_ERROR_CODES: ReadonlySet<string> = new Set([

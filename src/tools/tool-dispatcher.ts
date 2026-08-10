@@ -34,6 +34,11 @@ import {
 	type ToolFailure
 } from "./tool-failure.js";
 import type { AgentLoopRecoveryStatus } from "../workflow/agent-loop-state.js";
+import {
+	CONTEXT_CONTROL_TOOL_NAMES,
+	parseContextControlArgs,
+	serializeContextControlResult
+} from "./context-control.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -211,7 +216,7 @@ async function executeSingleToolCall(
 			retryable: true,
 			artifactRefs: []
 		};
-		onEvent?.({
+				onEvent?.({
 			type: "tool.error",
 			step,
 			toolCallId: toolCall.id,
@@ -266,6 +271,52 @@ async function executeSingleToolCall(
 
 	const workspaceId: string | undefined = toolContext?.workspaceId ?? mcpHost.getActiveWorkspaceId();
 	const executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
+	if (CONTEXT_CONTROL_TOOL_NAMES.has(functionName)) {
+		if (toolContext?.contextControl === undefined || toolContext.contextControlAvailable === false) {
+			const failure: ToolFailure = {
+				code: "context_control_unavailable",
+				category: "protocol",
+				message: "Context control is not available in the current chat mode.",
+				retryable: false,
+				artifactRefs: []
+			};
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+		try {
+			const parsedArgs: Record<string, unknown> = parseContextControlArgs(functionName, executionArgs);
+			onEvent?.({
+				type: "tool.call",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				args: parsedArgs,
+					serverId: "internal",
+					serverName: "Daedalus",
+					category: "unknown",
+					title: "Managing context",
+					summary: "Managing recoverable conversation context",
+					target: { kind: "unknown" }
+			});
+			const value: Record<string, unknown> = await toolContext.contextControl.execute(functionName, parsedArgs);
+			const content: string = serializeContextControlResult(value);
+			onEvent?.({
+				type: "tool.result",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				resultChars: content.length,
+				truncated: false,
+				ok: true,
+				validationStatus: "passed",
+				summary: typeof value.summary === "string" ? value.summary : "Context operation completed"
+			});
+			return { role: "tool", tool_call_id: toolCall.id, content };
+		} catch (error: unknown) {
+			const failure: ToolFailure = createToolFailure(error, { artifactRefs: [] });
+			onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: failure.message, failure });
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+	}
 	const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, executionArgs);
 	if (exhaustedFailure !== undefined) {
 		onEvent?.({
@@ -583,14 +634,14 @@ async function executeSingleToolCall(
 			&& parsedSummary.validationStatus !== "not_applicable"
 			? toolContext?.agentLoopRecovery?.recordSuccess(functionName, executionArgs)
 			: undefined;
-		if (parsedSummary.environmentIssue === true) {
+			if (parsedSummary.environmentIssue === true) {
 			cacheRuntimeCapabilityFailure(
 				toolContext?.requestId,
 				runtimeCapabilityKind,
 				parsedSummary.summary ?? `${functionName} is unavailable in the current runtime environment.`
 			);
-		}
-		logger.info("tool", "call_finished", {
+			}
+			logger.info("tool", "call_finished", {
 			toolCallId: toolCall.id,
 			toolName: functionName,
 			step,
@@ -675,8 +726,7 @@ async function executeSingleToolCall(
 				recovery: getRecoveryStatus(failure)
 			});
 		}
-
-		return {
+			return {
 			role: "tool",
 			tool_call_id: toolCall.id,
 			content: serializeToolFailure(failure)
@@ -740,6 +790,23 @@ export async function dispatchToolCalls(
 
 	for (const toolCall of toolCalls) {
 		const result = await executeSingleToolCall(mcpHost, toolCall, step, gateway, onEvent, enricher, toolContext, abortSignal);
+		let args: Record<string, unknown> = {};
+		if (toolCall.type === "function") {
+			try {
+				const parsed: unknown = JSON.parse(toolCall.function.arguments);
+				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+					args = stripApprovalReasonArg(parsed as Record<string, unknown>);
+				}
+			} catch {
+				// Invalid arguments are themselves a recoverable tool result.
+			}
+		}
+		await toolContext?.contextControl?.recordToolResult?.({
+			toolCallId: toolCall.id,
+			toolName: toolCall.type === "function" ? toolCall.function.name : "unknown",
+			content: typeof result.content === "string" ? result.content : JSON.stringify(result.content),
+			args
+		});
 		results.push(result);
 	}
 

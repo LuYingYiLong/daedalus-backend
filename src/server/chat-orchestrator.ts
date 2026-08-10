@@ -46,7 +46,7 @@ import {
 	createSession, openSession, saveSession, listSessions,
 	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
 	rewindSessionFromRequest,
-	readSummary, writeSummary,
+	readSummary, writeSummary, deleteSummary,
 	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents, updateSessionMetadata, promoteTemporarySession,
 	openSessionRecentTimeline, openSessionTimelinePage,
 	type SessionMetadata,
@@ -198,6 +198,10 @@ import { createInitialPlan } from "./plan-mode.js";
 import { createPlanGetResult, type StoredPlan } from "./plan-store.js";
 import { getUserPrompt } from "../user-prompt-store.js";
 import { compressSessionHistory } from "./session-compression.js";
+import { clearContextLedger, filterMessagesOutsideContextLedger } from "../context/context-ledger.js";
+import { createContextBudgetSnapshot } from "../context/context-budget-manager.js";
+import type { ContextBudgetSnapshot } from "../context/context-types.js";
+import { createSessionContextControl } from "./context-control-runtime.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import {
@@ -762,7 +766,14 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			executionControl,
 			executionControlAvailable: params.routeDecision.lane !== "probe",
 			chatCompletion,
-			agentLoopRecovery
+			agentLoopRecovery,
+			contextControl: params.session.sessionId === undefined ? undefined : createSessionContextControl({
+				session: params.session,
+				apiKey: params.options.apiKey,
+				requestId: params.requestId,
+				abortSignal: params.abortSignal
+			}),
+			contextControlAvailable: params.routeDecision.lane === "agent_loop"
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -1294,6 +1305,7 @@ type ContextUsageEstimate = {
 	systemAndContextTokens: number;
 	outputReserveTokens: number;
 	safetyMarginTokens: number;
+	budget: ContextBudgetSnapshot;
 };
 
 function getFullContextHistoryMessages(session: ClientSession, excludeRequestId?: string | undefined): ChatMessage[] {
@@ -1304,9 +1316,11 @@ function getFullContextHistoryMessages(session: ClientSession, excludeRequestId?
 		return filterRequest(filterSessionLlmContextMessages(session));
 	}
 
-	const recentSourceMessages: ChatMessage[] = session.summaryCoveredMessageCount !== undefined
-		? session.messages.slice(session.summaryCoveredMessageCount)
-		: session.messages;
+	const recentSourceMessages: ChatMessage[] = session.contextLedger !== undefined
+		? filterMessagesOutsideContextLedger(session.messages, session.contextLedger.coveredMessageKeys)
+		: session.summaryCoveredMessageCount !== undefined
+			? session.messages.slice(session.summaryCoveredMessageCount)
+			: session.messages;
 	return [session.summaryMessage, ...filterRequest(filterSessionLlmContextMessages(session, recentSourceMessages))];
 }
 
@@ -1325,21 +1339,25 @@ async function estimateFullContextUsage(
 	const historyTokens: number = await estimateMessagesTokens(getFullContextHistoryMessages(session, requestId));
 	const outputReserveTokens: number = params.options?.maxTokens ?? session.modelProfile.defaultOutputReserveTokens;
 	const safetyMarginTokens: number = session.modelProfile.safetyMarginTokens;
-	const usedTokens: number = Math.max(0, systemPromptTokens + contextPromptTokens + currentMessageTokens + historyTokens + outputReserveTokens + safetyMarginTokens);
+	const inputTokens: number = Math.max(0, systemPromptTokens + contextPromptTokens + currentMessageTokens + historyTokens);
 	const contextWindowTokens: number = session.modelProfile.contextWindowTokens;
-	const percent: number = contextWindowTokens > 0
-		? Math.min(100, Math.round((usedTokens / contextWindowTokens) * 1000) / 10)
-		: 0;
+	const budget: ContextBudgetSnapshot = createContextBudgetSnapshot({
+		inputTokens,
+		outputReserveTokens,
+		safetyMarginTokens,
+		contextWindowTokens
+	});
 	return {
-		usedTokens,
+		usedTokens: budget.committedTokens,
 		contextWindowTokens,
-		percent,
-		availableTokens: Math.max(0, contextWindowTokens - usedTokens),
+		percent: budget.committedPercent,
+		availableTokens: budget.availableTokens,
 		historyTokens,
 		currentMessageTokens,
 		systemAndContextTokens: systemPromptTokens + contextPromptTokens,
 		outputReserveTokens,
-		safetyMarginTokens
+		safetyMarginTokens,
+		budget
 	};
 }
 
@@ -1355,7 +1373,7 @@ async function maybeAutoCompressContextBeforeRun(
 	abortSignal?: AbortSignal | undefined
 ): Promise<ContextUsageEstimate> {
 	let estimate: ContextUsageEstimate = await estimateFullContextUsage(session, requestId, options, params, systemPrompt, contextPrompt, abortSignal);
-	if (estimate.percent >= 85 && session.messages.length > 8) {
+	if (estimate.budget.shouldAutoCompress && session.messages.length > 8) {
 		const compressionId: string = `context-compression:${requestId}`;
 		sendSessionEvent(socket, requestId, session, "agent.context.compression", {
 			compressionId,
@@ -1365,26 +1383,40 @@ async function maybeAutoCompressContextBeforeRun(
 			contextWindowTokens: estimate.contextWindowTokens
 		});
 		try {
-			const compression = await compressSessionHistory(session, apiKey, 8, requestId);
+			const compression = await compressSessionHistory(session, apiKey, 8, requestId, {
+				abortSignal,
+				compressionSource: estimate.budget.shouldEmergencyCompress ? "emergency" : "automatic"
+			});
 			sendSessionEvent(socket, requestId, session, "agent.context.compression", compression.compressed ? {
 				compressionId,
 				status: "completed",
 				summary: compression.summary,
 				source: compression.source,
 				oldMessageCount: compression.oldMessageCount,
-				keptMessageCount: compression.keptMessageCount
+				keptMessageCount: compression.keptMessageCount,
+				beforeTokens: compression.beforeTokens,
+				afterTokens: compression.afterTokens,
+				savedTokens: compression.savedTokens,
+				level: compression.level,
+				coveredBlockIds: compression.coveredBlockIds,
+				restorableBlockCount: compression.restorableBlockCount,
+				warning: compression.warning
 			} : {
 				compressionId,
 				status: "skipped",
 				reason: compression.reason
 			});
 		} catch (error: unknown) {
+			if (abortSignal?.aborted === true) throw error;
 			sendSessionEvent(socket, requestId, session, "agent.context.compression", {
 				compressionId,
 				status: "failed",
 				reason: error instanceof Error ? error.message : "Context compression failed"
 			});
-			throw error;
+			logger.warn("session", "automatic_context_compression_failed", {
+				requestId,
+				message: error instanceof Error ? error.message : String(error)
+			});
 		}
 		estimate = await estimateFullContextUsage(session, requestId, options, params, systemPrompt, contextPrompt, abortSignal);
 	}
@@ -1790,7 +1822,14 @@ async function runToolBudgetDecisionContinuation(params: {
 			chatCompletion: pendingContinuation.chatCompletion,
 			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
 				? undefined
-				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
+				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
+			contextControl: session.sessionId === undefined ? undefined : createSessionContextControl({
+				session,
+				apiKey: pendingContinuation.options.apiKey,
+				requestId: pending.requestId,
+				abortSignal: abortController.signal
+			}),
+			contextControlAvailable: pendingContinuation.agentLoopState !== undefined
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2228,6 +2267,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				session.fullSessionLoadPromise = undefined;
 				session.summaryMessage = undefined;
 				session.summaryCoveredMessageCount = undefined;
+				session.contextLedger = undefined;
+				await clearContextLedger(session.sessionId);
+				await deleteSummary(session.sessionId);
 			}
 			const modelSnapshotChanged: boolean = applyChatRequestModelSnapshot(session, params);
 			if (modelSnapshotChanged && session.sessionId !== undefined) {
@@ -2485,6 +2527,24 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						: getNoWorkspaceToolNames();
 				}
 				allowedToolNames = await resolveSearchAwareToolNames(allowedToolNames, session, webSearchEnabled);
+				const budgetContextControl = session.sessionId === undefined ? undefined : createSessionContextControl({
+					session,
+					apiKey,
+					requestId: request.id,
+					abortSignal: abortController.signal
+				});
+				const budgetToolCatalog = createWorkspaceToolCatalog({
+					workspaceId: session.activeWorkspace?.id,
+					hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
+					editorInstanceId: session.editorInstanceId,
+					sessionId: session.sessionId,
+					contextControl: budgetContextControl,
+					contextControlAvailable: effectiveParams.mode === "agent" || effectiveParams.mode === "goal"
+				});
+				const budgetToolDefinitions = allowedToolNames === undefined
+					? budgetToolCatalog.getDefinitions()
+					: budgetToolCatalog.getDefinitionsForNames(allowedToolNames);
+				const budgetToolDefinitionsSection: string = JSON.stringify(budgetToolDefinitions);
 				const promptId = effectiveParams.promptId ?? explicitSkills.find((skill): boolean => skill.defaultPromptId !== undefined)?.defaultPromptId;
 				const systemPrompt: string = await composeSystemPrompt(
 					promptId,
@@ -2507,13 +2567,53 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 							getAgentRun(session, request.id)?.checkpoint.successfulWriteFingerprints.join(", ") || "none"
 						}.`
 					].join("\n");
-				const fullSystemPrompt: string = systemPrompt
+				const contextBudgetPrompt: string = skillPrompt
+					+ skillCatalogPrompt
+					+ mcpSystemContext
+					+ additionalContextSection
+					+ guidePromptSection
+					+ budgetToolDefinitionsSection;
+				let fullSystemPrompt: string = systemPrompt
 					+ (skillPrompt.length > 0 ? `\n\n${skillPrompt}` : "")
 					+ (skillCatalogPrompt.length > 0 ? `\n\n${skillCatalogPrompt}` : "")
 					+ mcpSystemContext
 					+ (additionalContextSection.length > 0 ? `\n\n${additionalContextSection}` : "")
 					+ (guidePromptSection.length > 0 ? `\n\n${guidePromptSection}` : "")
 					+ (safeRetryPromptSection.length > 0 ? `\n\n${safeRetryPromptSection}` : "");
+				if (effectiveParams.retryOfRunId === undefined) {
+					await appendUserMessageToSession(
+						session,
+						effectiveParams.message,
+						request.id,
+						turnStartedAt,
+						effectiveParams.additionalContext
+					);
+				}
+				let contextUsageEstimate: ContextUsageEstimate | undefined;
+				if ((goalBinding?.cycle ?? 1) <= 1) {
+					contextUsageEstimate = await maybeAutoCompressContextBeforeRun(
+						socket,
+						request.id,
+						session,
+						apiKey,
+						options,
+						effectiveParams,
+						systemPrompt,
+						contextBudgetPrompt,
+						abortController.signal
+					);
+				}
+				if (
+					contextUsageEstimate?.budget.shouldNudge === true
+					&& (effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
+				) {
+					fullSystemPrompt += [
+						"",
+						"## Context budget",
+						`The committed context is ${contextUsageEstimate.budget.committedPercent.toFixed(1)}% of the model window.`,
+						"Context status, compression, search, and bounded retrieval tools are available. Use them only when they help preserve relevant evidence; do not compress the current request or pending work."
+					].join("\n");
+				}
 				logPromptTrace({
 					requestId: request.id,
 					promptId,
@@ -2526,34 +2626,12 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					guidePromptSection,
 					fullSystemPrompt
 				});
-				if (effectiveParams.retryOfRunId === undefined) {
-					await appendUserMessageToSession(
-						session,
-						effectiveParams.message,
-						request.id,
-						turnStartedAt,
-						effectiveParams.additionalContext
-					);
-				}
-				if ((goalBinding?.cycle ?? 1) <= 1) {
-					await maybeAutoCompressContextBeforeRun(
-						socket,
-						request.id,
-						session,
-						apiKey,
-						options,
-						effectiveParams,
-						systemPrompt,
-						skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection,
-						abortController.signal
-					);
-				}
 				const historyBudgetTokens: number = await computeHistoryBudget(
 					session.modelProfile,
 					options,
 					effectiveParams,
 					systemPrompt,
-					skillPrompt + skillCatalogPrompt + mcpSystemContext + additionalContextSection + guidePromptSection,
+					contextBudgetPrompt,
 					abortController.signal
 				);
 				const history: ChatMessage[] = (goalBinding?.cycle ?? 1) > 1

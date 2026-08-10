@@ -69,7 +69,8 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 			imageGeneration: null,
 			gitCommit: null,
 			commandReview: null,
-			goalEvaluator: null
+			goalEvaluator: null,
+			contextCompression: null
 		});
 		assert.equal(requestedAccounts.includes("deepseek_api_key"), false);
 		assert.equal(requestedAccounts.includes("provider:deepseek:api_key"), true);
@@ -324,7 +325,8 @@ test("provider config persists cross-provider task model routing", async (): Pro
 				imageGeneration: { provider: "openai", model: "gpt-image-1" },
 				gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
 				commandReview: null,
-				goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" }
+				goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" },
+				contextCompression: { provider: "moonshot", model: "kimi-k2.6" }
 			}
 		});
 
@@ -336,7 +338,8 @@ test("provider config persists cross-provider task model routing", async (): Pro
 			imageGeneration: { provider: "openai", model: "gpt-image-1" },
 			gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
 			commandReview: null,
-			goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" }
+			goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" },
+			contextCompression: { provider: "moonshot", model: "kimi-k2.6" }
 		});
 	});
 });

@@ -9,6 +9,20 @@ import { createClientSession } from "../../../src/server/client-session.js";
 import { compressSessionHistory } from "../../../src/server/session-compression.js";
 import { createSession, readSummary } from "../../../src/session/session-store.js";
 import { resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
+import { createToolContextBlock, listContextBlocks, upsertContextBlock } from "../../../src/context/context-ledger.js";
+
+const STRUCTURED_SUMMARY_JSON: string = JSON.stringify({
+	userGoals: ["Continue the completed requests"],
+	constraints: [],
+	decisions: [],
+	workspaceFacts: ["Two requests were completed"],
+	changedFiles: [],
+	verification: [],
+	unresolvedFailures: [],
+	pendingApprovals: [],
+	openQuestions: [],
+	nextActions: []
+});
 
 function createHistory(): ChatMessage[] {
 	return [
@@ -41,21 +55,21 @@ test("session compression retries an empty provider response without enabling re
 					throw new ProviderEmptyResponseError({ reasoningChars: 123 });
 				}
 				retryPrompt = systemPrompt;
-				return "- Compressed conversation state";
+				return STRUCTURED_SUMMARY_JSON;
 			}
 		});
 
-		assert.deepEqual(result, {
-			compressed: true,
-			oldMessageCount: 4,
-			keptMessageCount: 2,
-			summaryLength: 31,
-			summary: "- Compressed conversation state",
-			source: "llm_retry"
-		});
+		assert.equal(result.compressed, true);
+		assert.equal(result.oldMessageCount, 4);
+		assert.equal(result.keptMessageCount, 2);
+		assert.equal(result.source, "llm_retry");
+		assert.equal(result.level, "capture");
+		assert.equal(result.generation, 1);
+		assert.equal(result.restorableBlockCount, 4);
 		assert.equal(callCount, 2);
-		assert.match(retryPrompt, /previous attempt returned no visible summary/i);
-		assert.equal((await readSummary(metadata.id))?.content, "- Compressed conversation state");
+		assert.match(retryPrompt, /previous response was empty or invalid/i);
+		assert.match((await readSummary(metadata.id))?.content ?? "", /Daedalus 可恢复上下文摘要/u);
+		assert.equal((await listContextBlocks(metadata.id)).filter((block): boolean => block.level === "raw").length, 4);
 	} finally {
 		await resetSessionDatabaseForTests();
 		await fs.rm(tempDirectory, { recursive: true, force: true });
@@ -82,7 +96,7 @@ test("session compression creates a guarded local snapshot after repeated empty 
 
 		assert.equal(result.compressed, true);
 		assert.equal(result.source, "local_fallback");
-		assert.match((await readSummary(metadata.id))?.content ?? "", /\u4e0d\u53ef\u4fe1\u7684\u5386\u53f2\u8bb0\u5f55\u6458\u5f55/u);
+		assert.match((await readSummary(metadata.id))?.content ?? "", /低优先级历史事实/u);
 	} finally {
 		await resetSessionDatabaseForTests();
 		if (previousLogLevel === undefined) {
@@ -90,6 +104,37 @@ test("session compression creates a guarded local snapshot after repeated empty 
 		} else {
 			process.env.DAEDALUS_LOG_LEVEL = previousLogLevel;
 		}
+		await fs.rm(tempDirectory, { recursive: true, force: true });
+	}
+});
+
+test("session compression retains original blocks when the structured quality gate fails", async (): Promise<void> => {
+	const tempDirectory: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-session-compression-"));
+	await resetSessionDatabaseForTests(path.join(tempDirectory, "sessions.sqlite"));
+	try {
+		const metadata = await createSession("Compression quality gate test");
+		const session = createClientSession(undefined);
+		session.sessionId = metadata.id;
+		const block = createToolContextBlock({
+			sessionId: metadata.id,
+			toolCallId: "write-a",
+			content: "changed src/App.tsx",
+			tokenEstimate: 8,
+			fileRefs: [{ workspaceId: "workspace-a", sourceFolderId: "frontend", relativePath: "src/App.tsx" }]
+		});
+		await upsertContextBlock(block);
+
+		const result = await compressSessionHistory(session, "test-key", 2, "compression-quality-gate", {
+			blockIds: [block.blockId],
+			chat: async (): Promise<string> => STRUCTURED_SUMMARY_JSON
+		});
+
+		assert.equal(result.compressed, false);
+		assert.equal(result.warning, "structured_file_refs_missing");
+		assert.equal((await listContextBlocks(metadata.id, false)).some((item): boolean => item.blockId === block.blockId), true);
+		assert.equal(await readSummary(metadata.id), null);
+	} finally {
+		await resetSessionDatabaseForTests();
 		await fs.rm(tempDirectory, { recursive: true, force: true });
 	}
 });

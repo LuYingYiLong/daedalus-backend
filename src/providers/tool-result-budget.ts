@@ -1,4 +1,5 @@
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
+import { isContextControlResult } from "../tools/context-control.js";
 
 const FINAL_ANSWER_HEADROOM_CHARS: number = 2000;
 const MIN_TRUNCATED_TOOL_CHARS: number = 240;
@@ -7,7 +8,7 @@ const TOOL_CONTEXT_COMPACTION_MARKER: string = "[[daedalus_tool_context_compacte
 // Keep enough recent output for the next model turn, while ensuring that a
 // large parallel tool batch cannot consume the entire provider context.
 const TOOL_CONTEXT_RECENT_RAW_RESULT_COUNT: number = 2;
-const COMPACTED_TOOL_RESULT_CHARS: number = 96;
+const COMPACTED_TOOL_RESULT_CHARS: number = 320;
 
 export type BudgetedToolResult = {
 	content: string;
@@ -29,28 +30,37 @@ export type ToolContextCompactionResult<T> = {
 export function compactToolResultEntries<T>(
 	entries: readonly T[],
 	getContent: (entry: T) => string,
-	replaceContent: (entry: T, content: string) => T
+	replaceContent: (entry: T, content: string) => T,
+	options: {
+		recentRawCount?: number | undefined;
+		createCapsule?: ((entry: T, compactedContent: string) => string) | undefined;
+	} = {}
 ): ToolContextCompactionResult<T> {
 	const resultIndexes: number[] = [];
 	for (let index: number = 0; index < entries.length; index += 1) {
 		resultIndexes.push(index);
 	}
 	const compactableIndexes: Set<number> = new Set(
-		resultIndexes.slice(0, Math.max(0, resultIndexes.length - TOOL_CONTEXT_RECENT_RAW_RESULT_COUNT))
+		resultIndexes.slice(0, Math.max(0, resultIndexes.length - (options.recentRawCount ?? TOOL_CONTEXT_RECENT_RAW_RESULT_COUNT)))
 	);
 	let compactedCount: number = 0;
 	const nextEntries: T[] = entries.map((entry: T, index: number): T => {
 		if (!compactableIndexes.has(index)) return entry;
 		const content: string = getContent(entry);
-		const compacted: string = compactToolResultContent(content);
-		if (compacted === content) return entry;
+		if (isContextControlResult(content)) return entry;
+		const baseCompacted: string = compactToolResultContent(content);
+		if (baseCompacted === content) return entry;
+		const compacted: string = options.createCapsule?.(entry, baseCompacted) ?? baseCompacted;
 		compactedCount += 1;
 		return replaceContent(entry, compacted);
 	});
 
 	return {
 		entries: nextEntries,
-		totalChars: nextEntries.reduce((total: number, entry: T): number => total + getContent(entry).length, 0),
+		totalChars: nextEntries.reduce((total: number, entry: T): number => {
+			const content: string = getContent(entry);
+			return total + (isContextControlResult(content) ? 0 : content.length);
+		}, 0),
 		compactedCount
 	};
 }
@@ -60,7 +70,7 @@ function compactToolResultContent(content: string): string {
 		return content;
 	}
 
-	const prefix: string = `${TOOL_CONTEXT_COMPACTION_MARKER}\nOlder output compacted.\n`;
+	const prefix: string = `${TOOL_CONTEXT_COMPACTION_MARKER}\nOlder output compacted. Use daedalus_context_search and daedalus_context_retrieve to restore the stored block.\n`;
 	const separator: string = "\n…\n";
 	const available: number = Math.max(0, COMPACTED_TOOL_RESULT_CHARS - prefix.length - separator.length);
 	const headLength: number = Math.ceil(available * 0.72);
@@ -90,6 +100,15 @@ export function fitToolResultContent(
 	currentTotalChars: number,
 	maxTotalChars: number = MAX_TOTAL_TOOL_RESULT_CHARS
 ): BudgetedToolResult {
+	if (isContextControlResult(content)) {
+		return {
+			content,
+			chars: 0,
+			truncated: false,
+			limitReached: false,
+			reason: null
+		};
+	}
 	const targetLimit: number = Math.max(MIN_TRUNCATED_TOOL_CHARS, maxTotalChars - FINAL_ANSWER_HEADROOM_CHARS);
 	const remainingBeforeFinalize: number = targetLimit - currentTotalChars;
 	if (remainingBeforeFinalize <= MIN_TRUNCATED_TOOL_CHARS) {

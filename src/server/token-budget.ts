@@ -17,6 +17,7 @@ import { cloneAdditionalContextItems } from "./additional-context.js";
 import { logger } from "../logger.js";
 import { readRuntimeAssetText } from "../runtime/runtime-assets.js";
 import { filterLlmContextMessages, filterSessionLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
+import { filterMessagesOutsideContextLedger } from "../context/context-ledger.js";
 
 export { appendFailedChatTurnToSession, filterLlmContextMessages, filterSessionLlmContextMessages, isLlmContextMessage } from "./transcript-history.js";
 
@@ -238,9 +239,11 @@ export async function selectHistoryForModel(session: ClientSession, budgetTokens
 
 	const summaryTokens: number = await estimateMessagesTokens([session.summaryMessage]);
 	const recentBudgetTokens: number = Math.max(0, budgetTokens - summaryTokens);
-	const recentSourceMessages: ChatMessage[] = session.summaryCoveredMessageCount !== undefined
-		? session.messages.slice(session.summaryCoveredMessageCount)
-		: session.messages;
+	const recentSourceMessages: ChatMessage[] = session.contextLedger !== undefined
+		? filterMessagesOutsideContextLedger(session.messages, session.contextLedger.coveredMessageKeys)
+		: session.summaryCoveredMessageCount !== undefined
+			? session.messages.slice(session.summaryCoveredMessageCount)
+			: session.messages;
 	const recentMessages: ChatMessage[] = await selectHistoryWithinBudget(filterRequest(filterSessionLlmContextMessages(session, recentSourceMessages)), recentBudgetTokens);
 	return [session.summaryMessage, ...recentMessages];
 }

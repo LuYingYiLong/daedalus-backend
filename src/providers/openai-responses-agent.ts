@@ -28,7 +28,6 @@ import {
 import {
 	compactToolResultEntries,
 	createToolResultLimitFallback,
-	createToolResultLimitReason,
 	fitToolResultContent
 } from "./tool-result-budget.js";
 import {
@@ -57,6 +56,7 @@ import {
 	runProviderRequestWithResilience,
 	type ProviderReconnectState
 } from "./provider-resilience.js";
+import { prepareProviderContextLengthRetry } from "./provider-context-recovery.js";
 
 const FINALIZE_AFTER_TOOL_LIMIT_PROMPT: string =
 	"工具调用阶段已经达到后端限制。请停止请求更多工具，基于目前已经获得的工具结果直接回答用户。"
@@ -175,7 +175,7 @@ function isFunctionCallOutputItem(item: ResponseInputItem): boolean {
 	return (item as { type?: unknown }).type === "function_call_output";
 }
 
-function compactOpenAIResponsesToolResults(inputItems: ResponseInputItem[]): number {
+function compactOpenAIResponsesToolResults(inputItems: ResponseInputItem[], emergency: boolean = false): number {
 	const toolResultItems: ResponseInputItem[] = inputItems.filter(isFunctionCallOutputItem);
 	if (toolResultItems.length === 0) {
 		return 0;
@@ -190,7 +190,14 @@ function compactOpenAIResponsesToolResults(inputItems: ResponseInputItem[]): num
 		(item: ResponseInputItem, output: string): ResponseInputItem => ({
 			...(item as unknown as Record<string, unknown>),
 			output
-		}) as ResponseInputItem
+		}) as ResponseInputItem,
+		{
+			recentRawCount: emergency ? 0 : undefined,
+			createCapsule: (item: ResponseInputItem, content: string): string => {
+				const callId: unknown = (item as { call_id?: unknown }).call_id;
+				return `${content}\nRecover with blockId tool:${typeof callId === "string" ? callId : "unknown"}.`;
+			}
+		}
 	);
 	if (compacted.compactedCount === 0) {
 		return compacted.totalChars;
@@ -508,6 +515,7 @@ async function runResponsesAgentLoop(
 	const allowedToolNames: ReadonlySet<string> = getAllowedToolNames(chatTools);
 	let toolProtocolViolationRetries: number = 0;
 	let imageFallbackAttempted: boolean = false;
+	let contextLengthRetryUsed: boolean = false;
 	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
@@ -539,6 +547,19 @@ async function runResponsesAgentLoop(
 				} as unknown as ResponseInputItem);
 				toolImageReferences.splice(0, toolImageReferences.length);
 				imageFallbackAttempted = true;
+				step -= 1;
+				continue;
+			}
+			if (await prepareProviderContextLengthRetry({
+				error,
+				retryUsed: contextLengthRetryUsed,
+				contextControl: toolContext?.contextControl,
+				compactProviderToolResults: (): void => {
+					totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
+				}
+			})) {
+				contextLengthRetryUsed = true;
+				stepReconnectState = undefined;
 				step -= 1;
 				continue;
 			}
@@ -586,40 +607,7 @@ async function runResponsesAgentLoop(
 			const appendResult: AppendToolResultItemsResult = appendToolResultItems(inputItems, toolResults, totalToolResultChars, maxTotalToolResultChars);
 			totalToolResultChars = appendResult.totalToolResultChars;
 			if (totalToolResultChars >= maxTotalToolResultChars) {
-				const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-				if (shouldPauseForToolBudget(gateway)) {
-					return createToolBudgetRequiredResult({
-						limitKind: "tool_result_chars",
-						reason,
-						usedSteps: step + 1,
-						maxSteps,
-						totalToolResultChars,
-						toolResultCharLimit: maxTotalToolResultChars,
-						continuation: {
-							kind: "responses",
-							instructions,
-							inputItems: [...inputItems],
-							nextStep: step + 1,
-							totalToolResultChars,
-							maxSteps,
-							toolResultCharLimit: maxTotalToolResultChars,
-							toolImageReferences: [...toolImageReferences]
-						}
-					});
-				}
-				const finalText: string = await createFinalAnswer(
-					params,
-					options,
-					instructions,
-					inputItems,
-					reason,
-					abortSignal,
-					toolImageReferences
-				);
-				if (streamAssistant) {
-					onEvent?.({ type: "ai.delta", text: finalText });
-				}
-				return { status: "completed", text: finalText };
+				totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 			}
 		} catch (error: unknown) {
 			if (error instanceof ChatAnswerSignal) {
@@ -649,7 +637,8 @@ async function runResponsesAgentLoop(
 						totalToolResultChars,
 						maxSteps,
 						toolResultCharLimit: maxTotalToolResultChars,
-						toolImageReferences: [...toolImageReferences]
+						toolImageReferences: [...toolImageReferences],
+						contextState: toolContext?.contextControl?.getState()
 					}
 				};
 			}
@@ -658,40 +647,7 @@ async function runResponsesAgentLoop(
 		}
 
 		if (totalToolResultChars >= maxTotalToolResultChars) {
-			const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-			if (shouldPauseForToolBudget(gateway)) {
-				return createToolBudgetRequiredResult({
-					limitKind: "tool_result_chars",
-					reason,
-					usedSteps: step + 1,
-					maxSteps,
-					totalToolResultChars,
-					toolResultCharLimit: maxTotalToolResultChars,
-					continuation: {
-						kind: "responses",
-						instructions,
-						inputItems: [...inputItems],
-						nextStep: step + 1,
-						totalToolResultChars,
-						maxSteps,
-						toolResultCharLimit: maxTotalToolResultChars,
-						toolImageReferences: [...toolImageReferences]
-					}
-				});
-			}
-			const finalText: string = await createFinalAnswer(
-				params,
-				options,
-				instructions,
-				inputItems,
-				reason,
-				abortSignal,
-				toolImageReferences
-			);
-			if (streamAssistant) {
-				onEvent?.({ type: "ai.delta", text: finalText });
-			}
-			return { status: "completed", text: finalText };
+			totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 		}
 
 		// 工具执行成功后进入新的模型步骤，新的步骤使用新的重连链。
@@ -715,7 +671,8 @@ async function runResponsesAgentLoop(
 				totalToolResultChars,
 				maxSteps,
 				toolResultCharLimit: maxTotalToolResultChars,
-				toolImageReferences: [...toolImageReferences]
+				toolImageReferences: [...toolImageReferences],
+				contextState: toolContext?.contextControl?.getState()
 			}
 		});
 	}
@@ -842,36 +799,7 @@ export async function continueOpenAIResponsesAgent(
 	totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 
 	if (totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-		if (shouldPauseForToolBudget(gateway)) {
-			return createToolBudgetRequiredResult({
-				limitKind: "tool_result_chars",
-				reason,
-				usedSteps: continuation.nextStep,
-				maxSteps: getContinuationMaxSteps(params, continuation),
-				totalToolResultChars,
-				toolResultCharLimit: maxTotalToolResultChars,
-				continuation: {
-					...continuation,
-					inputItems: [...inputItems],
-					totalToolResultChars,
-					maxSteps: getContinuationMaxSteps(params, continuation),
-					toolResultCharLimit: maxTotalToolResultChars
-				}
-			});
-		}
-		return {
-			status: "completed",
-			text: await createFinalAnswer(
-				params,
-				options,
-				continuation.instructions,
-				inputItems,
-				reason,
-				abortSignal,
-				continuation.toolImageReferences ?? []
-			)
-		};
+		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 	}
 
 	const maxSteps: number = getContinuationMaxSteps(params, continuation);
@@ -925,35 +853,7 @@ export async function continueOpenAIResponsesAgentStreaming(
 	totalToolResultChars = compactOpenAIResponsesToolResults(inputItems);
 
 	if (totalToolResultChars >= maxTotalToolResultChars) {
-		const reason: string = createToolResultLimitReason(totalToolResultChars, maxTotalToolResultChars);
-		if (shouldPauseForToolBudget(gateway)) {
-			return createToolBudgetRequiredResult({
-				limitKind: "tool_result_chars",
-				reason,
-				usedSteps: continuation.nextStep,
-				maxSteps: getContinuationMaxSteps(params, continuation),
-				totalToolResultChars,
-				toolResultCharLimit: maxTotalToolResultChars,
-				continuation: {
-					...continuation,
-					inputItems: [...inputItems],
-					totalToolResultChars,
-					maxSteps: getContinuationMaxSteps(params, continuation),
-					toolResultCharLimit: maxTotalToolResultChars
-				}
-			});
-		}
-		const finalText: string = await createFinalAnswer(
-			params,
-			options,
-			continuation.instructions,
-			inputItems,
-			reason,
-			abortSignal,
-			continuation.toolImageReferences ?? []
-		);
-		onEvent?.({ type: "ai.delta", text: finalText });
-		return { status: "completed", text: finalText };
+		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 	}
 
 	const maxSteps: number = getContinuationMaxSteps(params, continuation);

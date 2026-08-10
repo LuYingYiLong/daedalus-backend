@@ -105,6 +105,7 @@ import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "..
 import { logPromptTrace, logProjectInstructionTrace } from "../prompt-trace.js";
 import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "../request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt } from "../token-budget.js";
+import { createSessionContextControl } from "../context-control-runtime.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "../session-preview.js";
 import { createProviderChatOptions } from "../provider-chat-options.js";
 import { createGodotRuntimeStatus } from "../godot-runtime-status.js";
@@ -308,7 +309,14 @@ async function continueAfterRejectedApproval(params: {
 			chatCompletion: pendingContinuation.chatCompletion,
 			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
 				? undefined
-				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
+				: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
+			contextControl: session.sessionId === undefined ? undefined : createSessionContextControl({
+				session,
+				apiKey: pendingContinuation.options.apiKey,
+				requestId: pendingContinuation.requestId,
+				abortSignal: abortController.signal
+			}),
+			contextControlAvailable: pendingContinuation.agentLoopState !== undefined
 		};
 		const agentResult: ProviderAgentResult = await (pendingContinuation.stream
 			? continueProviderAgentStreaming(
@@ -710,6 +718,12 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				abortController.signal
 			);
 			throwIfAborted(abortController.signal);
+			const contextControl = session.sessionId === undefined ? undefined : createSessionContextControl({
+				session,
+				apiKey: pendingContinuation.options.apiKey,
+				requestId: pendingContinuation.requestId,
+				abortSignal: abortController.signal
+			});
 			const agentResultPromise: Promise<ProviderAgentResult> = pendingContinuation.stream
 				? continueProviderAgentStreaming(
 					continuationParams,
@@ -733,7 +747,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						chatCompletion: pendingContinuation.chatCompletion,
 						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
 							? undefined
-							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
+							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
+						contextControl,
+						contextControlAvailable: pendingContinuation.agentLoopState !== undefined
 					}
 				)
 				: continueProviderAgent(
@@ -758,7 +774,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						chatCompletion: pendingContinuation.chatCompletion,
 						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
 							? undefined
-							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState)
+							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
+						contextControl,
+						contextControlAvailable: pendingContinuation.agentLoopState !== undefined
 					}
 				);
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);

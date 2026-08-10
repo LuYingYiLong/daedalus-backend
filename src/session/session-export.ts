@@ -27,6 +27,8 @@ export const SESSION_EXPORT_TABLES: readonly SessionTableCopySpec[] = [
 	{ name: "messages", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "session_events", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "summaries", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
+	{ name: "context_blocks", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
+	{ name: "context_compactions", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "plans", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "attachments", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "file_edit_batches", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },

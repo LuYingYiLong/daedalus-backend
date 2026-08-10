@@ -11,6 +11,7 @@ import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ToolRisk } from "../tools/tool-policy.js";
 import { createActivityGroupAccumulator, type ActivityGroupAccumulator } from "../session/activity-groups.js";
 import type { ProviderRequestOverrides } from "../providers/provider-request-overrides.js";
+import type { ActiveContextLedger } from "../context/context-types.js";
 
 export type PendingGuide = {
 	id: string;
@@ -100,6 +101,7 @@ export type ClientSession = {
 	sessionTitle?: string | undefined;
 	summaryMessage?: ChatMessage | undefined;
 	summaryCoveredMessageCount?: number | undefined;
+	contextLedger?: ActiveContextLedger | undefined;
 	pendingAiContinuations: Map<string, PendingAiContinuation>;
 	pendingToolBudgets: Map<string, PendingToolBudget>;
 	aiDeltaEventBuffers: Map<string, ThinkingEventBuffer>;
@@ -190,6 +192,7 @@ export function clearActiveSession(session: ClientSession): void {
 	session.fullSessionLoadPromise = undefined;
 	session.summaryMessage = undefined;
 	session.summaryCoveredMessageCount = undefined;
+	session.contextLedger = undefined;
 	session.pendingToolBudgets.clear();
 	session.pendingGuides = [];
 	session.queuedMessages = [];

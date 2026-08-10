@@ -26,6 +26,11 @@ import type { ProviderChatOptions } from "../providers/provider-types.js";
 import type { AgentLoopRecoveryController } from "../workflow/agent-loop-state.js";
 import { findWorkspace } from "../workspace/registry.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
+import {
+	CONTEXT_CONTROL_TOOL_DEFINITIONS,
+	CONTEXT_CONTROL_TOOL_NAMES,
+	type ContextControlContext
+} from "./context-control.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -44,6 +49,8 @@ export type ToolExecutionContext = {
 	/** True only when the active workspace contains a source folder with project.godot. */
 	hasGodotWorkspaceCapability?: boolean | undefined;
 	agentLoopRecovery?: AgentLoopRecoveryController | undefined;
+	contextControl?: ContextControlContext | undefined;
+	contextControlAvailable?: boolean | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -331,6 +338,18 @@ function createChatCompletionControlEntry(): ToolCatalogEntry {
 	};
 }
 
+function createContextControlEntry(definition: ChatCompletionTool): ToolCatalogEntry {
+	const id: string | undefined = getToolName(definition);
+	if (id === undefined) throw new Error("Context control definition must be a function tool");
+	return {
+		id,
+		definition,
+		mapping: { serverId: "internal", toolName: id },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -360,7 +379,10 @@ export class WorkspaceToolCatalog {
 		const chatCompletionEntries: ToolCatalogEntry[] = this.context.chatCompletion === undefined || this.context.chatCompletionAvailable === false
 			? []
 			: [createChatCompletionControlEntry()];
-		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries];
+		const contextControlEntries: ToolCatalogEntry[] = this.context.contextControl === undefined || this.context.contextControlAvailable === false
+			? []
+			: CONTEXT_CONTROL_TOOL_DEFINITIONS.map(createContextControlEntry);
+		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -374,6 +396,9 @@ export class WorkspaceToolCatalog {
 		}
 		if (this.context.chatCompletion !== undefined && this.context.chatCompletionAvailable !== false) {
 			allowedNames.add(CHAT_COMPLETION_CONTROL_TOOL_NAME);
+		}
+		if (this.context.contextControl !== undefined && this.context.contextControlAvailable !== false) {
+			for (const toolName of CONTEXT_CONTROL_TOOL_NAMES) allowedNames.add(toolName);
 		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()

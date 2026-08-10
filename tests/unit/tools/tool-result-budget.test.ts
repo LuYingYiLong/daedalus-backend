@@ -62,7 +62,7 @@ test("tool context compaction preserves recent raw results and stable result ide
 	assert.equal(compacted.compactedCount, 4);
 	assert.deepEqual(compacted.entries.map((entry: { id: string; content: string }): string => entry.id), entries.map((entry: { id: string; content: string }): string => entry.id));
 	assert.match(compacted.entries[0]!.content, /^\[\[daedalus_tool_context_compacted\]\]/u);
-	assert.ok(compacted.entries[0]!.content.length <= 96);
+	assert.ok(compacted.entries[0]!.content.length <= 320);
 	assert.equal(compacted.entries[4]!.content, entries[4]!.content);
 	assert.equal(compacted.entries[5]!.content, entries[5]!.content);
 });

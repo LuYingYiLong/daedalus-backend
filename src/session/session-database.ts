@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 7;
+const DB_SCHEMA_VERSION: number = 8;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -84,6 +84,48 @@ function migrateSchema(db: DatabaseSync): void {
 			token_estimate INTEGER NOT NULL,
 			generated_at TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS context_blocks (
+			block_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			request_id TEXT,
+			kind TEXT NOT NULL,
+			level TEXT NOT NULL,
+			status TEXT NOT NULL,
+			token_estimate INTEGER NOT NULL,
+			source_folder_id TEXT,
+			file_refs_json TEXT NOT NULL,
+			protected_reason TEXT,
+			covered_block_ids_json TEXT NOT NULL,
+			covered_message_keys_json TEXT NOT NULL,
+			content TEXT NOT NULL,
+			summary_json TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_context_blocks_session_status
+			ON context_blocks (session_id, status, level, created_at);
+		CREATE INDEX IF NOT EXISTS idx_context_blocks_request
+			ON context_blocks (session_id, request_id, created_at);
+		CREATE TABLE IF NOT EXISTS context_compactions (
+			compression_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			request_id TEXT,
+			generation INTEGER NOT NULL,
+			level TEXT NOT NULL,
+			source TEXT NOT NULL,
+			status TEXT NOT NULL,
+			before_tokens INTEGER NOT NULL,
+			after_tokens INTEGER NOT NULL,
+			saved_tokens INTEGER NOT NULL,
+			covered_block_ids_json TEXT NOT NULL,
+			summary_block_id TEXT REFERENCES context_blocks(block_id) ON DELETE SET NULL,
+			warning TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(session_id, generation)
+		);
+		CREATE INDEX IF NOT EXISTS idx_context_compactions_session_generation
+			ON context_compactions (session_id, generation DESC);
 		CREATE TABLE IF NOT EXISTS plans (
 			plan_id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,

@@ -63,6 +63,8 @@ test("session database initializes canonical SQLite storage and ignores legacy f
 			"agent_run_continuations",
 			"agent_runs",
 			"attachments",
+			"context_blocks",
+			"context_compactions",
 			"file_edit_batches",
 			"messages",
 			"plans",
@@ -93,7 +95,7 @@ test("session database initializes canonical SQLite storage and ignores legacy f
 			String((db.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check),
 			"ok"
 		);
-		assert.equal(Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version), 7);
+		assert.equal(Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version), 8);
 
 		assert.equal(await exists(join(profile, ".daedalus", "migrations")), false);
 		assert.equal(await exists(join(legacySessionDir, "metadata.json")), true);

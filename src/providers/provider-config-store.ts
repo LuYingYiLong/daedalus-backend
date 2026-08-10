@@ -54,6 +54,7 @@ export type ProviderModelRouting = {
 	gitCommit: ProviderTaskModelRef | null;
 	commandReview: ProviderTaskModelRef | null;
 	goalEvaluator: ProviderTaskModelRef | null;
+	contextCompression: ProviderTaskModelRef | null;
 };
 
 export type ProviderModelRoutingInput = Partial<Record<keyof ProviderModelRouting, ProviderTaskModelRef | null | undefined>>;
@@ -270,7 +271,8 @@ export function createEmptyModelRouting(): ProviderModelRouting {
 		imageGeneration: null,
 		gitCommit: null,
 		commandReview: null,
-		goalEvaluator: null
+		goalEvaluator: null,
+		contextCompression: null
 	};
 }
 
@@ -306,6 +308,7 @@ function parseModelRouting(value: unknown): ProviderModelRouting {
 	routing.gitCommit = parseTaskModelRef(record.gitCommit);
 	routing.commandReview = parseTaskModelRef(record.commandReview);
 	routing.goalEvaluator = parseTaskModelRef(record.goalEvaluator);
+	routing.contextCompression = parseTaskModelRef(record.contextCompression);
 	return routing;
 }
 
@@ -316,7 +319,7 @@ function mergeModelRouting(existing: ProviderModelRouting | undefined, input: Pr
 	}
 
 	const next: ProviderModelRouting = { ...routing };
-	for (const key of ["imageRecognition", "workflowPlanner", "sessionTitle", "imageGeneration", "gitCommit", "commandReview", "goalEvaluator"] as const) {
+	for (const key of ["imageRecognition", "workflowPlanner", "sessionTitle", "imageGeneration", "gitCommit", "commandReview", "goalEvaluator", "contextCompression"] as const) {
 		if (!Object.prototype.hasOwnProperty.call(input, key)) {
 			continue;
 		}

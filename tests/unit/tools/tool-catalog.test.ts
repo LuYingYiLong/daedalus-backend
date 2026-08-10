@@ -6,6 +6,7 @@ import { filterToolNamesForWorkspace, getDefaultWorkflowToolNames, getNoWorkspac
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../../../src/tools/tool-sentinels.js";
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../../src/tools/execution-control.js";
 import { CHAT_COMPLETION_CONTROL_TOOL_NAME } from "../../../src/tools/chat-completion-control.js";
+import { CONTEXT_CONTROL_TOOL_NAMES, type ContextControlContext } from "../../../src/tools/context-control.js";
 
 function getFunctionToolName(tool: { type: string; function?: { name: string } | undefined }): string {
 	assert.equal(tool.type, "function");
@@ -97,6 +98,20 @@ test("workspace tool catalog exposes approval reason schema for write tools", ()
 		assert.ok("approvalReason" in getFunctionToolProperties(dynamicWrite!));
 	} finally {
 		clearDynamicMcpToolsForWorkspace("catalog-approval");
+	}
+});
+
+test("context controls are exposed only when the execution lane enables them", (): void => {
+	const contextControl: ContextControlContext = {
+		getState: () => ({ schemaVersion: 1, generation: 0, activeSummaryBlockIds: [], compactedToolResultBlockIds: [] }),
+		execute: async (): Promise<Record<string, unknown>> => ({ ok: true })
+	};
+	const disabled = createWorkspaceToolCatalog({ contextControl, contextControlAvailable: false });
+	const enabled = createWorkspaceToolCatalog({ contextControl, contextControlAvailable: true });
+
+	for (const toolName of CONTEXT_CONTROL_TOOL_NAMES) {
+		assert.equal(disabled.getEntry(toolName), undefined);
+		assert.notEqual(enabled.getEntry(toolName), undefined);
 	}
 });
 

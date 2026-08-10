@@ -4,6 +4,7 @@ import type { AnthropicMessageParam } from "./anthropic-compatible-client.js";
 import type { ExecutionDecision } from "../workflow/agent-run-state.js";
 import type { ProviderToolImageReference } from "./tool-image-reference.js";
 import type { ChatAnswer } from "../tools/chat-completion-control.js";
+import type { AgentContextState } from "../context/context-types.js";
 
 export type ChatCompletionsAgentContinuation = {
 	kind?: "chat_completions";
@@ -13,6 +14,7 @@ export type ChatCompletionsAgentContinuation = {
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
 	toolImageReferences?: ProviderToolImageReference[] | undefined;
+	contextState?: AgentContextState | undefined;
 };
 
 export type ResponsesAgentContinuation = {
@@ -24,6 +26,7 @@ export type ResponsesAgentContinuation = {
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
 	toolImageReferences?: ProviderToolImageReference[] | undefined;
+	contextState?: AgentContextState | undefined;
 };
 
 export type AnthropicMessagesAgentContinuation = {
@@ -35,6 +38,7 @@ export type AnthropicMessagesAgentContinuation = {
 	maxSteps?: number | undefined;
 	toolResultCharLimit?: number | undefined;
 	toolImageReferences?: ProviderToolImageReference[] | undefined;
+	contextState?: AgentContextState | undefined;
 };
 
 export type AgentContinuation = ChatCompletionsAgentContinuation | ResponsesAgentContinuation | AnthropicMessagesAgentContinuation;

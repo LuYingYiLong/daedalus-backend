@@ -3,7 +3,6 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { createToolBudgetRequiredResult, getContinuedMaxSteps, getContinuedToolResultCharLimit, shouldPauseForToolBudget } from "../../../src/providers/agent-tool-budget.js";
 import type { ChatCompletionsAgentContinuation } from "../../../src/providers/agent-types.js";
-import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../../../src/tools/llm-tool-budget.js";
 
 test("tool budgets leave enough room for project-scale runs", (): void => {
@@ -14,10 +13,19 @@ test("tool budgets leave enough room for project-scale runs", (): void => {
 	assert.equal(MAX_TOTAL_TOOL_RESULT_CHARS, 128000);
 });
 
-test("only manual mode pauses for a tool budget decision", (): void => {
-	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("manual")), true);
-	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("auto-safe")), false);
-	assert.equal(shouldPauseForToolBudget(new ApprovalGateway("full-trust")), false);
+test("every approval mode preserves a resumable tool-budget continuation", async (): Promise<void> => {
+	assert.equal(shouldPauseForToolBudget(), true);
+
+	for (const path of [
+		"../../../src/providers/openai-compatible-agent.ts",
+		"../../../src/providers/openai-responses-agent.ts",
+		"../../../src/providers/anthropic-compatible-agent.ts"
+	]) {
+		const source: string = await readFile(new URL(path, import.meta.url), "utf8");
+		assert.equal(source.includes("shouldPauseForToolBudget()"), true);
+		assert.equal(source.includes("shouldPauseForToolBudget(gateway)"), false);
+		assert.equal(source.includes("return createToolBudgetRequiredResult({"), true);
+	}
 });
 
 test("tool budget continuation grants the configured extra step and char budget", (): void => {

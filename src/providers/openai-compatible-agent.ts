@@ -1655,7 +1655,7 @@ async function runAgentLoop(
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;
-	if (shouldPauseForToolBudget(gateway)) {
+	if (shouldPauseForToolBudget()) {
 		return createToolBudgetRequiredResult({
 			limitKind: "steps",
 			reason: stepLimitReason,

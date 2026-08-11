@@ -1,10 +1,14 @@
-import type { ApprovalGateway } from "../tools/approval-gateway.js";
 import { CHAT_TOOL_RESULT_CHAR_LIMIT, MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../tools/llm-tool-budget.js";
 import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult, ToolBudgetLimitKind } from "./agent-types.js";
 
-export function shouldPauseForToolBudget(gateway: ApprovalGateway): boolean {
-	return gateway.getMode() === "manual";
+/**
+ * 工具预算是资源边界，不是审批边界
+ * 到达边界必须保留 provider continuation，避免 auto-safe/full-trust
+ * 把未完成任务错误收束为最终回答，导致用户无法从既有进度继续
+ */
+export function shouldPauseForToolBudget(): boolean {
+	return true;
 }
 
 export function createToolBudgetId(): string {

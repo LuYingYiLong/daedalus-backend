@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { composeSystemPrompt, listPromptTemplates } from "../prompts/registry.js";
+import { getGeneralSettings } from "../general-settings-store.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
@@ -126,7 +127,7 @@ import {
 	serializeQueuedMessage,
 	setQueuedMessageStatus
 } from "./message-queue.js";
-import { bumpWorkbenchRevision, clearWorkbenchComposer, emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun, setWorkbenchNextStepHints } from "./workbench.js";
+import { bumpWorkbenchRevision, clearWorkbenchComposer, clearWorkbenchNextStepHints, emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun, setWorkbenchNextStepHints } from "./workbench.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
@@ -144,7 +145,7 @@ import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "./additional-context.js";
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
-import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints } from "./next-step-hints.js";
+import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints, resolveNextStepHintOptions } from "./next-step-hints.js";
 import type { NextStepHint } from "./next-step-hints.js";
 import {
 	hasProviderConnectionInterruptedError,
@@ -306,6 +307,88 @@ async function createWebSearchUnavailableMessage(): Promise<string> {
 
 function createWorkflowRouteContext(session: ClientSession): WorkflowRouteContext {
 	return { hasActiveWorkspace: session.activeWorkspace !== undefined };
+}
+
+function cancelPendingNextStepHintGeneration(session: ClientSession): void {
+	session.nextStepHintAbortController?.abort();
+	session.nextStepHintAbortController = undefined;
+}
+
+function shouldScheduleNextStepHints(params: AiChatParams, goalBinding: ReturnType<typeof getGoalRunBinding>): boolean {
+	return params.mode !== "goal" && params.mode !== "plan" && goalBinding === undefined;
+}
+
+function maybeScheduleNextStepHints(params: {
+	socket: WebSocket;
+	requestId: string;
+	session: ClientSession;
+	options: ProviderChatOptions;
+	generation: number;
+}): void {
+	const sessionId: string | undefined = params.session.sessionId;
+	if (sessionId === undefined) {
+		return;
+	}
+
+	cancelPendingNextStepHintGeneration(params.session);
+	const abortController: AbortController = new AbortController();
+	params.session.nextStepHintAbortController = abortController;
+	logger.debug("ai", "next_step_hints_scheduled", {
+		requestId: params.requestId,
+		sessionId,
+		generation: params.generation
+	});
+	void (async (): Promise<void> => {
+		try {
+			const generalSettings = await getGeneralSettings();
+			if (!generalSettings.nextStepHintsEnabled || abortController.signal.aborted) {
+				return;
+			}
+			const hintOptions: ProviderChatOptions = withProviderUsageContext(
+				await resolveNextStepHintOptions(params.options),
+				{ operation: "next_step_hints" }
+			);
+			const hints: NextStepHint[] = await createNextStepHints(
+				params.session,
+				hintOptions,
+				1,
+				"done",
+				params.requestId,
+				abortController.signal
+			);
+			if (abortController.signal.aborted || params.session.sessionId !== sessionId) {
+				return;
+			}
+			const updated = setWorkbenchNextStepHints(
+				params.session,
+				hints,
+				"done",
+				params.requestId,
+				params.generation
+			);
+			if (updated === undefined) {
+				logger.debug("ai", "next_step_hints_discarded_stale", {
+					requestId: params.requestId,
+					sessionId,
+					generation: params.generation
+				});
+				return;
+			}
+			emitWorkbenchUpdated(params.socket, params.requestId, params.session);
+		} catch (error: unknown) {
+			if (!isCancellationError(error, abortController.signal)) {
+				logger.warn("ai", "next_step_hints_generation_failed", {
+					requestId: params.requestId,
+					sessionId,
+					message: error instanceof Error ? error.message : String(error)
+				});
+			}
+		} finally {
+			if (params.session.nextStepHintAbortController === abortController) {
+				params.session.nextStepHintAbortController = undefined;
+			}
+		}
+	})();
 }
 
 function selectConcreteTargetKind(families: readonly WorkflowTargetKind[]): WorkflowTargetKind | undefined {
@@ -2397,6 +2480,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			const abortController: AbortController = new AbortController();
 			session.activeAbortControllers.set(request.id, abortController);
 			session.activeRunRequestId = request.id;
+			cancelPendingNextStepHintGeneration(session);
+			const nextStepHintGeneration: number = clearWorkbenchNextStepHints(session, request.id);
 			registerSessionRunController(runSessionId, request.id, abortController);
 			const runStartedAtMs: number = Date.now();
 			const turnStartedAt: string = new Date().toISOString();
@@ -2747,6 +2832,19 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				});
 				clearWorkbenchComposer(session, true);
 				emitWorkbenchUpdated(socket, request.id, session);
+				if (
+					shouldScheduleNextStepHints(params, goalBinding)
+					&& returnedRun?.stage === "completed"
+					&& returnedRun.terminal?.resultStatus !== "cancelled"
+				) {
+					maybeScheduleNextStepHints({
+						socket,
+						requestId: request.id,
+						session,
+						options,
+						generation: nextStepHintGeneration
+					});
+				}
 				break;
 			} catch (error: unknown) {
 				if (isCancellationError(error, abortController.signal)) {
@@ -3074,17 +3172,19 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			}
 
 			const abortController: AbortController = new AbortController();
+			cancelPendingNextStepHintGeneration(session);
 			session.activeAbortControllers.set(request.id, abortController);
 			try {
+				const baseOptions: ProviderChatOptions = withProviderUsageContext(createProviderChatOptions(session, apiKey), {
+					requestId: request.id,
+					runId: request.id,
+					sessionId: session.sessionId,
+					workspaceId: session.activeWorkspace?.id,
+					operation: "next_step_hints"
+				});
 				const hints: NextStepHint[] = await createNextStepHints(
 					session,
-					withProviderUsageContext(createProviderChatOptions(session, apiKey), {
-						requestId: request.id,
-						runId: request.id,
-						sessionId: session.sessionId,
-						workspaceId: session.activeWorkspace?.id,
-						operation: "next_step_hints"
-					}),
+					await resolveNextStepHintOptions(baseOptions),
 					request.params?.maxHints ?? DEFAULT_NEXT_STEP_HINT_COUNT,
 					request.params?.trigger ?? "done",
 					request.params?.anchorRequestId,

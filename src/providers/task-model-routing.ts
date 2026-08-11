@@ -13,7 +13,7 @@ import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderId } from "../protocol/types.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 
-export type ProviderTaskModelKind = "imageRecognition" | "workflowPlanner" | "sessionTitle" | "imageGeneration" | "gitCommit" | "commandReview" | "goalEvaluator" | "contextCompression";
+export type ProviderTaskModelKind = "imageRecognition" | "workflowPlanner" | "sessionTitle" | "nextStepHints" | "imageGeneration" | "gitCommit" | "commandReview" | "goalEvaluator" | "contextCompression";
 
 export type ResolvedProviderTaskModel = {
 	kind: ProviderTaskModelKind;

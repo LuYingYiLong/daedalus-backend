@@ -6,6 +6,7 @@ import test from "node:test";
 import { installMemorySecretStore, installReadOnlySecretStore, installUnavailableSecretStore, resetSecretStoreDriver } from "../../helpers/secret-store.js";
 import { getProviderConfigStatus, getProviderModelSelectionStatus, loadProviderConfigWithSecret, saveProviderConfig, saveProviderModelsCache } from "../../../src/providers/provider-config-store.js";
 import { resolveProviderTaskModelOptions } from "../../../src/providers/task-model-routing.js";
+import { resolveNextStepHintOptions } from "../../../src/server/next-step-hints.js";
 
 async function withTempAppData(run: () => Promise<void>): Promise<void> {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
@@ -66,6 +67,7 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 			imageRecognition: null,
 			workflowPlanner: null,
 			sessionTitle: null,
+			nextStepHints: null,
 			imageGeneration: null,
 			gitCommit: null,
 			commandReview: null,
@@ -322,6 +324,7 @@ test("provider config persists cross-provider task model routing", async (): Pro
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
 				workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 				sessionTitle: null,
+				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				imageGeneration: { provider: "openai", model: "gpt-image-1" },
 				gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
 				commandReview: null,
@@ -335,6 +338,7 @@ test("provider config persists cross-provider task model routing", async (): Pro
 			imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
 			workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 			sessionTitle: null,
+			nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 			imageGeneration: { provider: "openai", model: "gpt-image-1" },
 			gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
 			commandReview: null,
@@ -487,6 +491,7 @@ test("task model resolver falls back to current model or resolves configured pro
 			modelRouting: {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
 				workflowPlanner: { provider: "moonshot", model: "kimi-k2.6" },
+				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				gitCommit: { provider: "moonshot", model: "kimi-k2.6" }
 			}
 		});
@@ -509,6 +514,24 @@ test("task model resolver falls back to current model or resolves configured pro
 		assert.equal(titleModel.source, "current");
 		assert.equal(titleModel.provider, "deepseek");
 		assert.equal(titleModel.model, "deepseek-v4-flash");
+
+		const nextStepHints = await resolveProviderTaskModelOptions("nextStepHints", {
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash"
+		});
+		assert.equal(nextStepHints.source, "configured");
+		assert.equal(nextStepHints.provider, "moonshot");
+		assert.equal(nextStepHints.model, "kimi-k2.6");
+
+		const hintOptions = await resolveNextStepHintOptions({
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash"
+		});
+		assert.equal(hintOptions.provider, "moonshot");
+		assert.equal(hintOptions.model, "kimi-k2.6");
+		assert.equal(hintOptions.reasoningMode, "disabled");
 
 		const workflowPlanner = await resolveProviderTaskModelOptions("workflowPlanner", {
 			provider: "deepseek",

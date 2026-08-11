@@ -16,6 +16,7 @@ import { getWebSearchSettingsStatus, updateWebSearchSettings } from "../../web-s
 import { getDaedalusDir } from "../../app-paths.js";
 import { getUsageMetricsSummary, getUsageMetricsTrends, listUsageMetricsLogs } from "../../usage/metrics-store.js";
 import { requestBackendShutdown } from "../../runtime/shutdown.js";
+import { clearWorkbenchNextStepHints, emitWorkbenchUpdated } from "../workbench.js";
 
 declare const __DAEDALUS_SEA_BUILD__: boolean | undefined;
 
@@ -196,6 +197,12 @@ export async function handleCoreRequest(socket: WebSocket, request: ClientReques
 	case "generalSettings.update":
 		{
 			const settings = await updateGeneralSettings(request.params);
+			if (request.params.nextStepHintsEnabled === false) {
+				session.nextStepHintAbortController?.abort();
+				session.nextStepHintAbortController = undefined;
+				clearWorkbenchNextStepHints(session);
+				emitWorkbenchUpdated(socket, request.id, session);
+			}
 			if (request.params.godotExecutablePath !== undefined) {
 				await mcpHost.refreshGodotExecutableConfiguration();
 				if (session.activeWorkspace?.godotExecutablePath === undefined) {

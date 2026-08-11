@@ -4,7 +4,7 @@ import { inspectGodotExecutable, type GodotExecutableAvailability } from "./godo
 
 export type GeneralSettings = {
 	schemaVersion: 2;
-	autoExpandTodoList: boolean;
+	nextStepHintsEnabled: boolean;
 	godotExecutablePath: string | null;
 	godotExecutableVersion: string | null;
 	godotExecutableStatus: "unconfigured" | "ready" | "unavailable";
@@ -13,13 +13,13 @@ export type GeneralSettings = {
 };
 
 export type GeneralSettingsPatch = {
-	autoExpandTodoList?: boolean | undefined;
+	nextStepHintsEnabled?: boolean | undefined;
 	godotExecutablePath?: string | null | undefined;
 };
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
 	schemaVersion: 2,
-	autoExpandTodoList: false,
+	nextStepHintsEnabled: true,
 	godotExecutablePath: null,
 	godotExecutableVersion: null,
 	godotExecutableStatus: "unconfigured",
@@ -41,9 +41,9 @@ export function normalizeGeneralSettings(value: unknown): GeneralSettings {
 		: null;
 	return {
 		schemaVersion: 2,
-		autoExpandTodoList: typeof value.autoExpandTodoList === "boolean"
-			? value.autoExpandTodoList
-			: DEFAULT_GENERAL_SETTINGS.autoExpandTodoList,
+		nextStepHintsEnabled: typeof value.nextStepHintsEnabled === "boolean"
+			? value.nextStepHintsEnabled
+			: DEFAULT_GENERAL_SETTINGS.nextStepHintsEnabled,
 		godotExecutablePath,
 		godotExecutableVersion: typeof value.godotExecutableVersion === "string"
 			? value.godotExecutableVersion
@@ -89,7 +89,7 @@ export async function updateGeneralSettings(patch: GeneralSettingsPatch): Promis
 	}
 	const settings: GeneralSettings = {
 		schemaVersion: 2,
-		autoExpandTodoList: patch.autoExpandTodoList ?? current.autoExpandTodoList,
+		nextStepHintsEnabled: patch.nextStepHintsEnabled ?? current.nextStepHintsEnabled,
 		godotExecutablePath,
 		godotExecutableVersion,
 		godotExecutableStatus: godotExecutablePath === null ? "unconfigured" : "ready",
@@ -98,7 +98,7 @@ export async function updateGeneralSettings(patch: GeneralSettingsPatch): Promis
 	};
 	await writeJsonFileAtomic(getGeneralSettingsConfigPath(), {
 		schemaVersion: settings.schemaVersion,
-		autoExpandTodoList: settings.autoExpandTodoList,
+		nextStepHintsEnabled: settings.nextStepHintsEnabled,
 		godotExecutablePath: settings.godotExecutablePath,
 		godotExecutableVersion: settings.godotExecutableVersion,
 		updatedAt: settings.updatedAt

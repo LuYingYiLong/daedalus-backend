@@ -151,6 +151,7 @@ test("provider.config.set schema accepts task model routing", (): void => {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
 				workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 				sessionTitle: null,
+				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" }
 			}
 		}

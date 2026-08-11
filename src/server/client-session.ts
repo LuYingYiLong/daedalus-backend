@@ -120,6 +120,8 @@ export type ClientSession = {
 	workbenchComposer: WorkbenchComposer;
 	workbenchActiveRun: WorkbenchActiveRun;
 	workbenchNextStepHints: WorkbenchNextStepHints;
+	workbenchNextStepHintGeneration: number;
+	nextStepHintAbortController?: AbortController | undefined;
 	workbenchClientPatchSequences: Map<string, number>;
 	fullSessionLoadPromise?: Promise<void> | undefined;
 	activeRunRequestId?: string | undefined;
@@ -164,6 +166,7 @@ export function createClientSession(defaultWorkspace: WorkspaceConfig | undefine
 		workbenchNextStepHints: {
 			hints: []
 		},
+		workbenchNextStepHintGeneration: 0,
 		workbenchClientPatchSequences: new Map(),
 		agentRuns: new Map(),
 		agentRunToolCalls: new Map(),
@@ -207,6 +210,9 @@ export function clearActiveSession(session: ClientSession): void {
 	};
 	session.workbenchActiveRun = { status: "idle" };
 	session.workbenchNextStepHints = { hints: [] };
+	session.workbenchNextStepHintGeneration += 1;
+	session.nextStepHintAbortController?.abort();
+	session.nextStepHintAbortController = undefined;
 	session.workbenchClientPatchSequences.clear();
 	session.aiDeltaEventBuffers.clear();
 	session.thinkingEventBuffers.clear();

@@ -194,8 +194,18 @@ export function setWorkbenchNextStepHints(
 	session: ClientSession,
 	hints: WorkbenchNextStepHint[],
 	trigger: string | undefined,
-	anchorRequestId: string | undefined
-): WorkbenchNextStepHints {
+	anchorRequestId: string | undefined,
+	expectedGeneration?: number | undefined
+): WorkbenchNextStepHints | undefined {
+	if (
+		expectedGeneration !== undefined
+		&& expectedGeneration !== session.workbenchNextStepHintGeneration
+	) {
+		return undefined;
+	}
+	if (expectedGeneration === undefined) {
+		session.workbenchNextStepHintGeneration += 1;
+	}
 	session.workbenchNextStepHints = {
 		hints: hints.map((hint: WorkbenchNextStepHint): WorkbenchNextStepHint => ({ ...hint })),
 		trigger,
@@ -204,6 +214,26 @@ export function setWorkbenchNextStepHints(
 	};
 	bumpWorkbenchRevision(session);
 	return session.workbenchNextStepHints;
+}
+
+/**
+ * A new user turn invalidates any in-flight background suggestion before it
+ * can replace the placeholder for that turn.
+ */
+export function clearWorkbenchNextStepHints(
+	session: ClientSession,
+	anchorRequestId?: string | undefined,
+	bumpRevision: boolean = true
+): number {
+	session.workbenchNextStepHintGeneration += 1;
+	session.workbenchNextStepHints = {
+		hints: [],
+		anchorRequestId
+	};
+	if (bumpRevision) {
+		bumpWorkbenchRevision(session);
+	}
+	return session.workbenchNextStepHintGeneration;
 }
 
 function serializePendingApproval(session: ClientSession): Record<string, unknown> {
@@ -401,7 +431,7 @@ export function applyWorkbenchPatch(session: ClientSession, patch: WorkbenchPatc
 		}
 	}
 	if (patch.nextStepHintsAction === "clear") {
-		session.workbenchNextStepHints = { hints: [] };
+		clearWorkbenchNextStepHints(session, undefined, false);
 		changed = true;
 	}
 	if (patch.activeRun !== undefined) {

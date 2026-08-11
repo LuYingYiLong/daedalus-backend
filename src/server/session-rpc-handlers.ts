@@ -108,7 +108,7 @@ import {
 	type SlashCommandResult
 } from "./slash-commands.js";
 import { hydrateMessageQueue, serializeMessageQueue } from "./message-queue.js";
-import { bumpWorkbenchRevision, emitWorkbenchUpdated, serializeWorkbench } from "./workbench.js";
+import { bumpWorkbenchRevision, clearWorkbenchNextStepHints, emitWorkbenchUpdated, serializeWorkbench } from "./workbench.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { compressSessionHistory, hydrateSessionContextLedger } from "./session-compression.js";
 import { createContextBudgetSnapshot } from "../context/context-budget-manager.js";
@@ -590,7 +590,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				updatedAt: new Date().toISOString()
 			};
 			session.workbenchActiveRun = { status: "idle" };
-			session.workbenchNextStepHints = { hints: [] };
+			session.nextStepHintAbortController?.abort();
+			session.nextStepHintAbortController = undefined;
+			clearWorkbenchNextStepHints(session, undefined, false);
 			bumpWorkbenchRevision(session);
 			if (session.sessionId) {
 				await clearContextLedger(session.sessionId);
@@ -712,7 +714,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				updatedAt: new Date().toISOString()
 			};
 			session.workbenchActiveRun = { status: "idle" };
-			session.workbenchNextStepHints = { hints: [] };
+			session.nextStepHintAbortController?.abort();
+			session.nextStepHintAbortController = undefined;
+			clearWorkbenchNextStepHints(session, undefined, false);
 
 			session = bindConnectionToSessionRuntime(socket, metadata.id, session);
 			if (workspace !== undefined || requestedWorkspaceId === null || !shouldUseConnectionWorkspace) {
@@ -790,7 +794,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						updatedAt: new Date().toISOString()
 					};
 					session.workbenchActiveRun = { status: "idle" };
-					session.workbenchNextStepHints = { hints: [] };
+					session.nextStepHintAbortController?.abort();
+					session.nextStepHintAbortController = undefined;
+					clearWorkbenchNextStepHints(session, undefined, false);
 					startFullSessionLoad(session, timeline.metadata.id);
 
 					const ledgerHydrated: boolean = await hydrateSessionContextLedger(session);

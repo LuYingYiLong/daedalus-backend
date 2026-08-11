@@ -57,6 +57,7 @@ const providerModelRoutingSchema = z.object({
 	imageRecognition: providerTaskModelRefSchema.nullable().optional(),
 	workflowPlanner: providerTaskModelRefSchema.nullable().optional(),
 	sessionTitle: providerTaskModelRefSchema.nullable().optional(),
+	nextStepHints: providerTaskModelRefSchema.nullable().optional(),
 	imageGeneration: providerTaskModelRefSchema.nullable().optional(),
 	gitCommit: providerTaskModelRefSchema.nullable().optional(),
 	commandReview: providerTaskModelRefSchema.nullable().optional(),
@@ -818,7 +819,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("generalSettings.update"),
 		params: z.object({
-			autoExpandTodoList: z.boolean().optional(),
+			nextStepHintsEnabled: z.boolean().optional(),
 			godotExecutablePath: z.string().min(1).nullable().optional(),
 		}),
 	}),

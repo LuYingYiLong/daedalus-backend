@@ -50,6 +50,7 @@ export type ProviderModelRouting = {
 	imageRecognition: ProviderTaskModelRef | null;
 	workflowPlanner: ProviderTaskModelRef | null;
 	sessionTitle: ProviderTaskModelRef | null;
+	nextStepHints: ProviderTaskModelRef | null;
 	imageGeneration: ProviderTaskModelRef | null;
 	gitCommit: ProviderTaskModelRef | null;
 	commandReview: ProviderTaskModelRef | null;
@@ -268,6 +269,7 @@ export function createEmptyModelRouting(): ProviderModelRouting {
 		imageRecognition: null,
 		workflowPlanner: null,
 		sessionTitle: null,
+		nextStepHints: null,
 		imageGeneration: null,
 		gitCommit: null,
 		commandReview: null,
@@ -304,6 +306,7 @@ function parseModelRouting(value: unknown): ProviderModelRouting {
 	routing.imageRecognition = parseTaskModelRef(record.imageRecognition);
 	routing.workflowPlanner = parseTaskModelRef(record.workflowPlanner);
 	routing.sessionTitle = parseTaskModelRef(record.sessionTitle);
+	routing.nextStepHints = parseTaskModelRef(record.nextStepHints);
 	routing.imageGeneration = parseTaskModelRef(record.imageGeneration);
 	routing.gitCommit = parseTaskModelRef(record.gitCommit);
 	routing.commandReview = parseTaskModelRef(record.commandReview);
@@ -319,7 +322,7 @@ function mergeModelRouting(existing: ProviderModelRouting | undefined, input: Pr
 	}
 
 	const next: ProviderModelRouting = { ...routing };
-	for (const key of ["imageRecognition", "workflowPlanner", "sessionTitle", "imageGeneration", "gitCommit", "commandReview", "goalEvaluator", "contextCompression"] as const) {
+	for (const key of ["imageRecognition", "workflowPlanner", "sessionTitle", "nextStepHints", "imageGeneration", "gitCommit", "commandReview", "goalEvaluator", "contextCompression"] as const) {
 		if (!Object.prototype.hasOwnProperty.call(input, key)) {
 			continue;
 		}

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-test("general settings default auto expand todo list to false and persist updates", async (): Promise<void> => {
+test("general settings default next-step hints to enabled and persist updates", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const appDataDir: string = await mkdtemp(join(tmpdir(), "daedalus-general-settings-"));
 	process.env.USERPROFILE = appDataDir;
@@ -13,19 +13,19 @@ test("general settings default auto expand todo list to false and persist update
 		const store = await import(`../../../src/general-settings-store.js?case=${Date.now()}-${Math.random()}`);
 		const appPaths = await import(`../../../src/app-paths.js?case=${Date.now()}-${Math.random()}`);
 
-		assert.equal((await store.getGeneralSettings()).autoExpandTodoList, false);
+		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, true);
 
-		const saved = await store.updateGeneralSettings({ autoExpandTodoList: true });
+		const saved = await store.updateGeneralSettings({ nextStepHintsEnabled: false });
 		assert.equal(saved.schemaVersion, 2);
-		assert.equal(saved.autoExpandTodoList, true);
+		assert.equal(saved.nextStepHintsEnabled, false);
 		assert.equal(saved.godotExecutablePath, null);
 		assert.equal(saved.godotExecutableStatus, "unconfigured");
 		assert.notEqual(saved.updatedAt, "");
 
 		const rawConfig: string = await readFile(appPaths.getGeneralSettingsConfigPath(), "utf8");
-		assert.match(rawConfig, /"autoExpandTodoList": true/u);
+		assert.match(rawConfig, /"nextStepHintsEnabled": false/u);
 		assert.equal(rawConfig.endsWith("\n"), true);
-		assert.equal((await store.getGeneralSettings()).autoExpandTodoList, true);
+		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, false);
 	} finally {
 		if (previousUserProfile === undefined) {
 			delete process.env.USERPROFILE;
@@ -49,12 +49,12 @@ test("general settings fallback to defaults for invalid config without compatibi
 		await mkdir(dirname(configPath), { recursive: true });
 		await writeFile(configPath, JSON.stringify({
 			schemaVersion: 0,
-			autoExpandTodoList: true
+			nextStepHintsEnabled: false
 		}), "utf8");
 
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
-			autoExpandTodoList: false,
+			nextStepHintsEnabled: true,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -83,13 +83,12 @@ test("general settings ignores v1 config and rejects an invalid Godot executable
 		await mkdir(dirname(configPath), { recursive: true });
 		await writeFile(configPath, JSON.stringify({
 			schemaVersion: 1,
-			autoExpandTodoList: true,
 			updatedAt: "2026-07-23T00:00:00.000Z"
 		}), "utf8");
 
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
-			autoExpandTodoList: false,
+			nextStepHintsEnabled: true,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -99,7 +98,6 @@ test("general settings ignores v1 config and rejects an invalid Godot executable
 
 		await writeFile(configPath, JSON.stringify({
 			schemaVersion: 2,
-			autoExpandTodoList: true,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			updatedAt: "2026-07-23T00:00:00.000Z"

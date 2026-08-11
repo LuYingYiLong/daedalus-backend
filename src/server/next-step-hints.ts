@@ -1,5 +1,7 @@
-import { chatWithDeepSeek, type ProviderChatOptions } from "../providers/deepseek-client.js";
 import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
+import { chatWithProvider } from "../providers/provider-chat.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
+import { resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import type { ChatMessage } from "../protocol/types.js";
 import { logger } from "../logger.js";
 import type { ClientSession } from "./client-session.js";
@@ -8,7 +10,7 @@ import { filterSessionLlmContextMessages } from "./transcript-history.js";
 
 const DEFAULT_NEXT_STEP_HINT_COUNT: number = 3;
 const MAX_NEXT_STEP_HINT_COUNT: number = 5;
-const MAX_NEXT_STEP_HINT_MESSAGE_CHARS: number = 320;
+const MAX_NEXT_STEP_HINT_MESSAGE_CHARS: number = 220;
 
 export type NextStepHint = {
 	title: string;
@@ -53,18 +55,43 @@ export function normalizeNextStepHints(raw: unknown, maxHints: number): NextStep
 	return hints;
 }
 
-export function createNextStepHintPrompt(trigger: string, anchorRequestId: string | undefined): string {
+export function createNextStepHintPrompt(
+	trigger: string,
+	anchorRequestId: string | undefined,
+	maxHints: number = 1
+): string {
+	const hintLimit: number = Math.max(1, Math.min(MAX_NEXT_STEP_HINT_COUNT, Math.floor(maxHints)));
 	return [
-		"你是 Godot Daedalus 的对话引导器。只生成下一步建议，不调用工具，不修改会话，不输出解释文本。",
-		"输出必须是 JSON object，格式：{\"hints\":[{\"title\":\"短标题\",\"message\":\"可直接填入输入框的一句话\"}]}",
-		"规则：",
-		"- 生成 2 到 3 条。",
-		"- message 必须短、具体、可直接作为用户下一轮消息。",
-		"- 避免重复刚刚已经完成的动作。",
-		"- 如果用户当前正在修改代码，优先建议验证、补测、总结或继续明确目标。",
-		`- 触发点：${trigger || "done"}。`,
-		anchorRequestId ? `- 锚点请求：${anchorRequestId}。` : ""
+		`Generate up to ${hintLimit} concise, useful next-step suggestion${hintLimit === 1 ? "" : "s"} for the user. These texts are shown only as empty composer placeholders.`,
+		"Return exactly one JSON object: {\"hints\":[{\"title\":\"short label\",\"message\":\"a natural next user message\"}]}. Return {\"hints\":[]} when no honest suggestion is useful.",
+		"Rules:",
+		"- Do not call tools, alter the conversation, explain your reasoning, or claim work was completed.",
+		"- Follow the language used by the latest user message.",
+		"- The message must be concrete, optional, and suitable for the user to send verbatim.",
+		"- Do not repeat the just-completed request or invent an unfinished task.",
+		"- Prefer a focused follow-up, verification, comparison, or next decision when it genuinely helps.",
+		`- Trigger: ${trigger || "done"}.`,
+		anchorRequestId === undefined ? "" : `- Anchor request: ${anchorRequestId}.`
 	].filter((line: string): boolean => line.length > 0).join("\n");
+}
+
+export async function resolveNextStepHintOptions(currentOptions: ProviderChatOptions): Promise<ProviderChatOptions> {
+	try {
+		const routed = await resolveProviderTaskModelOptions("nextStepHints", currentOptions);
+		return {
+			...routed.options,
+			usageContext: currentOptions.usageContext,
+			reasoningMode: "disabled"
+		};
+	} catch (error: unknown) {
+		logger.warn("ai", "next_step_hints_task_model_fallback", {
+			message: error instanceof Error ? error.message : String(error)
+		});
+		return {
+			...currentOptions,
+			reasoningMode: "disabled"
+		};
+	}
 }
 
 export async function createNextStepHints(
@@ -80,23 +107,23 @@ export async function createNextStepHints(
 	const latestMessages: string = history
 		.map((message: ChatMessage): string => `${message.role}: ${clipTextByChars(message.content, 1200)}`)
 		.join("\n\n");
-	const text: string = await chatWithDeepSeek(
+	const text: string = await chatWithProvider(
 		{
 			message: [
-				"请基于下面最近会话生成下一步提示。",
+				"Generate a next-step suggestion from this recent conversation.",
 				"",
-				"## 最近会话",
-				latestMessages.length > 0 ? latestMessages : "暂无会话历史。"
+				"## Recent conversation",
+				latestMessages.length > 0 ? latestMessages : "No conversation history is available."
 			].join("\n"),
 			options: {
-				temperature: 0.35,
-				maxTokens: 600,
+				temperature: 0.2,
+				maxTokens: 220,
 				responseFormat: "json"
 			}
 		},
 		options,
-		[],
-		createNextStepHintPrompt(trigger, anchorRequestId),
+		[] satisfies ChatMessage[],
+		createNextStepHintPrompt(trigger, anchorRequestId, clippedMaxHints),
 		abortSignal
 	);
 	try {

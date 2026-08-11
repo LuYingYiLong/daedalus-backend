@@ -14,7 +14,7 @@ import {
 } from "../../../src/server/message-queue.js";
 import { createPendingGuide, hydratePendingGuides, reorderPendingGuides } from "../../../src/server/pending-guides.js";
 import { handleWorkbenchRequest } from "../../../src/server/handlers/workbench-handlers.js";
-import { applyWorkbenchPatch, serializeWorkbench } from "../../../src/server/workbench.js";
+import { applyWorkbenchPatch, clearWorkbenchNextStepHints, serializeWorkbench, setWorkbenchNextStepHints } from "../../../src/server/workbench.js";
 
 function makeContext(id: string, resourcePath: string, pinned: boolean = false): AdditionalContextItem {
 	return {
@@ -237,6 +237,21 @@ test("workbench active run sequence is monotonic across state changes", (): void
 		status: "idle",
 		sequence: 2
 	});
+});
+
+test("next-step hints discard an older background generation", (): void => {
+	const session = createClientSession(undefined);
+	const firstGeneration = clearWorkbenchNextStepHints(session, "request-1");
+	const secondGeneration = clearWorkbenchNextStepHints(session, "request-2");
+
+	assert.equal(setWorkbenchNextStepHints(session, [{ title: "Old", message: "Old suggestion" }], "done", "request-1", firstGeneration), undefined);
+	const hints = setWorkbenchNextStepHints(session, [{ title: "Current", message: "Current suggestion" }], "done", "request-2", secondGeneration);
+
+	assert.deepEqual(hints?.hints, [{ title: "Current", message: "Current suggestion" }]);
+	const workbench = serializeWorkbench(session) as {
+		nextStepHints: { anchorRequestId?: string | undefined };
+	};
+	assert.equal(workbench.nextStepHints.anchorRequestId, "request-2");
 });
 
 test("workbench snapshot drops stale non-idle active run state", (): void => {

@@ -594,13 +594,13 @@ test("session.overview.get accepts session overview limits", (): void => {
 	}).success, true);
 });
 
-test("general settings update accepts auto expand todo preference", (): void => {
+test("general settings update accepts next-step hint preference", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
 		id: "general-settings-update",
 		method: "generalSettings.update",
 		params: {
-			autoExpandTodoList: false
+			nextStepHintsEnabled: false
 		}
 	}).success, true);
 });

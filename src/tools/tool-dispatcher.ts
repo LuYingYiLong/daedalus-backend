@@ -39,6 +39,11 @@ import {
 	parseContextControlArgs,
 	serializeContextControlResult
 } from "./context-control.js";
+import {
+	parseAgentTodoListInput,
+	serializeTodoControlResult,
+	TODO_UPDATE_TOOL_NAME
+} from "./todo-control.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -271,6 +276,36 @@ async function executeSingleToolCall(
 
 	const workspaceId: string | undefined = toolContext?.workspaceId ?? mcpHost.getActiveWorkspaceId();
 	const executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
+	if (functionName === TODO_UPDATE_TOOL_NAME) {
+		if (toolContext?.todoControl === undefined || toolContext.todoControlAvailable === false) {
+			const failure: ToolFailure = {
+				code: "todo_control_unavailable",
+				category: "protocol",
+				message: "Agent Todo control is not available in the current chat mode.",
+				retryable: false,
+				artifactRefs: []
+			};
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+		try {
+			const parsedArgs = parseAgentTodoListInput(executionArgs);
+			const value: Record<string, unknown> = await toolContext.todoControl.execute(parsedArgs);
+			return {
+				role: "tool",
+				tool_call_id: toolCall.id,
+				content: serializeTodoControlResult(value)
+			};
+		} catch (error: unknown) {
+			const failure: ToolFailure = {
+				code: "invalid_todo_update",
+				category: "protocol",
+				message: error instanceof Error ? error.message : "Invalid Agent Todo update.",
+				retryable: true,
+				artifactRefs: []
+			};
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+	}
 	if (CONTEXT_CONTROL_TOOL_NAMES.has(functionName)) {
 		if (toolContext?.contextControl === undefined || toolContext.contextControlAvailable === false) {
 			const failure: ToolFailure = {
@@ -634,6 +669,20 @@ async function executeSingleToolCall(
 			&& parsedSummary.validationStatus !== "not_applicable"
 			? toolContext?.agentLoopRecovery?.recordSuccess(functionName, executionArgs)
 			: undefined;
+		const progressNotice: ToolFailure | undefined = toolContext?.agentLoopRecovery?.recordProgress(
+			functionName,
+			executionArgs,
+			modelResultContent
+		);
+		if (progressNotice !== undefined) {
+			modelResultContent = JSON.stringify({
+				ok: parsedSummary.failure === undefined
+					&& parsedSummary.ok !== false
+					&& parsedSummary.validationStatus !== "failed",
+				result: modelResultContent,
+				agentLoopNotice: progressNotice
+			});
+		}
 			if (parsedSummary.environmentIssue === true) {
 			cacheRuntimeCapabilityFailure(
 				toolContext?.requestId,

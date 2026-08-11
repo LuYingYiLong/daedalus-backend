@@ -3,23 +3,32 @@ import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult, ToolBudgetLimitKind } from "./agent-types.js";
 
 /**
+ * 新 Agent Loop 不再把普通工具步数变成用户决策点。这个上限只用于阻止
+ * provider 永久循环；到达后要求模型基于现有结果自然收束，不创建预算审批。
+ */
+export const AUTONOMOUS_AGENT_TOOL_HARD_LIMIT = 256 as const;
+
+/**
  * 工具预算是资源边界，不是审批边界
  * 到达边界必须保留 provider continuation，避免 auto-safe/full-trust
  * 把未完成任务错误收束为最终回答，导致用户无法从既有进度继续
  */
-export function shouldPauseForToolBudget(): boolean {
-	return true;
+export function shouldPauseForToolBudget(autonomousAgentLoop: boolean = false): boolean {
+	return !autonomousAgentLoop;
 }
 
 export function createToolBudgetId(): string {
 	return `tool-budget-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function getInitialMaxToolSteps(params: AiChatParams): number {
-	return resolveToolBudget(
+export function getInitialMaxToolSteps(params: AiChatParams, autonomousAgentLoop: boolean = false): number {
+	const configuredLimit: number = resolveToolBudget(
 		(params.options as Record<string, unknown> | undefined)?.["toolBudget"] as string | undefined,
 		params.skillRefs?.[0]
 	);
+	return autonomousAgentLoop
+		? Math.max(configuredLimit, AUTONOMOUS_AGENT_TOOL_HARD_LIMIT)
+		: configuredLimit;
 }
 
 export function getInitialToolResultCharLimit(params: AiChatParams): number {
@@ -28,8 +37,15 @@ export function getInitialToolResultCharLimit(params: AiChatParams): number {
 		: MAX_TOTAL_TOOL_RESULT_CHARS;
 }
 
-export function getContinuationMaxSteps(params: AiChatParams, continuation: AgentContinuation): number {
-	return continuation.maxSteps ?? getInitialMaxToolSteps(params);
+export function getContinuationMaxSteps(
+	params: AiChatParams,
+	continuation: AgentContinuation,
+	autonomousAgentLoop: boolean = false
+): number {
+	const continuedLimit: number = continuation.maxSteps ?? getInitialMaxToolSteps(params, autonomousAgentLoop);
+	return autonomousAgentLoop
+		? Math.max(continuedLimit, AUTONOMOUS_AGENT_TOOL_HARD_LIMIT)
+		: continuedLimit;
 }
 
 export function getContinuationToolResultCharLimit(continuation: AgentContinuation): number {

@@ -31,6 +31,11 @@ import {
 	CONTEXT_CONTROL_TOOL_NAMES,
 	type ContextControlContext
 } from "./context-control.js";
+import {
+	TODO_UPDATE_TOOL_DEFINITION,
+	TODO_UPDATE_TOOL_NAME,
+	type TodoControlContext
+} from "./todo-control.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -51,6 +56,8 @@ export type ToolExecutionContext = {
 	agentLoopRecovery?: AgentLoopRecoveryController | undefined;
 	contextControl?: ContextControlContext | undefined;
 	contextControlAvailable?: boolean | undefined;
+	todoControl?: TodoControlContext | undefined;
+	todoControlAvailable?: boolean | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -350,6 +357,16 @@ function createContextControlEntry(definition: ChatCompletionTool): ToolCatalogE
 	};
 }
 
+function createTodoControlEntry(): ToolCatalogEntry {
+	return {
+		id: TODO_UPDATE_TOOL_NAME,
+		definition: TODO_UPDATE_TOOL_DEFINITION,
+		mapping: { serverId: "internal", toolName: TODO_UPDATE_TOOL_NAME },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -382,7 +399,10 @@ export class WorkspaceToolCatalog {
 		const contextControlEntries: ToolCatalogEntry[] = this.context.contextControl === undefined || this.context.contextControlAvailable === false
 			? []
 			: CONTEXT_CONTROL_TOOL_DEFINITIONS.map(createContextControlEntry);
-		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries];
+		const todoControlEntries: ToolCatalogEntry[] = this.context.todoControl === undefined || this.context.todoControlAvailable === false
+			? []
+			: [createTodoControlEntry()];
+		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -399,6 +419,9 @@ export class WorkspaceToolCatalog {
 		}
 		if (this.context.contextControl !== undefined && this.context.contextControlAvailable !== false) {
 			for (const toolName of CONTEXT_CONTROL_TOOL_NAMES) allowedNames.add(toolName);
+		}
+		if (this.context.todoControl !== undefined && this.context.todoControlAvailable !== false) {
+			allowedNames.add(TODO_UPDATE_TOOL_NAME);
 		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()

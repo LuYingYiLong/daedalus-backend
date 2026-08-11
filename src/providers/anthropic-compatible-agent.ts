@@ -457,7 +457,7 @@ async function runAgentLoop(
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;
-	if (shouldPauseForToolBudget()) {
+	if (shouldPauseForToolBudget(toolContext?.agentLoopRecovery !== undefined)) {
 		return createToolBudgetRequiredResult({
 			limitKind: "steps",
 			reason: stepLimitReason,
@@ -501,8 +501,8 @@ function getTools(allowedToolNames: readonly string[] | undefined, toolContext: 
 		: toolCatalog.getDefinitions();
 }
 
-function getMaxSteps(params: AiChatParams): number {
-	return getInitialMaxToolSteps(params);
+function getMaxSteps(params: AiChatParams, toolContext: ToolExecutionContext | undefined): number {
+	return getInitialMaxToolSteps(params, toolContext?.agentLoopRecovery !== undefined);
 }
 
 export async function runAnthropicCompatibleAgent(
@@ -527,7 +527,7 @@ export async function runAnthropicCompatibleAgent(
 		gateway,
 		getTools(allowedToolNames, toolContext),
 		0,
-		getMaxSteps(params),
+		getMaxSteps(params, toolContext),
 		0,
 		getInitialToolResultCharLimit(params),
 		false,
@@ -560,7 +560,7 @@ export async function runAnthropicCompatibleAgentStreaming(
 		gateway,
 		getTools(allowedToolNames, toolContext),
 		0,
-		getMaxSteps(params),
+		getMaxSteps(params, toolContext),
 		0,
 		getInitialToolResultCharLimit(params),
 		true,
@@ -605,7 +605,7 @@ async function continueAnthropicCompatibleAgentInternal(
 		gateway,
 		getTools(allowedToolNames, toolContext),
 		continuation.nextStep,
-		getContinuationMaxSteps(params, continuation),
+		getContinuationMaxSteps(params, continuation, toolContext?.agentLoopRecovery !== undefined),
 		totalToolResultChars,
 		maxTotalToolResultChars,
 		streamAssistant,

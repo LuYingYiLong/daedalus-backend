@@ -16,7 +16,7 @@ export type WorkflowPhaseId = string;
 
 export type WorkflowTodoStatus = "pending" | "running" | "done" | "failed" | "paused" | "skipped";
 
-export type WorkflowSource = "fixed" | "llm" | "slash";
+export type WorkflowSource = "fixed" | "llm" | "slash" | "agent_loop";
 
 export type WorkflowToolGroup = "read" | "write" | "verify" | "summarize";
 

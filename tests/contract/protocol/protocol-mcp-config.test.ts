@@ -390,8 +390,16 @@ test("session create and save schema accept frontend session metadata", (): void
 			provider: "moonshot",
 			model: "kimi-k2.7-code",
 			chatMode: "plan",
-			workflowTodoCollapsed: true
+			workflowTodoCollapsed: true,
+			workflowTodoDismissedKey: "agent-loop:run-a"
 		}
+	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "session-clear-dismissed-todo",
+		method: "session.save",
+		params: { workflowTodoDismissedKey: null }
 	}).success, true);
 
 	assert.equal(clientRequestSchema.safeParse({

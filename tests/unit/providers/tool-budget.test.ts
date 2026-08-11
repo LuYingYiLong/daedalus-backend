@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { createToolBudgetRequiredResult, getContinuedMaxSteps, getContinuedToolResultCharLimit, shouldPauseForToolBudget } from "../../../src/providers/agent-tool-budget.js";
+import {
+	AUTONOMOUS_AGENT_TOOL_HARD_LIMIT,
+	createToolBudgetRequiredResult,
+	getContinuedMaxSteps,
+	getContinuationMaxSteps,
+	getContinuedToolResultCharLimit,
+	getInitialMaxToolSteps,
+	shouldPauseForToolBudget
+} from "../../../src/providers/agent-tool-budget.js";
 import type { ChatCompletionsAgentContinuation } from "../../../src/providers/agent-types.js";
 import { MAX_TOTAL_TOOL_RESULT_CHARS, TOOL_BUDGET_CONTINUE_STEPS, TOOL_RESULT_CONTINUE_CHARS, resolveToolBudget } from "../../../src/tools/llm-tool-budget.js";
 
@@ -13,8 +21,17 @@ test("tool budgets leave enough room for project-scale runs", (): void => {
 	assert.equal(MAX_TOTAL_TOOL_RESULT_CHARS, 128000);
 });
 
-test("every approval mode preserves a resumable tool-budget continuation", async (): Promise<void> => {
+test("legacy lanes preserve budget pauses while Agent Loop runs to a background safety limit", async (): Promise<void> => {
 	assert.equal(shouldPauseForToolBudget(), true);
+	assert.equal(shouldPauseForToolBudget(true), false);
+	assert.equal(getInitialMaxToolSteps({ message: "long task", options: { toolBudget: "project_edit" } }, true), AUTONOMOUS_AGENT_TOOL_HARD_LIMIT);
+	assert.equal(getContinuationMaxSteps({ message: "continue" }, {
+		kind: "chat_completions",
+		messages: [],
+		nextStep: 48,
+		totalToolResultChars: 0,
+		maxSteps: 48
+	}, true), AUTONOMOUS_AGENT_TOOL_HARD_LIMIT);
 
 	for (const path of [
 		"../../../src/providers/openai-compatible-agent.ts",
@@ -22,8 +39,7 @@ test("every approval mode preserves a resumable tool-budget continuation", async
 		"../../../src/providers/anthropic-compatible-agent.ts"
 	]) {
 		const source: string = await readFile(new URL(path, import.meta.url), "utf8");
-		assert.equal(source.includes("shouldPauseForToolBudget()"), true);
-		assert.equal(source.includes("shouldPauseForToolBudget(gateway)"), false);
+		assert.equal(source.includes("shouldPauseForToolBudget(toolContext?.agentLoopRecovery !== undefined)"), true);
 		assert.equal(source.includes("return createToolBudgetRequiredResult({"), true);
 	}
 });

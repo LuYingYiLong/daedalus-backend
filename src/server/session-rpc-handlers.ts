@@ -233,6 +233,7 @@ function createSessionUiMetadata(params: {
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
+	workflowTodoDismissedKey?: string | null | undefined;
 	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
@@ -257,6 +258,9 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.workflowTodoCollapsed !== undefined) {
 		metadata.workflowTodoCollapsed = params.workflowTodoCollapsed;
+	}
+	if (params.workflowTodoDismissedKey !== undefined) {
+		metadata.workflowTodoDismissedKey = params.workflowTodoDismissedKey;
 	}
 	if (params.temporary === true) {
 		metadata.temporary = true;

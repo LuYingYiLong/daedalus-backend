@@ -1,5 +1,6 @@
 import { MAX_TOTAL_TOOL_RESULT_CHARS } from "../tools/llm-tool-budget.js";
 import { isContextControlResult } from "../tools/context-control.js";
+import { isTodoControlResult } from "../tools/todo-control.js";
 
 const FINAL_ANSWER_HEADROOM_CHARS: number = 2000;
 const MIN_TRUNCATED_TOOL_CHARS: number = 240;
@@ -47,7 +48,7 @@ export function compactToolResultEntries<T>(
 	const nextEntries: T[] = entries.map((entry: T, index: number): T => {
 		if (!compactableIndexes.has(index)) return entry;
 		const content: string = getContent(entry);
-		if (isContextControlResult(content)) return entry;
+		if (isContextControlResult(content) || isTodoControlResult(content)) return entry;
 		const baseCompacted: string = compactToolResultContent(content);
 		if (baseCompacted === content) return entry;
 		const compacted: string = options.createCapsule?.(entry, baseCompacted) ?? baseCompacted;
@@ -59,7 +60,7 @@ export function compactToolResultEntries<T>(
 		entries: nextEntries,
 		totalChars: nextEntries.reduce((total: number, entry: T): number => {
 			const content: string = getContent(entry);
-			return total + (isContextControlResult(content) ? 0 : content.length);
+			return total + (isContextControlResult(content) || isTodoControlResult(content) ? 0 : content.length);
 		}, 0),
 		compactedCount
 	};
@@ -100,7 +101,7 @@ export function fitToolResultContent(
 	currentTotalChars: number,
 	maxTotalChars: number = MAX_TOTAL_TOOL_RESULT_CHARS
 ): BudgetedToolResult {
-	if (isContextControlResult(content)) {
+	if (isContextControlResult(content) || isTodoControlResult(content)) {
 		return {
 			content,
 			chars: 0,

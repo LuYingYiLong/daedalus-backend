@@ -112,6 +112,10 @@ test("execution and communication anchors are CORE requirements rather than a Go
 	assert.match(corePrompt, /用户可见的正文消息中/);
 	assert.match(corePrompt, /不能只写在 thinking\/reasoning 中/);
 	assert.match(corePrompt, /最终回复说明实际完成内容、验证状态/);
+	assert.match(corePrompt, /业务实现任务应先直接回答用户准备如何处理/);
+	assert.match(corePrompt, /超过 3 个有实际意义的步骤/);
+	assert.match(corePrompt, /Todo 只是用户可见的过程辅助/);
+	assert.match(corePrompt, /自动展开待办列表/);
 	assert.doesNotMatch(godotPrompt, /## 2\. 执行与沟通锚点/);
 });
 

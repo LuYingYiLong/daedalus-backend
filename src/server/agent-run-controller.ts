@@ -107,6 +107,22 @@ export function updateAgentRun(
 	return next;
 }
 
+export function updateAgentRunTodo(
+	socket: WebSocket,
+	session: ClientSession,
+	runId: string,
+	todo: AgentRunState["todo"]
+): AgentRunState {
+	const current: AgentRunState | undefined = session.agentRuns.get(runId);
+	if (current === undefined) {
+		throw new Error(`Unknown agent run: ${runId}.`);
+	}
+	const next: AgentRunState = transitionAgentRunState(current, current.stage, { todo });
+	session.agentRuns.set(runId, next);
+	emitAgentRunState(socket, session, next);
+	return next;
+}
+
 export function recordAgentRunToolEvent(
 	socket: WebSocket,
 	session: ClientSession,

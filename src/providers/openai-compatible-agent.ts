@@ -1655,7 +1655,7 @@ async function runAgentLoop(
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;
-	if (shouldPauseForToolBudget()) {
+	if (shouldPauseForToolBudget(toolContext?.agentLoopRecovery !== undefined)) {
 		return createToolBudgetRequiredResult({
 			limitKind: "steps",
 			reason: stepLimitReason,
@@ -1715,7 +1715,7 @@ export async function runOpenAICompatibleAgent(
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
 
-	const maxSteps: number = getInitialMaxToolSteps(params);
+	const maxSteps: number = getInitialMaxToolSteps(params, toolContext?.agentLoopRecovery !== undefined);
 
 	const messages: ChatCompletionMessageParam[] = createMessages(params, history, systemPrompt);
 
@@ -1741,7 +1741,7 @@ export async function runOpenAICompatibleAgentStreaming(
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
 
-	const maxSteps: number = getInitialMaxToolSteps(params);
+	const maxSteps: number = getInitialMaxToolSteps(params, toolContext?.agentLoopRecovery !== undefined);
 
 	const messages: ChatCompletionMessageParam[] = createMessages(params, history, systemPrompt);
 
@@ -1784,7 +1784,7 @@ export async function continueOpenAICompatibleAgent(
 		totalToolResultChars = compactOpenAICompatibleToolResults(messages, true);
 	}
 
-	const maxSteps: number = getContinuationMaxSteps(params, continuation);
+	const maxSteps: number = getContinuationMaxSteps(params, continuation, toolContext?.agentLoopRecovery !== undefined);
 
 	return runAgentLoop(
 		client,
@@ -1843,7 +1843,7 @@ export async function continueOpenAICompatibleAgentStreaming(
 		totalToolResultChars = compactOpenAICompatibleToolResults(messages, true);
 	}
 
-	const maxSteps: number = getContinuationMaxSteps(params, continuation);
+	const maxSteps: number = getContinuationMaxSteps(params, continuation, toolContext?.agentLoopRecovery !== undefined);
 
 	return runAgentLoop(
 		client,

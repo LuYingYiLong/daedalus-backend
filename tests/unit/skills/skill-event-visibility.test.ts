@@ -5,6 +5,7 @@ import { createClientSession } from "../../../src/server/client-session.js";
 import { createAgentToolEventForwarder } from "../../../src/server/workflow/tool-events.js";
 import { describeToolEvent } from "../../../src/tools/tool-event-describer.js";
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../../src/tools/execution-control.js";
+import { TODO_UPDATE_TOOL_NAME } from "../../../src/tools/todo-control.js";
 import type { FileEditBatchDraft } from "../../../src/tools/file-edit-snapshots.js";
 
 type SocketMock = WebSocket & { sent: Array<Record<string, unknown>> };
@@ -96,6 +97,35 @@ test("execution decisions stay internal and cannot leave a running tool part", (
 		...describeToolEvent(EXECUTION_CONTROL_TOOL_NAME, args)
 	});
 
+	assert.deepEqual(socket.sent, []);
+});
+
+test("Agent Todo control stays in the floating state panel instead of the timeline", (): void => {
+	const socket = createSocket();
+	const forward = createAgentToolEventForwarder(
+		socket,
+		"request-todo",
+		createClientSession(undefined),
+		"run-todo",
+		"step-todo"
+	);
+	const args: Record<string, unknown> = { title: "Task", items: [] };
+	forward({
+		type: "tool.preparing",
+		step: 1,
+		toolCallId: "tool-todo",
+		toolName: TODO_UPDATE_TOOL_NAME,
+		args,
+		...describeToolEvent(TODO_UPDATE_TOOL_NAME, args)
+	});
+	forward({
+		type: "tool.call",
+		step: 1,
+		toolCallId: "tool-todo",
+		toolName: TODO_UPDATE_TOOL_NAME,
+		args,
+		...describeToolEvent(TODO_UPDATE_TOOL_NAME, args)
+	});
 	assert.deepEqual(socket.sent, []);
 });
 

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+	cloneAgentLoopState,
 	createAgentLoopRecoveryController,
 	createAgentLoopState,
+	AGENT_LOOP_NO_PROGRESS_EXHAUSTED_CALLS,
+	AGENT_LOOP_NO_PROGRESS_WARNING_CALLS,
+	isAgentLoopState,
 	MAX_AGENT_LOOP_RECOVERY_ATTEMPTS
 } from "../../../src/workflow/agent-loop-state.js";
 import type { ToolFailure } from "../../../src/tools/tool-failure.js";
@@ -74,4 +78,61 @@ test("an unchanged invalid-argument call is blocked before it reaches the tool a
 		...args,
 		scope: "project"
 	}), undefined);
+});
+
+test("repeated structured operations receive a correction window without user interaction", (): void => {
+	const state = createAgentLoopState();
+	const recovery = createAgentLoopRecoveryController(state);
+	const args = { sourceFolderId: "backend", relativePath: "src/a.ts" };
+
+	assert.equal(recovery.beforeCall("mcp_workspace_read_text_file", args), undefined);
+	assert.equal(recovery.recordProgress("mcp_workspace_read_text_file", args, "same result"), undefined);
+	for (let attempt: number = 1; attempt < AGENT_LOOP_NO_PROGRESS_WARNING_CALLS; attempt += 1) {
+		assert.equal(recovery.beforeCall("mcp_workspace_read_text_file", args), undefined);
+		assert.equal(recovery.recordProgress("mcp_workspace_read_text_file", args, "same result"), undefined);
+	}
+	assert.equal(
+		recovery.recordProgress("mcp_workspace_read_text_file", args, "same result")?.code,
+		"agent_loop_no_progress_detected"
+	);
+
+	for (
+		let attempt: number = AGENT_LOOP_NO_PROGRESS_WARNING_CALLS + 1;
+		attempt < AGENT_LOOP_NO_PROGRESS_EXHAUSTED_CALLS;
+		attempt += 1
+	) {
+		assert.equal(
+			recovery.recordProgress("mcp_workspace_read_text_file", args, "same result")?.code,
+			"agent_loop_no_progress_detected"
+		);
+	}
+	assert.equal(
+		recovery.recordProgress("mcp_workspace_read_text_file", args, "same result")?.code,
+		"agent_loop_no_progress_exhausted"
+	);
+});
+
+test("a changed structured result resets no-progress detection", (): void => {
+	const state = createAgentLoopState();
+	const recovery = createAgentLoopRecoveryController(state);
+	const first = { sourceFolderId: "backend", relativePath: "src/a.ts" };
+	for (let attempt: number = 0; attempt <= AGENT_LOOP_NO_PROGRESS_WARNING_CALLS; attempt += 1) {
+		recovery.beforeCall("mcp_workspace_read_text_file", first);
+		recovery.recordProgress("mcp_workspace_read_text_file", first, "same result");
+	}
+
+	assert.equal(recovery.recordProgress("mcp_workspace_read_text_file", first, "changed result"), undefined);
+	assert.equal(state.progress?.consecutiveNoProgressCalls, 0);
+});
+
+test("persisted Agent Loop state keeps progress while old v1 state remains readable", (): void => {
+	const oldState = { schemaVersion: 1 as const, recoveryEntries: [] };
+	assert.equal(isAgentLoopState(oldState), true);
+
+	const recovery = createAgentLoopRecoveryController(oldState);
+	recovery.beforeCall("mcp_workspace_read_text_file", { relativePath: "src/a.ts" });
+	recovery.recordProgress("mcp_workspace_read_text_file", { relativePath: "src/a.ts" }, "content");
+	const restored = cloneAgentLoopState(oldState);
+	assert.equal(restored.progress?.totalToolCalls, 1);
+	assert.equal(restored.progress?.observedResultKeys.length, 1);
 });

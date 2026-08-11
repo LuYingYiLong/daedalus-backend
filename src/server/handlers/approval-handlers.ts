@@ -106,6 +106,7 @@ import { logPromptTrace, logProjectInstructionTrace } from "../prompt-trace.js";
 import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "../request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt } from "../token-budget.js";
 import { createSessionContextControl } from "../context-control-runtime.js";
+import { createAgentTodoControl } from "../todo-control-runtime.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "../session-preview.js";
 import { createProviderChatOptions } from "../provider-chat-options.js";
 import { createGodotRuntimeStatus } from "../godot-runtime-status.js";
@@ -316,7 +317,11 @@ async function continueAfterRejectedApproval(params: {
 				requestId: pendingContinuation.requestId,
 				abortSignal: abortController.signal
 			}),
-			contextControlAvailable: pendingContinuation.agentLoopState !== undefined
+			contextControlAvailable: pendingContinuation.agentLoopState !== undefined,
+			todoControl: pendingContinuation.agentLoopState === undefined
+				? undefined
+				: createAgentTodoControl({ socket, session, runId: pendingContinuation.requestId }),
+			todoControlAvailable: pendingContinuation.agentLoopState !== undefined
 		};
 		const agentResult: ProviderAgentResult = await (pendingContinuation.stream
 			? continueProviderAgentStreaming(
@@ -749,7 +754,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 							? undefined
 							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
 						contextControl,
-						contextControlAvailable: pendingContinuation.agentLoopState !== undefined
+						contextControlAvailable: pendingContinuation.agentLoopState !== undefined,
+						todoControl: pendingContinuation.agentLoopState === undefined
+							? undefined
+							: createAgentTodoControl({ socket, session, runId: pendingContinuation.requestId }),
+						todoControlAvailable: pendingContinuation.agentLoopState !== undefined
 					}
 				)
 				: continueProviderAgent(
@@ -776,7 +785,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 							? undefined
 							: createAgentLoopRecoveryController(pendingContinuation.agentLoopState),
 						contextControl,
-						contextControlAvailable: pendingContinuation.agentLoopState !== undefined
+						contextControlAvailable: pendingContinuation.agentLoopState !== undefined,
+						todoControl: pendingContinuation.agentLoopState === undefined
+							? undefined
+							: createAgentTodoControl({ socket, session, runId: pendingContinuation.requestId }),
+						todoControlAvailable: pendingContinuation.agentLoopState !== undefined
 					}
 				);
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);

@@ -41,6 +41,7 @@ import {
 import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../workflow/evidence-failures.js";
 import { cloneAgentLoopState, type AgentLoopState } from "../workflow/agent-loop-state.js";
 import { isLegacyWorkflowContinuation, LegacyWorkflowRemovedError } from "./legacy-workflow-guard.js";
+import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -593,7 +594,9 @@ export async function sendContinuedAgentResult(
 		text = `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`;
 	}
 	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {
+		const currentRun: AgentRunState = getAgentRun(session, pendingContinuation.requestId)!;
 		updateAgentRun(socket, session, pendingContinuation.requestId, "finalizing", {
+			todo: completeAgentTodoSnapshot(currentRun.todo),
 			verificationStatus: completionStatus.verificationStatus ?? null,
 			warnings: completionStatus.warnings
 		});

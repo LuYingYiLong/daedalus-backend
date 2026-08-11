@@ -655,7 +655,7 @@ async function runResponsesAgentLoop(
 	}
 
 	const stepLimitReason: string = `工具调用达到最大步数 ${maxSteps}，当前工具结果总量为 ${totalToolResultChars} 字符`;
-	if (shouldPauseForToolBudget()) {
+	if (shouldPauseForToolBudget(toolContext?.agentLoopRecovery !== undefined)) {
 		return createToolBudgetRequiredResult({
 			limitKind: "steps",
 			reason: stepLimitReason,
@@ -709,7 +709,7 @@ export async function runOpenAIResponsesAgent(
 	const tools = allowedToolNames !== undefined
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
-	const maxSteps: number = getInitialMaxToolSteps(params);
+	const maxSteps: number = getInitialMaxToolSteps(params, toolContext?.agentLoopRecovery !== undefined);
 
 	return runResponsesAgentLoop(
 		params,
@@ -748,7 +748,7 @@ export async function runOpenAIResponsesAgentStreaming(
 	const tools = allowedToolNames !== undefined
 		? toolCatalog.getDefinitionsForNames(allowedToolNames)
 		: toolCatalog.getDefinitions();
-	const maxSteps: number = getInitialMaxToolSteps(params);
+	const maxSteps: number = getInitialMaxToolSteps(params, toolContext?.agentLoopRecovery !== undefined);
 
 	return runResponsesAgentLoop(
 		params,
@@ -802,7 +802,7 @@ export async function continueOpenAIResponsesAgent(
 		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 	}
 
-	const maxSteps: number = getContinuationMaxSteps(params, continuation);
+	const maxSteps: number = getContinuationMaxSteps(params, continuation, toolContext?.agentLoopRecovery !== undefined);
 	return runResponsesAgentLoop(
 		params,
 		options,
@@ -856,7 +856,7 @@ export async function continueOpenAIResponsesAgentStreaming(
 		totalToolResultChars = compactOpenAIResponsesToolResults(inputItems, true);
 	}
 
-	const maxSteps: number = getContinuationMaxSteps(params, continuation);
+	const maxSteps: number = getContinuationMaxSteps(params, continuation, toolContext?.agentLoopRecovery !== undefined);
 	return runResponsesAgentLoop(
 		params,
 		options,

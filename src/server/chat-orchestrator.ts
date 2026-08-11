@@ -203,6 +203,8 @@ import { clearContextLedger, filterMessagesOutsideContextLedger } from "../conte
 import { createContextBudgetSnapshot } from "../context/context-budget-manager.js";
 import type { ContextBudgetSnapshot } from "../context/context-types.js";
 import { createSessionContextControl } from "./context-control-runtime.js";
+import { createAgentTodoControl } from "./todo-control-runtime.js";
+import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import {
@@ -659,7 +661,12 @@ export function createHiddenAnswerSystemPrompt(
 			[
 				"## Daedalus free Agent Loop",
 				"- You own the execution flow. Choose the smallest useful sequence of reading, editing, commands, validation, questions, retries, and explanation for the user's actual request.",
-				"- There are no fixed inspect, implement, verify, or summarize phases. Do not report artificial phase completion and do not create a workflow Todo merely to mirror those steps.",
+				"- There are no fixed inspect, implement, verify, or summarize phases. Do not report artificial phase completion and do not create a Todo merely to mirror those generic labels.",
+				"- For a business implementation request, begin with 1-3 visible sentences that answer the request directly, name the intended scope and preserved behavior, and state the first concrete direction. Do this before any Todo or workspace tool call.",
+				"- If you judge that the task has more than three meaningful steps, call daedalus_update_todo_list to show a concise task-specific Todo list. Do not inflate a short task into generic phases just to create a list.",
+				"- Todo is optional display metadata, not an execution contract. Update it only when real progress changes; it never grants permission, requires a particular order, replaces user-visible communication, or determines whether the task succeeded.",
+				"- Do not ask the user to extend an internal tool-count budget. Continue naturally while useful progress is being made; context pressure is handled by the recoverable context controls.",
+				"- If a tool returns agent_loop_no_progress_detected, change the target or approach instead of repeating the call. If it returns agent_loop_no_progress_exhausted or agent_loop_safety_limit_reached, stop requesting equivalent tools and give an honest progress summary.",
 				"- Tools are optional. General questions may be answered directly. Workspace claims must come from actual observations, and workspace mutations must use the available policy-governed tools.",
 				"- A structured tool failure is an observation, not a request-level crash. Read its code and target, then correct the arguments, gather more context, use another equally authorized approach, ask the user when authority is missing, or continue with unaffected work.",
 				"- Never broaden source-folder, path, network, destructive, or approval scope while retrying. A retry_exhausted result means that exact operation must not be repeated; choose a materially different safe approach or explain the limitation.",
@@ -856,7 +863,11 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 				requestId: params.requestId,
 				abortSignal: params.abortSignal
 			}),
-			contextControlAvailable: params.routeDecision.lane === "agent_loop"
+			contextControlAvailable: params.routeDecision.lane === "agent_loop",
+			todoControl: params.routeDecision.lane === "agent_loop"
+				? createAgentTodoControl({ socket: params.socket, session: params.session, runId })
+				: undefined,
+			todoControlAvailable: params.routeDecision.lane === "agent_loop"
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -1215,7 +1226,9 @@ async function completeHiddenAnswerExecution(
 			? `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`
 			: text;
 	if (getAgentRun(params.session, runId) !== undefined) {
+		const currentRun: AgentRunState = getAgentRun(params.session, runId)!;
 		updateAgentRun(params.socket, params.session, runId, "finalizing", {
+			todo: completeAgentTodoSnapshot(currentRun.todo),
 			verificationStatus: completionStatus.verificationStatus ?? null,
 			warnings: completionStatus.warnings
 		});
@@ -1912,7 +1925,11 @@ async function runToolBudgetDecisionContinuation(params: {
 				requestId: pending.requestId,
 				abortSignal: abortController.signal
 			}),
-			contextControlAvailable: pendingContinuation.agentLoopState !== undefined
+			contextControlAvailable: pendingContinuation.agentLoopState !== undefined,
+			todoControl: pendingContinuation.agentLoopState === undefined
+				? undefined
+				: createAgentTodoControl({ socket, session, runId: pending.requestId }),
+			todoControlAvailable: pendingContinuation.agentLoopState !== undefined
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2624,7 +2641,19 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					editorInstanceId: session.editorInstanceId,
 					sessionId: session.sessionId,
 					contextControl: budgetContextControl,
-					contextControlAvailable: effectiveParams.mode === "agent" || effectiveParams.mode === "goal"
+					contextControlAvailable: effectiveParams.mode === "agent" || effectiveParams.mode === "goal",
+					todoControl: (
+						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
+						&& effectiveParams.options?.executionPolicy !== "read_only"
+						&& session.activeWorkspace !== undefined
+					)
+						? createAgentTodoControl({ socket, session, runId: request.id })
+						: undefined,
+					todoControlAvailable: (
+						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
+						&& effectiveParams.options?.executionPolicy !== "read_only"
+						&& session.activeWorkspace !== undefined
+					)
 				});
 				const budgetToolDefinitions = allowedToolNames === undefined
 					? budgetToolCatalog.getDefinitions()

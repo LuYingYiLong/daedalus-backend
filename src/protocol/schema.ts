@@ -1754,6 +1754,14 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("attachment.text.get"),
+		params: z.object({
+			attachmentId: z.string().min(1).max(160),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("workspace.git.diff.summary.get"),
 		params: z.object({
 			workspaceId: z.string().min(1),

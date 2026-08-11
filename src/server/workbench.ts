@@ -66,7 +66,7 @@ function getContextDataRecord(context: AdditionalContextItem): Record<string, un
 }
 
 function getContextKey(context: AdditionalContextItem): string {
-	if (context.kind === "image") {
+	if (context.kind === "image" || context.kind === "text_attachment") {
 		const attachmentId: unknown = getContextDataRecord(context).attachmentId;
 		if (typeof attachmentId === "string" && attachmentId.length > 0) {
 			return `${context.kind}\n${attachmentId}`;

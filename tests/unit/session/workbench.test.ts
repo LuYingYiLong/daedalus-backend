@@ -101,6 +101,34 @@ test("workbench additional context actions dedupe, pin and clear unpinned", (): 
 	assert.equal(session.workbenchComposer.additionalContext[0]?.pinned, true);
 });
 
+test("workbench keeps independent pasted text attachments", (): void => {
+	const session = createClientSession(undefined);
+	const makeTextAttachment = (attachmentId: string): AdditionalContextItem => ({
+		id: attachmentId,
+		kind: "text_attachment",
+		title: attachmentId,
+		source: "manual",
+		data: {
+			attachmentId,
+			mimeType: "text/plain",
+			byteSize: 300,
+			fileName: `${attachmentId}.txt`
+		}
+	});
+
+	applyWorkbenchPatch(session, {
+		additionalContextAction: { action: "addOrReplace", item: makeTextAttachment("pasted-text-a") }
+	});
+	applyWorkbenchPatch(session, {
+		additionalContextAction: { action: "addOrReplace", item: makeTextAttachment("pasted-text-b") }
+	});
+
+	assert.deepEqual(
+		session.workbenchComposer.additionalContext.map((context: AdditionalContextItem): string => context.id),
+		["pasted-text-a", "pasted-text-b"]
+	);
+});
+
 test("git review comments remain pinned and keep independent line identities", (): void => {
 	const session = createClientSession(undefined);
 	const commentA: AdditionalContextItem = {

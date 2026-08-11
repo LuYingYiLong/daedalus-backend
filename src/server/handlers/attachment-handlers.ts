@@ -3,7 +3,7 @@ import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
-import { readGeneratedImageDataUrl, readImageAttachmentDataUrl, saveImageAttachment, saveTextAttachment } from "../../session/session-attachments.js";
+import { readGeneratedImageDataUrl, readImageAttachmentDataUrl, readTextAttachmentContent, saveImageAttachment, saveTextAttachment } from "../../session/session-attachments.js";
 
 export async function handleAttachmentRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, _mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
@@ -131,6 +131,36 @@ export async function handleAttachmentRequest(socket: WebSocket, request: Client
 					id: request.id,
 					ok: false,
 					error: { code: "attachment_text_save_failed", message: error instanceof Error ? error.message : "Failed to save text attachment" }
+				});
+			}
+			return;
+		}
+
+		case "attachment.text.get": {
+			if (session.sessionId === undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "session_required", message: "Open a session before reading text attachments." }
+				});
+				return;
+			}
+
+			try {
+				const result = await readTextAttachmentContent(session.sessionId, request.params.attachmentId);
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: { attachmentId: request.params.attachmentId, content: result.content }
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "attachment_text_read_failed", message: error instanceof Error ? error.message : "Failed to read text attachment" }
 				});
 			}
 			return;

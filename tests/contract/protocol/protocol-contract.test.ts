@@ -16,6 +16,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"attachment.image.generated.get",
 	"attachment.image.get",
 	"attachment.text.save",
+	"attachment.text.get",
 	"backend.shutdown",
 	"backend.update.check",
 	"backend.update.install",

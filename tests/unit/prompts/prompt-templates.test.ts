@@ -124,6 +124,8 @@ test("core prompt provides a human-centered expression contract without weakenin
 
 	assert.match(corePrompt, /可点击的 Markdown 文件链接/);
 	assert.match(corePrompt, /\[App\.tsx \(line 2942\)\]\(C:\/workspace\/src\/App\.tsx:2942\)/);
+	assert.match(corePrompt, /文件引用是面向用户的输出契约/);
+	assert.match(corePrompt, /每个用于定位文件的裸路径都已改为链接/);
 	assert.match(corePrompt, /行号必须来自工具结果/);
 	assert.match(corePrompt, /#### 人文表达契约/);
 	assert.match(corePrompt, /事实与状态 > 用户当前目标 > 下一步行动 > 背景解释 > 礼貌修饰/);

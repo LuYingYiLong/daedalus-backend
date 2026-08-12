@@ -20,6 +20,9 @@ export type SkillSummary = {
 	editable: boolean;
 	removable: boolean;
 	displayPath: string;
+	workspaceId?: string | undefined;
+	sourceFolderId?: string | undefined;
+	isPrimarySourceFolder?: boolean | undefined;
 	error?: string | undefined;
 };
 
@@ -33,4 +36,9 @@ export type CatalogSkill = SkillSummary & {
 export type SkillWorkspace = {
 	id: string;
 	rootPath: string;
+	sourceFolders?: Array<{
+		id: string;
+		rootPath: string;
+	}> | undefined;
+	primarySourceFolderId?: string | undefined;
 };

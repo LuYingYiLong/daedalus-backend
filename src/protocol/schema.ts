@@ -22,8 +22,13 @@ export const skillIdSchema = z.enum([
 
 export const skillRefSchema = z.string()
 	.min(3)
-	.max(80)
-	.regex(/^(builtin|personal|project):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u, "Invalid skill reference.");
+	.max(96)
+	.regex(/^(?:builtin|personal):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$|^project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:@[a-f0-9]{12})?$/u, "Invalid skill reference.");
+
+const skillTargetSchema = z.object({
+	workspaceId: z.string().min(1).max(200).optional(),
+	sourceFolderId: z.string().min(1).max(200).optional(),
+}).strict();
 
 export const providerIdSchema = z.string()
 	.min(1)
@@ -935,7 +940,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("skill.list"),
-		params: z.object({}).optional(),
+		params: skillTargetSchema.optional(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -943,7 +948,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("skill.get"),
 		params: z.object({
 			ref: skillRefSchema,
-		}),
+			workspaceId: z.string().min(1).max(200).optional(),
+			sourceFolderId: z.string().min(1).max(200).optional(),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -952,7 +959,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			ref: skillRefSchema,
 			enabled: z.boolean(),
-		}),
+			workspaceId: z.string().min(1).max(200).optional(),
+			sourceFolderId: z.string().min(1).max(200).optional(),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -961,7 +970,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			ref: skillRefSchema,
 			content: z.string().min(1).max(65536),
-		}),
+			workspaceId: z.string().min(1).max(200).optional(),
+			sourceFolderId: z.string().min(1).max(200).optional(),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -969,7 +980,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("skill.remove"),
 		params: z.object({
 			ref: skillRefSchema,
-		}),
+			workspaceId: z.string().min(1).max(200).optional(),
+			sourceFolderId: z.string().min(1).max(200).optional(),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -979,13 +992,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			source: z.enum(["personal", "project"]),
 			kind: z.enum(["folder", "zip"]),
 			path: z.string().min(1),
-		}),
+			workspaceId: z.string().min(1).max(200).optional(),
+			sourceFolderId: z.string().min(1).max(200).optional(),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("skill.reload"),
-		params: z.object({}).optional(),
+		params: skillTargetSchema.optional(),
 	}),
 	z.object({
 		type: z.literal("request"),

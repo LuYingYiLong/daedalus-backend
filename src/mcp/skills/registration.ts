@@ -44,7 +44,7 @@ export function registerSkillTools(server: McpServer, workspace: SkillWorkspace)
 	server.registerTool("load", {
 		title: "Load Skill",
 		description: "读取当前工作区已启用 skill 的正文。只读，不会改变工具权限。",
-		inputSchema: z.object({ ref: z.string().min(3).max(80) })
+		inputSchema: z.object({ ref: z.string().min(3).max(96) })
 	}, async ({ ref }) => {
 		const skill = await resolveCatalogSkill(workspace, ref, true);
 		return asJsonResult({ ref: skill.ref, name: skill.name, description: skill.description, activation: "automatic", instructions: skill.document!.body });

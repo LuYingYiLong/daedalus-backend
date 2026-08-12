@@ -7,6 +7,7 @@ import test from "node:test";
 import { parseSkillDocument } from "../../../src/skills/frontmatter.js";
 import { listSkillSummaries, resolveCatalogSkill } from "../../../src/skills/catalog.js";
 import { createSkill, installSkillFromPath, removeSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../../src/skills/management.js";
+import { composeSkillCatalogPrompt } from "../../../src/skills/runtime.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 import { REQUEST_HANDLERS } from "../../../src/server/request-dispatcher.js";
 
@@ -100,6 +101,35 @@ test("skill management creates atomically, validates updates, and safely removes
 	await assert.rejects(resolveCatalogSkill(workspace, projectRef), /Unknown skill/);
 });
 
+test("multi-source catalogs keep project skills source-scoped and preserve the legacy primary ref", async (): Promise<void> => {
+	const primaryRoot: string = await mkdtemp(join(tmpdir(), "daedalus-skills-primary-"));
+	const secondaryRoot: string = await mkdtemp(join(tmpdir(), "daedalus-skills-secondary-"));
+	for (const [root, name] of [[primaryRoot, "Primary Skill"], [secondaryRoot, "Secondary Skill"]] as const) {
+		const directory: string = join(root, ".github", "skills", "shared-name");
+		await mkdir(directory, { recursive: true });
+		await writeFile(join(directory, "SKILL.md"), skillDocument(name, `${name} description.`), "utf8");
+	}
+	const workspace = {
+		id: "multi-source-workspace",
+		rootPath: primaryRoot,
+		sourceFolders: [
+			{ id: "primary", rootPath: primaryRoot },
+			{ id: "secondary", rootPath: secondaryRoot }
+		],
+		primarySourceFolderId: "primary"
+	};
+	const projectSkills = (await listSkillSummaries(workspace)).skills.filter(
+		(skill): boolean => skill.source === "project" && skill.slug === "shared-name"
+	);
+	assert.equal(projectSkills.length, 2);
+	assert.notEqual(projectSkills[0]?.ref, projectSkills[1]?.ref);
+	assert.deepEqual(new Set(projectSkills.map((skill): string | undefined => skill.sourceFolderId)), new Set(["primary", "secondary"]));
+	assert.equal((await resolveCatalogSkill(workspace, "project:shared-name")).name, "Primary Skill");
+	const prompt: string = await composeSkillCatalogPrompt(workspace);
+	assert.match(prompt, /project:shared-name@[a-f0-9]{12} \[sourceFolderId: primary\]/u);
+	assert.match(prompt, /project:shared-name@[a-f0-9]{12} \[sourceFolderId: secondary\]/u);
+});
+
 test("skill install imports folders and zipped single-root skills", async (): Promise<void> => {
 	const projectRoot: string = await mkdtemp(join(tmpdir(), "daedalus-skills-install-"));
 	const workspace = { id: "install-workspace", rootPath: projectRoot };
@@ -134,4 +164,26 @@ test("skill install is registered in schema and dispatcher", (): void => {
 		params: { source: "personal", kind: "folder", path: "/tmp/example" }
 	}).success, true);
 	assert.equal(REQUEST_HANDLERS.has("skill.install"), true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "install-project-skill",
+		method: "skill.install",
+		params: {
+			source: "project",
+			kind: "folder",
+			path: "/tmp/example",
+			workspaceId: "workspace-a",
+			sourceFolderId: "source-a"
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "get-source-scoped-skill",
+		method: "skill.get",
+		params: {
+			ref: "project:example@0123456789ab",
+			workspaceId: "workspace-a",
+			sourceFolderId: "source-a"
+		}
+	}).success, true);
 });

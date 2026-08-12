@@ -33,7 +33,7 @@ import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-pro
 import { type TokenCounter } from "../tokens/token-counter.js";
 import { createTokenCounter } from "../tokens/token-counter-factory.js";
 import { computeInputBudget, selectMessagesWithinBudget } from "../session/session-compressor.js";
-import { composeExplicitSkillPrompt, composeSkillCatalogPrompt, createGlobalSkillWorkspace, resolveBuiltinToolRestriction, resolveExplicitSkills } from "../skills/runtime.js";
+import { composeExplicitSkillPrompt, composeSkillCatalogPrompt, createGlobalSkillWorkspace, createSkillWorkspace, resolveBuiltinToolRestriction, resolveExplicitSkills } from "../skills/runtime.js";
 import type { CatalogSkill, SkillWorkspace } from "../skills/types.js";
 import {
 	createRuntimeWorkspace,
@@ -2611,7 +2611,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					break;
 				}
 				const skillWorkspace: SkillWorkspace = session.activeWorkspace !== undefined
-					? { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath }
+					? createSkillWorkspace(session.activeWorkspace)
 					: createGlobalSkillWorkspace();
 				const explicitSkills: CatalogSkill[] = await resolveExplicitSkills(skillWorkspace, effectiveParams.skillRefs ?? []);
 				const builtinToolRestriction: readonly string[] | undefined = resolveBuiltinToolRestriction(explicitSkills);

@@ -13,10 +13,10 @@ import { sendGlobalEvent } from "../session-events.js";
 import { getUserPromptConfig, setUserPromptConfig } from "../../user-prompt-store.js";
 import { getGeneralSettings, updateGeneralSettings } from "../../general-settings-store.js";
 import { getWebSearchSettingsStatus, updateWebSearchSettings } from "../../web-search-settings-store.js";
-import { getDaedalusDir } from "../../app-paths.js";
 import { getUsageMetricsSummary, getUsageMetricsTrends, listUsageMetricsLogs } from "../../usage/metrics-store.js";
 import { requestBackendShutdown } from "../../runtime/shutdown.js";
 import { clearWorkbenchNextStepHints, emitWorkbenchUpdated } from "../workbench.js";
+import { resolveSkillWorkspaceTarget, type SkillTargetParams } from "../../skills/workspace-target.js";
 
 declare const __DAEDALUS_SEA_BUILD__: boolean | undefined;
 
@@ -27,26 +27,22 @@ async function loadSourceBackendUpdateModule(): Promise<BackendUpdateModule> {
 	return await import(modulePath) as BackendUpdateModule;
 }
 
-function getActiveSkillWorkspace(session: ClientSession): SkillWorkspace | undefined {
-	if (session.activeWorkspace !== undefined) {
-		return { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath };
-	}
-	if (session.godotProjectPath !== undefined) {
-		return { id: `runtime:${session.godotProjectPath}`, rootPath: session.godotProjectPath };
-	}
-	return undefined;
+function getConfiguredSkillWorkspace(params: SkillTargetParams, sourceScoped: boolean = false): SkillWorkspace {
+	return resolveSkillWorkspaceTarget(params, { sourceScoped });
 }
 
-function getSkillWorkspace(session: ClientSession): SkillWorkspace {
-	return getActiveSkillWorkspace(session) ?? { id: "studio:global", rootPath: getDaedalusDir() };
+function isProjectSkillRef(ref: string): boolean {
+	return ref.startsWith("project:");
 }
 
-function getProjectSkillWorkspace(session: ClientSession): SkillWorkspace {
-	const workspace: SkillWorkspace | undefined = getActiveSkillWorkspace(session);
-	if (workspace === undefined) {
-		throw new Error("No active workspace is available for project skill management.");
+function getOperationSkillWorkspace(params: SkillTargetParams & { ref: string }): SkillWorkspace {
+	if (!isProjectSkillRef(params.ref)) {
+		return getConfiguredSkillWorkspace(params);
 	}
-	return workspace;
+	if (params.workspaceId === undefined) {
+		throw new Error("workspaceId is required for project skill management.");
+	}
+	return getConfiguredSkillWorkspace(params, true);
 }
 
 async function sendSkillList(socket: WebSocket, requestId: string, workspace: SkillWorkspace): Promise<void> {
@@ -238,43 +234,46 @@ export async function handleCoreRequest(socket: WebSocket, request: ClientReques
 
 	case "skill.list":
 	case "skill.reload":
-		await sendSkillList(socket, request.id, getSkillWorkspace(session));
+		await sendSkillList(socket, request.id, getConfiguredSkillWorkspace(request.params ?? {}));
 		break;
 
 	case "skill.get": {
-		const workspace: SkillWorkspace = getSkillWorkspace(session);
+		const workspace: SkillWorkspace = getOperationSkillWorkspace(request.params);
 		sendJson(socket, { type: "response", id: request.id, ok: true, result: { ref: request.params.ref, content: await getSkillContent(workspace, request.params.ref) } });
 		break;
 	}
 
 	case "skill.set_enabled": {
-		const workspace: SkillWorkspace = getSkillWorkspace(session);
-		await setWorkspaceSkillEnabled(workspace, request.params.ref, request.params.enabled);
-		await sendSkillList(socket, request.id, workspace);
+		const operationWorkspace: SkillWorkspace = getOperationSkillWorkspace(request.params);
+		await setWorkspaceSkillEnabled(operationWorkspace, request.params.ref, request.params.enabled);
+		await sendSkillList(socket, request.id, getConfiguredSkillWorkspace(request.params));
 		sendGlobalEvent(socket, request.id, "skill.catalog.changed", { ref: request.params.ref });
 		break;
 	}
 
 	case "skill.update": {
-		const workspace: SkillWorkspace = getSkillWorkspace(session);
-		await updateSkillContent(workspace, request.params.ref, request.params.content);
-		await sendSkillList(socket, request.id, workspace);
+		const operationWorkspace: SkillWorkspace = getOperationSkillWorkspace(request.params);
+		await updateSkillContent(operationWorkspace, request.params.ref, request.params.content);
+		await sendSkillList(socket, request.id, getConfiguredSkillWorkspace(request.params));
 		sendGlobalEvent(socket, request.id, "skill.catalog.changed", { ref: request.params.ref });
 		break;
 	}
 
 	case "skill.remove": {
-		const workspace: SkillWorkspace = getSkillWorkspace(session);
-		await removeSkill(workspace, request.params.ref);
-		await sendSkillList(socket, request.id, workspace);
+		const operationWorkspace: SkillWorkspace = getOperationSkillWorkspace(request.params);
+		await removeSkill(operationWorkspace, request.params.ref);
+		await sendSkillList(socket, request.id, getConfiguredSkillWorkspace(request.params));
 		sendGlobalEvent(socket, request.id, "skill.catalog.changed", { ref: request.params.ref });
 		break;
 	}
 
 	case "skill.install": {
-		const workspace: SkillWorkspace = request.params.source === "project" ? getProjectSkillWorkspace(session) : getSkillWorkspace(session);
-		const ref: string = await installSkillFromPath(workspace, request.params.source, request.params.kind, request.params.path);
-		await sendSkillList(socket, request.id, workspace);
+		if (request.params.source === "project" && request.params.workspaceId === undefined) {
+			throw new Error("workspaceId is required for project skill installation.");
+		}
+		const operationWorkspace: SkillWorkspace = getConfiguredSkillWorkspace(request.params, request.params.source === "project");
+		const ref: string = await installSkillFromPath(operationWorkspace, request.params.source, request.params.kind, request.params.path);
+		await sendSkillList(socket, request.id, getConfiguredSkillWorkspace(request.params));
 		sendGlobalEvent(socket, request.id, "skill.catalog.changed", { ref });
 		break;
 	}

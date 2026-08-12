@@ -46,6 +46,8 @@ import type { McpProgressNotification } from "./terminal/progress.js";
 import { resolveEffectiveGodotExecutable } from "../godot-executable-resolver.js";
 import { readGodotProjectFeatureVersion } from "../godot-documentation/project-version.js";
 import { logger } from "../logger.js";
+import { resolveCatalogEntry } from "../skills/catalog.js";
+import { createSkillWorkspace } from "../skills/runtime.js";
 import {
 	COMMAND_TIMEOUT_MS,
 	findPreset,
@@ -1009,6 +1011,13 @@ export class McpHost {
 		const workspace: WorkspaceConfig | undefined = resolvedWorkspaceId === undefined
 			? undefined
 			: findWorkspace(resolvedWorkspaceId);
+		let routedSourceFolderId: string | undefined = sourceFolderId;
+		if (serverId === "skills" && name === "load" && workspace !== undefined) {
+			const ref: string = typeof args.ref === "string" ? args.ref : "";
+			const skill = await resolveCatalogEntry(createSkillWorkspace(workspace), ref);
+			routedSourceFolderId = skill.sourceFolderId ?? workspace.primarySourceFolderId;
+			args.sourceFolderId = routedSourceFolderId;
+		}
 		if (serverId === "workspace" && workspace !== undefined) {
 			try {
 				if (name === "list_source_folders" || name === "get_source_context") {
@@ -1047,7 +1056,7 @@ export class McpHost {
 			const operation: WorkspaceSourceOperation = serverId === "godot"
 				? "godot"
 				: serverId === "skills" && name === "load" ? "read" : "write";
-			const selection = resolveWorkspaceSources(workspace, { sourceFolderId, operation });
+			const selection = resolveWorkspaceSources(workspace, { sourceFolderId: routedSourceFolderId, operation });
 			if (selection.kind !== "source") {
 				throw new Error("source_required: this operation requires one source folder.");
 			}

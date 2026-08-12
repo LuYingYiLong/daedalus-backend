@@ -7,7 +7,7 @@ import type { OnToolEvent, ToolEvent } from "../../tools/tool-dispatcher.js";
 import type { ProviderChatOptions } from "../../providers/deepseek-client.js";
 import { McpHost } from "../../mcp/mcp-host.js";
 import { composeSkillPrompt } from "../../skills/registry.js";
-import { composeExplicitSkillPrompt, composeSkillCatalogPrompt, createGlobalSkillWorkspace, resolveExplicitSkills } from "../../skills/runtime.js";
+import { composeExplicitSkillPrompt, composeSkillCatalogPrompt, createGlobalSkillWorkspace, createSkillWorkspace, resolveExplicitSkills } from "../../skills/runtime.js";
 import type { SkillWorkspace } from "../../skills/types.js";
 import { applyToolEventToWorkflowObservations } from "../../workflow/outcome.js";
 import { createPhasePrompt } from "../../workflow/runner.js";
@@ -137,7 +137,7 @@ export async function createWorkflowPhasePrompt(
 	const runtimePhase: WorkflowPhase = await createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session);
 	const phaseSkillPrompt: string = await composeSkillPrompt(phase.skillId);
 	const skillWorkspace: SkillWorkspace = session.activeWorkspace !== undefined
-		? { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath }
+		? createSkillWorkspace(session.activeWorkspace)
 		: createGlobalSkillWorkspace();
 	const explicitSkillPrompt: string = composeExplicitSkillPrompt(await resolveExplicitSkills(skillWorkspace, params.skillRefs ?? []));
 	const skillCatalogPrompt: string = runtimePhase.allowedTools.includes(SKILL_LOAD_TOOL)

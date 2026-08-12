@@ -18,8 +18,14 @@ const BUILTIN_SLUGS: Record<SkillId, string> = {
 	"image.gen": "image-gen"
 };
 
-export function createSkillRef(source: SkillSource, slug: string): SkillRef {
-	return `${source}:${slug}`;
+function createSourceRefSuffix(sourceFolderId: string): string {
+	return createHash("sha256").update(sourceFolderId).digest("hex").slice(0, 12);
+}
+
+export function createSkillRef(source: SkillSource, slug: string, sourceFolderId?: string | undefined): SkillRef {
+	return source === "project" && sourceFolderId !== undefined
+		? `${source}:${slug}@${createSourceRefSuffix(sourceFolderId)}`
+		: `${source}:${slug}`;
 }
 
 export function legacySkillIdToRef(skillId: string): SkillRef | undefined {
@@ -34,7 +40,14 @@ function isInside(rootPath: string, candidatePath: string): boolean {
 	return child.length === 0 || (!child.startsWith(`..${sep}`) && child !== ".." && !isAbsolute(child));
 }
 
-async function scanRoot(source: "personal" | "project", rootPath: string, workspace: SkillWorkspace, enablement: Record<SkillRef, boolean>): Promise<CatalogSkill[]> {
+async function scanRoot(
+	source: "personal" | "project",
+	rootPath: string,
+	workspace: SkillWorkspace,
+	enablement: Record<SkillRef, boolean>,
+	sourceFolderId?: string | undefined,
+	isPrimarySourceFolder: boolean = false
+): Promise<CatalogSkill[]> {
 	let rootRealPath: string;
 	try {
 		const rootStat = await lstat(rootPath);
@@ -55,10 +68,10 @@ async function scanRoot(source: "personal" | "project", rootPath: string, worksp
 			continue;
 		}
 		const slug: string = entry.name;
-		const ref: SkillRef = createSkillRef(source, slug);
+		const ref: SkillRef = createSkillRef(source, slug, sourceFolderId);
 		const filePath: string = join(rootRealPath, slug, "SKILL.md");
 		const displayPath: string = source === "project"
-			? `res://.github/skills/${slug}/SKILL.md`
+			? `${sourceFolderId === undefined ? "" : `[${sourceFolderId}] `}.github/skills/${slug}/SKILL.md`
 			: `%USERPROFILE%/.daedalus/skills/${slug}/SKILL.md`;
 		let document;
 		let errorMessage: string | undefined;
@@ -87,11 +100,13 @@ async function scanRoot(source: "personal" | "project", rootPath: string, worksp
 			name: document?.name ?? slug,
 			description: document?.description ?? "",
 			source,
-			enabled: document !== undefined && (enablement[ref] ?? source !== "personal"),
+			enabled: document !== undefined && (enablement[ref] ?? (source === "project" ? enablement[createSkillRef("project", slug)] : undefined) ?? source !== "personal"),
 			valid: document !== undefined,
 			editable: fileExists,
 			removable: true,
 			displayPath,
+			workspaceId: workspace.id,
+			...(sourceFolderId === undefined ? {} : { sourceFolderId, isPrimarySourceFolder }),
 			...(errorMessage === undefined ? {} : { error: errorMessage }),
 			filePath,
 			document
@@ -128,10 +143,25 @@ async function scanBuiltins(workspace: SkillWorkspace, enablement: Record<SkillR
 }
 
 export async function loadSkillCatalog(workspace: SkillWorkspace): Promise<{ skills: CatalogSkill[]; revision: string }> {
-	const projectRoot: string = join(workspace.rootPath, ".github", "skills");
 	const enablement: Record<SkillRef, boolean> = await getWorkspaceSkillEnablement(workspace.id);
+	const projectSources: Array<{ id?: string; rootPath: string; primary: boolean }> = workspace.id === "studio:global"
+		? []
+		: workspace.sourceFolders === undefined
+		? [{ rootPath: workspace.rootPath, primary: true }]
+		: workspace.sourceFolders.map((sourceFolder): { id: string; rootPath: string; primary: boolean } => ({
+			id: sourceFolder.id,
+			rootPath: sourceFolder.rootPath,
+			primary: sourceFolder.id === workspace.primarySourceFolderId
+		}));
 	const groups = await Promise.all([
-		scanRoot("project", projectRoot, workspace, enablement),
+		...projectSources.map((sourceFolder): Promise<CatalogSkill[]> => scanRoot(
+			"project",
+			join(sourceFolder.rootPath, ".github", "skills"),
+			workspace,
+			enablement,
+			sourceFolder.id,
+			sourceFolder.primary
+		)),
 		scanRoot("personal", getPersonalSkillsDir(), workspace, enablement),
 		scanBuiltins(workspace, enablement)
 	]);
@@ -159,7 +189,12 @@ export async function resolveCatalogSkill(workspace: SkillWorkspace, ref: SkillR
 }
 
 export async function resolveCatalogEntry(workspace: SkillWorkspace, ref: SkillRef): Promise<CatalogSkill> {
-	const skill: CatalogSkill | undefined = (await loadSkillCatalog(workspace)).skills.find((entry): boolean => entry.ref === ref);
+	const catalog = await loadSkillCatalog(workspace);
+	let skill: CatalogSkill | undefined = catalog.skills.find((entry): boolean => entry.ref === ref);
+	if (skill === undefined && /^project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(ref)) {
+		const slug: string = ref.slice("project:".length);
+		skill = catalog.skills.find((entry): boolean => entry.source === "project" && entry.slug === slug && entry.isPrimarySourceFolder === true);
+	}
 	if (skill === undefined) {
 		throw new Error(`Unknown skill reference: ${ref}`);
 	}

@@ -9,7 +9,17 @@ import { setSkillEnabled } from "./settings-store.js";
 import type { SkillRef, SkillSource, SkillWorkspace } from "./types.js";
 
 function skillRoot(workspace: SkillWorkspace, source: "personal" | "project"): string {
-	return source === "project" ? join(workspace.rootPath, ".github", "skills") : getPersonalSkillsDir();
+	if (source !== "project") {
+		return getPersonalSkillsDir();
+	}
+	if (workspace.sourceFolders !== undefined && workspace.sourceFolders.length !== 1) {
+		throw new Error("A single sourceFolderId is required for project skill management.");
+	}
+	return join(workspace.sourceFolders?.[0]?.rootPath ?? workspace.rootPath, ".github", "skills");
+}
+
+function projectSourceFolderId(workspace: SkillWorkspace, source: "personal" | "project"): string | undefined {
+	return source === "project" ? workspace.sourceFolders?.[0]?.id : undefined;
 }
 
 function assertSafeSlug(slug: string): void {
@@ -172,7 +182,7 @@ export async function createSkill(workspace: SkillWorkspace, source: "personal" 
 	if (!isLexicallyInside(root, targetDirectory)) {
 		throw new Error("Skill target resolves outside its allowed root.");
 	}
-	const ref: SkillRef = createSkillRef(source, slug);
+	const ref: SkillRef = createSkillRef(source, slug, projectSourceFolderId(workspace, source));
 	if ((await loadSkillCatalog(workspace)).skills.some((skill): boolean => skill.ref === ref)) {
 		throw new Error(`Skill ${ref} already exists.`);
 	}
@@ -207,7 +217,7 @@ export async function installSkillFromPath(
 		if (!isLexicallyInside(root, targetDirectory)) {
 			throw new Error("Skill target resolves outside its allowed root.");
 		}
-		const ref: SkillRef = createSkillRef(source, slug);
+		const ref: SkillRef = createSkillRef(source, slug, projectSourceFolderId(workspace, source));
 		if ((await loadSkillCatalog(workspace)).skills.some((skill): boolean => skill.ref === ref) || await pathExists(targetDirectory)) {
 			throw new Error(`Skill ${ref} already exists.`);
 		}

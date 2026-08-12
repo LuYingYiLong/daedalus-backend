@@ -230,17 +230,25 @@ export async function installSkillFromPath(
 	}
 }
 
-export async function removePersonalSkill(workspace: SkillWorkspace, ref: SkillRef): Promise<void> {
+export async function removeSkill(workspace: SkillWorkspace, ref: SkillRef): Promise<void> {
 	const skill = await resolveCatalogEntry(workspace, ref);
-	if (skill.source !== "personal" || !skill.removable) {
+	if (skill.source === "builtin" || !skill.removable) {
 		throw new Error(`Skill ${ref} is not removable.`);
 	}
-	const rootReal: string = await realpath(getPersonalSkillsDir());
+	const rootReal: string = await realpath(skillRoot(workspace, skill.source));
 	const directoryReal: string = await realpath(dirname(skill.filePath));
 	if (!isLexicallyInside(rootReal, directoryReal) || directoryReal === rootReal) {
-		throw new Error("Refusing to remove a skill outside the personal skill root.");
+		throw new Error(`Refusing to remove a skill outside the ${skill.source} skill root.`);
 	}
 	await rm(directoryReal, { recursive: true, force: false });
+}
+
+export async function removePersonalSkill(workspace: SkillWorkspace, ref: SkillRef): Promise<void> {
+	const skill = await resolveCatalogEntry(workspace, ref);
+	if (skill.source !== "personal") {
+		throw new Error(`Skill ${ref} is not a personal skill.`);
+	}
+	await removeSkill(workspace, ref);
 }
 
 export async function setWorkspaceSkillEnabled(workspace: SkillWorkspace, ref: SkillRef, enabled: boolean): Promise<void> {

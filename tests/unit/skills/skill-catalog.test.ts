@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 import { parseSkillDocument } from "../../../src/skills/frontmatter.js";
 import { listSkillSummaries, resolveCatalogSkill } from "../../../src/skills/catalog.js";
-import { createSkill, installSkillFromPath, removePersonalSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../../src/skills/management.js";
+import { createSkill, installSkillFromPath, removeSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../../src/skills/management.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 import { REQUEST_HANDLERS } from "../../../src/server/request-dispatcher.js";
 
@@ -84,7 +84,7 @@ test("catalog discovers project, personal, and builtin skills without shadowing"
 	assert.equal((await resolveCatalogSkill(workspace, "personal:shared-name", true)).name, "Personal Skill");
 });
 
-test("skill management creates atomically, validates updates, and only removes personal skills", async (): Promise<void> => {
+test("skill management creates atomically, validates updates, and safely removes personal or project skills", async (): Promise<void> => {
 	const projectRoot: string = await mkdtemp(join(tmpdir(), "daedalus-skills-manage-"));
 	const workspace = { id: "manage-workspace", rootPath: projectRoot };
 	const ref: string = await createSkill(workspace, "personal", "created-skill", skillDocument("Created", "Created by AI."));
@@ -93,10 +93,11 @@ test("skill management creates atomically, validates updates, and only removes p
 	await updateSkillContent(workspace, ref, skillDocument("Updated", "Updated safely."));
 	assert.match(await readFile((await resolveCatalogSkill(workspace, ref)).filePath, "utf8"), /name: Updated/);
 	await assert.rejects(updateSkillContent(workspace, ref, "invalid"), /frontmatter/);
-	await removePersonalSkill(workspace, ref);
+	await removeSkill(workspace, ref);
 	await assert.rejects(resolveCatalogSkill(workspace, ref), /Unknown skill/);
 	const projectRef: string = await createSkill(workspace, "project", "project-skill", skillDocument("Project", "Version controlled."));
-	await assert.rejects(removePersonalSkill(workspace, projectRef), /not removable/);
+	await removeSkill(workspace, projectRef);
+	await assert.rejects(resolveCatalogSkill(workspace, projectRef), /Unknown skill/);
 });
 
 test("skill install imports folders and zipped single-root skills", async (): Promise<void> => {

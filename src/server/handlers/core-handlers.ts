@@ -7,7 +7,7 @@ import { createBackendHealthResult } from "../backend-health.js";
 import { createSlashCommandListResult } from "../slash-commands.js";
 import { listPromptTemplates } from "../../prompts/registry.js";
 import { listSkillSummaries } from "../../skills/catalog.js";
-import { getSkillContent, installSkillFromPath, removePersonalSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../skills/management.js";
+import { getSkillContent, installSkillFromPath, removeSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../skills/management.js";
 import type { SkillWorkspace } from "../../skills/types.js";
 import { sendGlobalEvent } from "../session-events.js";
 import { getUserPromptConfig, setUserPromptConfig } from "../../user-prompt-store.js";
@@ -265,7 +265,7 @@ export async function handleCoreRequest(socket: WebSocket, request: ClientReques
 
 	case "skill.remove": {
 		const workspace: SkillWorkspace = getSkillWorkspace(session);
-		await removePersonalSkill(workspace, request.params.ref);
+		await removeSkill(workspace, request.params.ref);
 		await sendSkillList(socket, request.id, workspace);
 		sendGlobalEvent(socket, request.id, "skill.catalog.changed", { ref: request.params.ref });
 		break;

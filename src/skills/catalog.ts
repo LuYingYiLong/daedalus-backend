@@ -90,7 +90,7 @@ async function scanRoot(source: "personal" | "project", rootPath: string, worksp
 			enabled: document !== undefined && (enablement[ref] ?? source !== "personal"),
 			valid: document !== undefined,
 			editable: fileExists,
-			removable: source === "personal",
+			removable: true,
 			displayPath,
 			...(errorMessage === undefined ? {} : { error: errorMessage }),
 			filePath,

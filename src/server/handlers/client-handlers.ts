@@ -18,15 +18,32 @@ import {
 } from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 import {
-	isPluginProtocolSupported,
-	MAX_PLUGIN_PROTOCOL_VERSION,
-	MIN_PLUGIN_PROTOCOL_VERSION
-} from "../plugin-compatibility.js";
+	isBridgeProtocolSupported,
+	MAX_BRIDGE_PROTOCOL_VERSION,
+	MIN_BRIDGE_PROTOCOL_VERSION
+} from "../bridge-compatibility.js";
 
 function readClientType(value: unknown): ClientType {
-	return value === "godot_plugin" || value === "studio" || value === "cli" || value === "smoke" || value === "external_mcp"
+	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "cli" || value === "smoke" || value === "external_mcp"
 		? value
 		: "legacy";
+}
+
+function rejectBridgeHandshake(socket: WebSocket, requestId: string, receivedVersion: number | undefined): void {
+	sendJson(socket, {
+		type: "response",
+		id: requestId,
+		ok: false,
+		error: {
+			code: "bridge_protocol_unsupported",
+			message: `Daedalus Editor Bridge Protocol v${MIN_BRIDGE_PROTOCOL_VERSION} is required. Received ${receivedVersion ?? "an unidentified legacy client"}.`
+		}
+	});
+	setTimeout((): void => {
+		if (socket.readyState < 2) {
+			socket.close(1008, "bridge_protocol_unsupported");
+		}
+	}, 0);
 }
 
 function readCapabilities(value: unknown): ClientCapabilities {
@@ -49,8 +66,34 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 		case "client.hello": {
 			const params = request.params!;
 			const clientType: ClientType = readClientType(params.clientType);
+			const isEditorBridge: boolean = clientType === "godot_editor_bridge";
+			if (clientType === "godot_plugin" || (isEditorBridge && !isBridgeProtocolSupported(params.bridgeProtocolVersion))) {
+				rejectBridgeHandshake(
+					socket,
+					request.id,
+					isEditorBridge ? params.bridgeProtocolVersion : params.pluginProtocolVersion
+				);
+				break;
+			}
+			if (isEditorBridge && (
+				params.bridgeVersion === undefined
+				|| params.godotVersion === undefined
+				|| params.workspaceRoot === undefined
+				|| params.editorInstanceId === undefined
+			)) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "bridge_hello_invalid",
+						message: "Editor Bridge hello requires bridgeVersion, godotVersion, workspaceRoot, and editorInstanceId."
+					}
+				});
+				break;
+			}
 			let workspace: WorkspaceConfig | undefined;
-			if (clientType === "godot_plugin" && params.workspaceRoot !== undefined) {
+			if (isEditorBridge && params.workspaceRoot !== undefined) {
 				const configuredSource = findWorkspaceSourceByPath(params.workspaceRoot);
 				workspace = configuredSource === undefined
 					? upsertRuntimeWorkspace(createRuntimeWorkspace(
@@ -81,10 +124,12 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 
 			const info = updateClientConnection(socket, {
 				clientType,
-				clientName: params.clientName ?? (params.clientType === "studio" ? "Daedalus Studio" : "Godot Daedalus"),
+				clientName: params.clientName ?? (params.clientType === "studio" ? "Daedalus Studio" : "Daedalus Editor Bridge"),
 				workspaceId: workspace?.id ?? params.workspaceId,
 				workspaceRoot: workspace?.rootPath ?? params.workspaceRoot,
 				editorInstanceId: params.editorInstanceId,
+				bridgeProtocolVersion: isEditorBridge ? params.bridgeProtocolVersion : undefined,
+				bridgeHandshakeAccepted: isEditorBridge,
 				capabilities: readCapabilities(params.capabilities)
 			});
 			// Studio 正常重连时握手频繁，仅在传输排障时保留这类元数据。
@@ -95,9 +140,9 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				workspaceId: info.workspaceId,
 				workspaceRoot: info.workspaceRoot,
 				editorInstanceId: info.editorInstanceId,
-				pluginVersion: params.pluginVersion,
-				pluginProtocolVersion: params.pluginProtocolVersion,
-				studioBindingVersion: params.studioBindingVersion,
+				bridgeVersion: params.bridgeVersion,
+				bridgeProtocolVersion: params.bridgeProtocolVersion,
+				godotVersion: params.godotVersion,
 				capabilities: info.capabilities,
 				sessionId: session.sessionId
 			});
@@ -112,10 +157,10 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 						enabled: true,
 						protocolVersion: 3
 					},
-					pluginCompatibility: {
-						minProtocolVersion: MIN_PLUGIN_PROTOCOL_VERSION,
-						maxProtocolVersion: MAX_PLUGIN_PROTOCOL_VERSION,
-						accepted: isPluginProtocolSupported(params.pluginProtocolVersion)
+					bridgeCompatibility: {
+						minProtocolVersion: MIN_BRIDGE_PROTOCOL_VERSION,
+						maxProtocolVersion: MAX_BRIDGE_PROTOCOL_VERSION,
+						accepted: !isEditorBridge || isBridgeProtocolSupported(params.bridgeProtocolVersion)
 					}
 				}
 			});

@@ -46,7 +46,7 @@ export type ToolExecutionContext = {
 	executionControlAvailable?: boolean | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
 	chatCompletionAvailable?: boolean | undefined;
-	clientType?: "studio" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
+	clientType?: "studio" | "godot_editor_bridge" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
 	imageRouting?: {
 		options: ProviderChatOptions;
 		contextText: string;

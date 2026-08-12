@@ -23,6 +23,7 @@ type PendingEditorToolCall = {
 	reject: (error: Error) => void;
 	timeout: NodeJS.Timeout;
 	editorInstanceId: string;
+	socket: WebSocket;
 };
 
 type EditorConnection = {
@@ -32,6 +33,8 @@ type EditorConnection = {
 	clientName?: string | undefined;
 	context: JsonObject;
 	updatedAtMs: number;
+	lastHeartbeatAtMs: number;
+	contextRevision: number;
 };
 
 export type GodotEditorInstanceSummary = {
@@ -130,15 +133,27 @@ export class GodotEditorBridge {
 				editorInstanceId: resolvedEditorInstanceId,
 				online: true
 			},
-			updatedAtMs: Date.now()
+			updatedAtMs: Date.now(),
+			lastHeartbeatAtMs: Date.now(),
+			contextRevision: typeof context.contextRevision === "number" ? context.contextRevision : (existing?.contextRevision ?? 0)
 		};
 		this.connectionsByInstanceId.set(resolvedEditorInstanceId, connection);
 		return this.createInstanceSummary(connection);
 	}
 
-	handleToolResult(callId: string, ok: boolean, result: unknown, error: unknown): boolean {
+	heartbeat(socket: WebSocket, editorInstanceId: string, contextRevision: number): boolean {
+		const connection: EditorConnection | undefined = this.connectionsByInstanceId.get(editorInstanceId);
+		if (connection === undefined || connection.socket !== socket) {
+			return false;
+		}
+		connection.lastHeartbeatAtMs = Date.now();
+		connection.contextRevision = contextRevision;
+		return true;
+	}
+
+	handleToolResult(callId: string, ok: boolean, result: unknown, error: unknown, socket?: WebSocket | undefined): boolean {
 		const pending: PendingEditorToolCall | undefined = this.pendingToolCalls.get(callId);
-		if (pending === undefined) {
+		if (pending === undefined || (socket !== undefined && pending.socket !== socket)) {
 			return false;
 		}
 
@@ -150,9 +165,24 @@ export class GodotEditorBridge {
 			return true;
 		}
 
-		pending.reject(new StructuredToolError(createToolFailure(
-			error ?? "Godot editor tool failed"
-		)));
+		const bridgeError: Record<string, unknown> | undefined = error !== null && typeof error === "object" && !Array.isArray(error)
+			? error as Record<string, unknown>
+			: undefined;
+		if (typeof bridgeError?.code === "string" && typeof bridgeError.message === "string") {
+			const failure = createToolFailure(`${bridgeError.code}: ${bridgeError.message}`);
+			pending.reject(new StructuredToolError({
+				...failure,
+				code: bridgeError.code,
+				message: bridgeError.message,
+				retryable: typeof bridgeError.retryable === "boolean" ? bridgeError.retryable : failure.retryable,
+				details: bridgeError.details !== null && typeof bridgeError.details === "object" && !Array.isArray(bridgeError.details)
+					? bridgeError.details as Record<string, unknown>
+					: undefined
+			}));
+			return true;
+		}
+
+		pending.reject(new StructuredToolError(createToolFailure(error ?? "Godot editor tool failed")));
 		return true;
 	}
 
@@ -378,7 +408,7 @@ export class GodotEditorBridge {
 		connection: EditorConnection | null = this.selectConnection(undefined, undefined, false),
 		workspaceId?: string | undefined
 	): JsonObject {
-		const ageMs: number | null = connection !== null && connection.updatedAtMs > 0 ? Date.now() - connection.updatedAtMs : null;
+		const ageMs: number | null = connection !== null && connection.lastHeartbeatAtMs > 0 ? Date.now() - connection.lastHeartbeatAtMs : null;
 		const online: boolean = connection !== null && this.isConnectionOnline(connection);
 		return {
 			online,
@@ -392,7 +422,7 @@ export class GodotEditorBridge {
 	}
 
 	private createInstanceSummary(connection: EditorConnection): GodotEditorInstanceSummary {
-		const ageMs: number | null = connection.updatedAtMs > 0 ? Date.now() - connection.updatedAtMs : null;
+		const ageMs: number | null = connection.lastHeartbeatAtMs > 0 ? Date.now() - connection.lastHeartbeatAtMs : null;
 		const activeScenePath: unknown = connection.context.activeScenePath;
 		return {
 			workspaceId: connection.workspaceId,
@@ -406,7 +436,9 @@ export class GodotEditorBridge {
 	}
 
 	private isConnectionOnline(connection: EditorConnection): boolean {
-		return isSocketOpen(connection.socket) && connection.updatedAtMs > 0;
+		return isSocketOpen(connection.socket)
+			&& connection.lastHeartbeatAtMs > 0
+			&& Date.now() - connection.lastHeartbeatAtMs <= EDITOR_CONTEXT_STALE_MS;
 	}
 
 	private selectConnection(
@@ -430,7 +462,7 @@ export class GodotEditorBridge {
 			throw new Error("editor_target_required: multiple Godot editors are online for this workspace; bind session.editor.bind first.");
 		}
 
-		return candidates.sort((a: EditorConnection, b: EditorConnection): number => b.updatedAtMs - a.updatedAtMs)[0] ?? null;
+		return candidates.sort((a: EditorConnection, b: EditorConnection): number => b.lastHeartbeatAtMs - a.lastHeartbeatAtMs)[0] ?? null;
 	}
 
 	private requestEditorTool(
@@ -476,7 +508,8 @@ export class GodotEditorBridge {
 				resolve,
 				reject,
 				timeout,
-				editorInstanceId: connection.editorInstanceId
+				editorInstanceId: connection.editorInstanceId,
+				socket: connection.socket
 			});
 
 			try {

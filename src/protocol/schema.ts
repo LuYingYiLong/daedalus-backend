@@ -519,7 +519,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.hello"),
 		params: z.object({
 			protocolVersion: z.literal(3),
-			clientType: z.enum(["godot_plugin", "studio", "cli", "smoke", "external_mcp"]).optional(),
+			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
 			workspaceId: z.string().min(1).optional(),
@@ -528,6 +528,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			pluginVersion: z.string().min(1).max(64).optional(),
 			pluginProtocolVersion: z.number().int().positive().optional(),
 			studioBindingVersion: z.string().min(1).max(64).optional(),
+			bridgeVersion: z.string().min(1).max(64).optional(),
+			bridgeProtocolVersion: z.number().int().positive().optional(),
+			godotVersion: z.string().min(1).max(64).optional(),
 			capabilities: z.record(z.string().min(1), z.boolean()).optional(),
 		}),
 	}),
@@ -1651,6 +1654,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("editor.heartbeat"),
+		params: z.object({
+			editorInstanceId: z.string().min(1).max(160),
+			workspaceRoot: z.string().min(1),
+			contextRevision: z.number().int().nonnegative(),
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("editor.instances.list"),
 		params: z.object({
 			workspaceId: z.string().min(1).optional(),
@@ -1664,7 +1677,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			callId: z.string().min(1),
 			ok: z.boolean(),
 			result: z.unknown().optional(),
-			error: z.string().optional(),
+			error: z.object({
+				code: z.string().min(1).max(160),
+				message: z.string().min(1).max(8_000),
+				retryable: z.boolean(),
+				details: z.record(z.string(), z.unknown()).optional(),
+			}).optional(),
 		}),
 	}),
 	z.object({

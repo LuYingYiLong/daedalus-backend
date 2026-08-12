@@ -46,8 +46,8 @@ type PackageManifest = {
 	daedalusBinary: {
 		minStudioVersion: string;
 		protocolVersion: number;
-		minPluginProtocolVersion: number;
-		maxPluginProtocolVersion: number;
+		minBridgeProtocolVersion: number;
+		maxBridgeProtocolVersion: number;
 	};
 };
 
@@ -714,8 +714,8 @@ async function main(): Promise<void> {
 		arch: "x64",
 		nodeVersion: EXPECTED_NODE_VERSION,
 		protocolVersion: manifest.daedalusBinary.protocolVersion,
-		minPluginProtocolVersion: manifest.daedalusBinary.minPluginProtocolVersion,
-		maxPluginProtocolVersion: manifest.daedalusBinary.maxPluginProtocolVersion,
+		minBridgeProtocolVersion: manifest.daedalusBinary.minBridgeProtocolVersion,
+		maxBridgeProtocolVersion: manifest.daedalusBinary.maxBridgeProtocolVersion,
 		minStudioVersion: manifest.daedalusBinary.minStudioVersion,
 		publishedAt,
 		authenticode: process.env.DAEDALUS_AUTHENTICODE_SIGNED === "1" ? "signed" : "unsigned",

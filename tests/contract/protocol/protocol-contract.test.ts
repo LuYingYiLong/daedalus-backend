@@ -6,11 +6,14 @@ import test from "node:test";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 import { REQUEST_HANDLER_METHODS, REQUEST_HANDLERS } from "../../../src/server/request-dispatcher.js";
 
-const configuredPluginDir: string | undefined = process.env.GODOT_DAEDALUS_PLUGIN_DIR;
-const pluginDir: string = configuredPluginDir ?? "D:/GodotProjects/example/addons/godot_daedalus";
-const pluginRpcMethodsPath: string = path.join(pluginDir, "scripts", "rpc_methods.gd");
-const frontendRpcSkipReason: string | undefined = configuredPluginDir === undefined && !existsSync(pluginRpcMethodsPath)
-	? `Godot Daedalus plugin RPC constants not found at ${pluginRpcMethodsPath}; set GODOT_DAEDALUS_PLUGIN_DIR to enable this external contract test.`
+const configuredPluginDir: string | undefined = process.env.DAEDALUS_EDITOR_BRIDGE_DIR;
+const pluginDir: string = configuredPluginDir ?? "D:/GodotProjects/example/addons/daedalus_editor_bridge";
+const bridgeRuntimePaths: string[] = [
+	path.join(pluginDir, "scripts", "bridge_runtime.gd"),
+	path.join(pluginDir, "scripts", "editor_context.gd")
+];
+const frontendRpcSkipReason: string | undefined = configuredPluginDir === undefined && bridgeRuntimePaths.some((filePath: string): boolean => !existsSync(filePath))
+	? `Daedalus Editor Bridge sources not found at ${pluginDir}; set DAEDALUS_EDITOR_BRIDGE_DIR to enable this external contract test.`
 	: undefined;
 const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"attachment.image.generated.get",
@@ -110,9 +113,12 @@ async function readBackendSchemaMethods(): Promise<string[]> {
 }
 
 async function readFrontendRpcMethods(): Promise<string[]> {
-	assert.ok(existsSync(pluginRpcMethodsPath), `Godot Daedalus plugin RPC constants not found at ${pluginRpcMethodsPath}`);
-	const source: string = await fs.readFile(pluginRpcMethodsPath, "utf8");
-	return unique([...source.matchAll(/const\s+[A-Z0-9_]+:\s+String\s+=\s+"([^"]+)"/g)].map((match: RegExpMatchArray): string => match[1]!));
+	for (const filePath of bridgeRuntimePaths) {
+		assert.ok(existsSync(filePath), `Daedalus Editor Bridge source not found at ${filePath}`);
+	}
+	const source: string = (await Promise.all(bridgeRuntimePaths.map(async (filePath: string): Promise<string> => await fs.readFile(filePath, "utf8")))).join("\n");
+	const bridgeMethods: string[] = ["client.hello", "editor.context.update", "editor.heartbeat", "editor.tool.result"];
+	return bridgeMethods.filter((method: string): boolean => source.includes(`"${method}"`));
 }
 
 test("backend protocol schema and WebSocket dispatcher stay in sync", async (): Promise<void> => {
@@ -127,13 +133,12 @@ test("backend protocol schema and WebSocket dispatcher stay in sync", async (): 
 	assert.ok(new Set([...REQUEST_HANDLERS.values()]).size > 1, "dispatcher must use domain-specific handlers");
 });
 
-test("frontend RPC constants match backend protocol schema", { skip: frontendRpcSkipReason }, async (): Promise<void> => {
+test("Editor Bridge RPC surface is minimal and covered by the backend schema", { skip: frontendRpcSkipReason }, async (): Promise<void> => {
 	const schemaMethods: string[] = await readBackendSchemaMethods();
 	const frontendMethods: string[] = await readFrontendRpcMethods();
-	const pluginRequiredSchemaMethods: string[] = schemaMethods.filter((method: string): boolean => !BACKEND_ONLY_OR_STUDIO_RPC_METHODS.has(method));
-
-	assert.deepEqual(difference(pluginRequiredSchemaMethods, frontendMethods), [], "schema methods missing frontend RPC constant");
-	assert.deepEqual(difference(frontendMethods, schemaMethods), [], "frontend RPC constants missing schema method");
+	assert.deepEqual(frontendMethods, ["client.hello", "editor.context.update", "editor.heartbeat", "editor.tool.result"]);
+	assert.deepEqual(difference(frontendMethods, schemaMethods), [], "Bridge RPC methods missing from backend schema");
+	assert.equal(frontendMethods.some((method: string): boolean => BACKEND_ONLY_OR_STUDIO_RPC_METHODS.has(method)), false);
 });
 
 test("session.timeline accepts omitted beforeOffset as latest page request", (): void => {

@@ -4,51 +4,53 @@ import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import { getClientConnection, updateClientConnection } from "../client-connections.js";
-import {
-	createRuntimeWorkspace,
-	createSourceScopedWorkspace,
-	findWorkspace,
-	findWorkspaceSourceByPath,
-	upsertRuntimeWorkspace
-} from "../../workspace/registry.js";
+import { findWorkspace } from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 
-function readString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function resolveEditorWorkspaceFromParams(params: Record<string, unknown>): WorkspaceConfig | undefined {
-	const explicitWorkspaceId: string | undefined = readString(params.workspaceId);
-	if (explicitWorkspaceId !== undefined) {
-		const configuredWorkspace: WorkspaceConfig | undefined = findWorkspace(explicitWorkspaceId);
-		if (configuredWorkspace !== undefined) {
-			return configuredWorkspace;
-		}
-
-		return upsertRuntimeWorkspace(createRuntimeWorkspace(explicitWorkspaceId));
+function requireAcceptedEditorBridge(socket: WebSocket, requestId: string): ReturnType<typeof getClientConnection> {
+	const connection = getClientConnection(socket);
+	if (connection?.clientType === "godot_editor_bridge" && connection.bridgeHandshakeAccepted) {
+		return connection;
 	}
 
-	const workspaceRoot: string | undefined = readString(params.workspaceRoot) ?? readString(params.godotProjectPath);
-	if (workspaceRoot !== undefined) {
-		const configuredSource = findWorkspaceSourceByPath(workspaceRoot);
-		if (configuredSource !== undefined) {
-			return createSourceScopedWorkspace(configuredSource.workspace, configuredSource.sourceFolder.id);
+	sendJson(socket, {
+		type: "response",
+		id: requestId,
+		ok: false,
+		error: {
+			code: "bridge_handshake_required",
+			message: "A successful Editor Bridge Protocol v4 handshake is required before editor RPC calls."
 		}
-		return upsertRuntimeWorkspace(createRuntimeWorkspace(workspaceRoot));
-	}
-
-	return undefined;
+	});
+	return null;
 }
 
 export async function handleEditorRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
 		case "editor.context.update": {
-			const connection = getClientConnection(socket);
+			const connection = requireAcceptedEditorBridge(socket, request.id);
+			if (connection === null) break;
+			if (
+				typeof request.params.editorInstanceId === "string"
+				&& connection.editorInstanceId !== undefined
+				&& request.params.editorInstanceId !== connection.editorInstanceId
+			) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "editor_instance_mismatch",
+						message: "Editor context cannot change the instance identity established by the Bridge handshake."
+					}
+				});
+				break;
+			}
 			const editorInstanceId: string = typeof request.params.editorInstanceId === "string" && request.params.editorInstanceId.length > 0
 				? request.params.editorInstanceId
-				: session.editorInstanceId ?? connection?.editorInstanceId ?? `editor-${connection?.connectionId ?? "legacy"}`;
-			const requestWorkspace: WorkspaceConfig | undefined = resolveEditorWorkspaceFromParams(request.params);
-			const workspace: WorkspaceConfig | undefined = session.activeWorkspace ?? requestWorkspace ?? (connection?.workspaceId === undefined ? undefined : findWorkspace(connection.workspaceId));
+				: session.editorInstanceId ?? connection.editorInstanceId ?? `editor-${connection.connectionId}`;
+			const workspace: WorkspaceConfig | undefined = session.activeWorkspace
+				?? (connection.workspaceId === undefined ? undefined : findWorkspace(connection.workspaceId));
 			if (workspace !== undefined) {
 				try {
 					await mcpHost.ensureWorkspace(workspace);
@@ -69,22 +71,22 @@ export async function handleEditorRequest(socket: WebSocket, request: ClientRequ
 				}
 			}
 
-			const workspaceId: string | undefined = workspace?.id ?? connection?.workspaceId;
+			const workspaceId: string | undefined = workspace?.id ?? connection.workspaceId;
 			session.editorInstanceId = editorInstanceId;
 			const instance = mcpHost.getEditorBridge().updateInstanceContext(
 				socket,
 				workspaceId,
 				editorInstanceId,
 				request.params,
-				connection?.clientName
+				connection.clientName
 			);
 			updateClientConnection(socket, {
-				clientType: connection?.clientType === "legacy" ? "godot_plugin" : connection?.clientType,
+				clientType: "godot_editor_bridge",
 				editorInstanceId,
 				workspaceId,
-				workspaceRoot: workspace?.rootPath ?? connection?.workspaceRoot,
+				workspaceRoot: workspace?.rootPath ?? connection.workspaceRoot,
 				capabilities: {
-					...connection?.capabilities,
+					...connection.capabilities,
 					editorTools: true
 				}
 			});
@@ -101,6 +103,23 @@ export async function handleEditorRequest(socket: WebSocket, request: ClientRequ
 			break;
 		}
 
+		case "editor.heartbeat": {
+			const connection = requireAcceptedEditorBridge(socket, request.id);
+			if (connection === null) break;
+			const accepted: boolean = mcpHost.getEditorBridge().heartbeat(
+				socket,
+				request.params.editorInstanceId,
+				request.params.contextRevision
+			);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: { accepted, contextRevision: request.params.contextRevision }
+			});
+			break;
+		}
+
 		case "editor.instances.list":
 			sendJson(socket, {
 				type: "response",
@@ -113,11 +132,14 @@ export async function handleEditorRequest(socket: WebSocket, request: ClientRequ
 			break;
 
 		case "editor.tool.result": {
+			const connection = requireAcceptedEditorBridge(socket, request.id);
+			if (connection === null) break;
 			const accepted: boolean = mcpHost.getEditorBridge().handleToolResult(
 				request.params.callId,
 				request.params.ok,
 				request.params.result,
-				request.params.error
+				request.params.error,
+				socket
 			);
 			sendJson(socket, {
 				type: "response",

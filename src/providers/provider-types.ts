@@ -25,6 +25,20 @@ export type ProviderModelCapabilities = {
 	imageEdit?: boolean | undefined;
 };
 
+export type ProviderModelCapabilityOverrides = Partial<Pick<
+	ProviderModelCapabilities,
+	"imageInput" | "videoInput" | "reasoning" | "tools" | "webSearch" | "imageGeneration" | "imageEdit"
+>>;
+
+export type ProviderModelCustomizationInfo = {
+	source: "custom" | "override";
+	displayName?: string | undefined;
+	contextWindowTokens?: number | undefined;
+	maxOutputTokens?: number | undefined;
+	capabilities: ProviderModelCapabilityOverrides;
+	updatedAt: string;
+};
+
 export type BaseReasoningEffort = "low" | "medium" | "high" | "max";
 
 /** A provider/model-specific reasoning option exposed to the client. */
@@ -45,6 +59,7 @@ export type ProviderModelInfo = {
 	maxOutputTokens: number;
 	capabilities: ProviderModelCapabilities;
 	ownedBy?: string | undefined;
+	customization?: ProviderModelCustomizationInfo | undefined;
 };
 
 export type ProviderEndpointConfig = {

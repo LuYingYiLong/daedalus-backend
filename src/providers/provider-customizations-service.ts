@@ -41,10 +41,24 @@ export type AddCustomModelInput = {
 	provider: ProviderId;
 	id: string;
 	displayName: string;
+	contextWindowTokens: number;
+	maxOutputTokens: number;
+	capabilities: {
+		[K in keyof EditableModelCapabilities]-?: boolean;
+	};
 };
 
-export type UpdateModelCustomizationInput = AddCustomModelInput & {
-	capabilities: EditableModelCapabilities;
+type ModelCapabilityUpdate = {
+	[K in keyof EditableModelCapabilities]-?: boolean | null;
+};
+
+export type UpdateModelCustomizationInput = {
+	provider: ProviderId;
+	id: string;
+	displayName: string | null;
+	contextWindowTokens: number | null;
+	maxOutputTokens: number | null;
+	capabilities: ModelCapabilityUpdate;
 };
 
 export type UpdateProviderModelSelectionInput = {
@@ -105,6 +119,43 @@ export async function addCustomProvider(input: AddCustomProviderInput): Promise<
 	return providerId;
 }
 
+function normalizePositiveInteger(value: number, fieldName: string): number {
+	if (!Number.isInteger(value) || value <= 0 || value > 2_000_000_000) {
+		throw new ProviderCustomizationError(
+			"provider_customization_invalid",
+			`${fieldName} must be a positive integer.`
+		);
+	}
+	return value;
+}
+
+function normalizeCapabilityOverrides(
+	capabilities: EditableModelCapabilities
+): EditableModelCapabilities {
+	const normalized: EditableModelCapabilities = {};
+	for (const key of [
+		"imageInput",
+		"videoInput",
+		"reasoning",
+		"tools",
+		"webSearch",
+		"imageGeneration",
+		"imageEdit"
+	] as const) {
+		if (typeof capabilities[key] === "boolean") {
+			normalized[key] = capabilities[key];
+		}
+	}
+	return normalized;
+}
+
+function hasModelOverrides(record: ModelCustomizationRecord): boolean {
+	return record.displayName !== undefined
+		|| record.contextWindowTokens !== undefined
+		|| record.maxOutputTokens !== undefined
+		|| Object.keys(record.capabilities).length > 0;
+}
+
 export async function removeCustomProvider(provider: ProviderId): Promise<void> {
 	await initializeProviderCustomizations();
 	if (!isProviderId(provider) || getCustomProviderRecord(provider) === undefined) {
@@ -125,6 +176,8 @@ export async function addCustomModel(input: AddCustomModelInput): Promise<void> 
 	}
 	const id: string = normalizeRequiredString(input.id, "Model ID", 200);
 	const displayName: string = normalizeRequiredString(input.displayName, "Model name", 120);
+	const contextWindowTokens: number = normalizePositiveInteger(input.contextWindowTokens, "Context window tokens");
+	const maxOutputTokens: number = normalizePositiveInteger(input.maxOutputTokens, "Maximum output tokens");
 	const models: ProviderModelInfo[] = await getEffectiveProviderModels(provider);
 	if (models.some((model: ProviderModelInfo): boolean => model.id === id)) {
 		throw new ProviderCustomizationError(
@@ -145,12 +198,9 @@ export async function addCustomModel(input: AddCustomModelInput): Promise<void> 
 		providerModels[id] = {
 			source: "custom",
 			displayName,
-			capabilities: {
-				vision: false,
-				webSearch: false,
-				reasoning: false,
-				tools: false
-			},
+			contextWindowTokens,
+			maxOutputTokens,
+			capabilities: normalizeCapabilityOverrides(input.capabilities),
 			updatedAt: now
 		};
 		draft.models[provider] = providerModels;
@@ -169,7 +219,6 @@ export async function updateModelCustomization(input: UpdateModelCustomizationIn
 		throw new ProviderCustomizationError("provider_not_found", `Unknown provider: ${provider}`);
 	}
 	const id: string = normalizeRequiredString(input.id, "Model ID", 200);
-	const displayName: string = normalizeRequiredString(input.displayName, "Model name", 120);
 	const models: ProviderModelInfo[] = await getEffectiveProviderModels(provider);
 	if (!models.some((model: ProviderModelInfo): boolean => model.id === id)) {
 		throw new ProviderCustomizationError(
@@ -179,20 +228,58 @@ export async function updateModelCustomization(input: UpdateModelCustomizationIn
 	}
 
 	const existing: ModelCustomizationRecord | undefined = getModelCustomizationRecords(provider)[id];
+	const source: ModelCustomizationRecord["source"] = existing?.source ?? "override";
+	const displayName: string | undefined = input.displayName === null
+		? undefined
+		: normalizeRequiredString(input.displayName, "Model name", 120);
+	const contextWindowTokens: number | undefined = input.contextWindowTokens === null
+		? undefined
+		: normalizePositiveInteger(input.contextWindowTokens, "Context window tokens");
+	const maxOutputTokens: number | undefined = input.maxOutputTokens === null
+		? undefined
+		: normalizePositiveInteger(input.maxOutputTokens, "Maximum output tokens");
+	if (source === "custom" && (displayName === undefined || contextWindowTokens === undefined || maxOutputTokens === undefined)) {
+		throw new ProviderCustomizationError(
+			"provider_customization_invalid",
+			"Custom models require a name, context window, and maximum output token limit."
+		);
+	}
+	const capabilities: EditableModelCapabilities = { ...(existing?.capabilities ?? {}) };
+	for (const [key, value] of Object.entries(input.capabilities)) {
+		const capabilityKey: keyof EditableModelCapabilities = key as keyof EditableModelCapabilities;
+		if (value === null) {
+			delete capabilities[capabilityKey];
+		} else if (typeof value === "boolean") {
+			capabilities[capabilityKey] = value;
+		}
+	}
 	const now: string = new Date().toISOString();
 	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
 		const providerModels: Record<string, ModelCustomizationRecord> = draft.models[provider] ?? {};
-		providerModels[id] = {
-			source: existing?.source ?? "override",
-			displayName,
-			capabilities: {
-				vision: input.capabilities.vision,
-				webSearch: input.capabilities.webSearch,
-				reasoning: input.capabilities.reasoning,
-				tools: input.capabilities.tools
-			},
+		const record: ModelCustomizationRecord = {
+			source,
+			capabilities,
 			updatedAt: now
 		};
+		if (displayName !== undefined) {
+			record.displayName = displayName;
+		}
+		if (contextWindowTokens !== undefined) {
+			record.contextWindowTokens = contextWindowTokens;
+		}
+		if (maxOutputTokens !== undefined) {
+			record.maxOutputTokens = maxOutputTokens;
+		}
+		if (source === "override" && !hasModelOverrides(record)) {
+			delete providerModels[id];
+			if (Object.keys(providerModels).length === 0) {
+				delete draft.models[provider];
+			} else {
+				draft.models[provider] = providerModels;
+			}
+			return;
+		}
+		providerModels[id] = record;
 		draft.models[provider] = providerModels;
 	});
 }

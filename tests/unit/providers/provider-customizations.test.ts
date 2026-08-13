@@ -32,6 +32,26 @@ import {
 } from "../../../src/providers/provider-config-store.js";
 import { installMemorySecretStore, resetSecretStoreDriver } from "../../helpers/secret-store.js";
 
+const allEditableCapabilities = {
+	imageInput: false,
+	videoInput: false,
+	reasoning: false,
+	tools: false,
+	webSearch: false,
+	imageGeneration: false,
+	imageEdit: false
+} as const;
+
+const allCapabilityUpdates = {
+	imageInput: null,
+	videoInput: null,
+	reasoning: null,
+	tools: null,
+	webSearch: null,
+	imageGeneration: null,
+	imageEdit: null
+} as const;
+
 async function withTempAppData(run: (root: string) => Promise<void>): Promise<void> {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-provider-customizations-"));
@@ -53,7 +73,7 @@ async function withTempAppData(run: (root: string) => Promise<void>): Promise<vo
 test("provider customization store falls back for missing and corrupt files", async (): Promise<void> => {
 	await withTempAppData(async (root: string): Promise<void> => {
 		assert.deepEqual(getProviderCustomizationsSnapshot(), {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			providers: {},
 			models: {},
 			excludedModelIds: {}
@@ -65,7 +85,7 @@ test("provider customization store falls back for missing and corrupt files", as
 		await initializeProviderCustomizations(true);
 
 		assert.deepEqual(getProviderCustomizationsSnapshot(), {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			providers: {},
 			models: {},
 			excludedModelIds: {}
@@ -73,7 +93,7 @@ test("provider customization store falls back for missing and corrupt files", as
 	});
 });
 
-test("provider customization store replaces v1 instead of migrating it and normalizes v2 exclusions", async (): Promise<void> => {
+test("provider customization store replaces unsupported schema versions", async (): Promise<void> => {
 	await withTempAppData(async (root: string): Promise<void> => {
 		const configDir: string = join(root, ".daedalus", "config");
 		await mkdir(configDir, { recursive: true });
@@ -85,13 +105,13 @@ test("provider customization store replaces v1 instead of migrating it and norma
 		}), "utf8");
 		await initializeProviderCustomizations(true);
 		assert.deepEqual(getProviderCustomizationsSnapshot(), {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			providers: {},
 			models: {},
 			excludedModelIds: {}
 		});
 		assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
-			schemaVersion: 2,
+			schemaVersion: 3,
 			providers: {},
 			models: {},
 			excludedModelIds: {}
@@ -100,13 +120,36 @@ test("provider customization store replaces v1 instead of migrating it and norma
 		await writeFile(filePath, JSON.stringify({
 			schemaVersion: 2,
 			providers: {},
-			models: {},
+			models: {
+				deepseek: {
+					"deepseek-v4-flash": {
+						source: "override",
+						displayName: "Legacy Flash",
+						capabilities: {
+							vision: true,
+							tools: false
+						},
+						updatedAt: "2026-08-01T00:00:00.000Z"
+					}
+				}
+			},
 			excludedModelIds: {
 				deepseek: [" deepseek-v4-flash ", "", "deepseek-v4-flash", 42]
 			}
 		}), "utf8");
 		await initializeProviderCustomizations(true);
-		assert.deepEqual(getProviderCustomizationsSnapshot().excludedModelIds.deepseek, ["deepseek-v4-flash"]);
+		assert.deepEqual(getProviderCustomizationsSnapshot(), {
+			schemaVersion: 3,
+			providers: {},
+			models: {},
+			excludedModelIds: {}
+		});
+		assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), {
+			schemaVersion: 3,
+			providers: {},
+			models: {},
+			excludedModelIds: {}
+		});
 	});
 });
 
@@ -123,24 +166,23 @@ test("custom providers persist adapter type and first custom model as default", 
 		await addCustomModel({
 			provider,
 			id: "claude-local",
-			displayName: "Claude Local"
-		});
-		assert.equal(getProviderDefaultModelOrNull(provider), "claude-local");
-		assert.deepEqual(getProviderFallbackModels(provider)[0], {
-			id: "claude-local",
 			displayName: "Claude Local",
-			provider,
-			endpointType: "anthropic-messages",
-			contextWindowTokens: 128_000,
-			maxOutputTokens: 8_192,
+			contextWindowTokens: 200_000,
+			maxOutputTokens: 16_384,
 			capabilities: {
-				vision: false,
-				imageInput: false,
-				webSearch: false,
-				reasoning: false,
-				tools: false
+				...allEditableCapabilities,
+				imageInput: true,
+				tools: true
 			}
 		});
+		assert.equal(getProviderDefaultModelOrNull(provider), "claude-local");
+		const model = getProviderFallbackModels(provider)[0];
+		assert.equal(model?.displayName, "Claude Local");
+		assert.equal(model?.contextWindowTokens, 200_000);
+		assert.equal(model?.maxOutputTokens, 16_384);
+		assert.equal(model?.capabilities.imageInput, true);
+		assert.equal(model?.capabilities.tools, true);
+		assert.equal(model?.customization?.source, "custom");
 
 		const filePath: string = join(root, ".daedalus", "config", "provider-customizations.json");
 		const persisted: string = await readFile(filePath, "utf8");
@@ -172,10 +214,12 @@ test("model overrides survive reload and preserve capabilities outside the edita
 			provider: "deepseek",
 			id: "api-special",
 			displayName: "My Special",
+			contextWindowTokens: 300_000,
+			maxOutputTokens: 24_000,
 			capabilities: {
-				vision: true,
+				...allCapabilityUpdates,
+				imageInput: true,
 				webSearch: true,
-				reasoning: true,
 				tools: true
 			}
 		});
@@ -183,8 +227,11 @@ test("model overrides survive reload and preserve capabilities outside the edita
 			provider: "deepseek",
 			id: "deepseek-v4-flash",
 			displayName: "My Flash",
+			contextWindowTokens: null,
+			maxOutputTokens: null,
 			capabilities: {
-				vision: false,
+				...allCapabilityUpdates,
+				imageInput: false,
 				webSearch: false,
 				reasoning: true,
 				tools: true
@@ -199,6 +246,8 @@ test("model overrides survive reload and preserve capabilities outside the edita
 		let model = mergeProviderModelsWithCatalog("deepseek", cache?.models ?? [])
 			.find((candidate): boolean => candidate.id === "api-special");
 		assert.equal(model?.displayName, "My Special");
+		assert.equal(model?.contextWindowTokens, 300_000);
+		assert.equal(model?.maxOutputTokens, 24_000);
 		assert.equal(model?.capabilities.vision, true);
 		assert.equal(model?.capabilities.imageInput, true);
 		assert.equal(model?.capabilities.webSearch, true);
@@ -207,6 +256,11 @@ test("model overrides survive reload and preserve capabilities outside the edita
 		assert.equal(model?.capabilities.imageGeneration, true);
 		assert.equal(model?.capabilities.imageEdit, true);
 		assert.deepEqual(model?.capabilities.reasoningEfforts, [{ id: "high", fallback: "high" }]);
+		assert.deepEqual(model?.customization?.capabilities, {
+			imageInput: true,
+			webSearch: true,
+			tools: true
+		});
 
 		await initializeProviderCustomizations(true);
 		cache = await getProviderModelsCache("deepseek");
@@ -214,6 +268,27 @@ test("model overrides survive reload and preserve capabilities outside the edita
 			.find((candidate): boolean => candidate.id === "api-special");
 		assert.equal(model?.displayName, "My Special");
 		assert.equal(model?.capabilities.imageGeneration, true);
+
+		await updateModelCustomization({
+			provider: "deepseek",
+			id: "api-special",
+			displayName: null,
+			contextWindowTokens: null,
+			maxOutputTokens: null,
+			capabilities: {
+				...allCapabilityUpdates,
+				imageInput: null,
+				webSearch: null,
+				tools: null
+			}
+		});
+		cache = await getProviderModelsCache("deepseek");
+		model = mergeProviderModelsWithCatalog("deepseek", cache?.models ?? [])
+			.find((candidate): boolean => candidate.id === "api-special");
+		assert.equal(model?.displayName, "API Special");
+		assert.equal(model?.contextWindowTokens, 200_000);
+		assert.equal(model?.maxOutputTokens, 16_000);
+		assert.equal(model?.customization, undefined);
 	});
 });
 
@@ -223,8 +298,11 @@ test("excluded catalog models disappear and restore their local overrides when r
 			provider: "deepseek",
 			id: "deepseek-v4-flash",
 			displayName: "My Flash",
+			contextWindowTokens: null,
+			maxOutputTokens: null,
 			capabilities: {
-				vision: false,
+				...allCapabilityUpdates,
+				imageInput: false,
 				webSearch: false,
 				reasoning: true,
 				tools: true
@@ -293,9 +371,23 @@ test("provider and model conflicts return stable error codes", async (): Promise
 			providerType: "openai-responses"
 		});
 		assert.equal(getProviderAdapterFamily(provider), "openai-responses");
-		await addCustomModel({ provider, id: "model-1", displayName: "Model 1" });
+		await addCustomModel({
+			provider,
+			id: "model-1",
+			displayName: "Model 1",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: allEditableCapabilities
+		});
 		await assert.rejects(
-			() => addCustomModel({ provider, id: "model-1", displayName: "Duplicate" }),
+			() => addCustomModel({
+				provider,
+				id: "model-1",
+				displayName: "Duplicate",
+				contextWindowTokens: 128_000,
+				maxOutputTokens: 8_192,
+				capabilities: allEditableCapabilities
+			}),
 			(error: unknown): boolean => error instanceof ProviderCustomizationError && error.code === "provider_model_exists"
 		);
 	});
@@ -313,7 +405,14 @@ test("custom providers report readiness and cannot activate without model or bas
 			/provider_not_ready/u
 		);
 
-		await addCustomModel({ provider, id: "ready-model", displayName: "Ready Model" });
+		await addCustomModel({
+			provider,
+			id: "ready-model",
+			displayName: "Ready Model",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: allEditableCapabilities
+		});
 		await assert.rejects(
 			() => saveProviderConfig({ provider, model: "ready-model" }),
 			/provider_base_url_required/u
@@ -351,7 +450,14 @@ test("providers cannot be disabled while active or task-routed, while unused cus
 			displayName: "Guarded Gateway",
 			providerType: "openai"
 		});
-		await addCustomModel({ provider, id: "guarded-model", displayName: "Guarded Model" });
+		await addCustomModel({
+			provider,
+			id: "guarded-model",
+			displayName: "Guarded Model",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: allEditableCapabilities
+		});
 		await saveProviderConfig({
 			provider,
 			apiKey: "custom-key",

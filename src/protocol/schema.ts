@@ -119,6 +119,26 @@ const sessionUiMetadataParamsSchema = z.object({
 	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional()
 }).strict();
 
+const editableProviderModelCapabilitiesSchema = z.object({
+	imageInput: z.boolean(),
+	videoInput: z.boolean(),
+	reasoning: z.boolean(),
+	tools: z.boolean(),
+	webSearch: z.boolean(),
+	imageGeneration: z.boolean(),
+	imageEdit: z.boolean()
+}).strict();
+
+const editableProviderModelCapabilityOverridesSchema = z.object({
+	imageInput: z.boolean().nullable(),
+	videoInput: z.boolean().nullable(),
+	reasoning: z.boolean().nullable(),
+	tools: z.boolean().nullable(),
+	webSearch: z.boolean().nullable(),
+	imageGeneration: z.boolean().nullable(),
+	imageEdit: z.boolean().nullable()
+}).strict();
+
 export const messageTextAnchorSchema = z.object({
 	entryId: z.string().trim().min(1).max(240),
 	requestId: z.string().trim().min(1).max(240),
@@ -673,7 +693,10 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			provider: providerIdSchema,
 			id: z.string().trim().min(1).max(200),
 			displayName: z.string().trim().min(1).max(120),
-		}),
+			contextWindowTokens: z.number().int().positive().max(2_000_000_000),
+			maxOutputTokens: z.number().int().positive().max(2_000_000_000),
+			capabilities: editableProviderModelCapabilitiesSchema
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -682,14 +705,11 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			provider: providerIdSchema,
 			id: z.string().trim().min(1).max(200),
-			displayName: z.string().trim().min(1).max(120),
-			capabilities: z.object({
-				vision: z.boolean(),
-				webSearch: z.boolean(),
-				reasoning: z.boolean(),
-				tools: z.boolean(),
-			}),
-		}),
+			displayName: z.string().trim().min(1).max(120).nullable(),
+			contextWindowTokens: z.number().int().positive().max(2_000_000_000).nullable(),
+			maxOutputTokens: z.number().int().positive().max(2_000_000_000).nullable(),
+			capabilities: editableProviderModelCapabilityOverridesSchema
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

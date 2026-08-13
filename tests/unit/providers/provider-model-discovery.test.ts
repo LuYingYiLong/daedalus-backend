@@ -7,6 +7,7 @@ import test from "node:test";
 import {
 	discoverProviderModels,
 	importProviderModels,
+	listProviderModels,
 	ProviderModelSyncError,
 	syncProviderModels,
 	type DiscoveredProviderModel
@@ -24,6 +25,26 @@ import {
 } from "../../../src/providers/provider-customizations-service.js";
 import { initializeProviderCustomizations } from "../../../src/providers/provider-customizations-store.js";
 import { getProviderDefaultModelOrNull } from "../../../src/providers/provider-registry.js";
+
+const allEditableCapabilities = {
+	imageInput: false,
+	videoInput: false,
+	reasoning: false,
+	tools: false,
+	webSearch: false,
+	imageGeneration: false,
+	imageEdit: false
+} as const;
+
+const allCapabilityUpdates = {
+	imageInput: null,
+	videoInput: null,
+	reasoning: null,
+	tools: null,
+	webSearch: null,
+	imageGeneration: null,
+	imageEdit: null
+} as const;
 
 async function listen(server: Server): Promise<string> {
 	await new Promise<void>((resolve): void => {
@@ -90,6 +111,55 @@ test("provider discovery uses fresh API metadata without writing the model cache
 	});
 });
 
+test("provider refresh caches source metadata instead of effective user overrides", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const server: Server = createServer((_request, response): void => {
+			response.writeHead(200, { "Content-Type": "application/json" });
+			response.end(JSON.stringify({
+				data: [{
+					id: "remote-model",
+					owned_by: "test",
+					context_length: 64_000,
+					supports_tools: false
+				}]
+			}));
+		});
+		const baseUrl: string = await listen(server);
+		try {
+			const provider: string = await addCustomProvider({
+				displayName: "Remote Provider",
+				providerType: "openai"
+			});
+			await listProviderModels(provider, "test-key", baseUrl, true);
+			await updateModelCustomization({
+				provider,
+				id: "remote-model",
+				displayName: "My Remote Model",
+				contextWindowTokens: 128_000,
+				maxOutputTokens: 16_384,
+				capabilities: { ...allCapabilityUpdates, tools: true }
+			});
+
+			const result = await listProviderModels(provider, "test-key", baseUrl, true);
+			const effective = result.models.find((model): boolean => model.id === "remote-model");
+			assert.equal(effective?.displayName, "My Remote Model");
+			assert.equal(effective?.contextWindowTokens, 128_000);
+			assert.equal(effective?.capabilities.tools, true);
+
+			const cache = await getProviderModelsCache(provider);
+			const cached = cache?.models.find((model): boolean => model.id === "remote-model");
+			assert.equal(cached?.displayName, "Remote Model");
+			assert.equal(cached?.contextWindowTokens, 64_000);
+			assert.equal(cached?.capabilities.tools, false);
+			assert.equal(cached?.customization, undefined);
+		} finally {
+			await new Promise<void>((resolve, reject): void => {
+				server.close((error?: Error): void => error === undefined ? resolve() : reject(error));
+			});
+		}
+	});
+});
+
 test("provider discovery falls back to catalog without mutating an existing cache", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		await saveProviderModelsCache("deepseek", [{
@@ -141,8 +211,11 @@ test("provider model import upserts selected models and preserves local override
 			provider: "deepseek",
 			id: "deepseek-v4-pro",
 			displayName: "My Pro",
+			contextWindowTokens: null,
+			maxOutputTokens: null,
 			capabilities: {
-				vision: false,
+				...allCapabilityUpdates,
+				imageInput: false,
 				webSearch: false,
 				reasoning: true,
 				tools: true
@@ -194,8 +267,11 @@ test("provider model sync removes and restores models while protecting reference
 			provider: "deepseek",
 			id: "deepseek-v4-pro",
 			displayName: "Restorable Pro",
+			contextWindowTokens: null,
+			maxOutputTokens: null,
 			capabilities: {
-				vision: false,
+				...allCapabilityUpdates,
+				imageInput: false,
 				webSearch: false,
 				reasoning: true,
 				tools: true
@@ -242,8 +318,22 @@ test("custom provider default follows the remaining enabled models", async (): P
 			displayName: "Selection Gateway",
 			providerType: "openai"
 		});
-		await addCustomModel({ provider, id: "first", displayName: "First" });
-		await addCustomModel({ provider, id: "second", displayName: "Second" });
+		await addCustomModel({
+			provider,
+			id: "first",
+			displayName: "First",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: allEditableCapabilities
+		});
+		await addCustomModel({
+			provider,
+			id: "second",
+			displayName: "Second",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: allEditableCapabilities
+		});
 		assert.equal(getProviderDefaultModelOrNull(provider), "first");
 
 		await syncProviderModels({

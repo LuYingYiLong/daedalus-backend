@@ -40,7 +40,7 @@ export type ProviderModelsListResult = {
 	error?: string | undefined;
 };
 
-export type DiscoveredProviderModel = Omit<ProviderModelInfo, "provider" | "endpointType">;
+export type DiscoveredProviderModel = Omit<ProviderModelInfo, "provider" | "endpointType" | "customization">;
 
 export type ProviderModelRemovalGuard =
 	| { kind: "activeModel" }
@@ -501,8 +501,9 @@ export async function listProviderModels(
 	const options: ProviderChatOptions = { provider, apiKey: apiKey ?? "", baseUrl, requestOverrides };
 	if (apiKey !== undefined && refresh) {
 		try {
-			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, await resolveProviderAdapter(options).listModels(options, refresh));
-			await saveProviderModelsCache(provider, models);
+			const apiModels: ProviderModelInfo[] = await resolveProviderAdapter(options).listModels(options, refresh);
+			await saveProviderModelsCache(provider, apiModels);
+			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, apiModels);
 			if (models[0] !== undefined) {
 				await ensureCustomProviderDefaultModel(provider, models[0].id);
 			}
@@ -536,8 +537,9 @@ export async function listProviderModels(
 
 	if (apiKey !== undefined) {
 		try {
-			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, await resolveProviderAdapter(options).listModels(options));
-			await saveProviderModelsCache(provider, models);
+			const apiModels: ProviderModelInfo[] = await resolveProviderAdapter(options).listModels(options);
+			await saveProviderModelsCache(provider, apiModels);
+			const models: ProviderModelInfo[] = mergeProviderModelsWithCatalog(provider, apiModels);
 			if (models[0] !== undefined) {
 				await ensureCustomProviderDefaultModel(provider, models[0].id);
 			}

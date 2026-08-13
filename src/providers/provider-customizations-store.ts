@@ -2,16 +2,12 @@ import { readFile } from "node:fs/promises";
 import { getProviderCustomizationsPath } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 import type { ProviderId } from "../protocol/types.js";
+import type { ProviderModelCapabilityOverrides, ProviderModelCustomizationInfo } from "./provider-types.js";
 
 export type CustomProviderType = "openai" | "openai-responses" | "anthropic";
 export type ModelCustomizationSource = "custom" | "override";
 
-export type EditableModelCapabilities = {
-	vision: boolean;
-	webSearch: boolean;
-	reasoning: boolean;
-	tools: boolean;
-};
+export type EditableModelCapabilities = ProviderModelCapabilityOverrides;
 
 export type CustomProviderRecord = {
 	displayName: string;
@@ -21,26 +17,24 @@ export type CustomProviderRecord = {
 	updatedAt: string;
 };
 
-export type ModelCustomizationRecord = {
-	source: ModelCustomizationSource;
-	displayName: string;
-	capabilities: EditableModelCapabilities;
-	updatedAt: string;
-};
+export type ModelCustomizationRecord = ProviderModelCustomizationInfo;
 
 export type ProviderCustomizations = {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	providers: Record<ProviderId, CustomProviderRecord>;
 	models: Record<ProviderId, Record<string, ModelCustomizationRecord>>;
 	excludedModelIds: Record<ProviderId, string[]>;
 };
 
-const EMPTY_CAPABILITIES: EditableModelCapabilities = {
-	vision: false,
-	webSearch: false,
-	reasoning: false,
-	tools: false
-};
+const EDITABLE_CAPABILITY_KEYS = [
+	"imageInput",
+	"videoInput",
+	"reasoning",
+	"tools",
+	"webSearch",
+	"imageGeneration",
+	"imageEdit"
+] as const;
 
 let snapshot: ProviderCustomizations = createEmptyProviderCustomizations();
 let initializedPath: string | null = null;
@@ -48,7 +42,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 function createEmptyProviderCustomizations(): ProviderCustomizations {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		providers: {},
 		models: {},
 		excludedModelIds: {}
@@ -77,14 +71,15 @@ function readTrimmedString(value: unknown, maxLength: number): string | null {
 
 function normalizeCapabilities(value: unknown): EditableModelCapabilities {
 	if (!isRecord(value)) {
-		return { ...EMPTY_CAPABILITIES };
+		return {};
 	}
-	return {
-		vision: value.vision === true,
-		webSearch: value.webSearch === true,
-		reasoning: value.reasoning === true,
-		tools: value.tools === true
-	};
+	const capabilities: EditableModelCapabilities = {};
+	for (const key of EDITABLE_CAPABILITY_KEYS) {
+		if (typeof value[key] === "boolean") {
+			capabilities[key] = value[key];
+		}
+	}
+	return capabilities;
 }
 
 function normalizeProviderRecord(value: unknown): CustomProviderRecord | null {
@@ -114,29 +109,50 @@ function normalizeProviderRecord(value: unknown): CustomProviderRecord | null {
 	};
 }
 
+function readPositiveInteger(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isInteger(value) && value > 0
+		? value
+		: undefined;
+}
+
 function normalizeModelRecord(value: unknown): ModelCustomizationRecord | null {
 	if (!isRecord(value)) {
 		return null;
 	}
-	const displayName: string | null = readTrimmedString(value.displayName, 120);
+	const displayName: string | null = value.displayName === undefined
+		? null
+		: readTrimmedString(value.displayName, 120);
 	const updatedAt: string | null = readTrimmedString(value.updatedAt, 80);
 	if (
-		displayName === null
-		|| updatedAt === null
+		updatedAt === null
 		|| (value.source !== "custom" && value.source !== "override")
 	) {
 		return null;
 	}
-	return {
+	const contextWindowTokens: number | undefined = readPositiveInteger(value.contextWindowTokens);
+	const maxOutputTokens: number | undefined = readPositiveInteger(value.maxOutputTokens);
+	if (value.source === "custom" && (displayName === null || contextWindowTokens === undefined || maxOutputTokens === undefined)) {
+		return null;
+	}
+	const model: ModelCustomizationRecord = {
 		source: value.source,
-		displayName,
 		capabilities: normalizeCapabilities(value.capabilities),
 		updatedAt
 	};
+	if (displayName !== null) {
+		model.displayName = displayName;
+	}
+	if (contextWindowTokens !== undefined) {
+		model.contextWindowTokens = contextWindowTokens;
+	}
+	if (maxOutputTokens !== undefined) {
+		model.maxOutputTokens = maxOutputTokens;
+	}
+	return model;
 }
 
 function normalizeProviderCustomizations(value: unknown): ProviderCustomizations {
-	if (!isRecord(value) || value.schemaVersion !== 2) {
+	if (!isRecord(value) || value.schemaVersion !== 3) {
 		return createEmptyProviderCustomizations();
 	}
 
@@ -200,7 +216,7 @@ type ReadSnapshotResult = {
 async function readSnapshot(filePath: string): Promise<ReadSnapshotResult> {
 	try {
 		const raw: unknown = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-		const validSchema: boolean = isRecord(raw) && raw.schemaVersion === 2;
+		const validSchema: boolean = isRecord(raw) && raw.schemaVersion === 3;
 		return {
 			value: normalizeProviderCustomizations(raw),
 			replaceFile: !validSchema

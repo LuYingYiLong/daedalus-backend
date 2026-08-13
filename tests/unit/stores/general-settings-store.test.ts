@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-test("general settings default next-step hints to enabled and persist updates", async (): Promise<void> => {
+test("general settings default next-step hints to disabled and persist updates", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
 	const appDataDir: string = await mkdtemp(join(tmpdir(), "daedalus-general-settings-"));
 	process.env.USERPROFILE = appDataDir;
@@ -13,7 +13,7 @@ test("general settings default next-step hints to enabled and persist updates", 
 		const store = await import(`../../../src/general-settings-store.js?case=${Date.now()}-${Math.random()}`);
 		const appPaths = await import(`../../../src/app-paths.js?case=${Date.now()}-${Math.random()}`);
 
-		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, true);
+		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, false);
 
 		const saved = await store.updateGeneralSettings({ nextStepHintsEnabled: false });
 		assert.equal(saved.schemaVersion, 2);
@@ -54,7 +54,7 @@ test("general settings fallback to defaults for invalid config without compatibi
 
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
-			nextStepHintsEnabled: true,
+			nextStepHintsEnabled: false,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -88,7 +88,7 @@ test("general settings ignores v1 config and rejects an invalid Godot executable
 
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
-			nextStepHintsEnabled: true,
+			nextStepHintsEnabled: false,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",

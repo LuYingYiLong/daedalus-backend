@@ -375,14 +375,21 @@ function applyEditableCapabilities(
 	base: ProviderModelCapabilities,
 	editable: EditableModelCapabilities
 ): ProviderModelCapabilities {
-	const capabilities: ProviderModelCapabilities = {
-		...base,
-		vision: editable.vision,
-		imageInput: editable.vision,
-		webSearch: editable.webSearch,
-		reasoning: editable.reasoning,
-		tools: editable.tools
-	};
+	const capabilities: ProviderModelCapabilities = { ...base };
+	delete capabilities.vision;
+	for (const key of [
+		"imageInput",
+		"videoInput",
+		"reasoning",
+		"tools",
+		"webSearch",
+		"imageGeneration",
+		"imageEdit"
+	] as const) {
+		if (editable[key] !== undefined) {
+			capabilities[key] = editable[key];
+		}
+	}
 	return normalizeProviderModelCapabilities(capabilities);
 }
 
@@ -395,18 +402,33 @@ function applyModelCustomizations(
 	const seen: Set<string> = new Set();
 	const result: ProviderModelInfo[] = models.map((model: ProviderModelInfo): ProviderModelInfo => {
 		seen.add(model.id);
+		const baseModel: ProviderModelInfo = { ...model };
+		delete baseModel.customization;
 		const customization: ModelCustomizationRecord | undefined = customizations[model.id];
 		if (customization === undefined) {
 			return {
-				...model,
+				...baseModel,
 				capabilities: { ...model.capabilities }
 			};
 		}
-		return {
-			...model,
-			displayName: customization.displayName,
-			capabilities: applyEditableCapabilities(model.capabilities, customization.capabilities)
+		const customizedModel: ProviderModelInfo = {
+			...baseModel,
+			capabilities: applyEditableCapabilities(model.capabilities, customization.capabilities),
+			customization: {
+				...customization,
+				capabilities: { ...customization.capabilities }
+			}
 		};
+		if (customization.displayName !== undefined) {
+			customizedModel.displayName = customization.displayName;
+		}
+		if (customization.contextWindowTokens !== undefined) {
+			customizedModel.contextWindowTokens = customization.contextWindowTokens;
+		}
+		if (customization.maxOutputTokens !== undefined) {
+			customizedModel.maxOutputTokens = customization.maxOutputTokens;
+		}
+		return customizedModel;
 	});
 
 	for (const [modelId, customization] of Object.entries(customizations)) {
@@ -415,12 +437,16 @@ function applyModelCustomizations(
 		}
 		result.push({
 			id: modelId,
-			displayName: customization.displayName,
+			displayName: customization.displayName ?? modelId,
 			provider,
 			endpointType: defaultEndpointType,
-			contextWindowTokens: CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS,
-			maxOutputTokens: CUSTOM_MODEL_MAX_OUTPUT_TOKENS,
-			capabilities: applyEditableCapabilities({}, customization.capabilities)
+			contextWindowTokens: customization.contextWindowTokens ?? CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS,
+			maxOutputTokens: customization.maxOutputTokens ?? CUSTOM_MODEL_MAX_OUTPUT_TOKENS,
+			capabilities: applyEditableCapabilities({}, customization.capabilities),
+			customization: {
+				...customization,
+				capabilities: { ...customization.capabilities }
+			}
 		});
 	}
 	return result;

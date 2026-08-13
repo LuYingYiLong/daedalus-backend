@@ -208,9 +208,31 @@ test("provider customization schemas accept valid fields and reject invalid capa
 		params: {
 			provider: "custom-demo",
 			id: "model-1",
-			displayName: "Model 1"
+			displayName: "Model 1",
+			contextWindowTokens: 256_000,
+			maxOutputTokens: 16_384,
+			capabilities: {
+				imageInput: true,
+				videoInput: false,
+				reasoning: false,
+				tools: true,
+				webSearch: false,
+				imageGeneration: false,
+				imageEdit: false
+			}
 		}
 	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "model-add-legacy-shape",
+		method: "provider.model.add",
+		params: {
+			provider: "custom-demo",
+			id: "model-legacy",
+			displayName: "Legacy Model"
+		}
+	}).success, false);
 
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
@@ -260,11 +282,16 @@ test("provider customization schemas accept valid fields and reject invalid capa
 			provider: "custom-demo",
 			id: "model-1",
 			displayName: "Model One",
+			contextWindowTokens: null,
+			maxOutputTokens: 32_768,
 			capabilities: {
-				vision: true,
-				webSearch: false,
+				imageInput: true,
+				videoInput: null,
 				reasoning: true,
-				tools: true
+				tools: true,
+				webSearch: null,
+				imageGeneration: null,
+				imageEdit: null
 			}
 		}
 	}).success, true);
@@ -277,10 +304,33 @@ test("provider customization schemas accept valid fields and reject invalid capa
 			provider: "custom-demo",
 			id: "model-1",
 			displayName: "Model One",
+			contextWindowTokens: null,
+			maxOutputTokens: 32_768,
+			capabilities: {
+				imageInput: true,
+				videoInput: null,
+				reasoning: true,
+				tools: "yes",
+				webSearch: false,
+				imageGeneration: null,
+				imageEdit: null
+			}
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "model-update-legacy-shape",
+		method: "provider.model.update",
+		params: {
+			provider: "custom-demo",
+			id: "model-1",
+			displayName: "Legacy Model",
 			capabilities: {
 				vision: true,
 				webSearch: false,
-				reasoning: true
+				reasoning: true,
+				tools: true
 			}
 		}
 	}).success, false);

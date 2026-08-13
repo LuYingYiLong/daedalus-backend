@@ -96,7 +96,7 @@ $env:PORT = "38180"
 godot-daedalus-backend
 ```
 
-The npm distribution contains TypeScript source and small JavaScript launchers. It runs through `tsx`, so Node.js 24.18.0 or newer is required.
+The npm distribution contains TypeScript source and small JavaScript launchers. It runs through `tsx`, so Node.js 24.18.0 or newer is required. Windows SEA packaging supports Node 24.18.0 or newer within Node 24.
 
 For a project-local installation:
 
@@ -260,7 +260,7 @@ Daedalus Studio production builds use their own verified binary transaction and 
 
 ### Prerequisites
 
-- Node.js 24.18.0 or newer
+- Node.js 24.18.0 or newer within Node 24 for the Windows SEA release binary
 - npm
 - Godot 4.5 or newer for the Windows integration smoke suite
 - Windows and the native build toolchain for the SEA release binary

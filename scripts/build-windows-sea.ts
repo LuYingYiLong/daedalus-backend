@@ -24,7 +24,8 @@ import {
 import { RUNTIME_ASSET_PATHS } from "../src/runtime/runtime-assets.js";
 
 const execFileAsync = promisify(execFile);
-const EXPECTED_NODE_VERSION: string = "24.18.0";
+const MINIMUM_NODE_VERSION: readonly [number, number, number] = [24, 18, 0];
+const MINIMUM_NODE_VERSION_TEXT: string = MINIMUM_NODE_VERSION.join(".");
 const SEA_FUSE: string = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 const PROJECT_ROOT: string = resolve(import.meta.dirname, "..");
 const OUTPUT_ROOT: string = resolve(PROJECT_ROOT, "dist", "sea-win32-x64");
@@ -79,6 +80,31 @@ async function readPackageManifest(): Promise<PackageManifest> {
 	return JSON.parse(await readFile(resolve(PROJECT_ROOT, "package.json"), "utf8")) as PackageManifest;
 }
 
+function parseNodeVersion(version: string): [number, number, number] | null {
+	const match: RegExpMatchArray | null = version.trim().match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/u);
+	if (match === null) {
+		return null;
+	}
+	return [
+		Number.parseInt(match[1]!, 10),
+		Number.parseInt(match[2]!, 10),
+		Number.parseInt(match[3]!, 10)
+	];
+}
+
+function isSupportedNodeVersion(version: string): boolean {
+	const parsed: [number, number, number] | null = parseNodeVersion(version);
+	if (parsed === null || parsed[0] !== MINIMUM_NODE_VERSION[0]) {
+		return false;
+	}
+	for (let index: number = 0; index < MINIMUM_NODE_VERSION.length; index += 1) {
+		if (parsed[index]! !== MINIMUM_NODE_VERSION[index]) {
+			return parsed[index]! > MINIMUM_NODE_VERSION[index]!;
+		}
+	}
+	return true;
+}
+
 async function resolveBuildId(version: string): Promise<string> {
 	const githubSha: string = process.env.GITHUB_SHA?.trim() ?? "";
 	if (githubSha.length >= 7) {
@@ -97,8 +123,8 @@ async function assertBuildEnvironment(): Promise<void> {
 	if (process.platform !== "win32" || process.arch !== "x64") {
 		throw new Error(`Windows SEA must be built on win32-x64, got ${process.platform}-${process.arch}.`);
 	}
-	if (process.versions.node !== EXPECTED_NODE_VERSION) {
-		throw new Error(`Windows SEA requires Node ${EXPECTED_NODE_VERSION}, got ${process.versions.node}.`);
+	if (!isSupportedNodeVersion(process.versions.node)) {
+		throw new Error(`Windows SEA requires Node ${MINIMUM_NODE_VERSION_TEXT} or newer within Node 24, got ${process.versions.node}.`);
 	}
 	for (const sourcePath of Object.values(RUNTIME_ASSET_PATHS)) {
 		const absolutePath: string = resolve(PROJECT_ROOT, sourcePath);
@@ -127,7 +153,7 @@ async function buildBundle(manifest: PackageManifest, buildId: string): Promise<
 		define: {
 			__DAEDALUS_BACKEND_VERSION__: JSON.stringify(manifest.version),
 			__DAEDALUS_BUILD_ID__: JSON.stringify(buildId),
-			__DAEDALUS_BUILD_NODE_VERSION__: JSON.stringify(EXPECTED_NODE_VERSION),
+			__DAEDALUS_BUILD_NODE_VERSION__: JSON.stringify(process.versions.node),
 			__DAEDALUS_SEA_BUILD__: "true"
 		}
 	});
@@ -712,7 +738,7 @@ async function main(): Promise<void> {
 		buildId,
 		platform: "win32",
 		arch: "x64",
-		nodeVersion: EXPECTED_NODE_VERSION,
+		nodeVersion: process.versions.node,
 		protocolVersion: manifest.daedalusBinary.protocolVersion,
 		minBridgeProtocolVersion: manifest.daedalusBinary.minBridgeProtocolVersion,
 		maxBridgeProtocolVersion: manifest.daedalusBinary.maxBridgeProtocolVersion,

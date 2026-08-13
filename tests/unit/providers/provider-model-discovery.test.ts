@@ -69,7 +69,6 @@ async function withTempAppData(run: () => Promise<void>): Promise<void> {
 		} else {
 			process.env.USERPROFILE = previousUserProfile;
 		}
-		await initializeProviderCustomizations(true);
 	}
 }
 
@@ -137,7 +136,8 @@ test("provider refresh caches source metadata instead of effective user override
 				displayName: "My Remote Model",
 				contextWindowTokens: 128_000,
 				maxOutputTokens: 16_384,
-				capabilities: { ...allCapabilityUpdates, tools: true }
+				capabilities: { ...allCapabilityUpdates, tools: true },
+				reasoningEfforts: null
 			});
 
 			const result = await listProviderModels(provider, "test-key", baseUrl, true);
@@ -219,7 +219,8 @@ test("provider model import upserts selected models and preserves local override
 				webSearch: false,
 				reasoning: true,
 				tools: true
-			}
+			},
+			reasoningEfforts: null
 		});
 
 		const imported: DiscoveredProviderModel[] = [{
@@ -275,7 +276,8 @@ test("provider model sync removes and restores models while protecting reference
 				webSearch: false,
 				reasoning: true,
 				tools: true
-			}
+			},
+			reasoningEfforts: null
 		});
 		let models = await syncProviderModels({
 			provider: "deepseek",
@@ -324,7 +326,8 @@ test("custom provider default follows the remaining enabled models", async (): P
 			displayName: "First",
 			contextWindowTokens: 128_000,
 			maxOutputTokens: 8_192,
-			capabilities: allEditableCapabilities
+			capabilities: allEditableCapabilities,
+			reasoningEfforts: []
 		});
 		await addCustomModel({
 			provider,
@@ -332,7 +335,8 @@ test("custom provider default follows the remaining enabled models", async (): P
 			displayName: "Second",
 			contextWindowTokens: 128_000,
 			maxOutputTokens: 8_192,
-			capabilities: allEditableCapabilities
+			capabilities: allEditableCapabilities,
+			reasoningEfforts: []
 		});
 		assert.equal(getProviderDefaultModelOrNull(provider), "first");
 

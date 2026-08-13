@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ChatCompletionCreateParamsBase } from "openai/resources/chat/completions";
 import { aiChatParamsSchema } from "../../../src/protocol/schema.js";
+import { createAnthropicRequestBody } from "../../../src/providers/anthropic-compatible-client.js";
 import { createOpenAIResponsesRequestBody } from "../../../src/providers/openai-responses-client.js";
 import { applyChatOptions } from "../../../src/providers/provider-chat-completions-client.js";
 import { getProviderFallbackModels } from "../../../src/providers/provider-registry.js";
@@ -83,6 +84,14 @@ test("provider request builders forward only supported reasoning parameters", ()
 	applyChatOptions(kimiRequest, params, { provider: "moonshot", apiKey: "test", model: "kimi-k3" });
 	assert.equal((kimiRequest as unknown as Record<string, unknown>).reasoning_effort, "max");
 	assert.equal("thinking" in (kimiRequest as unknown as Record<string, unknown>), false);
+
+	const anthropicRequest = createAnthropicRequestBody(
+		params,
+		{ provider: "openai", apiKey: "test", model: "gpt-5.6-sol" },
+		[],
+		"system"
+	) as unknown as Record<string, unknown>;
+	assert.deepEqual(anthropicRequest.output_config, { effort: "xhigh" });
 });
 
 test("auxiliary provider requests can disable reasoning without changing model defaults", (): void => {
@@ -116,4 +125,17 @@ test("auxiliary provider requests can disable reasoning without changing model d
 		"system"
 	) as unknown as Record<string, unknown>;
 	assert.equal("reasoning" in openAIRequest, false);
+
+	const anthropicRequest = createAnthropicRequestBody(
+		params,
+		{
+			provider: "openai",
+			apiKey: "test",
+			model: "gpt-5.6-sol",
+			reasoningMode: "disabled"
+		},
+		[],
+		"system"
+	) as unknown as Record<string, unknown>;
+	assert.equal("output_config" in anthropicRequest, false);
 });

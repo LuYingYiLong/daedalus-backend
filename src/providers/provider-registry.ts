@@ -18,7 +18,8 @@ import type {
 	ProviderEndpointConfig,
 	ProviderModelCapabilities,
 	ProviderModelInfo,
-	ProviderModelListMode
+	ProviderModelListMode,
+	ProviderReasoningEffortOption
 } from "./provider-types.js";
 
 export type {
@@ -373,7 +374,8 @@ function getCustomProviderEndpoint(providerType: CustomProviderType): {
 
 function applyEditableCapabilities(
 	base: ProviderModelCapabilities,
-	editable: EditableModelCapabilities
+	editable: EditableModelCapabilities,
+	reasoningEfforts?: readonly ProviderReasoningEffortOption[] | undefined
 ): ProviderModelCapabilities {
 	const capabilities: ProviderModelCapabilities = { ...base };
 	delete capabilities.vision;
@@ -388,6 +390,16 @@ function applyEditableCapabilities(
 	] as const) {
 		if (editable[key] !== undefined) {
 			capabilities[key] = editable[key];
+		}
+	}
+	if (editable.reasoning === false) {
+		delete capabilities.reasoningEfforts;
+	} else if (reasoningEfforts !== undefined) {
+		delete capabilities.reasoningEfforts;
+		if (reasoningEfforts.length > 0) {
+			capabilities.reasoningEfforts = reasoningEfforts.map((option: ProviderReasoningEffortOption): ProviderReasoningEffortOption => ({
+				...option
+			}));
 		}
 	}
 	return normalizeProviderModelCapabilities(capabilities);
@@ -413,7 +425,11 @@ function applyModelCustomizations(
 		}
 		const customizedModel: ProviderModelInfo = {
 			...baseModel,
-			capabilities: applyEditableCapabilities(model.capabilities, customization.capabilities),
+			capabilities: applyEditableCapabilities(
+				model.capabilities,
+				customization.capabilities,
+				customization.reasoningEfforts
+			),
 			customization: {
 				...customization,
 				capabilities: { ...customization.capabilities }
@@ -442,7 +458,7 @@ function applyModelCustomizations(
 			endpointType: defaultEndpointType,
 			contextWindowTokens: customization.contextWindowTokens ?? CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS,
 			maxOutputTokens: customization.maxOutputTokens ?? CUSTOM_MODEL_MAX_OUTPUT_TOKENS,
-			capabilities: applyEditableCapabilities({}, customization.capabilities),
+			capabilities: applyEditableCapabilities({}, customization.capabilities, customization.reasoningEfforts),
 			customization: {
 				...customization,
 				capabilities: { ...customization.capabilities }

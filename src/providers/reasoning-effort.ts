@@ -1,10 +1,15 @@
 import type { ProviderId } from "../protocol/types.js";
+import { getModelCustomizationRecords } from "./provider-customizations-store.js";
 import { getProviderFallbackModels } from "./provider-registry.js";
 import type { BaseReasoningEffort, ProviderModelInfo, ProviderReasoningEffortOption } from "./provider-types.js";
 
 export const DEFAULT_REASONING_EFFORT: BaseReasoningEffort = "medium";
 
 function getReasoningEffortOptions(provider: ProviderId, model: string): readonly ProviderReasoningEffortOption[] {
+	const customizedOptions: ProviderReasoningEffortOption[] | undefined = getModelCustomizationRecords(provider)[model]?.reasoningEfforts;
+	if (customizedOptions !== undefined) {
+		return customizedOptions;
+	}
 	const modelInfo: ProviderModelInfo | undefined = getProviderFallbackModels(provider)
 		.find((candidate: ProviderModelInfo): boolean => candidate.id === model);
 	return modelInfo?.capabilities.reasoningEfforts ?? [];

@@ -84,15 +84,39 @@ const providerRequestOverridesSchema = z.object({
 	body: z.record(z.string().min(1).max(160), providerRequestJsonValueSchema).optional()
 }).strict();
 
+const providerReasoningEffortOptionSchema = z.object({
+	id: z.string().trim().min(1).max(32),
+	fallback: z.enum(["low", "medium", "high", "max"]),
+	default: z.boolean().optional()
+}).strict();
+
+const providerReasoningEffortsSchema = z.array(providerReasoningEffortOptionSchema).max(16).superRefine((options, context): void => {
+	const ids: Set<string> = new Set();
+	let defaultCount: number = 0;
+	for (const [index, option] of options.entries()) {
+		if (ids.has(option.id)) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Reasoning effort IDs must be unique.",
+				path: [index, "id"]
+			});
+		}
+		ids.add(option.id);
+		defaultCount += option.default === true ? 1 : 0;
+	}
+	if (defaultCount > 1) {
+		context.addIssue({
+			code: z.ZodIssueCode.custom,
+			message: "Only one reasoning effort can be the default."
+		});
+	}
+});
+
 const providerModelCapabilitiesSchema = z.object({
 	imageInput: z.boolean().optional(),
 	videoInput: z.boolean().optional(),
 	reasoning: z.boolean().optional(),
-	reasoningEfforts: z.array(z.object({
-		id: z.string().trim().min(1).max(32),
-		fallback: z.enum(["low", "medium", "high", "max"]),
-		default: z.boolean().optional()
-	}).strict()).max(16).optional(),
+	reasoningEfforts: providerReasoningEffortsSchema.optional(),
 	tools: z.boolean().optional(),
 	webSearch: z.boolean().optional(),
 	vision: z.boolean().optional(),
@@ -695,7 +719,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			displayName: z.string().trim().min(1).max(120),
 			contextWindowTokens: z.number().int().positive().max(2_000_000_000),
 			maxOutputTokens: z.number().int().positive().max(2_000_000_000),
-			capabilities: editableProviderModelCapabilitiesSchema
+			capabilities: editableProviderModelCapabilitiesSchema,
+			reasoningEfforts: providerReasoningEffortsSchema
 		}).strict(),
 	}),
 	z.object({
@@ -708,7 +733,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			displayName: z.string().trim().min(1).max(120).nullable(),
 			contextWindowTokens: z.number().int().positive().max(2_000_000_000).nullable(),
 			maxOutputTokens: z.number().int().positive().max(2_000_000_000).nullable(),
-			capabilities: editableProviderModelCapabilityOverridesSchema
+			capabilities: editableProviderModelCapabilityOverridesSchema,
+			reasoningEfforts: providerReasoningEffortsSchema.nullable()
 		}).strict(),
 	}),
 	z.object({

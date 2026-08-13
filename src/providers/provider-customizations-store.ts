@@ -2,7 +2,12 @@ import { readFile } from "node:fs/promises";
 import { getProviderCustomizationsPath } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 import type { ProviderId } from "../protocol/types.js";
-import type { ProviderModelCapabilityOverrides, ProviderModelCustomizationInfo } from "./provider-types.js";
+import type {
+	BaseReasoningEffort,
+	ProviderModelCapabilityOverrides,
+	ProviderModelCustomizationInfo,
+	ProviderReasoningEffortOption
+} from "./provider-types.js";
 
 export type CustomProviderType = "openai" | "openai-responses" | "anthropic";
 export type ModelCustomizationSource = "custom" | "override";
@@ -20,7 +25,7 @@ export type CustomProviderRecord = {
 export type ModelCustomizationRecord = ProviderModelCustomizationInfo;
 
 export type ProviderCustomizations = {
-	schemaVersion: 3;
+	schemaVersion: 4;
 	providers: Record<ProviderId, CustomProviderRecord>;
 	models: Record<ProviderId, Record<string, ModelCustomizationRecord>>;
 	excludedModelIds: Record<ProviderId, string[]>;
@@ -42,7 +47,7 @@ let writeQueue: Promise<void> = Promise.resolve();
 
 function createEmptyProviderCustomizations(): ProviderCustomizations {
 	return {
-		schemaVersion: 3,
+		schemaVersion: 4,
 		providers: {},
 		models: {},
 		excludedModelIds: {}
@@ -115,6 +120,39 @@ function readPositiveInteger(value: unknown): number | undefined {
 		: undefined;
 }
 
+function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOption[] | null {
+	if (!Array.isArray(value) || value.length > 16) {
+		return null;
+	}
+	const efforts: ProviderReasoningEffortOption[] = [];
+	const ids: Set<string> = new Set();
+	let defaultSeen: boolean = false;
+	for (const item of value) {
+		if (!isRecord(item)) {
+			return null;
+		}
+		const id: string | null = readTrimmedString(item.id, 32);
+		const fallback: unknown = item.fallback;
+		if (
+			id === null
+			|| ids.has(id)
+			|| (fallback !== "low" && fallback !== "medium" && fallback !== "high" && fallback !== "max")
+			|| (item.default !== undefined && typeof item.default !== "boolean")
+			|| (item.default === true && defaultSeen)
+		) {
+			return null;
+		}
+		ids.add(id);
+		defaultSeen ||= item.default === true;
+		efforts.push({
+			id,
+			fallback: fallback as BaseReasoningEffort,
+			...(item.default === true ? { default: true } : {})
+		});
+	}
+	return efforts;
+}
+
 function normalizeModelRecord(value: unknown): ModelCustomizationRecord | null {
 	if (!isRecord(value)) {
 		return null;
@@ -131,7 +169,16 @@ function normalizeModelRecord(value: unknown): ModelCustomizationRecord | null {
 	}
 	const contextWindowTokens: number | undefined = readPositiveInteger(value.contextWindowTokens);
 	const maxOutputTokens: number | undefined = readPositiveInteger(value.maxOutputTokens);
-	if (value.source === "custom" && (displayName === null || contextWindowTokens === undefined || maxOutputTokens === undefined)) {
+	const reasoningEfforts: ProviderReasoningEffortOption[] | undefined | null = value.reasoningEfforts === undefined
+		? undefined
+		: normalizeReasoningEfforts(value.reasoningEfforts);
+	if (
+		reasoningEfforts === null
+		|| (
+			value.source === "custom"
+			&& (displayName === null || contextWindowTokens === undefined || maxOutputTokens === undefined || reasoningEfforts === undefined)
+		)
+	) {
 		return null;
 	}
 	const model: ModelCustomizationRecord = {
@@ -148,11 +195,14 @@ function normalizeModelRecord(value: unknown): ModelCustomizationRecord | null {
 	if (maxOutputTokens !== undefined) {
 		model.maxOutputTokens = maxOutputTokens;
 	}
+	if (reasoningEfforts !== undefined) {
+		model.reasoningEfforts = reasoningEfforts;
+	}
 	return model;
 }
 
 function normalizeProviderCustomizations(value: unknown): ProviderCustomizations {
-	if (!isRecord(value) || value.schemaVersion !== 3) {
+	if (!isRecord(value) || value.schemaVersion !== 4) {
 		return createEmptyProviderCustomizations();
 	}
 
@@ -216,7 +266,7 @@ type ReadSnapshotResult = {
 async function readSnapshot(filePath: string): Promise<ReadSnapshotResult> {
 	try {
 		const raw: unknown = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-		const validSchema: boolean = isRecord(raw) && raw.schemaVersion === 3;
+		const validSchema: boolean = isRecord(raw) && raw.schemaVersion === 4;
 		return {
 			value: normalizeProviderCustomizations(raw),
 			replaceFile: !validSchema

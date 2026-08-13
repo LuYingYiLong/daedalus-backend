@@ -10,6 +10,7 @@ import { parseAnthropicUsage } from "../usage/usage-parser.js";
 import { ProviderHttpError, ProviderIncompleteStreamError } from "./provider-resilience.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { applyProviderRequestOverridesToFetchInit } from "./provider-request-overrides.js";
+import { resolveReasoningEffort } from "./reasoning-effort.js";
 
 export type AnthropicTextBlock = {
 	type: "text";
@@ -81,6 +82,9 @@ type AnthropicRequestBody = {
 	temperature?: number | undefined;
 	top_p?: number | undefined;
 	stop_sequences?: string[] | undefined;
+	output_config?: {
+		effort: string;
+	} | undefined;
 };
 
 type StreamingContentBlock =
@@ -172,7 +176,7 @@ export function convertChatToolsToAnthropicTools(tools: readonly ChatCompletionT
 		}));
 }
 
-function createRequestBody(
+export function createAnthropicRequestBody(
 	params: AiChatParams,
 	options: ProviderChatOptions,
 	messages: AnthropicMessageParam[],
@@ -203,6 +207,16 @@ function createRequestBody(
 	}
 	if (params.options?.stop !== undefined) {
 		body.stop_sequences = Array.isArray(params.options.stop) ? params.options.stop : [params.options.stop];
+	}
+	if (options.reasoningMode !== "disabled") {
+		const reasoningEffort: string | undefined = resolveReasoningEffort(
+			options.provider,
+			resolveAnthropicModel(options),
+			params.options?.reasoningEffort
+		);
+		if (reasoningEffort !== undefined) {
+			body.output_config = { effort: reasoningEffort };
+		}
 	}
 	return body;
 }
@@ -285,7 +299,7 @@ export async function createAnthropicMessage(
 	tools?: readonly AnthropicToolDefinition[] | undefined,
 	abortSignal?: AbortSignal | undefined
 ): Promise<AnthropicMessageResponse> {
-	const requestBody: AnthropicRequestBody = createRequestBody(params, options, messages, systemPrompt, tools);
+	const requestBody: AnthropicRequestBody = createAnthropicRequestBody(params, options, messages, systemPrompt, tools);
 	const requestInit: RequestInit = {
 		method: "POST",
 		headers: {
@@ -370,7 +384,7 @@ export async function* streamAnthropicMessage(
 	abortSignal?: AbortSignal | undefined,
 	markActivity?: (() => void) | undefined
 ): AsyncGenerator<AnthropicStreamEvent> {
-	const requestBody: AnthropicRequestBody = createRequestBody(params, options, messages, systemPrompt, tools, true);
+	const requestBody: AnthropicRequestBody = createAnthropicRequestBody(params, options, messages, systemPrompt, tools, true);
 	const requestInit: RequestInit = {
 		method: "POST",
 		headers: {

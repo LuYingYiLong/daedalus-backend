@@ -36,6 +36,7 @@ export type ProviderModelCustomizationInfo = {
 	contextWindowTokens?: number | undefined;
 	maxOutputTokens?: number | undefined;
 	capabilities: ProviderModelCapabilityOverrides;
+	reasoningEfforts?: ProviderReasoningEffortOption[] | undefined;
 	updatedAt: string;
 };
 
@@ -158,6 +159,7 @@ function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOptio
 	}
 	const options: ProviderReasoningEffortOption[] = [];
 	const seen: Set<string> = new Set();
+	let defaultSeen: boolean = false;
 	for (const item of value) {
 		if (typeof item !== "object" || item === null || Array.isArray(item)) {
 			continue;
@@ -176,7 +178,9 @@ function normalizeReasoningEfforts(value: unknown): ProviderReasoningEffortOptio
 			continue;
 		}
 		seen.add(id);
-		options.push({ id, fallback, ...(isDefault === true ? { default: true } : {}) });
+		const useAsDefault: boolean = isDefault === true && !defaultSeen;
+		defaultSeen ||= useAsDefault;
+		options.push({ id, fallback, ...(useAsDefault ? { default: true } : {}) });
 	}
 	return options.length > 0 ? options : undefined;
 }

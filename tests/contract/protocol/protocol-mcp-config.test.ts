@@ -219,7 +219,8 @@ test("provider customization schemas accept valid fields and reject invalid capa
 				webSearch: false,
 				imageGeneration: false,
 				imageEdit: false
-			}
+			},
+			reasoningEfforts: []
 		}
 	}).success, true);
 
@@ -292,7 +293,11 @@ test("provider customization schemas accept valid fields and reject invalid capa
 				webSearch: null,
 				imageGeneration: null,
 				imageEdit: null
-			}
+			},
+			reasoningEfforts: [
+				{ id: "low", fallback: "low" },
+				{ id: "xhigh", fallback: "high", default: true }
+			]
 		}
 	}).success, true);
 

@@ -144,7 +144,7 @@ export function applyChatOptions(requestBody: ChatCompletionCreateParamsBase, pa
 			resolveChatModel(options),
 			params.options?.reasoningEffort
 		);
-		if (reasoningEffort !== undefined && (options.provider === "deepseek" || options.provider === "moonshot")) {
+		if (reasoningEffort !== undefined) {
 			const providerRequest = requestBody as unknown as Record<string, unknown>;
 			providerRequest.reasoning_effort = reasoningEffort;
 			if (options.provider === "deepseek") {

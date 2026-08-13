@@ -35,7 +35,7 @@ A same-user Godot integration can read the discovery record and invoke the liste
 
 ## Release Gate
 
-`npm run build:sea:win` requires Windows x64 and Node.js 24.18.0. It builds the SEA, rejects development runtime lookups, and performs black-box checks for:
+`npm run build:sea:win` requires Windows x64 and Node.js 24.18.0 or newer within Node 24. It builds the SEA, rejects development runtime lookups, and performs black-box checks for:
 
 - embedded assets, SQLite, and Credential Manager;
 - authenticated health and unauthenticated rejection;

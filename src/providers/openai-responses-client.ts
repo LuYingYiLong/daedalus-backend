@@ -104,7 +104,7 @@ export function applyOpenAIResponsesOptions(
 	}
 	if (options?.reasoningMode !== "disabled") {
 		const model: string = typeof requestBody.model === "string" ? requestBody.model : "";
-		const reasoningEffort: string | undefined = resolveReasoningEffort("openai", model, params.options?.reasoningEffort);
+		const reasoningEffort: string | undefined = resolveReasoningEffort(options?.provider ?? "openai", model, params.options?.reasoningEffort);
 		if (reasoningEffort !== undefined) {
 			(requestBody as unknown as { reasoning?: { effort: string } }).reasoning = { effort: reasoningEffort };
 		}

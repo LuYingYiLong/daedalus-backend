@@ -21,6 +21,7 @@ import {
 	mergeProviderModelsWithCatalog,
 	type ProviderModelInfo
 } from "./provider-registry.js";
+import type { BaseReasoningEffort, ProviderReasoningEffortOption } from "./provider-types.js";
 
 export class ProviderCustomizationError extends Error {
 	readonly code: string;
@@ -46,6 +47,7 @@ export type AddCustomModelInput = {
 	capabilities: {
 		[K in keyof EditableModelCapabilities]-?: boolean;
 	};
+	reasoningEfforts: ProviderReasoningEffortOption[];
 };
 
 type ModelCapabilityUpdate = {
@@ -59,6 +61,7 @@ export type UpdateModelCustomizationInput = {
 	contextWindowTokens: number | null;
 	maxOutputTokens: number | null;
 	capabilities: ModelCapabilityUpdate;
+	reasoningEfforts: ProviderReasoningEffortOption[] | null;
 };
 
 export type UpdateProviderModelSelectionInput = {
@@ -149,10 +152,45 @@ function normalizeCapabilityOverrides(
 	return normalized;
 }
 
+function normalizeReasoningEfforts(
+	efforts: readonly ProviderReasoningEffortOption[]
+): ProviderReasoningEffortOption[] {
+	if (efforts.length > 16) {
+		throw new ProviderCustomizationError(
+			"provider_customization_invalid",
+			"Reasoning effort options cannot contain more than 16 entries."
+		);
+	}
+	const normalized: ProviderReasoningEffortOption[] = [];
+	const ids: Set<string> = new Set();
+	let defaultSeen: boolean = false;
+	for (const effort of efforts) {
+		const id: string = normalizeRequiredString(effort.id, "Reasoning effort ID", 32);
+		const fallback: BaseReasoningEffort = effort.fallback;
+		if (ids.has(id) || (effort.default === true && defaultSeen)) {
+			throw new ProviderCustomizationError(
+				"provider_customization_invalid",
+				ids.has(id)
+					? `Reasoning effort ID ${id} is duplicated.`
+					: "Only one reasoning effort can be the default."
+			);
+		}
+		ids.add(id);
+		defaultSeen ||= effort.default === true;
+		normalized.push({
+			id,
+			fallback,
+			...(effort.default === true ? { default: true } : {})
+		});
+	}
+	return normalized;
+}
+
 function hasModelOverrides(record: ModelCustomizationRecord): boolean {
 	return record.displayName !== undefined
 		|| record.contextWindowTokens !== undefined
 		|| record.maxOutputTokens !== undefined
+		|| record.reasoningEfforts !== undefined
 		|| Object.keys(record.capabilities).length > 0;
 }
 
@@ -178,6 +216,10 @@ export async function addCustomModel(input: AddCustomModelInput): Promise<void> 
 	const displayName: string = normalizeRequiredString(input.displayName, "Model name", 120);
 	const contextWindowTokens: number = normalizePositiveInteger(input.contextWindowTokens, "Context window tokens");
 	const maxOutputTokens: number = normalizePositiveInteger(input.maxOutputTokens, "Maximum output tokens");
+	const capabilities: EditableModelCapabilities = normalizeCapabilityOverrides(input.capabilities);
+	const reasoningEfforts: ProviderReasoningEffortOption[] = capabilities.reasoning === false
+		? []
+		: normalizeReasoningEfforts(input.reasoningEfforts);
 	const models: ProviderModelInfo[] = await getEffectiveProviderModels(provider);
 	if (models.some((model: ProviderModelInfo): boolean => model.id === id)) {
 		throw new ProviderCustomizationError(
@@ -200,7 +242,8 @@ export async function addCustomModel(input: AddCustomModelInput): Promise<void> 
 			displayName,
 			contextWindowTokens,
 			maxOutputTokens,
-			capabilities: normalizeCapabilityOverrides(input.capabilities),
+			capabilities,
+			reasoningEfforts,
 			updatedAt: now
 		};
 		draft.models[provider] = providerModels;
@@ -253,6 +296,17 @@ export async function updateModelCustomization(input: UpdateModelCustomizationIn
 			capabilities[capabilityKey] = value;
 		}
 	}
+	const reasoningEfforts: ProviderReasoningEffortOption[] | undefined = capabilities.reasoning === false
+		? []
+		: input.reasoningEfforts === null
+			? undefined
+			: normalizeReasoningEfforts(input.reasoningEfforts);
+	if (source === "custom" && reasoningEfforts === undefined) {
+		throw new ProviderCustomizationError(
+			"provider_customization_invalid",
+			"Custom models require explicit reasoning effort options."
+		);
+	}
 	const now: string = new Date().toISOString();
 	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
 		const providerModels: Record<string, ModelCustomizationRecord> = draft.models[provider] ?? {};
@@ -269,6 +323,9 @@ export async function updateModelCustomization(input: UpdateModelCustomizationIn
 		}
 		if (maxOutputTokens !== undefined) {
 			record.maxOutputTokens = maxOutputTokens;
+		}
+		if (reasoningEfforts !== undefined) {
+			record.reasoningEfforts = reasoningEfforts;
 		}
 		if (source === "override" && !hasModelOverrides(record)) {
 			delete providerModels[id];

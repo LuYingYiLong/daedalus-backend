@@ -34,4 +34,11 @@ test("session.fork validates Studio fork payloads strictly", (): void => {
 			unexpected: true,
 		},
 	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "save-fork-origin-dismissed",
+		method: "session.save",
+		params: { forkOriginDismissed: true },
+	}).success, true);
 });

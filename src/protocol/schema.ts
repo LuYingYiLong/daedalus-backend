@@ -140,7 +140,8 @@ const sessionUiMetadataParamsSchema = z.object({
 	chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
 	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 	workflowTodoCollapsed: z.boolean().optional(),
-	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional()
+	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
+	forkOriginDismissed: z.boolean().optional()
 }).strict();
 
 const editableProviderModelCapabilitiesSchema = z.object({

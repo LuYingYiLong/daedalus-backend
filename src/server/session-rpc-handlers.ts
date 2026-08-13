@@ -242,6 +242,7 @@ function createSessionUiMetadata(params: {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
+	forkOriginDismissed?: boolean | undefined;
 	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
@@ -269,6 +270,9 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.workflowTodoDismissedKey !== undefined) {
 		metadata.workflowTodoDismissedKey = params.workflowTodoDismissedKey;
+	}
+	if (params.forkOriginDismissed !== undefined) {
+		metadata.forkOriginDismissed = params.forkOriginDismissed;
 	}
 	if (params.temporary === true) {
 		metadata.temporary = true;

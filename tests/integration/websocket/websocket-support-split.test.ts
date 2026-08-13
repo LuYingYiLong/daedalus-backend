@@ -7,7 +7,7 @@ import { createClientSession } from "../../../src/server/client-session.js";
 import type { ClientSession } from "../../../src/server/client-session.js";
 import { createAdditionalContextPromptSection } from "../../../src/server/additional-context.js";
 import { normalizeNextStepHints, parseJsonObjectLoose } from "../../../src/server/next-step-hints.js";
-import { beginRequestExecution, finishRequestExecution } from "../../../src/server/request-lifecycle.js";
+import { beginRequestExecution, finishRequestExecution, hasOtherInFlightRequest } from "../../../src/server/request-lifecycle.js";
 import { hydratePendingGuides } from "../../../src/server/pending-guides.js";
 
 function createSocketMock(): WebSocket & { sent: unknown[] } {
@@ -52,6 +52,14 @@ test("request lifecycle deduplicates in-flight and completed requests", (): void
 	finishRequestExecution(request, session);
 	assert.equal(beginRequestExecution(socket, request, session), false);
 	assert.equal((socket.sent.at(-1) as { result: { state: string } }).result.state, "completed");
+});
+
+test("request lifecycle can ignore the current RPC when checking session stability", (): void => {
+	const session = createClientSession(undefined);
+	session.inFlightRequestIds.add("fork-request");
+	assert.equal(hasOtherInFlightRequest(session, "fork-request"), false);
+	session.inFlightRequestIds.add("active-chat-request");
+	assert.equal(hasOtherInFlightRequest(session, "fork-request"), true);
 });
 
 test("additional context formats script selections without mutating source items", (): void => {

@@ -72,6 +72,7 @@ import {
 } from "../providers/provider-image-content.js";
 import { preprocessImageAttachmentsForTextModel, type ImageRecognitionPreprocessResult } from "../providers/image-recognition.js";
 import { hydrateImageAttachmentContexts } from "../session/session-attachments.js";
+import { clearSessionForkDraft } from "../session/session-fork.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, isProviderId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent, type ProviderErrorInfo } from "../providers/provider-error.js";
@@ -2405,6 +2406,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						chatParams: params
 					});
 					clearWorkbenchComposer(session, true);
+					if (session.sessionId !== undefined) {
+						await clearSessionForkDraft(session.sessionId);
+					}
 					emitWorkbenchUpdated(socket, request.id, session);
 					sendJson(socket, {
 						type: "response",
@@ -2602,6 +2606,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						turnStartedAt,
 						abortController.signal
 					);
+					clearWorkbenchComposer(session, true);
+					if (session.sessionId !== undefined) {
+						await clearSessionForkDraft(session.sessionId);
+					}
+					emitWorkbenchUpdated(socket, request.id, session);
 					sendJson(socket, {
 						type: "response",
 						id: request.id,
@@ -2860,6 +2869,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					durationMs: Date.now() - runStartedAtMs
 				});
 				clearWorkbenchComposer(session, true);
+				if (session.sessionId !== undefined) {
+					await clearSessionForkDraft(session.sessionId);
+				}
 				emitWorkbenchUpdated(socket, request.id, session);
 				if (
 					shouldScheduleNextStepHints(params, goalBinding)

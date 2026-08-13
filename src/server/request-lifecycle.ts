@@ -132,6 +132,15 @@ export function beginRequestExecution(socket: WebSocket, request: ClientRequest,
 	return true;
 }
 
+export function hasOtherInFlightRequest(session: ClientSession, currentRequestId: string): boolean {
+	for (const requestId of session.inFlightRequestIds) {
+		if (requestId !== currentRequestId) {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function finishRequestExecution(request: ClientRequest, session: ClientSession): void {
 	if (request.id.length === 0) {
 		return;

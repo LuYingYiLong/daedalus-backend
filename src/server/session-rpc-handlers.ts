@@ -51,6 +51,10 @@ import { listSelectionAskThreads } from "../session/selection-ask-store.js";
 import { exportSessionToSqlite } from "../session/session-export.js";
 import { importSessionFromSqlite } from "../session/session-import.js";
 import {
+	createSessionFork,
+	readSessionForkDraft,
+} from "../session/session-fork.js";
+import {
 	clearProviderConfig,
 	getProviderConfigStatus,
 	getProviderModelsCache,
@@ -119,7 +123,7 @@ import { createSessionOverview } from "./session-overview.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
-import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage } from "./request-lifecycle.js";
+import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, hasOtherInFlightRequest, parseMessage } from "./request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterLlmContextMessages, getTokenCounter } from "./token-budget.js";
 import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
@@ -184,7 +188,11 @@ function sessionRpcError(
 	fallbackMessage: string
 ): { code: string; message: string } {
 	const candidate = error as Error & { code?: string };
-	if (candidate.code === "session_storage_unavailable" || candidate.code === "session_not_found") {
+	if (
+		candidate.code === "session_storage_unavailable"
+		|| candidate.code === "session_not_found"
+		|| candidate.code?.startsWith("session_fork_") === true
+	) {
 		return {
 			code: candidate.code,
 			message: candidate.message
@@ -741,6 +749,117 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 		}
 
+		case "session.fork": {
+			try {
+				if (getClientConnection(socket)?.clientType !== "studio") {
+					throw Object.assign(new Error("Session forking is only available to Daedalus Studio."), {
+						code: "session_fork_studio_only",
+					});
+				}
+				const sourceRuntime: ClientSession | undefined = getSessionRuntime(request.params.sourceSessionId);
+				if (
+					sourceRuntime !== undefined
+					&& (
+						sourceRuntime.workbenchActiveRun.status !== "idle"
+						|| sourceRuntime.activeRunRequestId !== undefined
+						|| hasOtherInFlightRequest(sourceRuntime, request.id)
+						|| sourceRuntime.pendingAiContinuations.size > 0
+						|| sourceRuntime.pendingToolBudgets.size > 0
+						|| sourceRuntime.approvalGateway.listPending().length > 0
+					)
+				) {
+					throw Object.assign(new Error("Wait for the source session to finish before forking."), {
+						code: "session_fork_source_busy",
+					});
+				}
+				if (sourceRuntime !== undefined) {
+					await waitForSessionEventPersistence(sourceRuntime);
+				}
+				const fork = await createSessionFork(request.params);
+				const timeline = await openSessionRecentTimeline(fork.metadata.id, 100);
+				let workspace: WorkspaceConfig | undefined;
+				let workspaceWarning: string | undefined;
+				if (fork.metadata.workspaceId !== undefined) {
+					workspace = findWorkspace(fork.metadata.workspaceId)
+						?? restoreWorkspaceFromSessionMetadata(fork.metadata);
+					if (workspace === undefined) {
+						workspaceWarning = `Session workspace not found: ${fork.metadata.workspaceId}`;
+					} else {
+						try {
+							await mcpHost.ensureWorkspace(workspace);
+						} catch (error: unknown) {
+							workspaceWarning = error instanceof Error ? error.message : "Failed to switch MCP workspace";
+							workspace = undefined;
+						}
+					}
+				}
+
+				session = createClientSession(workspace);
+				applySessionMetadata(session, fork.metadata);
+				await applySessionApprovalMode(session, fork.metadata);
+				session.messages = (await openSession(fork.metadata.id)).messages.map(toChatMessage);
+				session.fullSessionLoadPromise = undefined;
+				session.pendingGuides = [];
+				session.queuedMessages = [];
+				session.messageQueueNextId = 0;
+				session.workbenchRevision = 0;
+				session.workbenchComposer = {
+					text: fork.draft.text,
+					chatMode: fork.metadata.chatMode,
+					provider: fork.metadata.provider,
+					model: fork.metadata.model,
+					reasoningEffort: session.workbenchComposer.reasoningEffort,
+					additionalContext: cloneAdditionalContextItems(fork.draft.additionalContext) ?? [],
+					updatedAt: new Date().toISOString(),
+				};
+				session.workbenchActiveRun = { status: "idle" };
+				clearWorkbenchNextStepHints(session, undefined, false);
+				session = bindConnectionToSessionRuntime(socket, fork.metadata.id, session);
+				applyWorkspaceToSessionRuntime(socket, session, workspace);
+				subscribeSocketToSession(socket, fork.metadata.id);
+				await ensureProviderConfigured(session);
+				const page = await createTimelinePageResult(timeline, 100);
+
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: {
+						forked: true,
+						opened: true,
+						metadata: {
+							...fork.metadata,
+							approvalMode: session.approvalGateway.getMode(),
+							activeSkillId: undefined,
+							legacySkillRefs: fork.metadata.activeSkillId === undefined
+								? []
+								: [legacySkillIdToRef(fork.metadata.activeSkillId)].filter((ref): boolean => ref !== undefined),
+						},
+						...page,
+						latestWorkflowSnapshot: null,
+						latestAgentSnapshot: null,
+						latestPlanClarification: null,
+						latestPlanApproval: null,
+						pendingGuides: [],
+						messageQueue: [],
+						selectionAskThreads: [],
+						currentGoal: null,
+						workbench: serializeWorkbench(session),
+						...serializeAgentRunRuntime(session),
+						workspaceWarning: workspaceWarning ?? null,
+					},
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_fork_failed", "Failed to fork session"),
+				});
+			}
+			break;
+		}
+
 		case "session.open": {
 			try {
 				const openMessageLimit: number = clampSessionOpenMessageLimit(request.params.limit);
@@ -783,18 +902,25 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					await applySessionApprovalMode(session, timeline.metadata);
 					session.messages = timeline.messages.map(toChatMessage);
 					const storedForGuides: Awaited<ReturnType<typeof openSession>> = await openSession(request.params.sessionId);
-					session.pendingGuides = hydratePendingGuides(storedForGuides.events);
-					const hydratedQueue = hydrateMessageQueue(storedForGuides.events);
-					session.queuedMessages = hydratedQueue.messages;
-					session.messageQueueNextId = hydratedQueue.nextId;
+					if (timeline.metadata.forkedFrom === undefined) {
+						session.pendingGuides = hydratePendingGuides(storedForGuides.events);
+						const hydratedQueue = hydrateMessageQueue(storedForGuides.events);
+						session.queuedMessages = hydratedQueue.messages;
+						session.messageQueueNextId = hydratedQueue.nextId;
+					} else {
+						session.pendingGuides = [];
+						session.queuedMessages = [];
+						session.messageQueueNextId = 0;
+					}
 					session.workbenchRevision = 0;
+					const forkDraft = await readSessionForkDraft(timeline.metadata.id);
 					session.workbenchComposer = {
-						text: "",
+						text: forkDraft?.text ?? "",
 						chatMode: timeline.metadata.chatMode,
 						provider: timeline.metadata.provider,
-							model: timeline.metadata.model,
-							reasoningEffort: session.workbenchComposer.reasoningEffort,
-						additionalContext: [],
+						model: timeline.metadata.model,
+						reasoningEffort: session.workbenchComposer.reasoningEffort,
+						additionalContext: cloneAdditionalContextItems(forkDraft?.additionalContext) ?? [],
 						updatedAt: new Date().toISOString()
 					};
 					session.workbenchActiveRun = { status: "idle" };
@@ -820,7 +946,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				applySessionMetadata(session, timeline.metadata);
 				await applySessionApprovalMode(session, timeline.metadata);
 				const apiKey: string | undefined = await ensureProviderConfigured(session);
-				if (!reusingRuntime) {
+				if (!reusingRuntime && timeline.metadata.forkedFrom === undefined) {
 					await hydrateAgentRunRuntime(session, apiKey);
 					await loadHydratedPendingApprovalStates(session, apiKey);
 				}
@@ -854,10 +980,20 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 								: [legacySkillIdToRef(timeline.metadata.activeSkillId)].filter((ref): boolean => ref !== undefined)
 						},
 						...await createTimelinePageResult(timeline, openMessageLimit),
-						pendingGuides: session.pendingGuides.map(serializePendingGuide),
-						messageQueue: serializeMessageQueue(session),
-						selectionAskThreads: await listSelectionAskThreads(timeline.metadata.id),
-						currentGoal: getClientConnection(socket)?.clientType === "godot_plugin"
+						...(timeline.metadata.forkedFrom === undefined ? {} : {
+							latestWorkflowSnapshot: null,
+							latestAgentSnapshot: null,
+							latestPlanClarification: null,
+							latestPlanApproval: null,
+						}),
+						pendingGuides: timeline.metadata.forkedFrom === undefined
+							? session.pendingGuides.map(serializePendingGuide)
+							: [],
+						messageQueue: timeline.metadata.forkedFrom === undefined ? serializeMessageQueue(session) : [],
+						selectionAskThreads: timeline.metadata.forkedFrom === undefined
+							? await listSelectionAskThreads(timeline.metadata.id)
+							: [],
+						currentGoal: getClientConnection(socket)?.clientType === "godot_plugin" || timeline.metadata.forkedFrom !== undefined
 							? null
 							: await getLatestAgentGoal(timeline.metadata.id),
 						workbench: clientWorkbench,

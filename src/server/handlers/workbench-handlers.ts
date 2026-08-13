@@ -10,6 +10,7 @@ import {
 	serializeWorkbench,
 	type WorkbenchPatch
 } from "../workbench.js";
+import { updateSessionForkDraft } from "../../session/session-fork.js";
 
 function sendWorkbenchResult(
 	socket: WebSocket,
@@ -45,7 +46,7 @@ function isStaleWorkbenchPatch(socket: WebSocket, session: ClientSession, patch:
 	return false;
 }
 
-export function handleWorkbenchRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, _mcpHost: McpHost): void {
+export async function handleWorkbenchRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, _mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
 	case "session.workbench.get":
 		sendWorkbenchResult(socket, request, session);
@@ -58,6 +59,12 @@ export function handleWorkbenchRequest(socket: WebSocket, request: ClientRequest
 			break;
 		}
 		const changed: boolean = applyWorkbenchPatch(session, patch);
+		if (changed && session.sessionId !== undefined) {
+			await updateSessionForkDraft(session.sessionId, {
+				text: session.workbenchComposer.text,
+				additionalContext: session.workbenchComposer.additionalContext,
+			});
+		}
 		sendWorkbenchResult(socket, request, session, changed);
 		if (changed) {
 			emitWorkbenchUpdated(socket, request.id, session);

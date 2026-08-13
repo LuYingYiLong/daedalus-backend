@@ -27,6 +27,13 @@ const SESSION_ID_PATTERN: RegExp = /^session-[a-zA-Z0-9_-]+$/;
 
 export type SessionChatMode = "agent" | "ask" | "plan" | "goal";
 
+export type SessionForkOrigin = {
+	sessionId: string;
+	requestId: string;
+	sessionTitle: string;
+	messagePreview: string;
+};
+
 export type SessionMetadata = {
 	id: string;
 	title: string;
@@ -45,6 +52,7 @@ export type SessionMetadata = {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
+	forkedFrom?: SessionForkOrigin | undefined;
 	archivedAt?: string | undefined;
 	createdAt: string;
 	updatedAt: string;

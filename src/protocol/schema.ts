@@ -1076,6 +1076,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.fork"),
+		params: z.object({
+			sourceSessionId: z.string().min(1),
+			sourceRequestId: z.string().min(1).optional(),
+			title: z.string().trim().min(1).max(200),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.open"),
 		params: z.object({
 			sessionId: z.string().min(1),

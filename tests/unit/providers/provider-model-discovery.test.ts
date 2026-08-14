@@ -402,12 +402,7 @@ test("provider model management reports provider, task routing, and web search g
 			provider: "deepseek",
 			model: "deepseek-v4-pro",
 			activate: false,
-			modelRouting: {
-				workflowPlanner: {
-					provider: "deepseek",
-					model: "deepseek-v4-pro"
-				}
-			}
+			modelRouting: {}
 		});
 		const server: Server = createServer((_request, response): void => {
 			response.writeHead(401, { "Content-Type": "application/json" });
@@ -417,10 +412,7 @@ test("provider model management reports provider, task routing, and web search g
 		try {
 			const discovery = await discoverProviderModels("deepseek", "bad-key", baseUrl);
 			const guarded = discovery.managedModels.find((model): boolean => model.id === "deepseek-v4-pro");
-			assert.deepEqual(guarded?.removalGuards, [
-				{ kind: "providerSelection" },
-				{ kind: "taskRouting", task: "workflowPlanner" }
-			]);
+			assert.deepEqual(guarded?.removalGuards, [{ kind: "providerSelection" }]);
 		} finally {
 			server.close();
 		}

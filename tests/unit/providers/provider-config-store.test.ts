@@ -65,7 +65,6 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 		});
 		assert.deepEqual(status.modelRouting, {
 			imageRecognition: null,
-			workflowPlanner: null,
 			sessionTitle: null,
 			nextStepHints: null,
 			imageGeneration: null,
@@ -260,7 +259,6 @@ test("provider config read paths treat keytar read failures as missing secrets",
 			},
 			modelRouting: {
 				imageRecognition: null,
-				workflowPlanner: null,
 				sessionTitle: null,
 				imageGeneration: null,
 				gitCommit: null
@@ -322,7 +320,6 @@ test("provider config persists cross-provider task model routing", async (): Pro
 			model: "deepseek-v4-flash",
 			modelRouting: {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
-				workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 				sessionTitle: null,
 				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				imageGeneration: { provider: "openai", model: "gpt-image-1" },
@@ -336,7 +333,6 @@ test("provider config persists cross-provider task model routing", async (): Pro
 		const status = await getProviderConfigStatus();
 		assert.deepEqual(status.modelRouting, {
 			imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
-			workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 			sessionTitle: null,
 			nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 			imageGeneration: { provider: "openai", model: "gpt-image-1" },
@@ -490,7 +486,6 @@ test("task model resolver falls back to current model or resolves configured pro
 			model: "deepseek-v4-flash",
 			modelRouting: {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
-				workflowPlanner: { provider: "moonshot", model: "kimi-k2.6" },
 				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				gitCommit: { provider: "moonshot", model: "kimi-k2.6" }
 			}
@@ -532,15 +527,6 @@ test("task model resolver falls back to current model or resolves configured pro
 		assert.equal(hintOptions.provider, "moonshot");
 		assert.equal(hintOptions.model, "kimi-k2.6");
 		assert.equal(hintOptions.reasoningMode, "disabled");
-
-		const workflowPlanner = await resolveProviderTaskModelOptions("workflowPlanner", {
-			provider: "deepseek",
-			apiKey: "deepseek-key",
-			model: "deepseek-v4-flash"
-		});
-		assert.equal(workflowPlanner.source, "configured");
-		assert.equal(workflowPlanner.provider, "moonshot");
-		assert.equal(workflowPlanner.model, "kimi-k2.6");
 
 		const gitCommitModel = await resolveProviderTaskModelOptions("gitCommit", {
 			provider: "deepseek",

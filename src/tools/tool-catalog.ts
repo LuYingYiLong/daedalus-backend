@@ -36,6 +36,11 @@ import {
 	TODO_UPDATE_TOOL_NAME,
 	type TodoControlContext
 } from "./todo-control.js";
+import {
+	SUMMARY_PREPARATION_TOOL_DEFINITION,
+	SUMMARY_PREPARATION_TOOL_NAME,
+	type SummaryPreparationContext
+} from "./summary-control.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -58,6 +63,8 @@ export type ToolExecutionContext = {
 	contextControlAvailable?: boolean | undefined;
 	todoControl?: TodoControlContext | undefined;
 	todoControlAvailable?: boolean | undefined;
+	summaryPreparation?: SummaryPreparationContext | undefined;
+	summaryPreparationAvailable?: boolean | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -367,6 +374,16 @@ function createTodoControlEntry(): ToolCatalogEntry {
 	};
 }
 
+function createSummaryPreparationEntry(): ToolCatalogEntry {
+	return {
+		id: SUMMARY_PREPARATION_TOOL_NAME,
+		definition: SUMMARY_PREPARATION_TOOL_DEFINITION,
+		mapping: { serverId: "internal", toolName: SUMMARY_PREPARATION_TOOL_NAME },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -402,7 +419,10 @@ export class WorkspaceToolCatalog {
 		const todoControlEntries: ToolCatalogEntry[] = this.context.todoControl === undefined || this.context.todoControlAvailable === false
 			? []
 			: [createTodoControlEntry()];
-		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries];
+		const summaryPreparationEntries: ToolCatalogEntry[] = this.context.summaryPreparation === undefined || this.context.summaryPreparationAvailable === false
+			? []
+			: [createSummaryPreparationEntry()];
+		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries, ...summaryPreparationEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -422,6 +442,9 @@ export class WorkspaceToolCatalog {
 		}
 		if (this.context.todoControl !== undefined && this.context.todoControlAvailable !== false) {
 			allowedNames.add(TODO_UPDATE_TOOL_NAME);
+		}
+		if (this.context.summaryPreparation !== undefined && this.context.summaryPreparationAvailable !== false) {
+			allowedNames.add(SUMMARY_PREPARATION_TOOL_NAME);
 		}
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()

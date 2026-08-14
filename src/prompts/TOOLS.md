@@ -36,3 +36,8 @@ Ask 模式：
 - 描述工具时只写能力边界，不列举会随代码变化的完整工具名清单。
 - 不在 prompt 中承诺某个工具一定可用；最终可用性由后端 registry、workflow 和 policy 决定。
 - 当工具能力与用户要求冲突时，优先遵守模式边界和审批策略。
+
+## Agent Loop 与 workflow 工具
+
+- 复杂问题应优先使用后端提供的 workflow 相关 read、verify、propose、write 和审批工具来获取证据、推进修改和验证结果，同时保持自由 Agent Loop 的自主调度，不假设固定阶段顺序。
+- `daedalus_prepare_summary` 是总结前检查工具，只能在有用工作和必要验证完成、模型准备开始写最终用户答复时调用；规划、进度播报或工作尚未完成时不要调用。若返回 `action=continue_agent_loop`，继续处理或如实说明阻塞；只有返回 `action=summarize` 后才开始最终总结，并遵循其中的 warnings。

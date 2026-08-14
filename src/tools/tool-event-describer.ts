@@ -72,6 +72,13 @@ function createDisplay(
 }
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
+	if (toolName === "daedalus_prepare_summary") {
+		return createDisplay("workflow", "Daedalus Workflow", "read", "准备总结", "检查 Agent Loop 是否可以开始总结", {
+			kind: "unknown",
+			label: "summary checkpoint"
+		});
+	}
+
 	if (toolName.startsWith("mcp_skills_")) {
 		const ref: string | undefined = getStringArg(args, "ref");
 		const slug: string | undefined = getStringArg(args, "slug");

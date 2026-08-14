@@ -59,7 +59,7 @@ export const TODO_UPDATE_TOOL_DEFINITION: ChatCompletionTool = {
 	type: "function",
 	function: {
 		name: TODO_UPDATE_TOOL_NAME,
-		description: "Create or replace the visible Daedalus task list for a genuinely complex Agent Loop task. Use it only when the task has more than three meaningful steps, after a visible prose prelude. This list is display-only and never grants permissions or determines task completion.",
+		description: "Create or replace the visible Daedalus task list for a genuinely complex free Agent Loop task. When a task has more than three meaningful steps, use this together with the policy-governed workflow read, verify, and write tools while keeping the execution flow flexible. Call it after a visible prose prelude; it is display-only and never grants permissions or determines task completion.",
 		parameters: {
 			type: "object",
 			additionalProperties: false,

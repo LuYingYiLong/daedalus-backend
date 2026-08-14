@@ -80,6 +80,14 @@ export type AgentRunCheckpoint = {
 	lastWriteAt?: string | undefined;
 };
 
+export type AgentSummaryPreparation = {
+	ready: boolean;
+	remainingTodoItems: string[];
+	unresolvedFailures: string[];
+	warnings: string[];
+	preparedAt: string;
+};
+
 export type AgentRunState = {
 	schemaVersion: typeof AGENT_RUN_STATE_SCHEMA_VERSION;
 	runId: string;
@@ -105,6 +113,7 @@ export type AgentRunState = {
 	executionDecision?: ExecutionDecision | undefined;
 	interruptedReason?: string | undefined;
 	agentLoopState?: AgentLoopState | undefined;
+	summaryPreparation?: AgentSummaryPreparation | undefined;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -222,6 +231,7 @@ export function createAgentRunState(params: {
 		},
 		executionDecision: undefined,
 		agentLoopState: undefined,
+		summaryPreparation: undefined,
 		createdAt: now,
 		updatedAt: now
 	};

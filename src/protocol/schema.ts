@@ -75,7 +75,6 @@ const providerTaskModelRefSchema = z.object({
 
 const providerModelRoutingSchema = z.object({
 	imageRecognition: providerTaskModelRefSchema.nullable().optional(),
-	workflowPlanner: providerTaskModelRefSchema.nullable().optional(),
 	sessionTitle: providerTaskModelRefSchema.nullable().optional(),
 	nextStepHints: providerTaskModelRefSchema.nullable().optional(),
 	imageGeneration: providerTaskModelRefSchema.nullable().optional(),
@@ -83,7 +82,7 @@ const providerModelRoutingSchema = z.object({
 	commandReview: providerTaskModelRefSchema.nullable().optional(),
 	goalEvaluator: providerTaskModelRefSchema.nullable().optional(),
 	contextCompression: providerTaskModelRefSchema.nullable().optional()
-});
+}).strict();
 
 const providerRequestJsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
 	z.string().max(16_000),

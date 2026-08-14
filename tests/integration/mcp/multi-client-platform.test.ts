@@ -11,7 +11,7 @@ import { handleClientRequest } from "../../../src/server/handlers/client-handler
 import { createGodotRuntimeStatus } from "../../../src/server/godot-runtime-status.js";
 import { sendSessionEvent } from "../../../src/server/session-events.js";
 import { clearDynamicMcpToolsForWorkspace, getDynamicMcpToolMapping, getDynamicMcpToolNames, replaceDynamicMcpToolsForWorkspace } from "../../../src/tools/dynamic-mcp-tools.js";
-import { createRuntimeWorkspace, upsertRuntimeWorkspace } from "../../../src/workspace/registry.js";
+import { createRuntimeWorkspace, deleteWorkspace, findWorkspace, findWorkspaceSourceByPath, upsertRuntimeWorkspace } from "../../../src/workspace/registry.js";
 
 type SocketMock = WebSocket & { sent: Array<Record<string, unknown>> };
 
@@ -30,6 +30,7 @@ function createSocket(): SocketMock {
 }
 
 test("Editor Bridge v4 hello replaces the persisted default with the project workspace", async (): Promise<void> => {
+	const cleanupProjectWorkspace = captureWorkspaceCleanup("D:/GodotProjects/example");
 	const socket = createSocket();
 	const diagnosticsWorkspace = createRuntimeWorkspace("D:/DaedalusDiagnosticsWorkspace");
 	const session = createClientSession(diagnosticsWorkspace);
@@ -67,6 +68,7 @@ test("Editor Bridge v4 hello replaces the persisted default with the project wor
 		assert.equal(socket.sent.at(-1)?.ok, true);
 	} finally {
 		unregisterClientConnection(socket);
+		cleanupProjectWorkspace();
 	}
 });
 
@@ -104,6 +106,7 @@ test("legacy Godot plugin hello is rejected before workspace registration", asyn
 });
 
 test("Editor Bridge hello replies only after its workspace MCP initialization completes", async (): Promise<void> => {
+	const cleanupProjectWorkspace = captureWorkspaceCleanup("D:/GodotProjects/example");
 	const socket = createSocket();
 	const session = createClientSession(undefined);
 	registerClientConnection(socket, session);
@@ -142,6 +145,7 @@ test("Editor Bridge hello replies only after its workspace MCP initialization co
 		assert.equal(socket.sent.at(-1)?.ok, true);
 	} finally {
 		unregisterClientConnection(socket);
+		cleanupProjectWorkspace();
 	}
 });
 
@@ -269,18 +273,23 @@ test("filesystem refresh broadcasts to online Godot editors in the workspace", a
 });
 
 test("diagnostics bridge uses request workspace context without global active workspace", async (): Promise<void> => {
+	const cleanupWorkspace = captureWorkspaceCleanup("D:/DaedalusDiagnosticsWorkspace");
 	const host = new McpHost();
-	const workspace = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusDiagnosticsWorkspace"));
+	try {
+		const workspace = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusDiagnosticsWorkspace"));
 
-	const statusResource = await withMcpRequestContext({ workspaceId: workspace.id }, async (): Promise<unknown> => {
-		return await host.readResource(GODOT_DIAGNOSTICS_SERVER_ID, "godot-diagnostics://status");
-	});
-	assert.equal(typeof statusResource, "object");
-	assert.notEqual(statusResource, null);
-	const contents = (statusResource as { contents: Array<{ text: string }> }).contents;
-	const status = JSON.parse(contents[0]!.text) as Record<string, unknown>;
-	assert.equal(status.workspaceId, workspace.id);
-	assert.equal(status.workspaceRoot, workspace.rootPath);
+		const statusResource = await withMcpRequestContext({ workspaceId: workspace.id }, async (): Promise<unknown> => {
+			return await host.readResource(GODOT_DIAGNOSTICS_SERVER_ID, "godot-diagnostics://status");
+		});
+		assert.equal(typeof statusResource, "object");
+		assert.notEqual(statusResource, null);
+		const contents = (statusResource as { contents: Array<{ text: string }> }).contents;
+		const status = JSON.parse(contents[0]!.text) as Record<string, unknown>;
+		assert.equal(status.workspaceId, workspace.id);
+		assert.equal(status.workspaceRoot, workspace.rootPath);
+	} finally {
+		cleanupWorkspace();
+	}
 });
 
 test("connected server ids keep Godot editor scoped to the requested workspace", (): void => {
@@ -308,24 +317,34 @@ test("scene view capture is exposed only to editor clients that advertise suppor
 });
 
 test("Godot runtime status reports editor and diagnostics workspace mismatches", (): void => {
+	const cleanupWorkspaceA = captureWorkspaceCleanup("D:/DaedalusRuntimeWorkspaceA");
+	const cleanupWorkspaceB = captureWorkspaceCleanup("D:/DaedalusRuntimeWorkspaceB");
 	const host = new McpHost();
-	const workspaceA = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusRuntimeWorkspaceA"));
-	const workspaceB = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusRuntimeWorkspaceB"));
-	const socket = createSocket();
-	host.getEditorBridge().updateInstanceContext(socket, workspaceB.id, "editor-b", {}, "Godot B");
-	host.getDiagnosticsBridge().setWorkspace(workspaceB);
+	try {
+		const workspaceA = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusRuntimeWorkspaceA"));
+		const workspaceB = upsertRuntimeWorkspace(createRuntimeWorkspace("D:/DaedalusRuntimeWorkspaceB"));
+		const socket = createSocket();
+		host.getEditorBridge().updateInstanceContext(socket, workspaceB.id, "editor-b", {}, "Godot B");
+		host.getDiagnosticsBridge().setWorkspace(workspaceB);
 
-	const session = createClientSession(workspaceA);
-	session.editorInstanceId = "editor-a";
-	const status = createGodotRuntimeStatus(session, host);
-	const warnings = status.warnings as Array<{ code: string }>;
+		const session = createClientSession(workspaceA);
+		session.editorInstanceId = "editor-a";
+		const status = createGodotRuntimeStatus(session, host);
+		const warnings = status.warnings as Array<{ code: string }>;
 
-	assert.equal(status.sessionWorkspaceId, workspaceA.id);
-	assert.equal((status.editor as Record<string, unknown>).onlineForSession, false);
-	assert.equal((status.diagnostics as Record<string, unknown>).workspaceMatchesSession, false);
-	assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "editor_instance_missing"));
-	assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "bound_editor_offline"));
-	assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "diagnostics_workspace_mismatch"));
+		assert.equal(status.sessionWorkspaceId, workspaceA.id);
+		assert.equal((status.editor as Record<string, unknown>).onlineForSession, false);
+		assert.equal((status.diagnostics as Record<string, unknown>).workspaceMatchesSession, false);
+		assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "editor_instance_missing"));
+		assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "bound_editor_offline"));
+		assert.ok(warnings.some((warning: { code: string }): boolean => warning.code === "diagnostics_workspace_mismatch"));
+	} finally {
+		try {
+			cleanupWorkspaceA();
+		} finally {
+			cleanupWorkspaceB();
+		}
+	}
 });
 
 test("session events broadcast to subscribed frontend sockets once", (): void => {
@@ -502,4 +521,27 @@ test("custom MCP dynamic tools are scoped by workspace context", async (): Promi
 function registerSocket(socket: SocketMock): WebSocket {
 	registerClientConnection(socket, createClientSession(undefined));
 	return socket;
+}
+
+/**
+ * Keep integration tests from leaving runtime workspace registrations in the user's config.
+ * Existing registrations are restored so a test never removes user-owned workspace metadata.
+ */
+function captureWorkspaceCleanup(rootPath: string): () => void {
+	const candidate = createRuntimeWorkspace(rootPath);
+	const existingById = findWorkspace(candidate.id);
+	const existingByPath = findWorkspaceSourceByPath(rootPath)?.workspace;
+
+	return (): void => {
+		if (existingById !== undefined) {
+			upsertRuntimeWorkspace(existingById);
+			return;
+		}
+		if (existingByPath !== undefined) {
+			return;
+		}
+		if (findWorkspace(candidate.id) !== undefined) {
+			deleteWorkspace(candidate.id);
+		}
+	};
 }

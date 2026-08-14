@@ -44,6 +44,11 @@ import {
 	serializeTodoControlResult,
 	TODO_UPDATE_TOOL_NAME
 } from "./todo-control.js";
+import {
+	parseSummaryPreparationInput,
+	serializeSummaryPreparationResult,
+	SUMMARY_PREPARATION_TOOL_NAME
+} from "./summary-control.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -303,6 +308,52 @@ async function executeSingleToolCall(
 				retryable: true,
 				artifactRefs: []
 			};
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+	}
+	if (functionName === SUMMARY_PREPARATION_TOOL_NAME) {
+		if (toolContext?.summaryPreparation === undefined || toolContext.summaryPreparationAvailable === false) {
+			const failure: ToolFailure = {
+				code: "summary_preparation_unavailable",
+				category: "protocol",
+				message: "Summary preparation is not available in the current chat mode.",
+				retryable: false,
+				artifactRefs: []
+			};
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+		try {
+			const parsedArgs = parseSummaryPreparationInput(executionArgs);
+			onEvent?.({
+				type: "tool.call",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				args: parsedArgs,
+				serverId: "internal",
+				serverName: "Daedalus",
+				category: "read",
+				title: "准备总结",
+				summary: "检查 Agent Loop 是否可以开始总结",
+				target: { kind: "unknown", label: "summary checkpoint" }
+			});
+			const value: Record<string, unknown> = await toolContext.summaryPreparation.execute(parsedArgs);
+			const content: string = serializeSummaryPreparationResult(value);
+			onEvent?.({
+				type: "tool.result",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				resultChars: content.length,
+				truncated: false,
+				ok: value.ok !== false,
+				validationStatus: "passed",
+				summary: typeof value.summary === "string" ? value.summary : "Summary checkpoint completed"
+			});
+			return { role: "tool", tool_call_id: toolCall.id, content };
+		} catch (error: unknown) {
+			const failure: ToolFailure = createToolFailure(error, { artifactRefs: [] });
+			onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: failure.message, failure });
 			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
 		}
 	}

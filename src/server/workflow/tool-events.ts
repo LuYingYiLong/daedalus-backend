@@ -12,11 +12,13 @@ import type { WorkflowPhaseToolStats } from "./shared-types.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../tools/execution-control.js";
 import { TODO_UPDATE_TOOL_NAME } from "../../tools/todo-control.js";
+import { SUMMARY_PREPARATION_TOOL_NAME } from "../../tools/summary-control.js";
 
 const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_skills_load",
 	EXECUTION_CONTROL_TOOL_NAME,
-	TODO_UPDATE_TOOL_NAME
+	TODO_UPDATE_TOOL_NAME,
+	SUMMARY_PREPARATION_TOOL_NAME
 ]);
 
 export type AgentToolEventForwarderOptions = {

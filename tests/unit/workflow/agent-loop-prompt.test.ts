@@ -34,6 +34,10 @@ test("agent loop prompt grants sequencing freedom without mandatory stage contro
 	assert.match(prompt, /more than three meaningful steps/u);
 	assert.match(prompt, /daedalus_update_todo_list/u);
 	assert.match(prompt, /Todo is optional display metadata/u);
+	assert.match(prompt, /workflow-governed read, verify, propose, write/u);
+	assert.match(prompt, /daedalus_prepare_summary/u);
+	assert.match(prompt, /only when useful work and proportionate verification are complete/u);
+	assert.match(prompt, /action=continue_agent_loop/u);
 	assert.match(prompt, /Do not ask the user to extend an internal tool-count budget/u);
 	assert.match(prompt, /agent_loop_no_progress_detected/u);
 	assert.match(prompt, /agent_loop_safety_limit_reached/u);

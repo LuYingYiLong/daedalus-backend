@@ -149,7 +149,6 @@ test("provider.config.set schema accepts task model routing", (): void => {
 			baseUrl: "https://proxy.example/v1",
 			modelRouting: {
 				imageRecognition: { provider: "moonshot", model: "kimi-k2.6" },
-				workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" },
 				sessionTitle: null,
 				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" }
@@ -256,6 +255,18 @@ test("provider customization schemas accept valid fields and reject invalid capa
 			provider: "custom-demo",
 			id: "model-legacy",
 			displayName: "Legacy Model"
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-routing-removed-workflow-planner",
+		method: "provider.config.set",
+		params: {
+			provider: "deepseek",
+			modelRouting: {
+				workflowPlanner: { provider: "deepseek", model: "deepseek-v4-pro" }
+			}
 		}
 	}).success, false);
 

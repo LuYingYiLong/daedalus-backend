@@ -211,6 +211,7 @@ import { createContextBudgetSnapshot } from "../context/context-budget-manager.j
 import type { ContextBudgetSnapshot } from "../context/context-types.js";
 import { createSessionContextControl } from "./context-control-runtime.js";
 import { createAgentTodoControl } from "./todo-control-runtime.js";
+import { createSummaryPreparationControl } from "./summary-preparation-runtime.js";
 import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
@@ -688,6 +689,8 @@ export function createHiddenAnswerSystemPrompt(
 				"- For a business implementation request, begin with 1-3 visible sentences that answer the request directly, name the intended scope and preserved behavior, and state the first concrete direction. Do this before any Todo or workspace tool call.",
 				"- If you judge that the task has more than three meaningful steps, call daedalus_update_todo_list to show a concise task-specific Todo list. Do not inflate a short task into generic phases just to create a list.",
 				"- Todo is optional display metadata, not an execution contract. Update it only when real progress changes; it never grants permission, requires a particular order, replaces user-visible communication, or determines whether the task succeeded.",
+				"- For complex problems, use the available workflow-governed read, verify, propose, write, and approval tools to gather evidence and make changes safely. These tools support the free Agent Loop; they do not turn it into a fixed inspect/implement/verify/summarize workflow.",
+				"- Call daedalus_prepare_summary only when useful work and proportionate verification are complete and you are about to write the final user-facing summary. Never call it during planning, while announcing progress, or merely to inspect state. If it returns action=continue_agent_loop, keep working or explain the blocker; do not present the task as complete. When it returns action=summarize, write the final answer and follow its warnings.",
 				"- Do not ask the user to extend an internal tool-count budget. Continue naturally while useful progress is being made; context pressure is handled by the recoverable context controls.",
 				"- If a tool returns agent_loop_no_progress_detected, change the target or approach instead of repeating the call. If it returns agent_loop_no_progress_exhausted or agent_loop_safety_limit_reached, stop requesting equivalent tools and give an honest progress summary.",
 				"- Tools are optional. General questions may be answered directly. Workspace claims must come from actual observations, and workspace mutations must use the available policy-governed tools.",
@@ -890,7 +893,11 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			todoControl: params.routeDecision.lane === "agent_loop"
 				? createAgentTodoControl({ socket: params.socket, session: params.session, runId })
 				: undefined,
-			todoControlAvailable: params.routeDecision.lane === "agent_loop"
+			todoControlAvailable: params.routeDecision.lane === "agent_loop",
+			summaryPreparation: params.routeDecision.lane === "agent_loop"
+				? createSummaryPreparationControl({ socket: params.socket, session: params.session, runId })
+				: undefined,
+			summaryPreparationAvailable: params.routeDecision.lane === "agent_loop"
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -1181,6 +1188,7 @@ function collectToolAssistedCompletionStatus(
 		return { resultStatus: "completed", verificationStatus: undefined, warnings: [] };
 	}
 	const evidence: readonly ExecutionEvidence[] = getAgentRun(session, runId)?.checkpoint.evidence ?? [];
+	const currentRun: AgentRunState | undefined = getAgentRun(session, runId);
 	const unresolvedFailures: ExecutionEvidence[] = collectUnresolvedExecutionFailures(evidence);
 	const environmentWarnings: string[] = evidence
 		.filter((item: ExecutionEvidence): boolean => item.status === "failed" && item.failure?.category === "environment")
@@ -1205,7 +1213,24 @@ function collectToolAssistedCompletionStatus(
 		return {
 			resultStatus: "completed_with_warnings",
 			verificationStatus: changedWorkspace ? (verified ? "verified" : "unverified") : undefined,
-			warnings: [...environmentWarnings, ...unresolvedWarnings]
+			warnings: [
+				...environmentWarnings,
+				...unresolvedWarnings,
+				...(currentRun?.summaryPreparation?.ready === false
+					? ["The summary checkpoint requested more Agent Loop work before a complete summary."]
+					: [])
+			]
+		};
+	}
+	if (lane === "agent_loop" && currentRun?.summaryPreparation?.ready === false) {
+		return {
+			resultStatus: "completed_with_warnings",
+			verificationStatus: changedWorkspace ? (verified ? "verified" : "unverified") : undefined,
+			warnings: [
+				...environmentWarnings,
+				...currentRun.summaryPreparation.warnings,
+				"The summary checkpoint requested more Agent Loop work before a complete summary."
+			]
 		};
 	}
 	if (!changedWorkspace) {
@@ -1251,7 +1276,9 @@ async function completeHiddenAnswerExecution(
 	if (getAgentRun(params.session, runId) !== undefined) {
 		const currentRun: AgentRunState = getAgentRun(params.session, runId)!;
 		updateAgentRun(params.socket, params.session, runId, "finalizing", {
-			todo: completeAgentTodoSnapshot(currentRun.todo),
+			todo: currentRun.summaryPreparation?.ready === false
+				? currentRun.todo
+				: completeAgentTodoSnapshot(currentRun.todo),
 			verificationStatus: completionStatus.verificationStatus ?? null,
 			warnings: completionStatus.warnings
 		});
@@ -1979,7 +2006,11 @@ async function runToolBudgetDecisionContinuation(params: {
 			todoControl: pendingContinuation.agentLoopState === undefined
 				? undefined
 				: createAgentTodoControl({ socket, session, runId: pending.requestId }),
-			todoControlAvailable: pendingContinuation.agentLoopState !== undefined
+			todoControlAvailable: pendingContinuation.agentLoopState !== undefined,
+			summaryPreparation: pendingContinuation.agentLoopState === undefined
+				? undefined
+				: createSummaryPreparationControl({ socket, session, runId: pending.requestId }),
+			summaryPreparationAvailable: pendingContinuation.agentLoopState !== undefined
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2719,6 +2750,16 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
 						&& effectiveParams.options?.executionPolicy !== "read_only"
 						&& session.activeWorkspace !== undefined
+					),
+					summaryPreparation: (
+						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
+						&& effectiveParams.options?.executionPolicy !== "read_only"
+					)
+						? createSummaryPreparationControl({ socket, session, runId: request.id })
+						: undefined,
+					summaryPreparationAvailable: (
+						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
+						&& effectiveParams.options?.executionPolicy !== "read_only"
 					)
 				});
 				const budgetToolDefinitions = allowedToolNames === undefined

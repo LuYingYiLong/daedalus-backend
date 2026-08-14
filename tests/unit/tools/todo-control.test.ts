@@ -9,6 +9,11 @@ import {
 	TODO_UPDATE_TOOL_NAME
 } from "../../../src/tools/todo-control.js";
 import { fitToolResultContent } from "../../../src/providers/tool-result-budget.js";
+import {
+	isSummaryPreparationResult,
+	serializeSummaryPreparationResult,
+	SUMMARY_PREPARATION_TOOL_NAME
+} from "../../../src/tools/summary-control.js";
 
 const validInput = {
 	title: "Remove obsolete setting",
@@ -81,6 +86,26 @@ test("Todo control is catalog-gated and its result does not consume tool-result 
 	)), true);
 
 	const content: string = serializeTodoControlResult({ ok: true, revision: 1 });
+	const budgeted = fitToolResultContent(content, 100, 5000);
+	assert.equal(budgeted.chars, 0);
+	assert.equal(budgeted.limitReached, false);
+});
+
+test("summary preparation is catalog-gated and its result is protected from compaction budget", (): void => {
+	const unavailable = createWorkspaceToolCatalog({ workspaceId: "workspace-a" });
+	const available = createWorkspaceToolCatalog({
+		workspaceId: "workspace-a",
+		summaryPreparation: { async execute(): Promise<Record<string, unknown>> { return { ok: true, ready: true }; } },
+		summaryPreparationAvailable: true
+	});
+	assert.equal(unavailable.getEntry(SUMMARY_PREPARATION_TOOL_NAME), undefined);
+	assert.notEqual(available.getEntry(SUMMARY_PREPARATION_TOOL_NAME), undefined);
+	assert.equal(available.getDefinitionsForNames([]).some((tool) => (
+		tool.type === "function" && tool.function.name === SUMMARY_PREPARATION_TOOL_NAME
+	)), true);
+
+	const content: string = serializeSummaryPreparationResult({ ok: true, ready: true, action: "summarize" });
+	assert.equal(isSummaryPreparationResult(content), true);
 	const budgeted = fitToolResultContent(content, 100, 5000);
 	assert.equal(budgeted.chars, 0);
 	assert.equal(budgeted.limitReached, false);

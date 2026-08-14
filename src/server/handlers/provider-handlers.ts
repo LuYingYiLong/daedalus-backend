@@ -24,6 +24,7 @@ import {
 	addCustomProvider,
 	ProviderCustomizationError,
 	removeCustomProvider,
+	updateCustomProvider,
 	updateModelCustomization
 } from "../../providers/provider-customizations-service.js";
 
@@ -33,6 +34,7 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 	if (
 		(
 			request.method === "provider.custom.add"
+			|| request.method === "provider.custom.update"
 			|| request.method === "provider.usage.get"
 			|| request.method === "provider.setEnabled"
 			|| request.method === "provider.custom.remove"
@@ -408,6 +410,30 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 				error: {
 					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
 					message: error instanceof Error ? error.message : "Failed to add custom provider"
+				}
+			});
+		}
+		break;
+
+	case "provider.custom.update":
+		try {
+			await updateCustomProvider(request.params);
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: {
+					selection: await getProviderModelSelectionStatus()
+				}
+			});
+		} catch (error: unknown) {
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: false,
+				error: {
+					code: error instanceof ProviderCustomizationError ? error.code : "provider_customization_error",
+					message: error instanceof Error ? error.message : "Failed to update custom provider"
 				}
 			});
 		}

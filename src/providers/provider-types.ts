@@ -80,6 +80,7 @@ export type ProviderEndpointConfig = {
 export type ProviderDefinition = {
 	id: ProviderId;
 	displayName: string;
+	websiteUrl?: string | undefined;
 	authType: "api-key";
 	defaultEndpointType: EndpointType;
 	defaultBaseUrl: string;

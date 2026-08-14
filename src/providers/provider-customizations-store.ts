@@ -8,6 +8,7 @@ import type {
 	ProviderModelCustomizationInfo,
 	ProviderReasoningEffortOption
 } from "./provider-types.js";
+import { normalizeProviderWebsiteUrl } from "./provider-website.js";
 
 export type CustomProviderType = "openai" | "openai-responses" | "anthropic";
 export type ModelCustomizationSource = "custom" | "override";
@@ -17,6 +18,7 @@ export type EditableModelCapabilities = ProviderModelCapabilityOverrides;
 export type CustomProviderRecord = {
 	displayName: string;
 	providerType: CustomProviderType;
+	websiteUrl?: string | null | undefined;
 	defaultModel: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -105,9 +107,16 @@ function normalizeProviderRecord(value: unknown): CustomProviderRecord | null {
 	const defaultModel: string | null = value.defaultModel === null
 		? null
 		: readTrimmedString(value.defaultModel, 200);
+	let websiteUrl: string | null | undefined;
+	try {
+		websiteUrl = value.websiteUrl === null ? null : normalizeProviderWebsiteUrl(value.websiteUrl);
+	} catch {
+		return null;
+	}
 	return {
 		displayName,
 		providerType: value.providerType,
+		...(websiteUrl === undefined ? {} : { websiteUrl }),
 		defaultModel,
 		createdAt,
 		updatedAt

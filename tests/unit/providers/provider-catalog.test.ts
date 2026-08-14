@@ -20,6 +20,8 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(isProviderId("unknown"), false);
 
 	for (const provider of providerIds) {
+		const websiteUrl: string | undefined = getProviderDefinition(provider).websiteUrl;
+		assert.equal(websiteUrl?.startsWith("https://"), true);
 		const defaultModel: string = getProviderDefaultModel(provider);
 		const fallbackModels = getProviderFallbackModels(provider);
 		assert.ok(fallbackModels.some((model) => model.id === defaultModel));

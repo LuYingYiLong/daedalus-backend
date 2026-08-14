@@ -197,9 +197,33 @@ test("provider customization schemas accept valid fields and reject invalid capa
 		method: "provider.custom.add",
 		params: {
 			displayName: "Private OpenAI",
-			providerType: "openai-responses"
+			providerType: "openai-responses",
+			websiteUrl: "https://gateway.example.com"
 		}
 	}).success, true);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-update",
+		method: "provider.custom.update",
+		params: {
+			provider: "custom-demo",
+			displayName: "Private OpenAI",
+			providerType: "openai-responses",
+			websiteUrl: null
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "provider-update-invalid-url",
+		method: "provider.custom.update",
+		params: {
+			provider: "custom-demo",
+			displayName: "Private OpenAI",
+			providerType: "openai-responses",
+			websiteUrl: "javascript:alert(1)"
+		}
+	}).success, false);
 
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",

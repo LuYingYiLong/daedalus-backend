@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ProviderId } from "../protocol/types.js";
 import {
-	getProviderModelsCache
+	getProviderModelsCache,
+	saveProviderModelsCache
 } from "./provider-config-store.js";
 import {
 	getCustomProviderRecord,
@@ -15,6 +16,7 @@ import {
 	type ProviderCustomizations
 } from "./provider-customizations-store.js";
 import {
+	getProviderDefaultEndpointType,
 	getProviderDisplayName,
 	getProviderIds,
 	isProviderId,
@@ -22,6 +24,7 @@ import {
 	type ProviderModelInfo
 } from "./provider-registry.js";
 import type { BaseReasoningEffort, ProviderReasoningEffortOption } from "./provider-types.js";
+import { normalizeProviderWebsiteUrl } from "./provider-website.js";
 
 export class ProviderCustomizationError extends Error {
 	readonly code: string;
@@ -36,6 +39,14 @@ export class ProviderCustomizationError extends Error {
 export type AddCustomProviderInput = {
 	displayName: string;
 	providerType: CustomProviderType;
+	websiteUrl?: string | null | undefined;
+};
+
+export type UpdateCustomProviderInput = {
+	provider: ProviderId;
+	displayName: string;
+	providerType: CustomProviderType;
+	websiteUrl?: string | null | undefined;
 };
 
 export type AddCustomModelInput = {
@@ -94,6 +105,7 @@ async function getEffectiveProviderModels(provider: ProviderId): Promise<Provide
 export async function addCustomProvider(input: AddCustomProviderInput): Promise<ProviderId> {
 	await initializeProviderCustomizations();
 	const displayName: string = normalizeRequiredString(input.displayName, "Provider name", 80);
+	const websiteUrl: string | undefined = normalizeWebsiteUrl(input.websiteUrl);
 	const nameKey: string = displayName.toLocaleLowerCase();
 	if (getProviderIds().some((provider: ProviderId): boolean => getProviderDisplayName(provider).toLocaleLowerCase() === nameKey)) {
 		throw new ProviderCustomizationError(
@@ -114,12 +126,54 @@ export async function addCustomProvider(input: AddCustomProviderInput): Promise<
 		draft.providers[providerId] = {
 			displayName,
 			providerType: input.providerType,
+			websiteUrl: websiteUrl ?? null,
 			defaultModel: null,
 			createdAt: now,
 			updatedAt: now
 		};
 	});
 	return providerId;
+}
+
+export async function updateCustomProvider(input: UpdateCustomProviderInput): Promise<void> {
+	await initializeProviderCustomizations();
+	if (!isProviderId(input.provider) || getCustomProviderRecord(input.provider) === undefined) {
+		throw new ProviderCustomizationError("provider_not_custom", `Provider ${input.provider} is not a custom provider.`);
+	}
+	const displayName: string = normalizeRequiredString(input.displayName, "Provider name", 80);
+	const websiteUrl: string | undefined = normalizeWebsiteUrl(input.websiteUrl);
+	const nameKey: string = displayName.toLocaleLowerCase();
+	if (getProviderIds().some((provider: ProviderId): boolean => {
+		return provider !== input.provider && getProviderDisplayName(provider).toLocaleLowerCase() === nameKey;
+	})) {
+		throw new ProviderCustomizationError(
+			"provider_name_conflict",
+			`A provider named ${displayName} already exists.`
+		);
+	}
+
+	const previousProviderType: CustomProviderType = getCustomProviderRecord(input.provider)!.providerType;
+	await updateProviderCustomizations((draft: ProviderCustomizations): void => {
+		const record = draft.providers[input.provider];
+		if (record === undefined) {
+			throw new ProviderCustomizationError("provider_not_custom", `Provider ${input.provider} is not a custom provider.`);
+		}
+		record.displayName = displayName;
+		record.providerType = input.providerType;
+		record.websiteUrl = websiteUrl ?? null;
+		record.updatedAt = new Date().toISOString();
+	});
+
+	if (previousProviderType !== input.providerType) {
+		const cached = await getProviderModelsCache(input.provider);
+		if (cached !== undefined) {
+			const endpointType = getProviderDefaultEndpointType(input.provider);
+			await saveProviderModelsCache(input.provider, cached.models.map((model: ProviderModelInfo): ProviderModelInfo => ({
+				...model,
+				endpointType
+			})));
+		}
+	}
 }
 
 function normalizePositiveInteger(value: number, fieldName: string): number {
@@ -150,6 +204,17 @@ function normalizeCapabilityOverrides(
 		}
 	}
 	return normalized;
+}
+
+function normalizeWebsiteUrl(value: string | null | undefined): string | undefined {
+	try {
+		return normalizeProviderWebsiteUrl(value);
+	} catch (error: unknown) {
+		throw new ProviderCustomizationError(
+			"provider_website_invalid",
+			error instanceof Error ? error.message : "Provider website URL is invalid."
+		);
+	}
 }
 
 function normalizeReasoningEfforts(

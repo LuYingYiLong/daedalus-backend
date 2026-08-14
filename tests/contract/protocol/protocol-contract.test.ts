@@ -45,6 +45,7 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"godotDocumentation.setEnabled",
 	"godotDocumentation.update",
 	"provider.custom.add",
+	"provider.custom.update",
 	"provider.usage.get",
 	"provider.setEnabled",
 	"provider.custom.remove",

@@ -35,6 +35,21 @@ export const providerIdSchema = z.string()
 	.max(80)
 	.regex(/^[a-z][a-z0-9._-]*$/u, "Provider id must be lowercase ASCII with digits, dot, underscore, or dash.");
 
+const providerWebsiteUrlSchema = z.string()
+	.trim()
+	.max(2048)
+	.refine((value: string): boolean => {
+		if (value.length === 0) {
+			return true;
+		}
+		try {
+			const parsed: URL = new URL(value);
+			return parsed.protocol === "http:" || parsed.protocol === "https:";
+		} catch {
+			return false;
+		}
+	}, "Provider website URL must use http or https.");
+
 const imageContextDataSchema = z.object({
 	mimeType: z.enum(SUPPORTED_IMAGE_MIME_TYPES as [string, ...string[]]),
 	dataUrl: z.string().min(1).max(1_500_000).optional(),
@@ -682,7 +697,19 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			displayName: z.string().trim().min(1).max(80),
 			providerType: z.enum(["openai", "openai-responses", "anthropic"]),
-		}),
+			websiteUrl: providerWebsiteUrlSchema.nullable().optional()
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("provider.custom.update"),
+		params: z.object({
+			provider: providerIdSchema,
+			displayName: z.string().trim().min(1).max(80),
+			providerType: z.enum(["openai", "openai-responses", "anthropic"]),
+			websiteUrl: providerWebsiteUrlSchema.nullable().optional()
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

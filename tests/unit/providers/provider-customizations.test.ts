@@ -9,6 +9,7 @@ import {
 	ensureCustomProviderDefaultModel,
 	ProviderCustomizationError,
 	removeCustomProvider,
+	updateCustomProvider,
 	updateProviderModelSelection,
 	updateModelCustomization
 } from "../../../src/providers/provider-customizations-service.js";
@@ -18,6 +19,7 @@ import {
 } from "../../../src/providers/provider-customizations-store.js";
 import {
 	getProviderAdapterFamily,
+	getProviderDefaultEndpointType,
 	getProviderDefaultModelOrNull,
 	getProviderFallbackModels,
 	mergeProviderModelsWithCatalog
@@ -456,6 +458,49 @@ test("custom providers report readiness and cannot activate without model or bas
 
 		await saveProviderConfig({ provider, model: "ready-model" });
 		assert.equal((await getProviderModelSelectionStatus()).activeModel.providerId, provider);
+	});
+});
+
+test("custom provider website and type edits persist and remap cached models", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const provider: string = await addCustomProvider({
+			displayName: "Private Gateway",
+			providerType: "openai",
+			websiteUrl: "https://gateway.example.com"
+		});
+		assert.equal(getProviderCustomizationsSnapshot().providers[provider]?.websiteUrl, "https://gateway.example.com");
+		await saveProviderModelsCache(provider, [{
+			id: "gateway-model",
+			displayName: "Gateway Model",
+			provider,
+			endpointType: "openai-chat-completions",
+			contextWindowTokens: 128_000,
+			maxOutputTokens: 8_192,
+			capabilities: {}
+		}]);
+
+		await updateCustomProvider({
+			provider,
+			displayName: "Private Gateway Renamed",
+			providerType: "anthropic",
+			websiteUrl: null
+		});
+		assert.equal(getProviderCustomizationsSnapshot().providers[provider]?.displayName, "Private Gateway Renamed");
+		assert.equal(getProviderCustomizationsSnapshot().providers[provider]?.websiteUrl, null);
+		assert.equal(getProviderCustomizationsSnapshot().providers[provider]?.providerType, "anthropic");
+		assert.equal((await getProviderModelsCache(provider))?.models[0]?.endpointType, getProviderDefaultEndpointType(provider));
+		const selection = await getProviderModelSelectionStatus();
+		assert.equal(selection.providers.find((candidate): boolean => candidate.provider === provider)?.websiteUrl, undefined);
+
+		await assert.rejects(
+			() => updateCustomProvider({
+				provider,
+				displayName: "Private Gateway Renamed",
+				providerType: "anthropic",
+				websiteUrl: "javascript:alert(1)"
+			}),
+			(error: unknown): boolean => error instanceof ProviderCustomizationError && error.code === "provider_website_invalid"
+		);
 	});
 });
 

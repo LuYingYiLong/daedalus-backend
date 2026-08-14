@@ -180,10 +180,44 @@ test("provider discovery falls back to catalog without mutating an existing cach
 			const result = await discoverProviderModels("deepseek", "bad-key", baseUrl);
 			assert.equal(result.source, "fallback");
 			assert.match(result.error ?? "", /HTTP 401/u);
+			assert.deepEqual(result.failure, { code: "authentication", httpStatus: 401 });
 			assert.equal(result.models.some((model): boolean => model.id === "deepseek-v4-pro"), true);
 			assert.deepEqual((await getProviderModelsCache("deepseek"))?.models.map((model): string => model.id), ["kept-model"]);
 		} finally {
 			server.close();
+		}
+	});
+});
+
+test("provider discovery classifies unavailable model list endpoints and incompatible responses", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const missingEndpointServer: Server = createServer((_request, response): void => {
+			response.writeHead(404, { "Content-Type": "application/json" });
+			response.end(JSON.stringify({ error: "not found" }));
+		});
+		const invalidResponseServer: Server = createServer((_request, response): void => {
+			response.writeHead(200, { "Content-Type": "application/json" });
+			response.end(JSON.stringify({ models: [] }));
+		});
+		const missingEndpointUrl: string = await listen(missingEndpointServer);
+		const invalidResponseUrl: string = await listen(invalidResponseServer);
+		try {
+			const missingEndpoint = await discoverProviderModels("deepseek", "test-key", missingEndpointUrl);
+			assert.equal(missingEndpoint.source, "fallback");
+			assert.deepEqual(missingEndpoint.failure, { code: "models_endpoint", httpStatus: 404 });
+
+			const invalidResponse = await discoverProviderModels("deepseek", "test-key", invalidResponseUrl);
+			assert.equal(invalidResponse.source, "fallback");
+			assert.deepEqual(invalidResponse.failure, { code: "response_format" });
+		} finally {
+			await Promise.all([
+				new Promise<void>((resolve, reject): void => {
+					missingEndpointServer.close((error?: Error): void => error === undefined ? resolve() : reject(error));
+				}),
+				new Promise<void>((resolve, reject): void => {
+					invalidResponseServer.close((error?: Error): void => error === undefined ? resolve() : reject(error));
+				})
+			]);
 		}
 	});
 });

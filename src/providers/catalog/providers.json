@@ -2,6 +2,7 @@
   {
     "id": "deepseek",
     "displayName": "DeepSeek",
+    "websiteUrl": "https://www.deepseek.com",
     "authType": "api-key",
     "defaultModel": "deepseek-v4-flash",
     "defaultEndpointType": "openai-chat-completions",
@@ -18,6 +19,7 @@
   {
     "id": "moonshot",
     "displayName": "Moonshot/Kimi",
+    "websiteUrl": "https://www.moonshot.cn",
     "authType": "api-key",
     "defaultModel": "kimi-k3",
     "defaultEndpointType": "openai-chat-completions",
@@ -40,6 +42,7 @@
   {
     "id": "openai",
     "displayName": "OpenAI",
+    "websiteUrl": "https://openai.com",
     "authType": "api-key",
     "defaultModel": "gpt-5.6-sol",
     "defaultEndpointType": "openai-responses",
@@ -57,6 +60,7 @@
   {
     "id": "zhipu",
     "displayName": "Zhipu AI",
+    "websiteUrl": "https://open.bigmodel.cn",
     "authType": "api-key",
     "defaultModel": "glm-5.2",
     "defaultEndpointType": "openai-chat-completions",
@@ -78,6 +82,7 @@
   {
     "id": "dashscope",
     "displayName": "Alibaba Cloud Qwen",
+    "websiteUrl": "https://dashscope.aliyun.com",
     "authType": "api-key",
     "defaultModel": "qwen3.7-plus",
     "modelListMode": "catalog-recommended",
@@ -95,6 +100,7 @@
   {
     "id": "volcengine",
     "displayName": "Volcengine Ark",
+    "websiteUrl": "https://www.volcengine.com/product/ark",
     "authType": "api-key",
     "defaultModel": "doubao-seed-evolving",
     "modelListMode": "catalog-recommended",
@@ -112,6 +118,7 @@
   {
     "id": "minimax",
     "displayName": "MiniMax",
+    "websiteUrl": "https://www.minimaxi.com",
     "authType": "api-key",
     "defaultModel": "MiniMax-M3",
     "modelListMode": "catalog-recommended",
@@ -129,6 +136,7 @@
   {
     "id": "stepfun",
     "displayName": "StepFun",
+    "websiteUrl": "https://www.stepfun.com",
     "authType": "api-key",
     "defaultModel": "step-3.7-flash",
     "modelListMode": "catalog-recommended",
@@ -146,6 +154,7 @@
   {
     "id": "iflytek",
     "displayName": "iFlytek Spark",
+    "websiteUrl": "https://xinghuo.xfyun.cn",
     "authType": "api-key",
     "defaultModel": "4.0Ultra",
     "modelListMode": "catalog-only",
@@ -164,6 +173,7 @@
   {
     "id": "opencode",
     "displayName": "OpenCode Zen",
+    "websiteUrl": "https://opencode.ai",
     "authType": "api-key",
     "defaultModel": "kimi-k2.7-code",
     "modelListMode": "catalog-recommended",
@@ -181,6 +191,7 @@
   {
     "id": "opencode_go",
     "displayName": "OpenCode Go",
+    "websiteUrl": "https://opencode.ai",
     "authType": "api-key",
     "defaultModel": "kimi-k3",
     "modelListMode": "catalog-recommended",
@@ -203,6 +214,7 @@
   {
     "id": "qianfan",
     "displayName": "Baidu Qianfan",
+    "websiteUrl": "https://cloud.baidu.com/product-s/qianfan_home",
     "authType": "api-key",
     "defaultModel": "ernie-5.1",
     "modelListMode": "catalog-recommended",
@@ -220,6 +232,7 @@
   {
     "id": "mimo",
     "displayName": "Xiaomi MiMo",
+    "websiteUrl": "https://mimo.xiaomi.com",
     "authType": "api-key",
     "defaultModel": "mimo-v2.5-pro",
     "modelListMode": "catalog-recommended",

@@ -12,6 +12,7 @@ import {
 	getProviderDisplayName,
 	getProviderFallbackModels,
 	getProviderIds,
+	getProviderWebsiteUrl,
 	isCustomProvider,
 	isProviderId,
 	mergeProviderModelsWithCatalog,
@@ -94,6 +95,7 @@ export type ProviderConfigWithSecret = {
 export type ProviderConfigProviderStatus = {
 	provider: ProviderId;
 	displayName: string;
+	websiteUrl?: string | undefined;
 	configured: boolean;
 	model: string | null;
 	baseUrl: string | null;
@@ -127,6 +129,7 @@ export type CurrentProviderConfigStatus = {
 export type ProviderModelSelectionProviderStatus = {
 	provider: ProviderId;
 	displayName: string;
+	websiteUrl?: string | undefined;
 	configured: boolean;
 	selected: boolean;
 	selectedModel: string | null;
@@ -732,6 +735,7 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 		const status: ProviderConfigProviderStatus = {
 			provider,
 			displayName: getProviderDisplayName(provider),
+			...(getProviderWebsiteUrl(provider) === undefined ? {} : { websiteUrl: getProviderWebsiteUrl(provider) }),
 			configured: apiKey !== null,
 			model: entry?.model ?? null,
 			baseUrl: entry?.baseUrl ?? null,
@@ -810,6 +814,7 @@ export async function getProviderModelSelectionStatus(): Promise<ProviderModelSe
 			const selectionProvider: ProviderModelSelectionProviderStatus = {
 				provider: providerStatus.provider,
 				displayName: providerStatus.displayName,
+				...(providerStatus.websiteUrl === undefined ? {} : { websiteUrl: providerStatus.websiteUrl }),
 				configured: providerStatus.configured,
 				selected,
 				selectedModel,

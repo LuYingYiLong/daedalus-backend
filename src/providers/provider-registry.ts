@@ -11,6 +11,7 @@ import {
 	type ModelCustomizationRecord
 } from "./provider-customizations-store.js";
 import { normalizeProviderModelCapabilities } from "./provider-types.js";
+import { normalizeProviderWebsiteUrl } from "./provider-website.js";
 import type {
 	AdapterFamily,
 	EndpointType,
@@ -36,6 +37,7 @@ export { normalizeProviderModelCapabilities } from "./provider-types.js";
 type RawProviderCatalogEntry = {
 	id: string;
 	displayName: string;
+	websiteUrl?: string | undefined;
 	authType: "api-key";
 	defaultModel: string;
 	defaultEndpointType: EndpointType;
@@ -216,9 +218,17 @@ function parseProviders(value: unknown): RawProviderCatalogEntry[] {
 			endpointConfigs[endpointType] = parseEndpointConfig(config, id, endpointType);
 		}
 
+		let websiteUrl: string | undefined;
+		try {
+			websiteUrl = normalizeProviderWebsiteUrl(item.websiteUrl);
+		} catch (error: unknown) {
+			throw new Error(`Provider ${id} has invalid websiteUrl: ${error instanceof Error ? error.message : String(error)}`);
+		}
+
 		return {
 			id,
 			displayName: readString(item, "displayName"),
+			...(websiteUrl === undefined ? {} : { websiteUrl }),
 			authType: "api-key",
 			defaultModel: readString(item, "defaultModel"),
 			defaultEndpointType: defaultEndpointTypeValue,
@@ -312,6 +322,7 @@ function buildCatalog(): ProviderCatalog {
 		const definition: ProviderDefinition = {
 			id: rawProvider.id,
 			displayName: rawProvider.displayName,
+			...(rawProvider.websiteUrl === undefined ? {} : { websiteUrl: rawProvider.websiteUrl }),
 			authType: rawProvider.authType,
 			defaultEndpointType: rawProvider.defaultEndpointType,
 			defaultBaseUrl: defaultEndpoint.baseUrl,
@@ -478,6 +489,7 @@ function createCustomProviderDefinition(provider: ProviderId, record: CustomProv
 	return {
 		id: provider,
 		displayName: record.displayName,
+		...(typeof record.websiteUrl === "string" ? { websiteUrl: record.websiteUrl } : {}),
 		authType: "api-key",
 		defaultEndpointType: endpoint.endpointType,
 		defaultBaseUrl: "",
@@ -518,6 +530,10 @@ export function getProviderDefinition(provider: ProviderId): ProviderDefinition 
 
 export function getProviderDisplayName(provider: ProviderId): string {
 	return getProviderDefinition(provider).displayName;
+}
+
+export function getProviderWebsiteUrl(provider: ProviderId): string | undefined {
+	return getProviderDefinition(provider).websiteUrl;
 }
 
 export function getProviderDefaultEndpointType(provider: ProviderId): EndpointType {

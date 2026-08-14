@@ -53,12 +53,27 @@ export type ManagedProviderModel = DiscoveredProviderModel & {
 	removalGuards: ProviderModelRemovalGuard[];
 };
 
+export type ProviderModelDiscoveryFailureCode =
+	| "authentication"
+	| "permission"
+	| "rate_limited"
+	| "models_endpoint"
+	| "response_format"
+	| "network"
+	| "upstream";
+
+export type ProviderModelDiscoveryFailure = {
+	code: ProviderModelDiscoveryFailureCode;
+	httpStatus?: number | undefined;
+};
+
 export type ProviderModelsDiscoverResult = {
 	provider: ProviderId;
 	models: DiscoveredProviderModel[];
 	managedModels: ManagedProviderModel[];
 	source: "api" | "fallback";
 	error?: string | undefined;
+	failure?: ProviderModelDiscoveryFailure | undefined;
 };
 
 export type SyncProviderModelsInput = {
@@ -75,6 +90,16 @@ export class ProviderModelSyncError extends Error {
 		super(message);
 		this.name = "ProviderModelSyncError";
 		this.code = code;
+	}
+}
+
+class ProviderModelListError extends Error {
+	readonly failure: ProviderModelDiscoveryFailure;
+
+	constructor(message: string, failure: ProviderModelDiscoveryFailure) {
+		super(message);
+		this.name = "ProviderModelListError";
+		this.failure = failure;
 	}
 }
 
@@ -138,12 +163,16 @@ function normalizeCapabilities(raw: Record<string, unknown>, fallback: ProviderM
 
 function parseApiModels(provider: ProviderId, value: unknown): ProviderModelInfo[] {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		throw new Error("Provider model list response is not an object");
+		throw new ProviderModelListError("Provider model list response is not an object", {
+			code: "response_format"
+		});
 	}
 
 	const data: unknown = (value as Record<string, unknown>).data;
 	if (!Array.isArray(data)) {
-		throw new Error("Provider model list response does not contain data[]");
+		throw new ProviderModelListError("Provider model list response does not contain data[]", {
+			code: "response_format"
+		});
 	}
 
 	const endpointType = getProviderDefaultEndpointType(provider);
@@ -180,7 +209,9 @@ function parseApiModels(provider: ProviderId, value: unknown): ProviderModelInfo
 	}
 
 	if (models.length === 0) {
-		throw new Error("Provider model list response contains no usable models");
+		throw new ProviderModelListError("Provider model list response contains no usable models", {
+			code: "response_format"
+		});
 	}
 
 	return models;
@@ -197,11 +228,40 @@ export async function fetchOpenAICompatibleModels(options: ProviderChatOptions):
 	});
 
 	if (!response.ok) {
-		throw new Error(`Model list request failed with HTTP ${response.status}`);
+		throw new ProviderModelListError(
+			`Model list request failed with HTTP ${response.status}`,
+			classifyModelListHttpFailure(response.status)
+		);
 	}
 
 	const body: unknown = await response.json() as unknown;
 	return parseApiModels(options.provider, body);
+}
+
+function classifyModelListHttpFailure(status: number): ProviderModelDiscoveryFailure {
+	if (status === 401) {
+		return { code: "authentication", httpStatus: status };
+	}
+	if (status === 403) {
+		return { code: "permission", httpStatus: status };
+	}
+	if (status === 404 || status === 405) {
+		return { code: "models_endpoint", httpStatus: status };
+	}
+	if (status === 429) {
+		return { code: "rate_limited", httpStatus: status };
+	}
+	return { code: "upstream", httpStatus: status };
+}
+
+function classifyModelDiscoveryFailure(error: unknown): ProviderModelDiscoveryFailure {
+	if (error instanceof ProviderModelListError) {
+		return error.failure;
+	}
+	if (error instanceof TypeError) {
+		return { code: "network" };
+	}
+	return { code: "upstream" };
 }
 
 function deduplicateModels(models: readonly ProviderModelInfo[]): ProviderModelInfo[] {
@@ -341,7 +401,8 @@ export async function discoverProviderModels(
 			models: toImportableDiscoveredModels(getProviderFallbackModels(provider)),
 			managedModels: await getManagedProviderModels(provider),
 			source: "fallback",
-			error: error instanceof Error ? error.message : "Failed to discover provider models"
+			error: error instanceof Error ? error.message : "Failed to discover provider models",
+			failure: classifyModelDiscoveryFailure(error)
 		};
 	}
 }

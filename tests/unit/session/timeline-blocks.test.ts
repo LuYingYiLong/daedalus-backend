@@ -61,6 +61,54 @@ test("timeline recovery ignores malformed legacy body part slots", (): void => {
 	assert.deepEqual(getVisibleAssistantMarkdownSegments(legacyParts), ["visible"]);
 });
 
+test("fork origin divider is always the first canonical timeline block", (): void => {
+	const stored: StoredSession = session([
+		{
+			role: "user",
+			requestId: "request-before-fork",
+			content: "Copied question",
+			createdAt: "2026-07-09T00:01:00.000Z",
+		},
+	], []);
+	stored.metadata.forkedFrom = {
+		sessionId: "session-source",
+		requestId: "request-anchor",
+		sessionTitle: "Source session",
+		messagePreview: "Fork from here",
+	};
+
+	const result = buildCanonicalTimelineBlocks(stored);
+	assert.deepEqual(result.blocks.map((block: TimelineBlock): string => block.type), ["divider", "user"]);
+	const divider = result.blocks[0];
+	assert.equal(divider?.type === "divider" ? divider.dividerKind : "", "fork_origin");
+	assert.deepEqual(divider?.type === "divider" ? divider.origin : undefined, stored.metadata.forkedFrom);
+});
+
+test("model change divider appears before its user block without creating an assistant block", (): void => {
+	const stored: StoredSession = session([
+		{
+			role: "user",
+			requestId: "request-model-change",
+			content: "Try the same prompt",
+			createdAt: "2026-07-09T00:01:00.000Z",
+		},
+	], [
+		event("model-change", "request-model-change", "session.model.changed", "2026-07-09T00:01:01.000Z", {
+			from: { provider: "openai", model: "gpt-a", label: "OpenAI/gpt-a" },
+			to: { provider: "anthropic", model: "claude-b", label: "Anthropic/claude-b" },
+		}),
+	]);
+
+	const result = buildCanonicalTimelineBlocks(stored);
+	assert.deepEqual(result.blocks.map((block: TimelineBlock): string => `${block.type}:${block.requestId}`), [
+		"divider:request-model-change",
+		"user:request-model-change",
+	]);
+	const divider = result.blocks[0];
+	assert.equal(divider?.type === "divider" ? divider.from?.label : "", "OpenAI/gpt-a");
+	assert.equal(divider?.type === "divider" ? divider.to?.label : "", "Anthropic/claude-b");
+});
+
 test("canonical timeline keeps request order when older assistant messages are persisted late", (): void => {
 	const stored: StoredSession = session(
 		[

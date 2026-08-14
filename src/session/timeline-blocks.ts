@@ -1,5 +1,5 @@
 import type { ChatMessage } from "../protocol/types.js";
-import type { StoredMessage, StoredSession, StoredSessionEvent } from "./session-store.js";
+import type { SessionForkOrigin, StoredMessage, StoredSession, StoredSessionEvent } from "./session-store.js";
 import { annotateActivityEvent, createActivityGroupAccumulator, type TimelineActivityStats } from "./activity-groups.js";
 
 export type TimelineUserBlock = {
@@ -25,7 +25,25 @@ export type TimelineAssistantBlock = {
 	renderHints?: TimelineRenderHints | undefined;
 };
 
-export type TimelineBlock = TimelineUserBlock | TimelineAssistantBlock;
+export type TimelineDividerModelRef = {
+	provider: string;
+	model: string;
+	label: string;
+};
+
+export type TimelineDividerBlock = {
+	id: string;
+	type: "divider";
+	requestId: string;
+	createdAtUtc: string;
+	dividerKind: "fork_origin" | "model_change";
+	origin?: SessionForkOrigin | undefined;
+	from?: TimelineDividerModelRef | undefined;
+	to?: TimelineDividerModelRef | undefined;
+	renderHints?: TimelineRenderHints | undefined;
+};
+
+export type TimelineBlock = TimelineUserBlock | TimelineAssistantBlock | TimelineDividerBlock;
 
 export type TimelineRenderHints = {
 	estimatedHeight: number;
@@ -1209,6 +1227,54 @@ function createUserBlock(message: StoredMessage): TimelineUserBlock {
 	};
 }
 
+function createForkOriginDividerBlock(session: StoredSession): TimelineDividerBlock | null {
+	const origin: SessionForkOrigin | undefined = session.metadata.forkedFrom;
+	if (origin === undefined) {
+		return null;
+	}
+	return {
+		id: `divider:${session.metadata.id}:fork-origin`,
+		type: "divider",
+		requestId: `fork-origin:${session.metadata.id}`,
+		createdAtUtc: session.metadata.createdAt,
+		dividerKind: "fork_origin",
+		origin,
+	};
+}
+
+function readDividerModelRef(value: unknown): TimelineDividerModelRef | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const provider: string = asString(value.provider);
+	const model: string = asString(value.model);
+	const label: string = asString(value.label);
+	if (provider.length === 0 || model.length === 0) {
+		return null;
+	}
+	return { provider, model, label: label.length > 0 ? label : `${provider}/${model}` };
+}
+
+function createModelChangeDividerBlock(event: StoredSessionEvent): TimelineDividerBlock | null {
+	if (event.event !== "session.model.changed" || !isRecord(event.data)) {
+		return null;
+	}
+	const from: TimelineDividerModelRef | null = readDividerModelRef(event.data.from);
+	const to: TimelineDividerModelRef | null = readDividerModelRef(event.data.to);
+	if (from === null || to === null) {
+		return null;
+	}
+	return {
+		id: `divider:${event.id}`,
+		type: "divider",
+		requestId: event.requestId,
+		createdAtUtc: event.createdAt,
+		dividerKind: "model_change",
+		from,
+		to,
+	};
+}
+
 function createAssistantBlock(
 	sessionId: string,
 	requestId: string,
@@ -1505,6 +1571,16 @@ function withRenderHints(block: TimelineBlock): TimelineBlock {
 }
 
 function createRenderHints(block: TimelineBlock): TimelineRenderHints {
+	if (block.type === "divider") {
+		return {
+			estimatedHeight: 48,
+			contentChars: block.dividerKind === "fork_origin"
+				? block.origin?.messagePreview.length ?? 0
+				: (block.from?.label.length ?? 0) + (block.to?.label.length ?? 0),
+			bodyPartCount: 0,
+			heavyPartCount: 0,
+		};
+	}
 	if (block.type === "user") {
 		const contextCount: number = block.additionalContext?.length ?? 0;
 		const textRows: number = Math.max(1, Math.ceil(block.content.length / 72));
@@ -1548,6 +1624,10 @@ export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBu
 	const groupedEvents: Map<string, RequestEvents> = collectRequestEvents(sourceEvents, requestAliases);
 	const timelineEntries: TimelineBuildEntry[] = createTimelineBuildEntries(session.messages, groupedEvents, requestAliases);
 	const blocks: TimelineBlock[] = [];
+	const forkOriginDivider: TimelineDividerBlock | null = createForkOriginDividerBlock(session);
+	if (forkOriginDivider !== null) {
+		blocks.push(forkOriginDivider);
+	}
 
 	for (const entry of timelineEntries) {
 		if (entry.type === "standalone") {
@@ -1567,20 +1647,33 @@ export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBu
 			continue;
 		}
 
+		const modelChangeEvents: StoredSessionEvent[] = entry.events.filter(
+			(event: StoredSessionEvent): boolean => event.event === "session.model.changed",
+		);
+		for (const modelChangeEvent of modelChangeEvents) {
+			const divider: TimelineDividerBlock | null = createModelChangeDividerBlock(modelChangeEvent);
+			if (divider !== null) {
+				blocks.push(divider);
+			}
+		}
+
 		if (entry.userMessage !== undefined) {
 			blocks.push(createUserBlock(entry.userMessage));
 		}
 
-		if (entry.assistantMessage !== undefined || entry.events.length > 0) {
+		const assistantEvents: StoredSessionEvent[] = entry.events.filter(
+			(event: StoredSessionEvent): boolean => event.event !== "session.model.changed",
+		);
+		if (entry.assistantMessage !== undefined || assistantEvents.length > 0) {
 			const startedAtUtc: string = firstNonEmptyTimestamp(
 				entry.userMessage?.createdAt,
-				entry.firstEventAt,
+				assistantEvents[0]?.createdAt,
 				entry.assistantMessage?.createdAt,
 				entry.orderAt
 			) ?? "";
 			const completedAtUtc: string = firstNonEmptyTimestamp(
 				entry.assistantMessage?.createdAt,
-				entry.lastEventAt,
+				assistantEvents[assistantEvents.length - 1]?.createdAt,
 				startedAtUtc
 			) ?? startedAtUtc;
 			blocks.push(createAssistantBlock(
@@ -1589,7 +1682,7 @@ export function buildCanonicalTimelineBlocks(session: StoredSession): TimelineBu
 				entry.assistantMessage?.content ?? "",
 				startedAtUtc,
 				completedAtUtc,
-				entry.events,
+				assistantEvents,
 				entry.assistantMessage,
 				entry.assistantIdentityCreatedAt
 			));

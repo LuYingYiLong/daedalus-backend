@@ -52,7 +52,6 @@ export type SessionMetadata = {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
-	forkOriginDismissed?: boolean | undefined;
 	forkedFrom?: SessionForkOrigin | undefined;
 	archivedAt?: string | undefined;
 	createdAt: string;
@@ -162,7 +161,7 @@ export type SessionSearchProjectionBlock = {
 	blockOffset: number;
 	blockKey: string;
 	requestId: string;
-	role: "user" | "assistant";
+	role: "user" | "assistant" | "divider";
 	document: SessionTimelineSearchDocument | null;
 };
 
@@ -433,18 +432,23 @@ type TimelineIndexEntry = {
 	firstEventAt?: string | undefined;
 	orderAt: string;
 	sequence: number;
-	hasEvents: boolean;
+	hasAssistantEvents: boolean;
+	hasModelChangeDivider: boolean;
 };
 
 type TimelineBlockIndex = {
 	key: string;
 	requestId: string;
-	type: "user" | "assistant";
+	type: TimelineBlock["type"];
 	sourceRequestIds: string[];
 };
 
-function timelineBlockKey(requestId: string, type: "user" | "assistant"): string {
+function timelineBlockKey(requestId: string, type: TimelineBlock["type"]): string {
 	return `${requestId}\n${type}`;
+}
+
+function forkOriginDividerRequestId(sessionId: string): string {
+	return `fork-origin:${sessionId}`;
 }
 
 function createTimelineNavigationPreview(content: string): string {
@@ -468,7 +472,7 @@ function parseAliasRequestId(value: unknown): string {
 	}
 }
 
-function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineBlockIndex[] | null {
+function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string, metadata: SessionMetadata): TimelineBlockIndex[] | null {
 	const messageRows = db.prepare(`
 		SELECT request_id, role, created_at FROM messages WHERE session_id = ? ORDER BY sequence
 	`).all(sessionId) as Record<string, unknown>[];
@@ -515,7 +519,8 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 			sourceRequestIds: new Set([requestId]),
 			orderAt,
 			sequence,
-			hasEvents: false
+			hasAssistantEvents: false,
+			hasModelChangeDivider: false,
 		};
 		entries.set(requestId, entry);
 		return entry;
@@ -540,7 +545,12 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 		sequence += 1;
 	}
 
-	const eventGroups: Map<string, { firstAt: string; sourceRequestIds: Set<string> }> = new Map();
+	const eventGroups: Map<string, {
+		firstAt: string;
+		sourceRequestIds: Set<string>;
+		hasAssistantEvents: boolean;
+		hasModelChangeDivider: boolean;
+	}> = new Map();
 	for (const row of eventRows) {
 		const sourceRequestId: string = String(row.request_id);
 		const requestId: string = aliases.get(sourceRequestId) ?? sourceRequestId;
@@ -548,11 +558,19 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 			continue;
 		}
 		const createdAt: string = String(row.created_at);
+		const isModelChangeDivider: boolean = String(row.event_name) === "session.model.changed";
 		const existing = eventGroups.get(requestId);
 		if (existing === undefined) {
-			eventGroups.set(requestId, { firstAt: createdAt, sourceRequestIds: new Set([sourceRequestId]) });
+			eventGroups.set(requestId, {
+				firstAt: createdAt,
+				sourceRequestIds: new Set([sourceRequestId]),
+				hasAssistantEvents: !isModelChangeDivider,
+				hasModelChangeDivider: isModelChangeDivider,
+			});
 		} else {
 			existing.sourceRequestIds.add(sourceRequestId);
+			existing.hasAssistantEvents ||= !isModelChangeDivider;
+			existing.hasModelChangeDivider ||= isModelChangeDivider;
 			if (createdAt < existing.firstAt) {
 				existing.firstAt = createdAt;
 			}
@@ -560,7 +578,8 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 	}
 	for (const [requestId, group] of eventGroups) {
 		const entry: TimelineIndexEntry = getOrCreate(requestId, group.firstAt);
-		entry.hasEvents = true;
+		entry.hasAssistantEvents = group.hasAssistantEvents;
+		entry.hasModelChangeDivider = group.hasModelChangeDivider;
 		entry.firstEventAt = group.firstAt;
 		entry.sourceRequestIds = group.sourceRequestIds;
 		entry.orderAt = entry.userCreatedAt ?? entry.firstEventAt ?? entry.assistantCreatedAt ?? entry.orderAt;
@@ -571,15 +590,24 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 	const sortedEntries: TimelineIndexEntry[] = [...entries.values()]
 		.filter((entry: TimelineIndexEntry): boolean => !(
 			hasAnyEvents
-				&& !entry.hasEvents
+				&& !entry.hasAssistantEvents
+				&& !entry.hasModelChangeDivider
 				&& entry.userCreatedAt !== undefined
 				&& entry.assistantCreatedAt !== undefined
 		))
 		.sort((left: TimelineIndexEntry, right: TimelineIndexEntry): number => (
 			left.orderAt.localeCompare(right.orderAt) || left.sequence - right.sequence
 		));
-	return sortedEntries.flatMap((entry: TimelineIndexEntry): TimelineBlockIndex[] => {
+	const indexedBlocks: TimelineBlockIndex[] = sortedEntries.flatMap((entry: TimelineIndexEntry): TimelineBlockIndex[] => {
 		const blocks: TimelineBlockIndex[] = [];
+		if (entry.hasModelChangeDivider) {
+			blocks.push({
+				key: timelineBlockKey(entry.requestId, "divider"),
+				requestId: entry.requestId,
+				type: "divider",
+				sourceRequestIds: [...entry.sourceRequestIds],
+			});
+		}
 		if (entry.userCreatedAt !== undefined) {
 			blocks.push({
 				key: timelineBlockKey(entry.requestId, "user"),
@@ -588,7 +616,7 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 				sourceRequestIds: [...entry.sourceRequestIds]
 			});
 		}
-		if (entry.assistantCreatedAt !== undefined || entry.hasEvents) {
+		if (entry.assistantCreatedAt !== undefined || entry.hasAssistantEvents) {
 			blocks.push({
 				key: timelineBlockKey(entry.requestId, "assistant"),
 				requestId: entry.requestId,
@@ -598,6 +626,16 @@ function buildTimelineBlockIndex(db: DatabaseSync, sessionId: string): TimelineB
 		}
 		return blocks;
 	});
+	if (metadata.forkedFrom !== undefined) {
+		const requestId: string = forkOriginDividerRequestId(sessionId);
+		indexedBlocks.unshift({
+			key: timelineBlockKey(requestId, "divider"),
+			requestId,
+			type: "divider",
+			sourceRequestIds: [],
+		});
+	}
+	return indexedBlocks;
 }
 
 function eventFromRow(row: Record<string, unknown>): StoredSessionEvent {
@@ -645,7 +683,7 @@ async function createSqlTimelinePage(sessionId: string, offset: number | null, l
 		db.prepare("SELECT metadata_json FROM sessions WHERE session_id = ? AND archived_at IS NULL").get(safeSessionId) as Record<string, unknown> | undefined,
 		safeSessionId
 	);
-	const index: TimelineBlockIndex[] | null = buildTimelineBlockIndex(db, safeSessionId);
+	const index: TimelineBlockIndex[] | null = buildTimelineBlockIndex(db, safeSessionId, metadata);
 	if (index === null) {
 		return null;
 	}
@@ -783,6 +821,9 @@ export async function openSessionTimelineSearchIndexPage(
 	const documents: SessionTimelineSearchDocument[] = page.timelineBlocks.flatMap(
 		(block: TimelineBlock, index: number): SessionTimelineSearchDocument[] => {
 			const blockOffset: number = page.blockOffset + index;
+			if (block.type === "divider") {
+				return [];
+			}
 			if (block.type === "user") {
 				return block.content.length === 0 ? [] : [{
 					blockOffset,
@@ -844,6 +885,15 @@ export async function buildSessionSearchProjectionSnapshot(sessionId: string): P
 	return {
 		source,
 		blocks: timeline.blocks.map((block: TimelineBlock, blockOffset: number): SessionSearchProjectionBlock => {
+			if (block.type === "divider") {
+				return {
+					blockOffset,
+					blockKey: timelineBlockKey(block.requestId, block.type),
+					requestId: block.requestId,
+					role: "divider",
+					document: null,
+				};
+			}
 			if (block.type === "user") {
 				return {
 					blockOffset,

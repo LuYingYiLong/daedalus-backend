@@ -73,6 +73,12 @@ import {
 import { preprocessImageAttachmentsForTextModel, type ImageRecognitionPreprocessResult } from "../providers/image-recognition.js";
 import { hydrateImageAttachmentContexts } from "../session/session-attachments.js";
 import { clearSessionForkDraft } from "../session/session-fork.js";
+import {
+	clearPendingSessionModelTransition,
+	readPendingSessionModelTransition,
+	recordPendingSessionModelTransition,
+	type SessionModelRef,
+} from "../session/session-model-transition.js";
 import { getProviderDefaultBaseUrl, getProviderDefaultModel, getProviderDisplayName, isProviderId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort, resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
 import { classifyProviderError, createProviderStatusEvent, type ProviderErrorInfo } from "../providers/provider-error.js";
@@ -232,14 +238,21 @@ const GODOT_AUTOLOAD_WRITE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_godot_unset_autoload"
 ]);
 
-function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatParams): boolean {
+type ChatModelSnapshotChange = {
+	modelTransition?: {
+		from: SessionModelRef;
+		to: SessionModelRef;
+	} | undefined;
+};
+
+function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatParams): ChatModelSnapshotChange | null {
 	if (params.provider === undefined && params.model === undefined && params.options?.reasoningEffort === undefined) {
-		return false;
+		return null;
 	}
 
 	const nextProvider: ProviderId = params.provider ?? session.activeProvider;
 	if (!isProviderId(nextProvider)) {
-		return false;
+		return null;
 	}
 
 	const providerChanged: boolean = nextProvider !== session.activeProvider;
@@ -252,7 +265,7 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 			? getProviderDefaultModel(nextProvider)
 			: currentModel;
 	if (!providerChanged && nextModel === currentModel && params.options?.reasoningEffort === undefined) {
-		return false;
+		return null;
 	}
 
 	session.activeProvider = nextProvider;
@@ -266,7 +279,16 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 		session.providerBaseUrl = undefined;
 		session.providerRequestOverrides = undefined;
 	}
-	return true;
+	return {
+		...(providerChanged || nextModel !== currentModel
+			? {
+				modelTransition: {
+					from: { provider: previousProvider, model: currentModel },
+					to: { provider: nextProvider, model: nextModel },
+				},
+			}
+			: {}),
+	};
 }
 
 function isImageGenerationOnlyToolRestriction(toolNames: readonly string[] | undefined): boolean {
@@ -1722,6 +1744,33 @@ async function pauseProviderResponseInterruptedRun(params: {
 	return true;
 }
 
+function createTimelineModelRef(modelRef: SessionModelRef): SessionModelRef & { label: string } {
+	return {
+		...modelRef,
+		label: `${getProviderDisplayName(modelRef.provider)}/${modelRef.model}`,
+	};
+}
+
+async function emitPendingModelChangeDivider(
+	socket: WebSocket,
+	requestId: string,
+	session: ClientSession,
+): Promise<void> {
+	if (session.sessionId === undefined) {
+		return;
+	}
+	const pending = await readPendingSessionModelTransition(session.sessionId);
+	if (pending === null) {
+		return;
+	}
+	sendSessionEvent(socket, requestId, session, "session.model.changed", {
+		from: createTimelineModelRef(pending.from),
+		to: createTimelineModelRef(pending.to),
+	});
+	await waitForSessionEventPersistence(session);
+	await clearPendingSessionModelTransition(session.sessionId, pending.eventId);
+}
+
 function createQueueRunRequestId(queueItemId: number): string {
 	return `queue-${queueItemId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -2372,9 +2421,16 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				await clearContextLedger(session.sessionId);
 				await deleteSummary(session.sessionId);
 			}
-			const modelSnapshotChanged: boolean = applyChatRequestModelSnapshot(session, params);
-			if (modelSnapshotChanged && session.sessionId !== undefined) {
+			const modelSnapshotChange: ChatModelSnapshotChange | null = applyChatRequestModelSnapshot(session, params);
+			if (modelSnapshotChange !== null && session.sessionId !== undefined) {
 				await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
+				if (modelSnapshotChange.modelTransition !== undefined) {
+					await recordPendingSessionModelTransition(
+						session.sessionId,
+						modelSnapshotChange.modelTransition.from,
+						modelSnapshotChange.modelTransition.to,
+					);
+				}
 			}
 			if (params.mode !== "goal" && session.sessionId !== undefined && getGoalRunBinding(request.id) === undefined) {
 				const activeGoal = await getCurrentAgentGoal(session.sessionId);
@@ -2606,6 +2662,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						turnStartedAt,
 						abortController.signal
 					);
+					await emitPendingModelChangeDivider(socket, request.id, session);
 					clearWorkbenchComposer(session, true);
 					if (session.sessionId !== undefined) {
 						await clearSessionForkDraft(session.sessionId);
@@ -2704,13 +2761,16 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					+ (guidePromptSection.length > 0 ? `\n\n${guidePromptSection}` : "")
 					+ (safeRetryPromptSection.length > 0 ? `\n\n${safeRetryPromptSection}` : "");
 				if (effectiveParams.retryOfRunId === undefined) {
-					await appendUserMessageToSession(
+					const userMessageAppended: boolean = await appendUserMessageToSession(
 						session,
 						effectiveParams.message,
 						request.id,
 						turnStartedAt,
 						effectiveParams.additionalContext
 					);
+					if (userMessageAppended) {
+						await emitPendingModelChangeDivider(socket, request.id, session);
+					}
 				}
 				let contextUsageEstimate: ContextUsageEstimate | undefined;
 				if ((goalBinding?.cycle ?? 1) <= 1) {

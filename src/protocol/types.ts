@@ -91,6 +91,7 @@ export type CanonicalServerEventName =
 	| "session.subscriber.updated"
 	| "session.run.busy"
 	| "session.workbench.updated"
+	| "session.model.changed"
 	| "message.queue.updated"
 	| "plan.clarification.required"
 	| "plan.generated"

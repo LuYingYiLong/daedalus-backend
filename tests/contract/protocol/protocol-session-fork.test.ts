@@ -39,6 +39,6 @@ test("session.fork validates Studio fork payloads strictly", (): void => {
 		type: "request",
 		id: "save-fork-origin-dismissed",
 		method: "session.save",
-		params: { forkOriginDismissed: true },
+		params: { workflowTodoCollapsed: true },
 	}).success, true);
 });

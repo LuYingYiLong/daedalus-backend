@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { StoredMessage, StoredSessionEvent } from "../../../src/session/session-store.js";
+import type { TimelineBlock } from "../../../src/session/timeline-blocks.js";
 
 test("session fork copies the stable prefix and persists an independent composer draft", async (): Promise<void> => {
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
@@ -13,6 +14,7 @@ test("session fork copies the stable prefix and persists an independent composer
 		const store = await import(`../../../src/session/session-store.js?fork=${Date.now()}`);
 		const attachments = await import(`../../../src/session/session-attachments.js?fork=${Date.now()}`);
 		const forkStore = await import(`../../../src/session/session-fork.js?fork=${Date.now()}`);
+		const modelTransitions = await import(`../../../src/session/session-model-transition.js?fork=${Date.now()}`);
 		const source = await store.createSession("Source", "workspace-a", "gdscript.review", undefined, {
 			provider: "openai",
 			model: "gpt-test",
@@ -120,6 +122,12 @@ test("session fork copies the stable prefix and persists an independent composer
 			sessionTitle: "Source",
 			messagePreview: "Compare this model",
 		});
+		const forkTimeline = await store.openSessionRecentTimeline(fork.metadata.id, 100);
+		assert.equal(forkTimeline.timelineBlocks[0]?.type, "divider");
+		assert.equal(
+			forkTimeline.timelineBlocks[0]?.type === "divider" ? forkTimeline.timelineBlocks[0].dividerKind : "",
+			"fork_origin",
+		);
 
 		const sourceAnchorId = (anchorAttachment.data as Record<string, unknown>).attachmentId;
 		const targetAnchor = fork.draft.additionalContext[0]!;
@@ -158,6 +166,41 @@ test("session fork copies the stable prefix and persists an independent composer
 			(await store.openSession(lastQuestionFork.metadata.id)).messages.map((message: StoredMessage): string => message.content),
 			["First question", "First answer", "Compare this model", "Second answer"],
 		);
+		await store.appendSessionEvent(lastQuestionFork.metadata.id, "request-model-change", "session.model.changed", {
+			from: { provider: "openai", model: "gpt-test", label: "OpenAI/gpt-test" },
+			to: { provider: "anthropic", model: "claude-test", label: "Anthropic/claude-test" },
+		});
+		await store.appendMessage(lastQuestionFork.metadata.id, {
+			role: "user",
+			content: "Compare with the new model",
+			requestId: "request-model-change",
+			createdAt: "2026-08-14T00:02:00.000Z",
+		});
+		const modelChangeTimeline = await store.openSessionRecentTimeline(lastQuestionFork.metadata.id, 100);
+		const modelChangeOffset: number = modelChangeTimeline.timelineBlocks.findIndex(
+			(block: TimelineBlock): boolean => block.type === "divider" && block.dividerKind === "model_change",
+		);
+		assert.equal(modelChangeTimeline.timelineBlocks[modelChangeOffset + 1]?.type, "user");
+
+		await modelTransitions.recordPendingSessionModelTransition(
+			fork.metadata.id,
+			{ provider: "openai", model: "gpt-a" },
+			{ provider: "anthropic", model: "claude-b" },
+		);
+		await modelTransitions.recordPendingSessionModelTransition(
+			fork.metadata.id,
+			{ provider: "anthropic", model: "claude-b" },
+			{ provider: "google", model: "gemini-c" },
+		);
+		const pendingModelTransition = await modelTransitions.readPendingSessionModelTransition(fork.metadata.id);
+		assert.deepEqual(pendingModelTransition?.from, { provider: "openai", model: "gpt-a" });
+		assert.deepEqual(pendingModelTransition?.to, { provider: "google", model: "gemini-c" });
+		await modelTransitions.recordPendingSessionModelTransition(
+			fork.metadata.id,
+			{ provider: "google", model: "gemini-c" },
+			{ provider: "openai", model: "gpt-a" },
+		);
+		assert.equal(await modelTransitions.readPendingSessionModelTransition(fork.metadata.id), null);
 		await assert.rejects(
 			forkStore.createSessionFork({
 				sourceSessionId: source.id,

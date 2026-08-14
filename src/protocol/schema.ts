@@ -141,7 +141,6 @@ const sessionUiMetadataParamsSchema = z.object({
 	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 	workflowTodoCollapsed: z.boolean().optional(),
 	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
-	forkOriginDismissed: z.boolean().optional()
 }).strict();
 
 const editableProviderModelCapabilitiesSchema = z.object({

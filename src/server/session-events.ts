@@ -174,7 +174,8 @@ export function shouldPersistSessionEvent(eventName: ServerEventNameInput): bool
 		|| eventName.startsWith("terminal.")
 		|| eventName.startsWith("guide.")
 		|| eventName.startsWith("skill.")
-		|| eventName.startsWith("plan.");
+		|| eventName.startsWith("plan.")
+		|| canonicalEventName === "session.model.changed";
 }
 
 export function getThinkingEventBufferKey(sessionId: string, requestId: string): string {

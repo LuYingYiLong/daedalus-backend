@@ -54,6 +54,7 @@ import {
 	createSessionFork,
 	readSessionForkDraft,
 } from "../session/session-fork.js";
+import { recordPendingSessionModelTransition } from "../session/session-model-transition.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -242,7 +243,6 @@ function createSessionUiMetadata(params: {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
-	forkOriginDismissed?: boolean | undefined;
 	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
@@ -270,9 +270,6 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.workflowTodoDismissedKey !== undefined) {
 		metadata.workflowTodoDismissedKey = params.workflowTodoDismissedKey;
-	}
-	if (params.forkOriginDismissed !== undefined) {
-		metadata.forkOriginDismissed = params.forkOriginDismissed;
 	}
 	if (params.temporary === true) {
 		metadata.temporary = true;
@@ -1420,6 +1417,11 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			bumpWorkbenchRevision(session);
 			await waitForSessionEventPersistence(session);
 			await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
+			await recordPendingSessionModelTransition(
+				session.sessionId,
+				{ provider: previousProvider, model: previousModel },
+				{ provider, model },
+			);
 
 			const stored = await openSession(session.sessionId);
 			emitWorkbenchUpdated(socket, request.id, session);

@@ -29,7 +29,7 @@ import {
 	findWorkspace,
 	upsertRuntimeWorkspace
 } from "../workspace/registry.js";
-import type { WorkspaceConfig } from "../workspace/types.js";
+import type { WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
 	createSession, openSession, listSessions,
@@ -243,6 +243,7 @@ function createSessionUiMetadata(params: {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
+	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
 	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
@@ -270,6 +271,9 @@ function createSessionUiMetadata(params: {
 	}
 	if (params.workflowTodoDismissedKey !== undefined) {
 		metadata.workflowTodoDismissedKey = params.workflowTodoDismissedKey;
+	}
+	if (params.workspaceLaunch !== undefined) {
+		metadata.workspaceLaunch = params.workspaceLaunch;
 	}
 	if (params.temporary === true) {
 		metadata.temporary = true;

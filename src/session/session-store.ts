@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getDefaultArchivedSessionsDir, getDefaultSessionsDir, getGoalCheckpointsRoot } from "../app-paths.js";
 import type { ChatMessage } from "../protocol/types.js";
-import type { WorkspaceConfig } from "../workspace/types.js";
+import type { WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { findContainingWorkspaceSourceFolder } from "../workspace/registry.js";
 import {
 	getSessionDatabase,
@@ -52,6 +52,7 @@ export type SessionMetadata = {
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
+	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
 	forkedFrom?: SessionForkOrigin | undefined;
 	archivedAt?: string | undefined;
 	createdAt: string;

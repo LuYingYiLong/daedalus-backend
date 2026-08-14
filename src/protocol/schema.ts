@@ -155,6 +155,7 @@ const sessionUiMetadataParamsSchema = z.object({
 	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 	workflowTodoCollapsed: z.boolean().optional(),
 	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
+	workspaceLaunch: z.enum(["file-explorer", "terminal", "vscode", "visual-studio", "github-desktop", "git-bash", "godot"]).optional(),
 }).strict();
 
 const editableProviderModelCapabilitiesSchema = z.object({

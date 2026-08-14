@@ -21,6 +21,7 @@ test("session fork copies the stable prefix and persists an independent composer
 			reasoningEffort: "high",
 			chatMode: "ask",
 			approvalMode: "auto-safe",
+			workspaceLaunch: "godot",
 		});
 		const firstAttachment = await attachments.saveTextAttachment({
 			sessionId: source.id,
@@ -114,6 +115,7 @@ test("session fork copies the stable prefix and persists an independent composer
 		assert.equal(fork.metadata.reasoningEffort, "high");
 		assert.equal(fork.metadata.chatMode, "ask");
 		assert.equal(fork.metadata.approvalMode, "auto-safe");
+		assert.equal(fork.metadata.workspaceLaunch, "godot");
 		assert.equal(fork.metadata.workspaceId, "workspace-a");
 		assert.equal(fork.metadata.pinned, undefined);
 		assert.deepEqual(fork.metadata.forkedFrom, {

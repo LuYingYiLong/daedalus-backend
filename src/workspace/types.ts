@@ -1,6 +1,8 @@
 export type WorkspaceIcon = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 export type WorkspaceColor = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
+export type WorkspaceLaunchTargetId = "file-explorer" | "terminal" | "vscode" | "visual-studio" | "github-desktop" | "git-bash" | "godot";
+
 export type WorkspaceCapabilityStatus = "available" | "unavailable" | "unknown";
 
 export type WorkspaceSourceCapabilities = {

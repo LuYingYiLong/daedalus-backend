@@ -262,7 +262,8 @@ test("session store persists frontend session metadata", async (): Promise<void>
 			chatMode: "ask",
 			approvalMode: "manual",
 			workflowTodoCollapsed: true,
-			workflowTodoDismissedKey: "agent-loop:run-a"
+			workflowTodoDismissedKey: "agent-loop:run-a",
+			workspaceLaunch: "godot"
 		});
 
 		assert.equal(metadata.provider, "moonshot");
@@ -271,6 +272,7 @@ test("session store persists frontend session metadata", async (): Promise<void>
 		assert.equal(metadata.approvalMode, "manual");
 		assert.equal(metadata.workflowTodoCollapsed, true);
 		assert.equal(metadata.workflowTodoDismissedKey, "agent-loop:run-a");
+		assert.equal(metadata.workspaceLaunch, "godot");
 
 		await store.saveSession(metadata.id, [], {
 			provider: "deepseek",
@@ -278,7 +280,8 @@ test("session store persists frontend session metadata", async (): Promise<void>
 			chatMode: "plan",
 			approvalMode: "auto-safe",
 			workflowTodoCollapsed: false,
-			workflowTodoDismissedKey: null
+			workflowTodoDismissedKey: null,
+			workspaceLaunch: "file-explorer"
 		});
 
 		const opened = await store.openSession(metadata.id);
@@ -288,6 +291,7 @@ test("session store persists frontend session metadata", async (): Promise<void>
 		assert.equal(opened.metadata.approvalMode, "auto-safe");
 		assert.equal(opened.metadata.workflowTodoCollapsed, false);
 		assert.equal(opened.metadata.workflowTodoDismissedKey, null);
+		assert.equal(opened.metadata.workspaceLaunch, "file-explorer");
 	});
 });
 

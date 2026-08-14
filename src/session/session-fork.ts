@@ -348,6 +348,7 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 			reasoningEffort: source.metadata.reasoningEffort,
 			chatMode: source.metadata.chatMode,
 			approvalMode: source.metadata.approvalMode,
+			workspaceLaunch: source.metadata.workspaceLaunch,
 			forkedFrom: origin,
 		},
 	);

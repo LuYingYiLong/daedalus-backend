@@ -458,7 +458,8 @@ test("session create and save schema accept frontend session metadata", (): void
 			title: "Session with UI state",
 			provider: "deepseek",
 			model: "deepseek-v4-pro",
-			chatMode: "agent"
+			chatMode: "agent",
+			workspaceLaunch: "godot"
 		}
 	}).success, true);
 
@@ -481,7 +482,8 @@ test("session create and save schema accept frontend session metadata", (): void
 			model: "kimi-k2.7-code",
 			chatMode: "plan",
 			workflowTodoCollapsed: true,
-			workflowTodoDismissedKey: "agent-loop:run-a"
+			workflowTodoDismissedKey: "agent-loop:run-a",
+			workspaceLaunch: "file-explorer"
 		}
 	}).success, true);
 
@@ -545,6 +547,15 @@ test("session create and save schema accept frontend session metadata", (): void
 		method: "session.save",
 		params: {
 			approvalMode: "always"
+		}
+	}).success, false);
+
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "session-save-bad-workspace-launch",
+		method: "session.save",
+		params: {
+			workspaceLaunch: "not-installed"
 		}
 	}).success, false);
 });

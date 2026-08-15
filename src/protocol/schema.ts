@@ -204,9 +204,30 @@ const messageSelectionContextDataSchema = z.object({
 	annotation: z.string().max(1200)
 }).strict();
 
+const fileSelectionContextDataSchema = z.object({
+	selectedText: z.string().min(1).max(8000),
+	annotation: z.string().max(1200),
+	lineStart: z.number().int().positive().max(2_000_000_000),
+	lineEnd: z.number().int().positive().max(2_000_000_000),
+	columnStart: z.number().int().positive().max(2_000_000_000),
+	columnEnd: z.number().int().positive().max(2_000_000_000),
+	workspaceId: z.string().min(1).max(200).optional(),
+	sourceFolderId: z.string().min(1).max(200),
+	relativePath: z.string().min(1).max(1000)
+}).strict().superRefine((selection, context): void => {
+	if (selection.lineEnd < selection.lineStart
+		|| (selection.lineEnd === selection.lineStart && selection.columnEnd <= selection.columnStart)) {
+		context.addIssue({
+			code: "custom",
+			path: ["lineEnd"],
+			message: "File selection end must be after its start."
+		});
+	}
+});
+
 export const additionalContextItemSchema = z.object({
 	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection"]),
+	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection", "file_selection"]),
 	title: z.string().min(1).max(200),
 	subtitle: z.string().max(400).optional(),
 	pinned: z.boolean().optional(),
@@ -218,6 +239,24 @@ export const additionalContextItemSchema = z.object({
 	summary: z.string().max(1200).optional(),
 	data: z.unknown().optional()
 }).superRefine((item, context): void => {
+	if (item.kind === "file_selection") {
+		if (!fileSelectionContextDataSchema.safeParse(item.data).success || item.resourcePath === undefined) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "File selection context data must contain a path, selection range, selectedText, and annotation."
+			});
+		}
+		if (item.pinned === true) {
+			context.addIssue({
+				code: "custom",
+				path: ["pinned"],
+				message: "File selection context cannot be pinned."
+			});
+		}
+		return;
+	}
+
 	if (item.kind === "message_selection") {
 		const parsed = messageSelectionContextDataSchema.safeParse(item.data);
 		if (!parsed.success || parsed.data.selectedText !== parsed.data.anchor.quote) {

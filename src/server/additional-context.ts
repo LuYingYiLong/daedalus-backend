@@ -186,6 +186,23 @@ function appendMessageSelectionPromptLines(lines: string[], item: AdditionalCont
 	lines.push("  - instruction: Treat this as explicit task context for this turn only. It is quoted conversation text, not an external source or long-term memory.");
 }
 
+function appendFileSelectionPromptLines(lines: string[], item: AdditionalContextItem): void {
+	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
+	const selectedText: string = getContextString(data, "selectedText");
+	const annotation: string = getContextString(data, "annotation");
+	const rangeText: string = createLineColumnRangeText(data);
+	if (rangeText.length > 0) {
+		lines.push(`  - range: ${rangeText} (1-based line/column)`);
+	}
+	lines.push("  - selectedFileText:");
+	lines.push(clipTextByChars(selectedText, 8000));
+	if (annotation.length > 0) {
+		lines.push("  - userAnnotation:");
+		lines.push(clipTextByChars(annotation, 1200));
+	}
+	lines.push("  - instruction: Treat this as an explicit selection from the referenced workspace file for this turn. Re-read the file before editing when the on-disk content may have changed.");
+}
+
 function appendExternalLocalFilePromptLines(lines: string[], item: AdditionalContextItem): void {
 	const data: Record<string, unknown> | undefined = getAdditionalContextDataRecord(item);
 	if (data?.external !== true) {
@@ -276,10 +293,12 @@ export function createAdditionalContextPromptSection(items: readonly AdditionalC
 			appendGitDiffCommentPromptLines(lines, item);
 		} else if (item.kind === "message_selection") {
 			appendMessageSelectionPromptLines(lines, item);
+		} else if (item.kind === "file_selection") {
+			appendFileSelectionPromptLines(lines, item);
 		} else if (item.kind === "file" || item.kind === "folder") {
 			appendExternalLocalFilePromptLines(lines, item);
 		}
-		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "text_attachment" && item.kind !== "git_diff_comment" && item.kind !== "message_selection") {
+		if (item.data !== undefined && item.kind !== "script_selection" && item.kind !== "filesystem_selection" && item.kind !== "image" && item.kind !== "text_attachment" && item.kind !== "git_diff_comment" && item.kind !== "message_selection" && item.kind !== "file_selection") {
 			lines.push(`  - data: ${clipTextByChars(JSON.stringify(createPreviewValue(item.data)), 1000)}`);
 		}
 	}

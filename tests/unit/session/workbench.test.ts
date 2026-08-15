@@ -193,6 +193,41 @@ test("message selections dedupe by anchor and can never be pinned", (): void => 
 	assert.equal((session.workbenchComposer.additionalContext[0]?.data as { annotation?: string }).annotation, "updated");
 });
 
+test("file selections dedupe by path and range and can never be pinned", (): void => {
+	const session = createClientSession(undefined);
+	const selection: AdditionalContextItem = {
+		id: "file-selection-a",
+		kind: "file_selection",
+		title: "player.gd",
+		source: "manual",
+		resourcePath: "res://scripts/player.gd",
+		pinned: true,
+		data: {
+			selectedText: "velocity = speed",
+			annotation: "first",
+			lineStart: 42,
+			lineEnd: 42,
+			columnStart: 2,
+			columnEnd: 18,
+			sourceFolderId: "source-a",
+			relativePath: "scripts/player.gd"
+		}
+	};
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "addOrReplace", item: selection } });
+	applyWorkbenchPatch(session, {
+		additionalContextAction: {
+			action: "addOrReplace",
+			item: { ...selection, id: "file-selection-b", data: { ...(selection.data as Record<string, unknown>), annotation: "updated" } }
+		}
+	});
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "pin", contextId: "file-selection-a", pinned: true } });
+
+	assert.equal(session.workbenchComposer.additionalContext.length, 1);
+	assert.equal(session.workbenchComposer.additionalContext[0]?.id, "file-selection-a");
+	assert.equal(session.workbenchComposer.additionalContext[0]?.pinned, undefined);
+	assert.equal((session.workbenchComposer.additionalContext[0]?.data as { annotation?: string }).annotation, "updated");
+});
+
 test("workbench snapshot derives active run and pending approval shape", (): void => {
 	const session = createClientSession(undefined);
 	session.activeRunRequestId = "run-1";

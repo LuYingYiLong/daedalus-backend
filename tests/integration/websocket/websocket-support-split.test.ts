@@ -157,6 +157,32 @@ test("additional context injects message selections as turn-only task context", 
 	assert.doesNotMatch(section, /"anchor"/u);
 });
 
+test("additional context injects workspace file selections with path, range, and annotation", (): void => {
+	const section: string = createAdditionalContextPromptSection([{
+		id: "file-selection-1",
+		kind: "file_selection",
+		source: "manual",
+		title: "player.gd",
+		resourcePath: "res://scripts/player.gd",
+		data: {
+			selectedText: "velocity = speed",
+			annotation: "Use the configured acceleration here.",
+			lineStart: 42,
+			lineEnd: 42,
+			columnStart: 2,
+			columnEnd: 18,
+			sourceFolderId: "source-a",
+			relativePath: "scripts/player.gd"
+		}
+	}]);
+
+	assert.match(section, /resourcePath: res:\/\/scripts\/player\.gd/u);
+	assert.match(section, /range: 42:2-42:18/u);
+	assert.match(section, /selectedFileText:\s+velocity = speed/u);
+	assert.match(section, /Use the configured acceleration here/u);
+	assert.doesNotMatch(section, /"selectedText"/u);
+});
+
 test("additional context preserves external absolute file references", (): void => {
 	const section: string = createAdditionalContextPromptSection([{
 		id: "external-file-1",

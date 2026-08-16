@@ -15,17 +15,28 @@ test("general settings default next-step hints to disabled and persist updates",
 
 		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, false);
 
-		const saved = await store.updateGeneralSettings({ nextStepHintsEnabled: false });
+		const saved = await store.updateGeneralSettings({
+			nextStepHintsEnabled: false,
+			fontFamily: '"Inter", sans-serif',
+			fontFamilyCode: '"JetBrains Mono", monospace'
+		});
 		assert.equal(saved.schemaVersion, 2);
 		assert.equal(saved.nextStepHintsEnabled, false);
+		assert.equal(saved.fontFamily, '"Inter", sans-serif');
+		assert.equal(saved.fontFamilyCode, '"JetBrains Mono", monospace');
 		assert.equal(saved.godotExecutablePath, null);
 		assert.equal(saved.godotExecutableStatus, "unconfigured");
 		assert.notEqual(saved.updatedAt, "");
 
 		const rawConfig: string = await readFile(appPaths.getGeneralSettingsConfigPath(), "utf8");
 		assert.match(rawConfig, /"nextStepHintsEnabled": false/u);
+		assert.equal(rawConfig.includes('"fontFamily": "\\"Inter\\", sans-serif"'), true);
 		assert.equal(rawConfig.endsWith("\n"), true);
 		assert.equal((await store.getGeneralSettings()).nextStepHintsEnabled, false);
+		await assert.rejects(
+			() => store.updateGeneralSettings({ fontFamily: 'Inter; color: red' }),
+			/fontFamily contains invalid CSS/u
+		);
 	} finally {
 		if (previousUserProfile === undefined) {
 			delete process.env.USERPROFILE;
@@ -55,6 +66,8 @@ test("general settings fallback to defaults for invalid config without compatibi
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
 			nextStepHintsEnabled: false,
+			fontFamily: store.DEFAULT_FONT_FAMILY,
+			fontFamilyCode: store.DEFAULT_FONT_FAMILY_CODE,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -89,6 +102,8 @@ test("general settings ignores v1 config and rejects an invalid Godot executable
 		assert.deepEqual(await store.getGeneralSettings(), {
 			schemaVersion: 2,
 			nextStepHintsEnabled: false,
+			fontFamily: store.DEFAULT_FONT_FAMILY,
+			fontFamilyCode: store.DEFAULT_FONT_FAMILY_CODE,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",

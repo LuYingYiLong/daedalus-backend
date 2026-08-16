@@ -607,9 +607,19 @@ test("general settings update accepts next-step hint preference", (): void => {
 		id: "general-settings-update",
 		method: "generalSettings.update",
 		params: {
-			nextStepHintsEnabled: false
+			nextStepHintsEnabled: false,
+			fontFamily: '"Inter", sans-serif',
+			fontFamilyCode: '"JetBrains Mono", monospace'
 		}
 	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "general-settings-update-invalid-font",
+		method: "generalSettings.update",
+		params: {
+			fontFamily: "Inter; color: red"
+		}
+	}).success, false);
 });
 
 test("web search settings get and update are accepted", (): void => {

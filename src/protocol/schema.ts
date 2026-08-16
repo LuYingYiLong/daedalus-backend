@@ -50,6 +50,14 @@ const providerWebsiteUrlSchema = z.string()
 		}
 	}, "Provider website URL must use http or https.");
 
+const fontFamilySchema = z.string()
+	.trim()
+	.max(512)
+	.refine((value: string): boolean => {
+		return !/[\u0000-\u001f\u007f;{}<>]/u.test(value)
+			&& !/(?:url|expression)\s*\(/iu.test(value);
+	}, "Font family contains invalid CSS syntax.");
+
 const imageContextDataSchema = z.object({
 	mimeType: z.enum(SUPPORTED_IMAGE_MIME_TYPES as [string, ...string[]]),
 	dataUrl: z.string().min(1).max(1_500_000).optional(),
@@ -941,6 +949,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("generalSettings.update"),
 		params: z.object({
 			nextStepHintsEnabled: z.boolean().optional(),
+			fontFamily: fontFamilySchema.optional(),
+			fontFamilyCode: fontFamilySchema.optional(),
 			godotExecutablePath: z.string().min(1).nullable().optional(),
 		}),
 	}),

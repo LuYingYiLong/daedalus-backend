@@ -19,6 +19,7 @@ import {
 	type TimelinePlanApproval,
 	type TimelinePlanClarification
 } from "./timeline-blocks.js";
+import { estimateTimelineValueBytes, TimelineCache, type TimelineCacheStats } from "./timeline-cache.js";
 import { notifySessionDeleted } from "../session-search/lifecycle.js";
 
 const SESSIONS_DIR: string = getDefaultSessionsDir();
@@ -210,7 +211,7 @@ export type SessionSummary = {
 	generatedAt: string;
 };
 
-const timelineCacheBySessionId: Map<string, ReturnType<typeof buildCanonicalTimelineBlocks>> = new Map();
+const timelineCacheBySessionId: TimelineCache<ReturnType<typeof buildCanonicalTimelineBlocks>> = new TimelineCache();
 const transcriptWriteQueuesBySessionId: Map<string, Promise<void>> = new Map();
 
 function assertSafeSessionId(sessionId: string): string {
@@ -256,6 +257,10 @@ function getArchivedSessionDir(sessionId: string): string {
 
 function invalidateTimelineCache(sessionId: string): void {
 	timelineCacheBySessionId.delete(assertSafeSessionId(sessionId));
+}
+
+export function getTimelineCacheStats(): TimelineCacheStats {
+	return timelineCacheBySessionId.stats();
 }
 
 async function enqueueTranscriptWrite<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
@@ -421,7 +426,7 @@ function getTimelineBuildResult(stored: StoredSession): ReturnType<typeof buildC
 		return cached;
 	}
 	const result = buildCanonicalTimelineBlocks(stored);
-	timelineCacheBySessionId.set(stored.metadata.id, result);
+	timelineCacheBySessionId.set(stored.metadata.id, result, estimateTimelineValueBytes(result));
 	return result;
 }
 

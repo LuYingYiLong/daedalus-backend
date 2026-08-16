@@ -13,7 +13,7 @@ import { startStudioParentMonitor } from "./runtime/parent-monitor.js";
 import { registerBackendShutdownHandler } from "./runtime/shutdown.js";
 import { closeSessionDatabases } from "./session/session-database.js";
 import { cleanupUnsentSessionAttachments } from "./session/session-attachments.js";
-import { deleteSession, listTemporarySessions } from "./session/session-store.js";
+import { deleteSession, getTimelineCacheStats, listTemporarySessions } from "./session/session-store.js";
 import { initializeProviderCustomizations } from "./providers/provider-customizations-store.js";
 import { getBackendPortFromEnv } from "./server/backend-runtime.js";
 import { createServer, waitForServerListening } from "./server/websocket-server.js";
@@ -30,6 +30,7 @@ import { sessionSearchService } from "./session-search/service.js";
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
 const SHARED_RUNTIME_IDLE_POLL_MS: number = 5_000;
+const MEMORY_DIAGNOSTICS_INTERVAL_MS: number = 30_000;
 
 export type BackendApplication = {
 	server: WebSocketServer;
@@ -148,10 +149,24 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		}, "Server started without all MCP services available");
 	});
 	startSessionSearchPrebuildScheduler();
+	let memoryDiagnosticsTimer: ReturnType<typeof setInterval> | null = null;
+	if (process.env.DAEDALUS_MEMORY_DIAGNOSTICS === "1") {
+		memoryDiagnosticsTimer = setInterval((): void => {
+			logger.info("memory", "snapshot", {
+				...process.memoryUsage(),
+				timelineCache: getTimelineCacheStats()
+			});
+		}, MEMORY_DIAGNOSTICS_INTERVAL_MS);
+		memoryDiagnosticsTimer.unref();
+	}
 	let closePromise: Promise<void> | null = null;
 	const close = async (reason: string = "requested"): Promise<void> => {
 		closePromise ??= (async (): Promise<void> => {
 			stopSessionSearchPrebuildScheduler();
+			if (memoryDiagnosticsTimer !== null) {
+				clearInterval(memoryDiagnosticsTimer);
+				memoryDiagnosticsTimer = null;
+			}
 			logger.info("backend", "shutdown_started", { reason });
 			const timeout = setTimeout((): void => {
 				logger.error("backend", "shutdown_timeout", new Error("Backend graceful shutdown timed out."));

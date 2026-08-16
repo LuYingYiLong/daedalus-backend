@@ -327,6 +327,26 @@ test("session rewind uses event-only retry checkpoints to remove later messages"
 	});
 });
 
+test("session timeline cache exposes bounded runtime statistics", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const metadata = await store.createSession("Cache session");
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "cache me",
+			requestId: "cache-request",
+			createdAt: "2026-07-03T00:00:00.000Z"
+		});
+		await store.getSessionTimelineNavigationIndex(metadata.id);
+		await store.getSessionTimelineNavigationIndex(metadata.id);
+		const stats = store.getTimelineCacheStats();
+		assert.equal(stats.entryCount, 1);
+		assert.equal(stats.hits, 1);
+		assert.ok(stats.bytes > 0);
+		await store.deleteSession(metadata.id);
+		assert.equal(store.getTimelineCacheStats().entryCount, 0);
+	});
+});
+
 test("session rewind removes branch-owned plan, diff, run, and goal state", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const metadata = await store.createSession("Branch cleanup session");

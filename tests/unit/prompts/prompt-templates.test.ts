@@ -108,11 +108,13 @@ test("execution and communication anchors are CORE requirements rather than a Go
 	const godotPrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/godot-assistant.md"), "utf8");
 
 	assert.match(corePrompt, /#### 执行与沟通锚点/);
-	assert.match(corePrompt, /非平凡任务开始时，用 1-3 句话/);
-	assert.match(corePrompt, /用户可见的正文消息中/);
-	assert.match(corePrompt, /不能只写在 thinking\/reasoning 中/);
+	assert.match(corePrompt, /非平凡任务开始时，必须在用户可见的正文消息中用 1 句话、复杂任务最多 2 句话/);
+	assert.match(corePrompt, /同一条用户可见的正文开场消息中先直接回答/);
+	assert.match(corePrompt, /这些内容不得只写在 thinking\/reasoning 中/);
+	assert.match(corePrompt, /同一阶段、同一目标的连续工具调用视为一组/);
+	assert.match(corePrompt, /只有进入新阶段、工具结果改变判断、需要审批或澄清、发生等待或失败时/);
 	assert.match(corePrompt, /最终回复说明实际完成内容、验证状态/);
-	assert.match(corePrompt, /业务实现任务应先直接回答用户准备如何处理/);
+	assert.match(corePrompt, /业务实现任务必须在同一条用户可见的正文开场消息中先直接回答准备如何处理/);
 	assert.match(corePrompt, /超过 3 个有实际意义的步骤/);
 	assert.match(corePrompt, /Todo 只是用户可见的过程辅助/);
 	assert.match(corePrompt, /自动展开待办列表/);

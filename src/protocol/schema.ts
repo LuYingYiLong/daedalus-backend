@@ -234,9 +234,25 @@ const fileSelectionContextDataSchema = z.object({
 	}
 });
 
+const webElementContextDataSchema = z.object({
+	url: z.url().max(2048).refine((value: string): boolean => value.startsWith("https://") || value.startsWith("http://"), "Web element URL must use HTTP or HTTPS."),
+	pageTitle: z.string().max(300),
+	selector: z.string().min(1).max(1000),
+	tagName: z.string().min(1).max(80),
+	role: z.string().max(120),
+	accessibleName: z.string().max(500),
+	selectedText: z.string().max(8000),
+	attributes: z.record(z.string().min(1).max(120), z.string().max(500)).superRefine((attributes, context): void => {
+		if (Object.keys(attributes).length > 20) {
+			context.addIssue({ code: "custom", message: "Web element attributes cannot contain more than 20 entries." });
+		}
+	}),
+	annotation: z.string().max(1200)
+}).strict();
+
 export const additionalContextItemSchema = z.object({
 	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection", "file_selection"]),
+	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection", "file_selection", "web_element"]),
 	title: z.string().min(1).max(200),
 	subtitle: z.string().max(400).optional(),
 	pinned: z.boolean().optional(),
@@ -248,6 +264,24 @@ export const additionalContextItemSchema = z.object({
 	summary: z.string().max(1200).optional(),
 	data: z.unknown().optional()
 }).superRefine((item, context): void => {
+	if (item.kind === "web_element") {
+		if (!webElementContextDataSchema.safeParse(item.data).success) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "Web element context data must contain a validated page and element snapshot."
+			});
+		}
+		if (item.pinned === true) {
+			context.addIssue({
+				code: "custom",
+				path: ["pinned"],
+				message: "Web element context cannot be pinned."
+			});
+		}
+		return;
+	}
+
 	if (item.kind === "file_selection") {
 		if (!fileSelectionContextDataSchema.safeParse(item.data).success || item.resourcePath === undefined) {
 			context.addIssue({

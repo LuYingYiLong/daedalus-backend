@@ -228,6 +228,41 @@ test("file selections dedupe by path and range and can never be pinned", (): voi
 	assert.equal((session.workbenchComposer.additionalContext[0]?.data as { annotation?: string }).annotation, "updated");
 });
 
+test("web elements dedupe by URL and selector and can never be pinned", (): void => {
+	const session = createClientSession(undefined);
+	const element: AdditionalContextItem = {
+		id: "web-element-a",
+		kind: "web_element",
+		title: "Submit",
+		source: "manual",
+		pinned: true,
+		data: {
+			url: "https://example.com/form",
+			pageTitle: "Example form",
+			selector: "#submit",
+			tagName: "BUTTON",
+			role: "button",
+			accessibleName: "Submit",
+			selectedText: "Submit",
+			attributes: { id: "submit" },
+			annotation: "first"
+		}
+	};
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "addOrReplace", item: element } });
+	applyWorkbenchPatch(session, {
+		additionalContextAction: {
+			action: "addOrReplace",
+			item: { ...element, id: "web-element-b", data: { ...(element.data as Record<string, unknown>), annotation: "updated" } }
+		}
+	});
+	applyWorkbenchPatch(session, { additionalContextAction: { action: "pin", contextId: "web-element-a", pinned: true } });
+
+	assert.equal(session.workbenchComposer.additionalContext.length, 1);
+	assert.equal(session.workbenchComposer.additionalContext[0]?.id, "web-element-a");
+	assert.equal(session.workbenchComposer.additionalContext[0]?.pinned, undefined);
+	assert.equal((session.workbenchComposer.additionalContext[0]?.data as { annotation?: string }).annotation, "updated");
+});
+
 test("workbench snapshot derives active run and pending approval shape", (): void => {
 	const session = createClientSession(undefined);
 	session.activeRunRequestId = "run-1";

@@ -25,14 +25,12 @@ function stableJson(value: unknown): string {
 }
 
 export function createTerminalCommandFingerprint(args: Record<string, unknown>, workspaceId?: string | undefined): string {
+	const publicArgs: Record<string, unknown> = Object.fromEntries(
+		Object.entries(args).filter(([key]: [string, unknown]): boolean => !key.startsWith("__daedalus"))
+	);
 	return createHash("sha256").update(stableJson({
 		workspaceId: workspaceId ?? null,
-		commandLine: args.commandLine ?? null,
-		cwd: args.cwd ?? null,
-		env: args.env ?? null,
-		executionMode: args.executionMode ?? "wait",
-		timeoutMs: args.timeoutMs ?? null,
-		wakeAfterMs: args.wakeAfterMs ?? null
+		args: publicArgs
 	})).digest("hex");
 }
 

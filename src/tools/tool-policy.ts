@@ -32,8 +32,29 @@ const AUTO_SAFE_FILE_DELETE_TOOLS: ReadonlySet<string> = new Set([
 	"mcp_godot_delete_file"
 ]);
 
+const SANDBOXED_PROCESS_TOOLS: ReadonlySet<string> = new Set([
+	"mcp_terminal_run_command",
+	"mcp_terminal_run_safe_preset",
+	"mcp_terminal_run_write_preset",
+	"mcp_terminal_run_godot_scene_script",
+	"mcp_godot_launch_editor",
+	"mcp_godot_run_project",
+	"mcp_godot_get_runtime_status",
+	"mcp_godot_get_godot_version",
+	"mcp_godot_get_uid",
+	"mcp_godot_resave_resource",
+	"mcp_godot_update_project_uids",
+	"mcp_godot_save_scene_variant",
+	"mcp_godot_load_sprite_texture",
+	"mcp_godot_export_mesh_library"
+]);
+
 export function isAutoSafeFileDeleteTool(toolName: string): boolean {
 	return AUTO_SAFE_FILE_DELETE_TOOLS.has(toolName);
+}
+
+export function isSandboxedProcessToolName(toolName: string): boolean {
+	return SANDBOXED_PROCESS_TOOLS.has(toolName);
 }
 
 export function getToolPolicy(toolName: string, _workspaceId?: string | undefined): ToolPolicy | undefined {

@@ -175,14 +175,19 @@ export function materializePreset(preset: CommandPreset, context?: TerminalPrese
 export function resolveWorkingDirectory(workingDirectory: string | undefined, preset: CommandPreset, context?: TerminalPresetContext | undefined): string {
 	const requestedPath: string = workingDirectory ?? preset.workingDirectory;
 	const resolvedPath: string = path.resolve(requestedPath);
-
-	for (const allowedRoot of createAllowedWorkingRoots(context)) {
-		if (isPathInsideRoot(resolvedPath, allowedRoot)) {
-			return resolvedPath;
-		}
+	const resolvedContext: ResolvedTerminalPresetContext = resolveContext(context);
+	const intendedRoot: string = preset.name === "backend.typecheck"
+		? resolvedContext.backendDir
+		: WORKSPACE_PRESET_NAMES.has(preset.name)
+			? resolvedContext.workspaceRoot || resolvedContext.backendDir
+			: preset.requiresGodotProject === true
+				? resolvedContext.godotProjectPath || resolvedContext.backendDir
+				: preset.workingDirectory;
+	if (isPathInsideRoot(resolvedPath, path.resolve(intendedRoot))) {
+		return resolvedPath;
 	}
 
-	throw new Error(`Working directory is outside allowed roots: ${resolvedPath}`);
+	throw new Error(`Working directory is outside the preset root: ${resolvedPath}`);
 }
 
 function toProjectRelativePath(resourcePath: string, context?: TerminalPresetContext | undefined): string {

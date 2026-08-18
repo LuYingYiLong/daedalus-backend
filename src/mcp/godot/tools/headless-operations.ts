@@ -1,10 +1,14 @@
-import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import * as path from "node:path";
-import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { GODOT_EXECUTABLE } from "../../terminal/presets.js";
+import { runCommandInvocationWait, type CommandInvocation } from "../../terminal/process-runner.js";
+import {
+	resolveSandboxedProcessInvocation,
+	type ProcessInvocationResolution,
+	type SandboxExecutionInput
+} from "../../terminal/sandbox-execution.js";
+import { GODOT_EXECUTABLE, describePresetCommand } from "../../terminal/presets.js";
 import {
 	asJsonTextResult,
 	isPathInsideRoot,
@@ -13,7 +17,6 @@ import {
 } from "../context.js";
 import { materializeRuntimeAsset } from "../../../runtime/runtime-assets.js";
 
-const execFileAsync = promisify(execFile);
 const HEADLESS_OPERATION_TIMEOUT_MS: number = 120_000;
 const HEADLESS_WRITE_EXTENSIONS: ReadonlySet<string> = new Set([".tscn", ".tres", ".res"]);
 
@@ -36,6 +39,7 @@ export async function buildGodotHeadlessOperationInvocation(operation: Record<st
 	args: string[];
 	cwd: string;
 	operationJson: string;
+	runtimeAssetPath: string;
 }> {
 	const operationJson: string = JSON.stringify(operation);
 	const operationsScript = await materializeRuntimeAsset("godot.operationsScript");
@@ -49,7 +53,8 @@ export async function buildGodotHeadlessOperationInvocation(operation: Record<st
 			"--", operationJson
 		],
 		cwd: projectRoot,
-		operationJson
+		operationJson,
+		runtimeAssetPath: operationsScript.path
 	};
 }
 
@@ -126,30 +131,87 @@ async function assertWritableResourcePath(resourcePath: string, allowedExtension
 	return `res://${normalizedPath}`;
 }
 
-export async function runGodotHeadlessOperation(operation: Record<string, unknown>): Promise<HeadlessOperationResult> {
+export async function runGodotHeadlessOperation(
+	operation: Record<string, unknown>,
+	executionInput: SandboxExecutionInput & Record<string, unknown> = {}
+): Promise<HeadlessOperationResult> {
 	const operationName: unknown = operation.operation;
 	if (typeof operationName !== "string" || operationName.length === 0) {
 		throw new Error("Missing required operation name");
 	}
 
 	const invocation = await buildGodotHeadlessOperationInvocation(operation);
+	const command: string[] = [invocation.executable, ...invocation.args];
+	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+		input: executionInput,
+		command: { kind: "argv", command: invocation.executable, args: invocation.args },
+		commandLine: describePresetCommand(command),
+		cwd: invocation.cwd,
+		workspaceRoot: projectRoot,
+		readOnlyPaths: [
+			path.dirname(invocation.runtimeAssetPath),
+			...(path.isAbsolute(invocation.executable) ? [path.dirname(invocation.executable)] : [])
+		],
+		workspaceId: typeof executionInput.__daedalusWorkspaceId === "string"
+			? executionInput.__daedalusWorkspaceId
+			: undefined
+	});
+	if (!invocationResolution.ok) {
+		const stderr: string = String(invocationResolution.result.error ?? "OS sandbox is unavailable");
+		const code: string = String(invocationResolution.result.code ?? "sandbox_unavailable");
+		return enrichHeadlessResult({
+			ok: false,
+			operation: operationName,
+			exitCode: null,
+			stdout: "",
+			stderr
+		}, {
+			ok: false,
+			code,
+			failureCode: code,
+			failure: {
+				code,
+				category: "policy",
+				message: stderr,
+				retryable: false,
+				artifactRefs: []
+			}
+		});
+	}
+	const executableInvocation: CommandInvocation = {
+		...invocationResolution.invocation,
+		godotProjectPath: projectRoot,
+		godotExecutablePath: GODOT_EXECUTABLE
+	};
 
 	try {
-		const result = await execFileAsync(invocation.executable, invocation.args, {
+		const result = await runCommandInvocationWait({
+			presetName: "godot.headless_operation",
+			invocation: executableInvocation,
 			cwd: invocation.cwd,
-			timeout: HEADLESS_OPERATION_TIMEOUT_MS,
-			maxBuffer: 2 * 1024 * 1024
+			timeoutMs: HEADLESS_OPERATION_TIMEOUT_MS
 		});
 		const parsedEvents: unknown[] = parseJsonObjectsFromOutput(result.stdout);
-		const parsed: unknown = parsedEvents.at(-1) ?? null;
+		const parsed: unknown = parsedEvents.at(-1) ?? (result.ok ? null : {
+			ok: false,
+			code: "godot_runtime_unavailable",
+			failureCode: "godot_runtime_unavailable",
+			failure: {
+				code: "godot_runtime_unavailable",
+				category: "environment",
+				message: result.stderr || "Godot headless operation failed",
+				retryable: true,
+				artifactRefs: []
+			}
+		});
 		return enrichHeadlessResult({
-			ok: parsedEvents.some((event: unknown): boolean =>
+			ok: result.ok && parsedEvents.some((event: unknown): boolean =>
 				typeof event === "object" && event !== null && !Array.isArray(event) && (event as Record<string, unknown>).ok === true
 			),
 			operation: operationName,
-			exitCode: 0,
+			exitCode: result.exitCode,
 			stdout: result.stdout,
-			stderr: result.stderr,
+			stderr: result.stderr
 		}, parsed);
 	} catch (error: unknown) {
 		const execError = error as { code?: number | string | null; stdout?: string; stderr?: string; message?: string; killed?: boolean };
@@ -192,12 +254,12 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 			description: "通过 Godot ResourceLoader 读取资源 UID。",
 			inputSchema: z.object({
 				resourcePath: resourcePathSchema
-			})
+			}).passthrough()
 		},
-		async ({ resourcePath }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "get_uid",
-			resource_path: await assertReadableResourcePath(resourcePath)
-		}))
+			resource_path: await assertReadableResourcePath(input.resourcePath)
+		}, input as typeof input & SandboxExecutionInput))
 	);
 
 	server.registerTool(
@@ -207,12 +269,12 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 			description: "通过 Godot ResourceSaver 重新保存资源，用于刷新 UID/import 相关元数据。需要审批。",
 			inputSchema: z.object({
 				resourcePath: resourcePathSchema
-			})
+			}).passthrough()
 		},
-		async ({ resourcePath }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "resave_resource",
-			resource_path: await assertWritableResourcePath(resourcePath)
-		}))
+			resource_path: await assertWritableResourcePath(input.resourcePath)
+		}, input as typeof input & SandboxExecutionInput))
 	);
 
 	server.registerTool(
@@ -222,12 +284,12 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 			description: "递归重新保存当前项目中的 .tscn/.tres/.res 资源，用于刷新 UID 引用。需要审批。",
 			inputSchema: z.object({
 				subdir: z.string().optional()
-			})
+			}).passthrough()
 		},
-		async ({ subdir }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "update_project_uids",
-			subdir: subdir === undefined ? "" : await toProjectResPath(subdir)
-		}))
+			subdir: input.subdir === undefined ? "" : await toProjectResPath(input.subdir)
+		}, input as typeof input & SandboxExecutionInput))
 	);
 
 	server.registerTool(
@@ -238,13 +300,13 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 			inputSchema: z.object({
 				scenePath: resourcePathSchema,
 				outputPath: resourcePathSchema
-			})
+			}).passthrough()
 		},
-		async ({ scenePath, outputPath }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "save_scene_variant",
-			scene_path: await assertReadableResourcePath(scenePath),
-			output_path: await assertWritableResourcePath(outputPath, new Set([".tscn"]))
-		}))
+			scene_path: await assertReadableResourcePath(input.scenePath),
+			output_path: await assertWritableResourcePath(input.outputPath, new Set([".tscn"]))
+		}, input as typeof input & SandboxExecutionInput))
 	);
 
 	server.registerTool(
@@ -256,14 +318,14 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 				scenePath: resourcePathSchema,
 				nodePath: nodePathSchema,
 				texturePath: resourcePathSchema
-			})
+			}).passthrough()
 		},
-		async ({ scenePath, nodePath, texturePath }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "load_sprite_texture",
-			scene_path: await assertWritableResourcePath(scenePath, new Set([".tscn"])),
-			node_path: nodePath,
-			texture_path: await assertReadableResourcePath(texturePath)
-		}))
+			scene_path: await assertWritableResourcePath(input.scenePath, new Set([".tscn"])),
+			node_path: input.nodePath,
+			texture_path: await assertReadableResourcePath(input.texturePath)
+		}, input as typeof input & SandboxExecutionInput))
 	);
 
 	server.registerTool(
@@ -275,13 +337,13 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 				scenePath: resourcePathSchema,
 				outputPath: resourcePathSchema,
 				meshItemNames: meshItemNamesSchema
-			})
+			}).passthrough()
 		},
-		async ({ scenePath, outputPath, meshItemNames }) => asJsonTextResult(await runGodotHeadlessOperation({
+		async (input) => asJsonTextResult(await runGodotHeadlessOperation({
 			operation: "export_mesh_library",
-			scene_path: await assertReadableResourcePath(scenePath),
-			output_path: await assertWritableResourcePath(outputPath, new Set([".tres", ".res"])),
-			mesh_item_names: meshItemNames ?? []
-		}))
+			scene_path: await assertReadableResourcePath(input.scenePath),
+			output_path: await assertWritableResourcePath(input.outputPath, new Set([".tres", ".res"])),
+			mesh_item_names: input.meshItemNames ?? []
+		}, input as typeof input & SandboxExecutionInput))
 	);
 }

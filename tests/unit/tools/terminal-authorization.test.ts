@@ -75,3 +75,32 @@ test("terminal command authorization rejects workspace and argument changes", ()
 		/workspace does not match/u
 	);
 });
+
+test("terminal authorization binds preset, scene operation, and Godot runtime arguments", (): void => {
+	for (const [args, changedArgs] of [
+		[
+			{ presetName: "workspace.typecheck", sourceFolderId: "source-a", workingDirectory: "." },
+			{ presetName: "workspace.typecheck", sourceFolderId: "source-b", workingDirectory: "." }
+		],
+		[
+			{ operationJson: '{"operation":"rename_node","name":"Player"}' },
+			{ operationJson: '{"operation":"rename_node","name":"Enemy"}' }
+		],
+		[
+			{ scenePath: "res://main.tscn", debug: true },
+			{ scenePath: "res://admin.tscn", debug: true }
+		]
+	] as const) {
+		const authorization = createTerminalCommandAuthorization({
+			source: "user",
+			requestId: "request-process",
+			toolCallId: "call-process",
+			workspaceId: "workspace-a",
+			args
+		});
+		assert.match(
+			rejectionReason(consumeTerminalCommandAuthorization(authorization, changedArgs, "workspace-a")),
+			/changed after it was authorized/u
+		);
+	}
+});

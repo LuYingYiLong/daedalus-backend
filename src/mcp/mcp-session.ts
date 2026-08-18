@@ -11,6 +11,38 @@ export type McpCallToolOptions = {
 	onProgress?: ((progress: McpProgressNotification) => void) | undefined;
 };
 
+const WINDOWS_MCP_ENV_ALLOWLIST: readonly string[] = [
+	"PATH",
+	"Path",
+	"PATHEXT",
+	"SystemRoot",
+	"WINDIR",
+	"ComSpec",
+	"TEMP",
+	"TMP",
+	"USERPROFILE",
+	"APPDATA",
+	"LOCALAPPDATA"
+];
+const UNIX_MCP_ENV_ALLOWLIST: readonly string[] = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SHELL"];
+
+export function createMcpProcessEnvironment(
+	configuredEnv: Record<string, string> | undefined,
+	sourceEnv: NodeJS.ProcessEnv = process.env,
+	platform: NodeJS.Platform = process.platform
+): Record<string, string> {
+	const allowedNames: readonly string[] = platform === "win32" ? WINDOWS_MCP_ENV_ALLOWLIST : UNIX_MCP_ENV_ALLOWLIST;
+	const inheritedEnvironment: Record<string, string> = {};
+	for (const name of allowedNames) {
+		const value: string | undefined = sourceEnv[name];
+		if (value !== undefined) inheritedEnvironment[name] = value;
+	}
+	return {
+		...inheritedEnvironment,
+		...(configuredEnv ?? {})
+	};
+}
+
 export class McpSession {
 	private client: Client;
 	private transport: StdioClientTransport | StreamableHTTPClientTransport | undefined;
@@ -41,10 +73,7 @@ export class McpSession {
 			this.transport = new StdioClientTransport({
 				command: this.config.command,
 				args: this.config.args ?? [],
-				env: {
-					...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-					...this.config.env
-				} as Record<string, string>
+				env: createMcpProcessEnvironment(this.config.env)
 			});
 		}
 

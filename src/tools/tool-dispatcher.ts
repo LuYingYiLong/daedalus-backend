@@ -1,7 +1,7 @@
 import type { ChatCompletionMessageToolCall, ChatCompletionToolMessageParam } from "openai/resources/chat/completions";
 import type { McpHost } from "../mcp/mcp-host.js";
 import { type ApprovalGateway, type PendingApproval } from "./approval-gateway.js";
-import type { ToolRequiredConsent, ToolReviewAudit } from "./tool-policy.js";
+import { isSandboxedProcessToolName, type ToolRequiredConsent, type ToolReviewAudit } from "./tool-policy.js";
 import type { DownloadAuthorizationScope, NetworkAccessRequired } from "./download-authorization.js";
 import { describeToolEvent, type ToolEventDisplay } from "./tool-event-describer.js";
 import { executeLlmToolWithIdempotency } from "./tool-idempotency.js";
@@ -590,7 +590,7 @@ async function executeSingleToolCall(
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}
-		const commandAuthorization: TerminalCommandAuthorization | undefined = functionName === "mcp_terminal_run_command" && decision.review?.decision === "allow"
+		const commandAuthorization: TerminalCommandAuthorization | undefined = isSandboxedProcessToolName(functionName) && decision.review?.decision === "allow"
 			? createTerminalCommandAuthorization({
 				source: decision.review.source,
 				requestId: toolContext?.requestId ?? toolCall.id,

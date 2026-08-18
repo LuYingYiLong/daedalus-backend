@@ -1,5 +1,5 @@
 import type { McpHost } from "../mcp/mcp-host.js";
-import { evaluateToolCall, type ApprovalDecision, type ApprovalMode, type ToolRequiredConsent } from "./tool-policy.js";
+import { evaluateToolCall, isSandboxedProcessToolName, type ApprovalDecision, type ApprovalMode, type ToolRequiredConsent } from "./tool-policy.js";
 import { getEffectiveToolPolicy } from "./tool-policy.js";
 import { isPlanSafeDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { executeLlmToolWithIdempotency, getLlmToolExecutionIdentity } from "./tool-idempotency.js";
@@ -20,6 +20,12 @@ import {
 	type DownloadAuthorizationScope,
 	type NetworkAccessRequired
 } from "./download-authorization.js";
+import {
+	CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX,
+	getSandboxAvailability,
+	UNSANDBOXED_CONSENT_TEXT,
+	type SandboxAvailability
+} from "../mcp/terminal/sandbox-runner.js";
 
 export type PendingApproval = {
 	approvalId: string;
@@ -54,6 +60,7 @@ function collectApprovalArtifactRefs(args: Record<string, unknown>): string[] {
 
 export type ApprovalGatewayOptions = {
 	reviewCommand?: typeof reviewWorkspaceCommand | undefined;
+	resolveSandboxAvailability?: (() => SandboxAvailability) | undefined;
 };
 
 export type ApprovalResult =
@@ -73,10 +80,12 @@ export class ApprovalGateway {
 	private downloadAuthorizations: Map<string, Map<string, DownloadAuthorizationScope>> = new Map();
 	private mode: ApprovalMode;
 	private readonly reviewCommand: typeof reviewWorkspaceCommand;
+	private readonly resolveSandboxAvailability: () => SandboxAvailability;
 
 	constructor(mode: ApprovalMode = "manual", options: ApprovalGatewayOptions = {}) {
 		this.mode = mode;
 		this.reviewCommand = options.reviewCommand ?? reviewWorkspaceCommand;
+		this.resolveSandboxAvailability = options.resolveSandboxAvailability ?? getSandboxAvailability;
 	}
 
 	setMode(mode: ApprovalMode): void {
@@ -184,6 +193,40 @@ export class ApprovalGateway {
 				code: "network_access_required",
 				reason: "Network downloads in terminal commands require explicit download approval. Use mcp_workspace_download_file with a structured URL and workspace target instead."
 			};
+		}
+		if (effectiveMode !== "full-trust" && isSandboxedProcessToolName(llmToolName)) {
+			const availability: SandboxAvailability = this.resolveSandboxAvailability();
+			if (!availability.available) {
+				const deterministicDecision: ApprovalDecision = evaluateToolCall(
+					effectiveMode,
+					llmToolName,
+					args,
+					workspaceId
+				);
+				if (deterministicDecision.action === "deny") {
+					return deterministicDecision;
+				}
+				const existingConsent: ToolRequiredConsent | undefined = deterministicDecision.action === "request_approval"
+					? deterministicDecision.requiredConsent
+					: undefined;
+				const crossWorkspaceTarget: string | undefined = existingConsent?.expectedText.startsWith("ALLOW CROSS-WORKSPACE: ") === true
+					? existingConsent.expectedText.slice("ALLOW CROSS-WORKSPACE: ".length)
+					: undefined;
+				const requiredConsent: ToolRequiredConsent = crossWorkspaceTarget === undefined
+					? {
+						prompt: `The OS sandbox is unavailable. Running this process directly can access files and system resources outside the workspace. ${availability.error}`,
+						expectedText: UNSANDBOXED_CONSENT_TEXT
+					}
+					: {
+						prompt: `${existingConsent!.prompt} The OS sandbox is also unavailable, so this process would run directly on the host. ${availability.error}`,
+						expectedText: `${CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX}${crossWorkspaceTarget}`
+					};
+				return {
+					action: "request_approval",
+					reason: "The OS sandbox is unavailable. Explicit one-shot consent is required before running this process without isolation.",
+					requiredConsent
+				};
+			}
 		}
 		const risk = getEffectiveToolPolicy(llmToolName, args, workspaceId)?.risk;
 		if (
@@ -302,7 +345,7 @@ export class ApprovalGateway {
 		this.pendingApprovals.delete(approvalId);
 		this.grantDownloadAuthorization(pending.downloadAuthorization);
 
-		const commandAuthorization: TerminalCommandAuthorization | undefined = pending.llmToolName === "mcp_terminal_run_command"
+		const commandAuthorization: TerminalCommandAuthorization | undefined = isSandboxedProcessToolName(pending.llmToolName)
 			? createTerminalCommandAuthorization({
 				source: "user",
 				requestId: pending.requestId ?? pending.toolCallId,

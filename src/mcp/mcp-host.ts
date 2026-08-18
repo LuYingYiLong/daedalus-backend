@@ -63,6 +63,18 @@ const CUSTOM_MCP_LIST_TOOLS_TIMEOUT_MS: number = 10_000;
 const CUSTOM_MCP_CLOSE_TIMEOUT_MS: number = 2_000;
 const GLOBAL_CUSTOM_SCOPE_ID: string = "__global_custom_mcp__";
 const TERMINAL_MCP_TIMEOUT_GRACE_MS: number = 30_000;
+const SANDBOXED_GODOT_MCP_TOOLS: ReadonlySet<string> = new Set([
+	"get_runtime_status",
+	"get_godot_version",
+	"launch_editor",
+	"run_project",
+	"get_uid",
+	"resave_resource",
+	"update_project_uids",
+	"save_scene_variant",
+	"load_sprite_texture",
+	"export_mesh_library"
+]);
 
 type McpToolListResult = {
 	tools: Array<{
@@ -1050,6 +1062,14 @@ export class McpHost {
 		const forwardedArgs: Record<string, unknown> = { ...args };
 		delete forwardedArgs.sourceFolderId;
 		delete forwardedArgs.scope;
+		const sandboxedGodotProcess: boolean = serverId === "godot" && SANDBOXED_GODOT_MCP_TOOLS.has(name);
+		if (sandboxedGodotProcess) {
+			if (sourceFolderId !== undefined) forwardedArgs.sourceFolderId = sourceFolderId;
+			if (typeof args.scope === "string") forwardedArgs.scope = args.scope;
+			forwardedArgs.__daedalusWorkspaceId = resolvedWorkspaceId;
+			forwardedArgs.__daedalusApprovalMode = await getApprovalMode();
+			forwardedArgs.__daedalusCommandAuthorization = commandAuthorization;
+		}
 		const sourceScoped: boolean = serverId === "workspace" || serverId === "godot" || serverId === "skills";
 		let routedServerId: string = serverId;
 		if (workspace !== undefined && sourceScoped) {

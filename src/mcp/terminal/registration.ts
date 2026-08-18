@@ -3,10 +3,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
 import { terminalJobStore } from "./job-store.js";
-import { runCommandInvocationWait, runCommandWait, startCommandInvocationJob, startCommandJob, type TerminalOutputListener } from "./process-runner.js";
+import { runCommandInvocationWait, startCommandInvocationJob, type CommandInvocation, type TerminalOutputListener } from "./process-runner.js";
 import { serializeTerminalMcpProgress, type TerminalOutputStream } from "./progress.js";
 import { sanitizeTerminalDisplayText } from "./display-output.js";
-import { createSandboxInvocation } from "./sandbox-runner.js";
+import { CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX, getSandboxAvailability } from "./sandbox-runner.js";
+import {
+	resolveSandboxedProcessInvocation,
+	type ProcessInvocationResolution,
+	type SandboxExecutionInput
+} from "./sandbox-execution.js";
 import {
 	BACKEND_DIR,
 	COMMAND_PRESETS,
@@ -29,7 +34,7 @@ import { findWorkspace, getWorkspaceSourceFolder } from "../../workspace/registr
 import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { CommandPreset, CommandRunInput, PresetRunInput, TerminalCommandResult, TerminalJobRecord } from "./types.js";
 import { logger } from "../../logger.js";
-import { consumeTerminalCommandAuthorization, type TerminalCommandAuthorization } from "./authorization.js";
+import type { TerminalCommandAuthorization } from "./authorization.js";
 import { resolvePresetApplicability } from "./applicability.js";
 import type { ToolApplicabilityCode } from "../../tools/tool-applicability.js";
 
@@ -258,7 +263,7 @@ function createJobStartedResult(record: TerminalJobRecord): Record<string, unkno
 	};
 }
 
-type TerminalInternalInput = {
+type TerminalInternalInput = SandboxExecutionInput & {
 	sourceFolderId?: string | undefined;
 	__daedalusWorkspaceId?: string | undefined;
 	__daedalusSourceFolderId?: string | undefined;
@@ -335,17 +340,6 @@ function annotateTerminalApplicability(result: Record<string, unknown>): Record<
 	return result;
 }
 
-function createCommandLineEnv(inputEnv: Record<string, string> | undefined, trusted: boolean): Record<string, string> | undefined {
-	if (trusted) {
-		return {
-			...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
-			...(inputEnv ?? {})
-		};
-	}
-
-	return inputEnv;
-}
-
 function resolveCommandCwd(input: CommandRunInput & TerminalInternalInput, context: ReturnType<typeof resolveTerminalContext>, allowOutsideWorkspace: boolean): string {
 	const workspaceRoot: string = context.workspaceRoot;
 	if (workspaceRoot.length === 0) {
@@ -375,7 +369,11 @@ async function runCommand(
 	const context = resolveTerminalContext(input);
 	const trusted: boolean = input.__daedalusApprovalMode === "full-trust";
 	const workspaceRoot: string = context.workspaceRoot;
-	const hasCrossWorkspaceConsent: boolean = typeof input.__daedalusConsentText === "string" && input.__daedalusConsentText.startsWith("ALLOW CROSS-WORKSPACE: ");
+	const hasCrossWorkspaceConsent: boolean = typeof input.__daedalusConsentText === "string"
+		&& (
+			input.__daedalusConsentText.startsWith("ALLOW CROSS-WORKSPACE: ")
+			|| input.__daedalusConsentText.startsWith(CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX)
+		);
 	const startedAtMs: number = Date.now();
 
 	if (input.commandLine.trim().length === 0) {
@@ -404,67 +402,19 @@ async function runCommand(
 		risk: "verify"
 	}, input.executionMode === "job" ? DEFAULT_JOB_TIMEOUT_MS : resolveDefaultCommandTimeoutMs(input.commandLine));
 	const wakeAfterMs: number | undefined = normalizeWakeAfterMs(input.wakeAfterMs);
-	const commonInvocation = {
+	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+		input: input as TerminalInternalInput & Record<string, unknown>,
+		command: { kind: "shell", commandLine: input.commandLine },
 		commandLine: input.commandLine,
-		sandboxMode: trusted ? "full-trust" as const : "os-sandbox" as const,
-		workspaceId: context.workspace?.id ?? context.workspaceId,
+		cwd,
 		workspaceRoot: sandboxWorkspaceRoot,
-		trusted,
-		consentText: input.__daedalusConsentText
-	};
-	const executableInvocation = trusted
-		? {
-			...commonInvocation,
-			command: input.commandLine,
-			args: [],
-			shell: true,
-			env: createCommandLineEnv(input.env, true)
-		}
-		: (() => {
-			const sandboxInvocation = createSandboxInvocation({
-			commandLine: input.commandLine,
-			cwd,
-			workspaceRoot: sandboxWorkspaceRoot,
-			env: createCommandLineEnv(input.env, false)
-			});
-			if (sandboxInvocation.available === false) {
-				const directAuthorization = consumeTerminalCommandAuthorization(
-					input.__daedalusCommandAuthorization,
-					input as unknown as Record<string, unknown>,
-					context.workspace?.id ?? context.workspaceId
-				);
-				if (directAuthorization.allowed) {
-					return {
-						...commonInvocation,
-						command: input.commandLine,
-						args: [],
-						shell: true,
-						env: createCommandLineEnv(input.env, false),
-						sandboxMode: "approved-unsandboxed" as const,
-						authorizationSource: directAuthorization.source
-					};
-				}
-				return {
-					ok: false,
-					error: sandboxInvocation.error,
-					code: "sandbox_unavailable",
-					sandboxMode: sandboxInvocation.sandboxMode,
-					workspaceId: context.workspace?.id ?? context.workspaceId,
-					workspaceRoot: sandboxWorkspaceRoot,
-					cwd
-				} as const;
-			}
-			return {
-			...commonInvocation,
-				command: sandboxInvocation.command,
-				args: sandboxInvocation.args,
-				env: sandboxInvocation.env
-			};
-		})();
-
-	if ("ok" in executableInvocation && executableInvocation.ok === false) {
-		return executableInvocation;
+		workspaceId: context.workspace?.id ?? context.workspaceId,
+		env: input.env
+	});
+	if (!invocationResolution.ok) {
+		return invocationResolution.result;
 	}
+	const executableInvocation: CommandInvocation = invocationResolution.invocation;
 
 	if (input.executionMode === "job") {
 		const record: TerminalJobRecord = startCommandInvocationJob({
@@ -509,8 +459,8 @@ async function runCommand(
 	} as unknown as Record<string, unknown>;
 }
 
-async function runPreset(input: PresetRunInput, allowedRisks: readonly string[]): Promise<Record<string, unknown>> {
-	const context = resolveTerminalContext(input as PresetRunInput & TerminalInternalInput);
+async function runPreset(input: PresetRunInput & TerminalInternalInput, allowedRisks: readonly string[]): Promise<Record<string, unknown>> {
+	const context = resolveTerminalContext(input);
 	const preset: CommandPreset = materializePreset(findPreset(input.presetName), {
 		workspaceRoot: context.workspaceRoot,
 		godotProjectPath: context.godotProjectPath,
@@ -592,19 +542,33 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 			godotExecutablePath: preset.requiresGodotProject ? context.godotExecutablePath : undefined
 		};
 	}
+	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+		input: input as PresetRunInput & TerminalInternalInput & Record<string, unknown>,
+		command: { kind: "argv", command: command[0]!, args: command.slice(1) },
+		commandLine: describePresetCommand(command),
+		cwd,
+		workspaceRoot: path.resolve(cwd),
+		workspaceId: context.workspace?.id ?? context.workspaceId
+	});
+	if (!invocationResolution.ok) {
+		return invocationResolution.result;
+	}
+	const executableInvocation: CommandInvocation = {
+		...invocationResolution.invocation,
+		resourcePath: input.resourcePath ?? null,
+		godotProjectPath: preset.requiresGodotProject ? context.godotProjectPath || null : undefined,
+		godotExecutablePath: preset.requiresGodotProject ? context.godotExecutablePath : undefined
+	};
 
 	if (input.executionMode === "job") {
 		const wakeAfterMs: number | undefined = normalizeWakeAfterMs(input.wakeAfterMs);
-		const record: TerminalJobRecord = startCommandJob({
-			preset,
-			command,
+		const record: TerminalJobRecord = startCommandInvocationJob({
+			presetName: preset.name,
+			invocation: executableInvocation,
 			cwd,
 			timeoutMs: normalizeTimeoutMs(input.timeoutMs, preset, DEFAULT_JOB_TIMEOUT_MS),
 			wakeAfterMs,
-			tailLines: input.tailLines,
-			resourcePath: input.resourcePath ?? null,
-			godotProjectPath: preset.requiresGodotProject ? context.godotProjectPath || null : undefined,
-			godotExecutablePath: preset.requiresGodotProject ? context.godotExecutablePath : undefined
+			tailLines: input.tailLines
 		});
 		logger.info("terminal", "job_started", {
 			preset: input.presetName,
@@ -628,14 +592,11 @@ async function runPreset(input: PresetRunInput, allowedRisks: readonly string[])
 		timeoutMs: normalizeTimeoutMs(input.timeoutMs, preset, COMMAND_TIMEOUT_MS)
 	});
 	const timeoutMs: number = normalizeTimeoutMs(input.timeoutMs, preset, COMMAND_TIMEOUT_MS);
-	const result: TerminalCommandResult = await runCommandWait({
-		preset,
-		command,
+	const result: TerminalCommandResult = await runCommandInvocationWait({
+		presetName: preset.name,
+		invocation: executableInvocation,
 		cwd,
-		timeoutMs,
-		resourcePath: input.resourcePath ?? null,
-		godotProjectPath: preset.requiresGodotProject ? context.godotProjectPath || null : undefined,
-		godotExecutablePath: preset.requiresGodotProject ? context.godotExecutablePath : undefined
+		timeoutMs
 	});
 	logger.info("terminal", "preset_finished", {
 		preset: input.presetName,
@@ -688,6 +649,7 @@ export function registerTerminalTools(server: McpServer): void {
 		},
 		async (input: TerminalInternalInput) => {
 			const context = resolveTerminalContext(input);
+			const sandboxAvailability = getSandboxAvailability();
 			return asJsonTextResult({
 				workspaceId: context.workspace?.id ?? context.workspaceId ?? null,
 				selectedSourceFolderId: input.__daedalusSourceFolderId ?? context.workspace?.primarySourceFolderId ?? null,
@@ -699,7 +661,9 @@ export function registerTerminalTools(server: McpServer): void {
 				commandRunner: {
 					sandboxModes: ["os-sandbox", "full-trust"],
 					normalModeRequiresSandbox: true,
-					windowsSandboxHelper: process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER ?? null
+					sandboxAvailable: sandboxAvailability.available,
+					sandboxError: sandboxAvailability.available ? null : sandboxAvailability.error,
+					unsandboxedFallbackRequiresExplicitConsent: true
 				},
 				presets: COMMAND_PRESETS.map((preset: CommandPreset) => ({
 					name: preset.name,
@@ -750,7 +714,7 @@ export function registerTerminalTools(server: McpServer): void {
 			description: "执行安全的预设命令（read/verify 风险），自动允许。默认同步等待；executionMode=job 时启动长任务并返回 jobId。",
 			inputSchema: presetRunSchema
 		},
-		async (input: PresetRunInput) => asJsonTextResult(await runPreset(input, ["read", "verify"]))
+		async (input: PresetRunInput & TerminalInternalInput) => asJsonTextResult(await runPreset(input, ["read", "verify"]))
 	);
 
 	server.registerTool(
@@ -760,7 +724,7 @@ export function registerTerminalTools(server: McpServer): void {
 			description: "执行写操作预设命令（write 风险），需要通过审批系统批准。也允许执行更低风险的 read/verify 预设，避免审批后的流程因为工具包装器选择错误而中断。默认同步等待；executionMode=job 时启动长任务并返回 jobId。",
 			inputSchema: presetRunSchema
 		},
-		async (input: PresetRunInput) => asJsonTextResult(await runPreset(input, ["read", "verify", "write"]))
+		async (input: PresetRunInput & TerminalInternalInput) => asJsonTextResult(await runPreset(input, ["read", "verify", "write"]))
 	);
 
 	server.registerTool(
@@ -875,19 +839,26 @@ export function registerTerminalTools(server: McpServer): void {
 				return asJsonTextResult({ ok: false, error: "Godot project path is outside allowed roots" });
 			}
 
-			const result: TerminalCommandResult = await runCommandWait({
-				preset: {
-					name: "godot.scene_script",
-					description: "Run scene operator",
-					command,
-					workingDirectory: cwd,
-					risk: "write"
-				},
-				command,
+			const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+				input: input as { operationJson: string } & TerminalInternalInput & Record<string, unknown>,
+				command: { kind: "argv", command: command[0]!, args: command.slice(1) },
+				commandLine: describePresetCommand(command),
 				cwd,
-				timeoutMs: COMMAND_TIMEOUT_MS,
-				godotProjectPath: godotProject || null,
-				godotExecutablePath: godotExecutable
+				workspaceRoot: path.resolve(godotProject),
+				workspaceId: context.workspace?.id ?? context.workspaceId
+			});
+			if (!invocationResolution.ok) {
+				return asJsonTextResult(invocationResolution.result);
+			}
+			const result: TerminalCommandResult = await runCommandInvocationWait({
+				presetName: "godot.scene_script",
+				invocation: {
+					...invocationResolution.invocation,
+					godotProjectPath: godotProject || null,
+					godotExecutablePath: godotExecutable
+				},
+				cwd,
+				timeoutMs: COMMAND_TIMEOUT_MS
 			});
 			const parsedEvents: unknown[] = parseJsonObjectsFromOutput(result.stdout);
 			const parsedOutput: unknown = selectGodotOperationResult(parsedEvents);

@@ -85,7 +85,7 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 		});
 		const launchResult: Record<string, unknown> = await callTool(runtimeServer, "launch_editor", {});
 		assert.equal(launchResult.ok, false);
-		assert.equal(launchResult.code, "godot_executable_unavailable");
+		assert.equal(launchResult.code, "sandbox_unavailable");
 		assert.equal(launchResult.jobId, undefined);
 
 		const projectsResult: Record<string, unknown> = await callTool(runtimeServer, "list_projects", {

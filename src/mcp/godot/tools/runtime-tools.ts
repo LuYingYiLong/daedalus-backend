@@ -3,11 +3,17 @@ import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { terminalJobStore } from "../../terminal/job-store.js";
-import { startCommandJob } from "../../terminal/process-runner.js";
+import { runCommandInvocationWait, startCommandInvocationJob, type CommandInvocation } from "../../terminal/process-runner.js";
+import {
+	resolveSandboxedProcessInvocation,
+	type ProcessInvocationResolution,
+	type SandboxExecutionInput
+} from "../../terminal/sandbox-execution.js";
 import {
 	BACKEND_DIR,
 	DEFAULT_JOB_TIMEOUT_MS,
 	GODOT_EXECUTABLE,
+	describePresetCommand,
 	normalizeTimeoutMs,
 	normalizeWakeAfterMs
 } from "../../terminal/presets.js";
@@ -18,7 +24,7 @@ import {
 	projectRoot,
 	redactSensitivePaths
 } from "../context.js";
-import { inspectGodotExecutable, type GodotExecutableAvailability } from "../../../godot-executable.js";
+import type { GodotExecutableAvailability } from "../../../godot-executable.js";
 
 const GODOT_RUNTIME_TAIL_LINES: number = 200;
 const PROJECT_DISCOVERY_LIMIT: number = 100;
@@ -26,11 +32,45 @@ const PROJECT_DISCOVERY_LIMIT: number = 100;
 let activeRuntimeJobId: string | null = null;
 let cachedExecutableAvailability: { value: GodotExecutableAvailability; expiresAt: number } | null = null;
 
-async function getExecutableAvailability(): Promise<GodotExecutableAvailability> {
+async function getExecutableAvailability(
+	input: SandboxExecutionInput & Record<string, unknown>
+): Promise<GodotExecutableAvailability> {
 	if (cachedExecutableAvailability !== null && cachedExecutableAvailability.expiresAt > Date.now()) {
 		return cachedExecutableAvailability.value;
 	}
-	const value: GodotExecutableAvailability = await inspectGodotExecutable(GODOT_EXECUTABLE);
+	const command: string[] = [GODOT_EXECUTABLE, "--headless", "--version"];
+	const resolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+		input,
+		command: { kind: "argv", command: command[0]!, args: command.slice(1) },
+		commandLine: describePresetCommand(command),
+		cwd: projectRoot,
+		workspaceRoot: projectRoot,
+		readOnlyPaths: path.isAbsolute(GODOT_EXECUTABLE) ? [path.dirname(GODOT_EXECUTABLE)] : [],
+		workspaceId: typeof input.__daedalusWorkspaceId === "string" ? input.__daedalusWorkspaceId : undefined
+	});
+	if (!resolution.ok) {
+		return {
+			status: "unavailable",
+			path: GODOT_EXECUTABLE,
+			version: null,
+			error: String(resolution.result.error ?? "OS sandbox is unavailable")
+		};
+	}
+	const result = await runCommandInvocationWait({
+		presetName: "godot.version",
+		invocation: resolution.invocation,
+		cwd: projectRoot,
+		timeoutMs: 5_000
+	});
+	const version: string = result.stdout.trim().split(/\r?\n/u)[0]?.trim() ?? "";
+	const value: GodotExecutableAvailability = result.ok && version.length > 0
+		? { status: "ready", path: GODOT_EXECUTABLE, version, error: null }
+		: {
+			status: "unavailable",
+			path: GODOT_EXECUTABLE,
+			version: null,
+			error: result.stderr.trim() || "Godot executable is unavailable."
+		};
 	cachedExecutableAvailability = { value, expiresAt: Date.now() + 5_000 };
 	return value;
 }
@@ -126,20 +166,10 @@ async function startRuntimeJob(params: {
 	name: string;
 	description: string;
 	command: string[];
+	input: SandboxExecutionInput & Record<string, unknown>;
 	timeoutMs?: number | undefined;
 	wakeAfterMs?: number | undefined;
 }): Promise<Record<string, unknown>> {
-	const availability: GodotExecutableAvailability = await getExecutableAvailability();
-	if (availability.status !== "ready") {
-		return {
-			ok: false,
-			code: "godot_executable_unavailable",
-			environmentIssue: true,
-			applicabilityCode: "godot_runtime_unavailable",
-			error: availability.error,
-			godotExecutablePath: GODOT_EXECUTABLE
-		};
-	}
 	const existing: TerminalJobRecord | null = await getActiveRuntimeJob();
 	if (existing !== null) {
 		return {
@@ -150,15 +180,32 @@ async function startRuntimeJob(params: {
 	}
 
 	const preset: CommandPreset = createRuntimePreset(params.name, params.description, params.command, "write");
-	const record: TerminalJobRecord = startCommandJob({
-		preset,
-		command: params.command,
+	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
+		input: params.input,
+		command: { kind: "argv", command: params.command[0]!, args: params.command.slice(1) },
+		commandLine: describePresetCommand(params.command),
+		cwd: projectRoot,
+		workspaceRoot: projectRoot,
+		readOnlyPaths: path.isAbsolute(params.command[0]!) ? [path.dirname(params.command[0]!)] : [],
+		workspaceId: typeof params.input.__daedalusWorkspaceId === "string"
+			? params.input.__daedalusWorkspaceId
+			: undefined
+	});
+	if (!invocationResolution.ok) {
+		return invocationResolution.result;
+	}
+	const invocation: CommandInvocation = {
+		...invocationResolution.invocation,
+		godotProjectPath: projectRoot,
+		godotExecutablePath: GODOT_EXECUTABLE
+	};
+	const record: TerminalJobRecord = startCommandInvocationJob({
+		presetName: preset.name,
+		invocation,
 		cwd: projectRoot,
 		timeoutMs: normalizeTimeoutMs(params.timeoutMs, preset, DEFAULT_JOB_TIMEOUT_MS),
 		wakeAfterMs: normalizeWakeAfterMs(params.wakeAfterMs),
-		tailLines: GODOT_RUNTIME_TAIL_LINES,
-		godotProjectPath: projectRoot,
-		godotExecutablePath: GODOT_EXECUTABLE
+		tailLines: GODOT_RUNTIME_TAIL_LINES
 	});
 	activeRuntimeJobId = record.jobId;
 	return createJobResult(record);
@@ -220,10 +267,10 @@ export function registerRuntimeTools(server: McpServer): void {
 		{
 			title: "Get Godot Runtime Status",
 			description: "返回当前 Godot 可执行文件、项目路径和 active runtime job 状态。",
-			inputSchema: z.object({})
+			inputSchema: z.object({}).passthrough()
 		},
-		async () => {
-			const availability: GodotExecutableAvailability = await getExecutableAvailability();
+		async (input) => {
+			const availability: GodotExecutableAvailability = await getExecutableAvailability(input as typeof input & SandboxExecutionInput);
 			return asJsonTextResult({
 				ok: availability.status === "ready",
 				godotExecutablePath: GODOT_EXECUTABLE,
@@ -249,10 +296,10 @@ export function registerRuntimeTools(server: McpServer): void {
 		{
 			title: "Get Godot Version",
 			description: "调用 Godot --version，确认当前可执行文件版本。",
-			inputSchema: z.object({})
+			inputSchema: z.object({}).passthrough()
 		},
-		async () => {
-			const result: GodotExecutableAvailability = await getExecutableAvailability();
+		async (input) => {
+			const result: GodotExecutableAvailability = await getExecutableAvailability(input as typeof input & SandboxExecutionInput);
 			return asJsonTextResult({
 				ok: result.status === "ready",
 				version: result.version ?? "",
@@ -272,14 +319,19 @@ export function registerRuntimeTools(server: McpServer): void {
 			inputSchema: z.object({
 				wakeAfterMs: z.number().int().positive().optional(),
 				timeoutMs: z.number().int().positive().optional()
-			})
+			}).passthrough()
 		},
-		async ({ wakeAfterMs, timeoutMs }) => asJsonTextResult(await startRuntimeJob({
+		async (input: {
+			[key: string]: unknown;
+			wakeAfterMs?: number | undefined;
+			timeoutMs?: number | undefined;
+		} & SandboxExecutionInput) => asJsonTextResult(await startRuntimeJob({
 			name: "godot.launch_editor",
 			description: "Launch Godot editor",
 			command: buildLaunchEditorCommand(),
-			wakeAfterMs,
-			timeoutMs
+			input: input as typeof input & Record<string, unknown>,
+			wakeAfterMs: input.wakeAfterMs,
+			timeoutMs: input.timeoutMs
 		}))
 	);
 
@@ -293,16 +345,23 @@ export function registerRuntimeTools(server: McpServer): void {
 				debug: z.boolean().optional(),
 				wakeAfterMs: z.number().int().positive().optional(),
 				timeoutMs: z.number().int().positive().optional()
-			})
+			}).passthrough()
 		},
-		async ({ scenePath, debug, wakeAfterMs, timeoutMs }) => {
-			const command: string[] = buildRunProjectCommand(scenePath, debug ?? true);
+		async (input: {
+			[key: string]: unknown;
+			scenePath?: string | undefined;
+			debug?: boolean | undefined;
+			wakeAfterMs?: number | undefined;
+			timeoutMs?: number | undefined;
+		} & SandboxExecutionInput) => {
+			const command: string[] = buildRunProjectCommand(input.scenePath, input.debug ?? true);
 			return asJsonTextResult(await startRuntimeJob({
 				name: "godot.run_project",
 				description: "Run Godot project",
 				command,
-				wakeAfterMs,
-				timeoutMs
+				input: input as typeof input & Record<string, unknown>,
+				wakeAfterMs: input.wakeAfterMs,
+				timeoutMs: input.timeoutMs
 			}));
 		}
 	);

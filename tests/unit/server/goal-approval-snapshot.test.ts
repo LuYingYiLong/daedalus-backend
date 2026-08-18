@@ -80,7 +80,9 @@ test("Auto Safe Goal accepts a saved Editor Bridge patch targeting the active sc
 });
 
 test("Auto Safe Goal does not replace runtime policy with a rollback-completeness approval", async () => {
-	const gateway = new ApprovalGateway("manual");
+	const gateway = new ApprovalGateway("manual", {
+		resolveSandboxAvailability: () => ({ available: true })
+	});
 	bindGoalRun("goal-untracked-request", {
 		goalId: "goal-untracked",
 		cycle: 1,

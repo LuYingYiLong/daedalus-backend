@@ -139,6 +139,7 @@ test("manual and auto-safe terminal download syntax returns a structured policy 
 
 test("auto-safe command-review ask_user becomes a real approval instead of a denial", async (): Promise<void> => {
 	const gateway = new ApprovalGateway("auto-safe", {
+		resolveSandboxAvailability: () => ({ available: true }),
 		reviewCommand: async () => ({
 			decision: "ask_user",
 			reason: "The command needs user confirmation.",
@@ -156,5 +157,28 @@ test("auto-safe command-review ask_user becomes a real approval instead of a den
 	assert.equal(decision.action, "request_approval");
 	if (decision.action === "request_approval") {
 		assert.equal(decision.reason, "The command needs user confirmation.");
+	}
+});
+
+test("process tools require exact one-shot consent when the OS sandbox is unavailable", async (): Promise<void> => {
+	const gateway = new ApprovalGateway("manual", {
+		resolveSandboxAvailability: () => ({
+			available: false,
+			error: "sandbox_unavailable: test helper missing."
+		})
+	});
+	for (const [toolName, args] of [
+		["mcp_terminal_run_safe_preset", { presetName: "workspace.typecheck" }],
+		["mcp_terminal_run_godot_scene_script", { operationJson: '{"operation":"save"}' }],
+		["mcp_godot_launch_editor", {}],
+		["mcp_godot_get_runtime_status", {}],
+		["mcp_godot_resave_resource", { resourcePath: "res://player.tres" }]
+	] as const) {
+		const decision = await gateway.evaluate(toolName, args, `call-${toolName}`, "workspace-a");
+		assert.equal(decision.action, "request_approval");
+		if (decision.action === "request_approval") {
+			assert.equal(decision.requiredConsent?.expectedText, "RUN WITHOUT SANDBOX");
+			assert.match(decision.requiredConsent?.prompt ?? "", /sandbox is unavailable/iu);
+		}
 	}
 });

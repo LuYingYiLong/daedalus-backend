@@ -10,7 +10,7 @@ import type { CommandPreset, TerminalCommandResult, TerminalJobRecord, TerminalJ
 
 export type TerminalOutputListener = (stream: TerminalOutputStream, text: string) => void;
 
-type Invocation = {
+export type CommandInvocation = {
 	command: string;
 	args: string[];
 	commandLine: string;
@@ -22,6 +22,9 @@ type Invocation = {
 	trusted?: boolean | undefined;
 	consentText?: string | undefined;
 	authorizationSource?: "model" | "policy" | "user" | undefined;
+	resourcePath?: string | null | undefined;
+	godotProjectPath?: string | null | undefined;
+	godotExecutablePath?: string | undefined;
 };
 
 export async function runCommandWait(params: {
@@ -259,7 +262,7 @@ export function startCommandJob(params: {
 
 export async function runCommandInvocationWait(params: {
 	presetName: string;
-	invocation: Invocation;
+	invocation: CommandInvocation;
 	cwd: string;
 	timeoutMs?: number | undefined;
 	onOutput?: TerminalOutputListener | undefined;
@@ -293,6 +296,9 @@ export async function runCommandInvocationWait(params: {
 				command: [params.invocation.command, ...params.invocation.args],
 				commandLine: params.invocation.commandLine,
 				cwd: params.cwd,
+				resourcePath: params.invocation.resourcePath,
+				godotProjectPath: params.invocation.godotProjectPath,
+				godotExecutablePath: params.invocation.godotExecutablePath,
 				sandboxMode: params.invocation.sandboxMode,
 				workspaceId: params.invocation.workspaceId,
 				workspaceRoot: params.invocation.workspaceRoot,
@@ -330,6 +336,9 @@ export async function runCommandInvocationWait(params: {
 				command: [params.invocation.command, ...params.invocation.args],
 				commandLine: params.invocation.commandLine,
 				cwd: params.cwd,
+				resourcePath: params.invocation.resourcePath,
+				godotProjectPath: params.invocation.godotProjectPath,
+				godotExecutablePath: params.invocation.godotExecutablePath,
 				sandboxMode: params.invocation.sandboxMode,
 				workspaceId: params.invocation.workspaceId,
 				workspaceRoot: params.invocation.workspaceRoot,
@@ -363,6 +372,9 @@ export async function runCommandInvocationWait(params: {
 				command: [params.invocation.command, ...params.invocation.args],
 				commandLine: params.invocation.commandLine,
 				cwd: params.cwd,
+				resourcePath: params.invocation.resourcePath,
+				godotProjectPath: params.invocation.godotProjectPath,
+				godotExecutablePath: params.invocation.godotExecutablePath,
 				sandboxMode: params.invocation.sandboxMode,
 				workspaceId: params.invocation.workspaceId,
 				workspaceRoot: params.invocation.workspaceRoot,
@@ -388,7 +400,7 @@ export async function runCommandInvocationWait(params: {
 
 export function startCommandInvocationJob(params: {
 	presetName: string;
-	invocation: Invocation;
+	invocation: CommandInvocation;
 	cwd: string;
 	timeoutMs: number;
 	wakeAfterMs?: number | undefined;
@@ -403,6 +415,9 @@ export function startCommandInvocationJob(params: {
 		cwd: params.cwd,
 		timeoutMs: params.timeoutMs,
 		wakeAfterMs: params.wakeAfterMs,
+		resourcePath: params.invocation.resourcePath,
+		godotProjectPath: params.invocation.godotProjectPath,
+		godotExecutablePath: params.invocation.godotExecutablePath,
 		sandboxMode: params.invocation.sandboxMode,
 		workspaceId: params.invocation.workspaceId,
 		workspaceRoot: params.invocation.workspaceRoot,

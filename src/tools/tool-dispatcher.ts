@@ -49,6 +49,9 @@ import {
 	serializeSummaryPreparationResult,
 	SUMMARY_PREPARATION_TOOL_NAME
 } from "./summary-control.js";
+import { hookRuntime } from "../hooks/runtime.js";
+import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
+import { findWorkspace } from "../workspace/registry.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -242,6 +245,20 @@ async function executeSingleToolCall(
 	}
 
 	const functionName: string = toolCall.function.name;
+	const onHookRuntimeEvent = (event: HookRuntimeEvent): void => {
+		const message: string | undefined = event.systemMessage ?? event.statusMessage;
+		if (message === undefined) return;
+		onEvent?.({
+			type: "tool.progress",
+			step,
+			toolCallId: toolCall.id,
+			toolName: functionName,
+			status: event.systemMessage === undefined ? "message" : "error",
+			title: event.systemMessage === undefined ? "Running Hook" : "Hook warning",
+			details: message,
+			code: "hook"
+		});
+	};
 
 	let argsParsed: Record<string, unknown>;
 
@@ -280,7 +297,40 @@ async function executeSingleToolCall(
 	}
 
 	const workspaceId: string | undefined = toolContext?.workspaceId ?? mcpHost.getActiveWorkspaceId();
-	const executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
+	let executionArgs: Record<string, unknown> = stripApprovalReasonArg(argsParsed);
+	let preToolAdditionalContext: string | undefined;
+	if (toolContext?.hookContext !== undefined) {
+		const preHook: HookDecision = await hookRuntime.run({
+			event: "PreToolUse",
+			matcherValue: functionName,
+			input: {
+				tool_name: functionName,
+				tool_use_id: toolCall.id,
+				tool_input: executionArgs
+			},
+			sessionId: toolContext.sessionId ?? `tool:${toolContext.requestId ?? toolCall.id}`,
+			turnId: toolContext.requestId,
+			model: toolContext.hookContext.model,
+			approvalMode: toolContext.hookContext.approvalMode,
+			chatMode: toolContext.hookContext.chatMode,
+			workspace: toolContext.workspaceId === undefined ? undefined : findWorkspace(toolContext.workspaceId),
+			targetSourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
+			abortSignal
+		}, onHookRuntimeEvent);
+		if (preHook.blocked) {
+			const failure: ToolFailure = {
+				code: "hook_pre_tool_blocked",
+				category: "policy",
+				message: preHook.reason ?? "A PreToolUse hook blocked this tool call.",
+				retryable: false,
+				artifactRefs: collectToolArgumentArtifactRefs(executionArgs)
+			};
+			onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: failure.message, failure });
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+		if (preHook.updatedInput !== undefined) executionArgs = preHook.updatedInput;
+		preToolAdditionalContext = preHook.additionalContext;
+	}
 	if (functionName === TODO_UPDATE_TOOL_NAME) {
 		if (toolContext?.todoControl === undefined || toolContext.todoControlAvailable === false) {
 			const failure: ToolFailure = {
@@ -475,48 +525,114 @@ async function executeSingleToolCall(
 	}
 
 	if (decision.action === "request_approval") {
-		const reason: string = approvalReason.length > 0 ? approvalReason : decision.reason;
-		const pending = gateway.requestApproval(
-			functionName,
-			executionArgs,
-			toolCall.id,
-			reason,
-			workspaceId,
-			toolContext?.editorInstanceId,
-			toolContext?.sessionId,
-			decision.requiredConsent,
-			toolContext?.requestId,
-			{
-				approvalKind: decision.approvalKind,
-				downloadAuthorization: decision.downloadAuthorization,
-				networkAccessRequired: decision.networkAccessRequired
+		if (toolContext?.hookContext !== undefined) {
+			const permissionHook: HookDecision = await hookRuntime.run({
+				event: "PermissionRequest",
+				matcherValue: functionName,
+				input: {
+					tool_name: functionName,
+					tool_input: {
+						...executionArgs,
+						description: approvalReason.length > 0 ? approvalReason : decision.reason
+					}
+				},
+				sessionId: toolContext.sessionId ?? `tool:${toolContext.requestId ?? toolCall.id}`,
+				turnId: toolContext.requestId,
+				model: toolContext.hookContext.model,
+				approvalMode: toolContext.hookContext.approvalMode,
+				chatMode: toolContext.hookContext.chatMode,
+				workspace: toolContext.workspaceId === undefined ? undefined : findWorkspace(toolContext.workspaceId),
+				targetSourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
+				abortSignal
+			}, onHookRuntimeEvent);
+			if (permissionHook.blocked) {
+				const failure: ToolFailure = {
+					code: "hook_permission_denied",
+					category: "policy",
+					message: permissionHook.reason ?? "A PermissionRequest hook denied this tool call.",
+					retryable: false,
+					artifactRefs: collectToolArgumentArtifactRefs(executionArgs)
+				};
+				onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: failure.message, failure });
+				return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
 			}
-		);
-		logger.info("tool", "approval_required", {
-			toolCallId: toolCall.id,
-			toolName: functionName,
-			step,
-			approvalId: pending.approvalId,
-			workspaceId,
-			reason,
-			args: executionArgs
-		});
-		onEvent?.({
-			type: "tool.approval_required",
-			step,
-			toolCallId: toolCall.id,
-			toolName: functionName,
-			approvalId: pending.approvalId,
-			reason,
-			args: executionArgs,
-			requiredConsent: pending.requiredConsent,
-			approvalKind: pending.approvalKind,
-			downloadAuthorization: pending.downloadAuthorization,
-			networkAccessRequired: pending.networkAccessRequired,
-			...describeToolEvent(functionName, executionArgs, workspaceId)
-		});
+			const hardConsentRequired: boolean = decision.requiredConsent !== undefined
+				|| decision.approvalKind !== undefined
+				|| decision.networkAccessRequired !== undefined
+				|| decision.downloadAuthorization !== undefined;
+			if (permissionHook.approved === true && !hardConsentRequired) {
+				logger.info("hooks", "permission_approved", { toolCallId: toolCall.id, toolName: functionName });
+			} else {
+				const reason: string = approvalReason.length > 0 ? approvalReason : decision.reason;
+				const pending = gateway.requestApproval(
+					functionName,
+					executionArgs,
+					toolCall.id,
+					reason,
+					workspaceId,
+					toolContext?.editorInstanceId,
+					toolContext?.sessionId,
+					decision.requiredConsent,
+					toolContext?.requestId,
+					{
+						approvalKind: decision.approvalKind,
+						downloadAuthorization: decision.downloadAuthorization,
+						networkAccessRequired: decision.networkAccessRequired
+					}
+				);
+				logger.info("tool", "approval_required", { toolCallId: toolCall.id, toolName: functionName, step, approvalId: pending.approvalId, workspaceId, reason, args: executionArgs });
+				onEvent?.({
+					type: "tool.approval_required", step, toolCallId: toolCall.id, toolName: functionName,
+					approvalId: pending.approvalId, reason, args: executionArgs, requiredConsent: pending.requiredConsent,
+					approvalKind: pending.approvalKind, downloadAuthorization: pending.downloadAuthorization,
+					networkAccessRequired: pending.networkAccessRequired, ...describeToolEvent(functionName, executionArgs, workspaceId)
+				});
+				throw new ToolApprovalRequiredError(pending);
+			}
+		} else {
+			const reason: string = approvalReason.length > 0 ? approvalReason : decision.reason;
+			const pending = gateway.requestApproval(
+				functionName,
+				executionArgs,
+				toolCall.id,
+				reason,
+				workspaceId,
+				toolContext?.editorInstanceId,
+				toolContext?.sessionId,
+				decision.requiredConsent,
+				toolContext?.requestId,
+				{
+					approvalKind: decision.approvalKind,
+					downloadAuthorization: decision.downloadAuthorization,
+					networkAccessRequired: decision.networkAccessRequired
+				}
+			);
+			logger.info("tool", "approval_required", {
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				step,
+				approvalId: pending.approvalId,
+				workspaceId,
+				reason,
+				args: executionArgs
+			});
+			onEvent?.({
+				type: "tool.approval_required",
+				step,
+				toolCallId: toolCall.id,
+				toolName: functionName,
+				approvalId: pending.approvalId,
+				reason,
+				args: executionArgs,
+				requiredConsent: pending.requiredConsent,
+				approvalKind: pending.approvalKind,
+				downloadAuthorization: pending.downloadAuthorization,
+				networkAccessRequired: pending.networkAccessRequired,
+				...describeToolEvent(functionName, executionArgs, workspaceId)
+			});
 
-		throw new ToolApprovalRequiredError(pending);
+			throw new ToolApprovalRequiredError(pending);
+		}
 	}
 
 	if (onEvent) {
@@ -714,6 +830,29 @@ async function executeSingleToolCall(
 				modelResultContent = serializeToolFailure(enrichedFailure);
 			}
 		}
+		if (toolContext?.hookContext !== undefined) {
+			const postHook: HookDecision = await hookRuntime.run({
+				event: "PostToolUse",
+				matcherValue: functionName,
+				input: {
+					tool_name: functionName,
+					tool_use_id: toolCall.id,
+					tool_input: executionArgs,
+					tool_response: modelResultContent
+				},
+				sessionId: toolContext.sessionId ?? `tool:${toolContext.requestId ?? toolCall.id}`,
+				turnId: toolContext.requestId,
+				model: toolContext.hookContext.model,
+				approvalMode: toolContext.hookContext.approvalMode,
+				chatMode: toolContext.hookContext.chatMode,
+				workspace: toolContext.workspaceId === undefined ? undefined : findWorkspace(toolContext.workspaceId),
+				targetSourceFolderId: typeof executionArgs.sourceFolderId === "string" ? executionArgs.sourceFolderId : undefined,
+				abortSignal
+			}, onHookRuntimeEvent);
+			if (postHook.blocked) modelResultContent = postHook.reason ?? "A PostToolUse hook blocked the original tool result.";
+			if (postHook.additionalContext !== undefined) modelResultContent += `\n\n[Hook context]\n${postHook.additionalContext}`;
+		}
+		if (preToolAdditionalContext !== undefined) modelResultContent += `\n\n[PreToolUse Hook context]\n${preToolAdditionalContext}`;
 		const successRecovery: AgentLoopRecoveryStatus | undefined = parsedSummary.failure === undefined
 			&& parsedSummary.ok !== false
 			&& parsedSummary.validationStatus !== "failed"

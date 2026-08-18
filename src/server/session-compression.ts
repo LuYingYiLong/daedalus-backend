@@ -32,6 +32,7 @@ import type {
 	StructuredContextSummary
 } from "../context/context-types.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
+import { runCompactHooks, runSessionStartHooks } from "./hook-lifecycle.js";
 
 const INITIAL_COMPRESSION_MAX_TOKENS: number = 1100;
 const RETRY_COMPRESSION_MAX_TOKENS: number = 1500;
@@ -45,6 +46,7 @@ export type SessionCompressionDependencies = {
 	abortSignal?: AbortSignal | undefined;
 	compressionSource?: ContextCompressionSource | undefined;
 	blockIds?: readonly string[] | undefined;
+	trigger?: "manual" | "auto" | undefined;
 };
 
 export type SessionCompressionResult =
@@ -266,6 +268,16 @@ export async function compressSessionHistory(
 	const sessionId: string = session.sessionId;
 	return runContextCompressionSingleFlight(sessionId, async (): Promise<SessionCompressionResult> => {
 		throwIfCompressionAborted(dependencies.abortSignal);
+		const trigger: "manual" | "auto" = dependencies.trigger
+			?? (dependencies.compressionSource === "manual" || dependencies.compressionSource === "model" ? "manual" : "auto");
+		const preHook = await runCompactHooks(session, "PreCompact", trigger, requestId, dependencies.abortSignal);
+		if (preHook.blocked) {
+			return {
+				compressed: false,
+				reason: preHook.reason ?? "A PreCompact hook blocked context compression.",
+				messageCount: session.messages.length
+			};
+		}
 		const allMessages: ChatMessage[] = session.messages;
 		const ledger = await loadActiveContextLedger(sessionId);
 		const materialized = await materializeSessionContextBlocks(session, keepRecent);
@@ -329,6 +341,10 @@ export async function compressSessionHistory(
 		};
 		await writeSummary(sessionId, summaryObj);
 		await hydrateSessionContextLedger(session);
+		const postHook = await runCompactHooks(session, "PostCompact", trigger, requestId, dependencies.abortSignal);
+		if (!postHook.blocked) {
+			await runSessionStartHooks(session, "compact", requestId);
+		}
 		return {
 			compressed: true,
 			compressionId: committed.record.compressionId,
@@ -343,7 +359,9 @@ export async function compressSessionHistory(
 			afterTokens,
 			savedTokens: Math.max(0, beforeTokens - afterTokens),
 			restorableBlockCount: await countRestorableContextBlocks(sessionId),
-			warning: generated.warning,
+			warning: postHook.blocked
+				? [generated.warning, postHook.reason ?? "A PostCompact hook stopped the continuation after compression."].filter(Boolean).join("; ")
+				: generated.warning,
 			coveredBlockIds: committed.record.coveredBlockIds
 		};
 	});

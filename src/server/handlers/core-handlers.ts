@@ -17,6 +17,8 @@ import { getUsageMetricsSummary, getUsageMetricsTrends, listUsageMetricsLogs } f
 import { requestBackendShutdown } from "../../runtime/shutdown.js";
 import { clearWorkbenchNextStepHints, emitWorkbenchUpdated } from "../workbench.js";
 import { resolveSkillWorkspaceTarget, type SkillTargetParams } from "../../skills/workspace-target.js";
+import { getActiveConnectionSessions } from "../client-connections.js";
+import { runSessionEndHooks } from "../hook-lifecycle.js";
 
 declare const __DAEDALUS_SEA_BUILD__: boolean | undefined;
 
@@ -73,6 +75,11 @@ export async function handleCoreRequest(socket: WebSocket, request: ClientReques
 		if ((process.env.DAEDALUS_BACKEND_AUTH_TOKEN?.length ?? 0) === 0) {
 			throw new Error("Authenticated managed runtime is required for backend shutdown.");
 		}
+		await Promise.all(getActiveConnectionSessions()
+			.filter((candidate: ClientSession): boolean => candidate.sessionId !== undefined)
+			.map(async (candidate: ClientSession): Promise<void> => {
+				await runSessionEndHooks(candidate, "shutdown", request.id);
+			}));
 		sendJson(socket, {
 			type: "response",
 			id: request.id,

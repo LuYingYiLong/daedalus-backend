@@ -116,6 +116,7 @@ import { hydrateMessageQueue, serializeMessageQueue } from "./message-queue.js";
 import { bumpWorkbenchRevision, clearWorkbenchNextStepHints, emitWorkbenchUpdated, serializeWorkbench } from "./workbench.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { compressSessionHistory, hydrateSessionContextLedger } from "./session-compression.js";
+import { runSessionEndHooks, runSessionStartHooks } from "./hook-lifecycle.js";
 import { createContextBudgetSnapshot } from "../context/context-budget-manager.js";
 import type { ContextBudgetSnapshot } from "../context/context-types.js";
 import { clearContextLedger } from "../context/context-ledger.js";
@@ -284,6 +285,17 @@ function createSessionUiMetadata(params: {
 
 async function applySessionApprovalMode(session: ClientSession, _metadata?: Pick<SessionMetadata, "approvalMode"> | undefined): Promise<void> {
 	await synchronizeSessionApprovalMode(session);
+}
+
+async function loadSessionForEndHook(sessionId: string): Promise<ClientSession> {
+	const stored: Awaited<ReturnType<typeof openSession>> = await openSession(sessionId);
+	const workspace: WorkspaceConfig | undefined = stored.metadata.workspaceId === undefined
+		? undefined
+		: findWorkspace(stored.metadata.workspaceId) ?? restoreWorkspaceFromSessionMetadata(stored.metadata);
+	const hookSession: ClientSession = createClientSession(workspace);
+	applySessionMetadata(hookSession, stored.metadata);
+	await applySessionApprovalMode(hookSession, stored.metadata);
+	return hookSession;
 }
 
 type ContextEstimateSource = "provider" | "local";
@@ -616,6 +628,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				await deleteSummary(session.sessionId);
 				await clearSessionEvents(session.sessionId);
 			}
+			await runSessionStartHooks(session, "clear", request.id);
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -740,6 +753,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				applyWorkspaceToSessionRuntime(socket, session, workspace);
 			}
 			subscribeSocketToSession(socket, metadata.id);
+			await runSessionStartHooks(session, "startup", request.id);
 
 			sendJson(socket, {
 				type: "response",
@@ -822,6 +836,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				session = bindConnectionToSessionRuntime(socket, fork.metadata.id, session);
 				applyWorkspaceToSessionRuntime(socket, session, workspace);
 				subscribeSocketToSession(socket, fork.metadata.id);
+				await runSessionStartHooks(session, "startup", request.id);
 				await ensureProviderConfigured(session);
 				const page = await createTimelinePageResult(timeline, 100);
 
@@ -956,6 +971,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					await loadHydratedPendingApprovalStates(session, apiKey);
 				}
 				subscribeSocketToSession(socket, timeline.metadata.id);
+				if (!reusingRuntime) {
+					await runSessionStartHooks(session, "resume", request.id);
+				}
 				const godotGoalFallback: boolean = getClientConnection(socket)?.clientType === "godot_plugin"
 					&& timeline.metadata.chatMode === "goal";
 				const serializedWorkbench = serializeWorkbench(session);
@@ -1219,6 +1237,11 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			if (session.sessionId === request.params.sessionId) {
 				await waitForFullSessionLoad(session);
 				await waitForSessionEventPersistence(session);
+				await runSessionEndHooks(session, "archive", request.id);
+			} else {
+				const targetRuntime: ClientSession = getSessionRuntime(request.params.sessionId)
+					?? await loadSessionForEndHook(request.params.sessionId);
+				await runSessionEndHooks(targetRuntime, "archive", request.id);
 			}
 
 			const metadata: SessionMetadata = await archiveSession(request.params.sessionId);
@@ -1442,6 +1465,15 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		}
 
 		case "session.delete":
+			if (session.sessionId === request.params.sessionId) {
+				await waitForFullSessionLoad(session);
+				await waitForSessionEventPersistence(session);
+				await runSessionEndHooks(session, "delete", request.id);
+			} else {
+				const targetRuntime: ClientSession = getSessionRuntime(request.params.sessionId)
+					?? await loadSessionForEndHook(request.params.sessionId);
+				await runSessionEndHooks(targetRuntime, "delete", request.id);
+			}
 			await deleteSession(request.params.sessionId);
 			if (session.sessionId === request.params.sessionId) {
 				clearActiveSession(session);

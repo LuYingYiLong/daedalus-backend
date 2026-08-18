@@ -14,6 +14,10 @@ export type DaedalusPathKey =
 	| "config.webSearchSettings"
 	| "config.godotDocumentation"
 	| "config.approval"
+	| "config.hookTrust"
+	| "hooks.globalConfig"
+	| "hooks.dataRoot"
+	| "cache.hookOutputs"
 	| "godotDocumentation.root"
 	| "goalCheckpoints.root"
 	| "skills.root"
@@ -56,6 +60,10 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"config.webSearchSettings": join(configRoot, "web-search-settings.json"),
 		"config.godotDocumentation": join(configRoot, "godot-documentation.json"),
 		"config.approval": join(configRoot, "approval.json"),
+		"config.hookTrust": join(configRoot, "hook-trust.json"),
+		"hooks.globalConfig": join(root, "hooks.json"),
+		"hooks.dataRoot": join(root, "hook-data"),
+		"cache.hookOutputs": join(root, "cache", "hook-outputs"),
 		"godotDocumentation.root": join(root, "godot-docs"),
 		"goalCheckpoints.root": join(root, "goal-checkpoints"),
 		"skills.root": join(root, "skills"),
@@ -132,6 +140,22 @@ export function getGoalCheckpointsRoot(): string {
 
 export function getApprovalConfigPath(): string {
 	return getDaedalusPath("config.approval");
+}
+
+export function getHookTrustConfigPath(): string {
+	return getDaedalusPath("config.hookTrust");
+}
+
+export function getGlobalHooksConfigPath(): string {
+	return getDaedalusPath("hooks.globalConfig");
+}
+
+export function getHookDataRoot(): string {
+	return getDaedalusPath("hooks.dataRoot");
+}
+
+export function getHookOutputsRoot(): string {
+	return getDaedalusPath("cache.hookOutputs");
 }
 
 export function getDefaultSessionsDir(): string {

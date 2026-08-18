@@ -30,6 +30,15 @@ const skillTargetSchema = z.object({
 	sourceFolderId: z.string().min(1).max(200).optional(),
 }).strict();
 
+const hookConfigTargetSchema = z.discriminatedUnion("scope", [
+	z.object({ scope: z.literal("global") }).strict(),
+	z.object({
+		scope: z.literal("source"),
+		workspaceId: z.string().min(1).max(200),
+		sourceFolderId: z.string().min(1).max(200)
+	}).strict()
+]);
+
 export const providerIdSchema = z.string()
 	.min(1)
 	.max(80)
@@ -1707,6 +1716,42 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 				message: "plan.clarify requires either reply or skip: true."
 			});
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("hooks.config.sources.list"),
+		params: z.object({ workspaceId: z.string().min(1).max(200).optional() }).strict().optional()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("hooks.config.get"),
+		params: hookConfigTargetSchema
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("hooks.config.update"),
+		params: z.intersection(hookConfigTargetSchema, z.object({
+			content: z.string().max(512 * 1024),
+			expectedRevision: z.string().length(64)
+		}).strict())
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("hooks.trust.update"),
+		params: z.intersection(hookConfigTargetSchema, z.object({
+			fingerprint: z.string().length(64),
+			status: z.enum(["trusted", "disabled"])
+		}).strict())
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("hooks.runs.list"),
+		params: z.object({ limit: z.number().int().min(1).max(100).optional() }).strict().optional()
 	}),
 	z.object({
 		type: z.literal("request"),

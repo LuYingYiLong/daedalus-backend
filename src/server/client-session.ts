@@ -132,6 +132,8 @@ export type ClientSession = {
 		args: Record<string, unknown>;
 	}>>;
 	activityGroupAccumulators: Map<string, ActivityGroupAccumulator>;
+	hookDeveloperContext: string[];
+	stopHookContinuationCount: number;
 };
 
 export function createClientSession(defaultWorkspace: WorkspaceConfig | undefined): ClientSession {
@@ -171,6 +173,8 @@ export function createClientSession(defaultWorkspace: WorkspaceConfig | undefine
 		agentRuns: new Map(),
 		agentRunToolCalls: new Map(),
 		activityGroupAccumulators: new Map(),
+		hookDeveloperContext: [],
+		stopHookContinuationCount: 0,
 		eventPersistQueue: Promise.resolve()
 	};
 }
@@ -220,6 +224,8 @@ export function clearActiveSession(session: ClientSession): void {
 	session.agentRuns.clear();
 	session.agentRunToolCalls.clear();
 	session.activityGroupAccumulators.clear();
+	session.hookDeveloperContext = [];
+	session.stopHookContinuationCount = 0;
 }
 
 export function applySessionMetadata(session: ClientSession, metadata: SessionMetadata): void {

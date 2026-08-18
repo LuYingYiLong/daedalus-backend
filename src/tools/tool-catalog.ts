@@ -65,6 +65,11 @@ export type ToolExecutionContext = {
 	todoControlAvailable?: boolean | undefined;
 	summaryPreparation?: SummaryPreparationContext | undefined;
 	summaryPreparationAvailable?: boolean | undefined;
+	hookContext?: {
+		model: string;
+		approvalMode: "manual" | "auto-safe" | "full-trust";
+		chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
+	} | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";

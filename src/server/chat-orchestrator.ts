@@ -135,6 +135,8 @@ import {
 	setQueuedMessageStatus
 } from "./message-queue.js";
 import { bumpWorkbenchRevision, clearWorkbenchComposer, clearWorkbenchNextStepHints, emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun, setWorkbenchNextStepHints } from "./workbench.js";
+import { hookRuntime } from "../hooks/runtime.js";
+import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
@@ -213,6 +215,7 @@ import { createSessionContextControl } from "./context-control-runtime.js";
 import { createAgentTodoControl } from "./todo-control-runtime.js";
 import { createSummaryPreparationControl } from "./summary-preparation-runtime.js";
 import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
+import { consumeHookDeveloperContext, runUserPromptSubmitHooks } from "./hook-lifecycle.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import {
@@ -897,7 +900,12 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			summaryPreparation: params.routeDecision.lane === "agent_loop"
 				? createSummaryPreparationControl({ socket: params.socket, session: params.session, runId })
 				: undefined,
-			summaryPreparationAvailable: params.routeDecision.lane === "agent_loop"
+			summaryPreparationAvailable: params.routeDecision.lane === "agent_loop",
+			hookContext: {
+				model: resolveChatModel(executionOptions),
+				approvalMode: params.session.approvalGateway.getMode(),
+				chatMode: chatParams.mode
+			}
 		}
 	), params.abortSignal);
 	throwIfAborted(params.abortSignal);
@@ -1273,6 +1281,75 @@ async function completeHiddenAnswerExecution(
 		: completionStatus.resultStatus === "blocked"
 			? `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`
 			: text;
+	const stopDecision: HookDecision = await hookRuntime.run({
+		event: "Stop",
+		input: {
+			stop_hook_active: params.session.stopHookContinuationCount > 0,
+			last_assistant_message: effectiveText
+		},
+		sessionId: params.session.sessionId ?? `temporary:${params.requestId}`,
+		turnId: params.requestId,
+		model: resolveChatModel(params.options),
+		approvalMode: params.session.approvalGateway.getMode(),
+		chatMode: chatParams.mode,
+		workspace: params.session.activeWorkspace,
+		abortSignal: params.abortSignal
+	}, (event: HookRuntimeEvent): void => {
+		if (event.statusMessage !== undefined) {
+			sendSessionEvent(params.socket, params.requestId, params.session, "agent.status", {
+				status: "hook",
+				message: event.statusMessage
+			});
+		}
+		if (event.systemMessage !== undefined) {
+			sendSessionEvent(params.socket, params.requestId, params.session, "agent.status", {
+				status: "warning",
+				message: event.systemMessage
+			});
+		}
+	});
+	if (stopDecision.blocked && params.session.stopHookContinuationCount < 3) {
+		params.session.stopHookContinuationCount += 1;
+		const continuationPrompt: string = [
+			"A trusted Stop hook requested that this turn continue before it can be finalized.",
+			stopDecision.reason === undefined ? "Continue the answer and address anything still incomplete." : `Hook feedback: ${stopDecision.reason}`,
+			stopDecision.additionalContext === undefined ? "" : `Additional hook context:\n${stopDecision.additionalContext}`,
+			"Continue from the existing draft without repeating it. Do not call tools in this continuation."
+		].filter((part: string): boolean => part.length > 0).join("\n\n");
+		const continuationText: string = await chatWithDeepSeek(
+			{
+				...chatParams,
+				message: continuationPrompt,
+				additionalContext: undefined
+			},
+			withProviderUsageContext(params.options, { operation: "stop_hook_continuation" }),
+			[
+				...params.history,
+				{ role: "user", content: chatParams.message },
+				{ role: "assistant", content: effectiveText }
+			],
+			params.fullSystemPrompt,
+			params.abortSignal
+		);
+		const normalizedContinuation: string = continuationText.trim();
+		if (normalizedContinuation.length > 0) {
+			sendSessionEvent(params.socket, params.requestId, params.session, "ai.delta", {
+				text: `\n\n${normalizedContinuation}`
+			});
+			await completeHiddenAnswerExecution(
+				params,
+				chatParams,
+				`${effectiveText}\n\n${normalizedContinuation}`,
+				completionStatus
+			);
+			return;
+		}
+	}
+	const stopLimitReached: boolean = stopDecision.blocked && params.session.stopHookContinuationCount >= 3;
+	params.session.stopHookContinuationCount = 0;
+	const finalWarnings: string[] = stopLimitReached
+		? [...completionStatus.warnings, "Stop hook continuation limit reached; the turn was finalized after three continuations."]
+		: completionStatus.warnings;
 	if (getAgentRun(params.session, runId) !== undefined) {
 		const currentRun: AgentRunState = getAgentRun(params.session, runId)!;
 		updateAgentRun(params.socket, params.session, runId, "finalizing", {
@@ -1280,7 +1357,7 @@ async function completeHiddenAnswerExecution(
 				? currentRun.todo
 				: completeAgentTodoSnapshot(currentRun.todo),
 			verificationStatus: completionStatus.verificationStatus ?? null,
-			warnings: completionStatus.warnings
+			warnings: finalWarnings
 		});
 	}
 	await appendChatTurnToSession(
@@ -1312,7 +1389,7 @@ async function completeHiddenAnswerExecution(
 				completedAt: new Date().toISOString()
 			},
 			verificationStatus: completionStatus.verificationStatus ?? null,
-			warnings: completionStatus.warnings
+			warnings: finalWarnings
 		});
 	}
 	sendJson(params.socket, {
@@ -2010,7 +2087,12 @@ async function runToolBudgetDecisionContinuation(params: {
 			summaryPreparation: pendingContinuation.agentLoopState === undefined
 				? undefined
 				: createSummaryPreparationControl({ socket, session, runId: pending.requestId }),
-			summaryPreparationAvailable: pendingContinuation.agentLoopState !== undefined
+			summaryPreparationAvailable: pendingContinuation.agentLoopState !== undefined,
+			hookContext: {
+				model: resolveChatModel(pendingContinuation.options),
+				approvalMode: session.approvalGateway.getMode(),
+				chatMode: continuationParams.mode
+			}
 		};
 		const agentResultPromise: Promise<ProviderAgentResult> = decision === "continue"
 			? pendingContinuation.stream
@@ -2431,6 +2513,38 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				mode: rawParams.mode ?? session.workbenchComposer.chatMode,
 				additionalContext: rawParams.additionalContext ?? session.workbenchComposer.additionalContext
 			});
+			session.stopHookContinuationCount = 0;
+			const promptHookDecision = await runUserPromptSubmitHooks(
+				session,
+				request.id,
+				params.message,
+				(event): void => {
+					if (event.statusMessage !== undefined) {
+						sendSessionEvent(socket, request.id, session, "agent.status", {
+							status: "hook",
+							message: event.statusMessage
+						});
+					}
+					if (event.systemMessage !== undefined) {
+						sendSessionEvent(socket, request.id, session, "agent.status", {
+							status: "warning",
+							message: event.systemMessage
+						});
+					}
+				}
+			);
+			if (promptHookDecision.blocked) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "hook_user_prompt_blocked",
+						message: promptHookDecision.reason ?? "A UserPromptSubmit hook blocked this message."
+					}
+				});
+				break;
+			}
 			if (session.sessionId !== undefined) {
 				await promoteTemporarySession(session.sessionId);
 			}
@@ -2778,6 +2892,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				const mcpSystemContext: string = await createMcpSystemContext(mcpHost, session);
 				const additionalContextSection: string = createAdditionalContextPromptSection(effectiveParams.additionalContext);
 				const guidePromptSection: string = consumePendingGuideSection(socket, request.id, session);
+				const hookDeveloperContext: string = consumeHookDeveloperContext(session);
 				const safeRetryPromptSection: string = effectiveParams.retryOfRunId === undefined
 					? ""
 					: [
@@ -2800,6 +2915,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					+ mcpSystemContext
 					+ (additionalContextSection.length > 0 ? `\n\n${additionalContextSection}` : "")
 					+ (guidePromptSection.length > 0 ? `\n\n${guidePromptSection}` : "")
+					+ (hookDeveloperContext.length > 0 ? `\n\n## Hook context\n${hookDeveloperContext}` : "")
 					+ (safeRetryPromptSection.length > 0 ? `\n\n${safeRetryPromptSection}` : "");
 				if (effectiveParams.retryOfRunId === undefined) {
 					const userMessageAppended: boolean = await appendUserMessageToSession(

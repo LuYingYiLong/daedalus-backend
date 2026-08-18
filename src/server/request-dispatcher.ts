@@ -105,6 +105,10 @@ const handleGoalRequest: RequestHandler = createLazyHandler(async (): Promise<Re
 	return (await import("./handlers/goal-handlers.js")).handleGoalRequest;
 });
 
+const handleHookRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/hook-handlers.js")).handleHookRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -153,6 +157,11 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"userPrompt.set",
 	"generalSettings.get",
 	"generalSettings.update",
+	"hooks.config.sources.list",
+	"hooks.config.get",
+	"hooks.config.update",
+	"hooks.trust.update",
+	"hooks.runs.list",
 	"godotDocumentation.get",
 	"godotDocumentation.branches.list",
 	"godotDocumentation.install",
@@ -292,6 +301,11 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["userPrompt.set", handleCoreRequest],
 	["generalSettings.get", handleCoreRequest],
 	["generalSettings.update", handleCoreRequest],
+	["hooks.config.sources.list", handleHookRequest],
+	["hooks.config.get", handleHookRequest],
+	["hooks.config.update", handleHookRequest],
+	["hooks.trust.update", handleHookRequest],
+	["hooks.runs.list", handleHookRequest],
 	["godotDocumentation.get", handleGodotDocumentationRequest],
 	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
 	["godotDocumentation.install", handleGodotDocumentationRequest],

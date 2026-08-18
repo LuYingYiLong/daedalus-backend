@@ -265,6 +265,8 @@ export async function runCommandInvocationWait(params: {
 	invocation: CommandInvocation;
 	cwd: string;
 	timeoutMs?: number | undefined;
+	stdinText?: string | undefined;
+	killProcessTree?: boolean | undefined;
 	onOutput?: TerminalOutputListener | undefined;
 	signal?: AbortSignal | undefined;
 }): Promise<TerminalCommandResult> {
@@ -274,19 +276,23 @@ export async function runCommandInvocationWait(params: {
 		let stderr: string = "";
 		let child: ChildProcess;
 		let cancelled: boolean = false;
+		let timedOut: boolean = false;
+		let settled: boolean = false;
+		let timeout: NodeJS.Timeout | undefined;
 		const removeAbortListener = (): void => params.signal?.removeEventListener("abort", handleAbort);
 		const handleAbort = (): void => {
 			cancelled = true;
-			child.kill();
+			terminateProcess(child, params.killProcessTree === true);
 		};
 
 		try {
 			child = spawn(params.invocation.command, params.invocation.args, {
 				cwd: params.cwd,
-				stdio: ["ignore", "pipe", "pipe"],
+				stdio: [params.stdinText === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 				env: params.invocation.env,
 				shell: params.invocation.shell,
-				timeout: params.timeoutMs ?? COMMAND_TIMEOUT_MS
+				detached: params.killProcessTree === true && process.platform !== "win32",
+				windowsHide: true
 			});
 		} catch (error: unknown) {
 			resolve({
@@ -326,6 +332,9 @@ export async function runCommandInvocationWait(params: {
 		});
 
 		child.on("error", (error: Error): void => {
+			if (settled) return;
+			settled = true;
+			if (timeout !== undefined) clearTimeout(timeout);
 			removeAbortListener();
 			stderr += `\nProcess error: ${error.message}`;
 			resolve({
@@ -353,11 +362,16 @@ export async function runCommandInvocationWait(params: {
 		});
 
 		child.on("close", (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+			if (settled) return;
+			settled = true;
+			if (timeout !== undefined) clearTimeout(timeout);
 			removeAbortListener();
 			const stdoutResult = truncateOutput(stdout, MAX_STDOUT_CHARS);
 			const stderrResult = truncateOutput(stderr, MAX_STDERR_CHARS);
 			const status: Exclude<TerminalJobStatus, "running"> = cancelled
 				? "cancelled"
+				: timedOut
+					? "timed_out"
 				: exitCode === 0
 					? "completed"
 					: signal !== null
@@ -390,12 +404,47 @@ export async function runCommandInvocationWait(params: {
 			});
 		});
 
+		if (params.stdinText !== undefined) {
+			child.stdin?.end(params.stdinText, "utf8");
+		}
+
+		const timeoutMs: number = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
+		if (timeoutMs > 0) {
+			timeout = setTimeout((): void => {
+				timedOut = true;
+				terminateProcess(child, params.killProcessTree === true);
+			}, timeoutMs);
+		}
+
 		if (params.signal?.aborted === true) {
 			handleAbort();
 		} else {
 			params.signal?.addEventListener("abort", handleAbort, { once: true });
 		}
 	});
+}
+
+function terminateProcess(child: ChildProcess, processTree: boolean): void {
+	if (!processTree || child.pid === undefined) {
+		child.kill();
+		return;
+	}
+	if (process.platform === "win32") {
+		try {
+			spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+				stdio: "ignore",
+				windowsHide: true
+			}).unref();
+		} catch {
+			child.kill();
+		}
+		return;
+	}
+	try {
+		process.kill(-child.pid, "SIGTERM");
+	} catch {
+		child.kill();
+	}
 }
 
 export function startCommandInvocationJob(params: {

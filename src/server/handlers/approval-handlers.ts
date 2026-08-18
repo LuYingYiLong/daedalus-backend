@@ -438,6 +438,11 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 		let approvalDecisionEmitted: boolean = false;
 		let approvedToolExecuted: boolean = false;
 		try {
+			// “替我审批”必须在同一个 RPC 中切换模式并批准当前请求，避免模式更新落后于本次审批。
+			if (request.params.enableAutoSafe === true) {
+				await setApprovalMode("auto-safe");
+				applyApprovalModeToActiveSessions("auto-safe");
+			}
 			await synchronizeSessionApprovalMode(session);
 			const apiKey: string | undefined = await ensureProviderConfigured(session);
 			const hydrated = await loadHydratedPendingApprovalStates(session, apiKey);
@@ -633,6 +638,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					approvalId: request.params.approvalId,
 					result: publicApprovalResult,
 					continued: pendingContinuation !== undefined,
+					mode: session.approvalGateway.getMode(),
 					workbench: serializeWorkbench(session)
 				}
 			});

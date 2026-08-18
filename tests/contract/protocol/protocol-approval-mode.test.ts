@@ -28,6 +28,15 @@ test("approval.approve accepts consent text for cross-workspace approvals", (): 
 			consentText: "ALLOW CROSS-WORKSPACE: C:\\other-project"
 		}
 	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "approval-approve-auto-safe",
+		method: "approval.approve",
+		params: {
+			approvalId: "approval-123",
+			enableAutoSafe: true
+		}
+	}).success, true);
 });
 
 test("plan.clarify has an explicit structured skip path", (): void => {

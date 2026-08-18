@@ -1792,6 +1792,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			approvalId: z.string().min(1),
 			consentText: z.string().optional(),
+			enableAutoSafe: z.boolean().optional(),
 		}),
 	}),
 	z.object({

@@ -47,7 +47,7 @@ test("session overview lists recent plans and image sources", async (): Promise<
 			await planStore.writeStoredPlan(planMetadata, `# Plan ${index}\n`);
 		}
 
-		await attachments.saveImageAttachment({
+		const imageAttachment = await attachments.saveImageAttachment({
 			sessionId: metadata.id,
 			mimeType: "image/png",
 			dataUrl: "data:image/png;base64,aW1hZ2UtYXR0YWNobWVudA==",
@@ -62,10 +62,16 @@ test("session overview lists recent plans and image sources", async (): Promise<
 			model: "gpt-image-1",
 			prompt: "Generated source"
 		});
-		await attachments.saveTextAttachment({
+		const textAttachment = await attachments.saveTextAttachment({
 			sessionId: metadata.id,
 			content: "Pasted notes for the current session.",
 			title: "Pasted notes.txt"
+		});
+		await sessionStore.appendMessage(metadata.id, {
+			role: "user",
+			content: "Use these sources",
+			requestId: "request-sources",
+			additionalContext: [imageAttachment, textAttachment]
 		});
 
 		const result = await overview.createSessionOverview({
@@ -93,6 +99,41 @@ test("session overview lists recent plans and image sources", async (): Promise<
 	});
 });
 
+test("session overview excludes unsent composer attachments", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const overview = await import("../../../src/server/session-overview.js");
+		const metadata = await sessionStore.createSession("Unsent source test");
+		const imageAttachment = await attachments.saveImageAttachment({
+			sessionId: metadata.id,
+			mimeType: "image/png",
+			dataUrl: "data:image/png;base64,aW1hZ2UtYXR0YWNobWVudA==",
+			byteSize: Buffer.byteLength("image-attachment"),
+			title: "Composer draft image"
+		});
+		await attachments.saveTextAttachment({
+			sessionId: metadata.id,
+			content: "Composer draft text",
+			title: "Composer draft.txt"
+		});
+
+		const draftOverview = await overview.createSessionOverview({ sessionId: metadata.id, sourceLimit: 100 });
+		assert.equal(draftOverview.sources.total, 0);
+		assert.deepEqual(draftOverview.sources.items, []);
+
+		await sessionStore.appendMessage(metadata.id, {
+			role: "user",
+			content: "Send the image",
+			requestId: "request-sent-image",
+			additionalContext: [imageAttachment]
+		});
+		const sentOverview = await overview.createSessionOverview({ sessionId: metadata.id, sourceLimit: 100 });
+		assert.equal(sentOverview.sources.total, 1);
+		assert.equal(sentOverview.sources.items[0]?.id, imageAttachment.id);
+	});
+});
+
 test("session overview can list image metadata without reading image payloads", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");
@@ -114,6 +155,12 @@ test("session overview can list image metadata without reading image payloads", 
 			provider: "openai",
 			model: "gpt-image-1",
 			prompt: "Generated source"
+		});
+		await sessionStore.appendMessage(metadata.id, {
+			role: "user",
+			content: "Use the source image",
+			requestId: "request-overview-metadata",
+			additionalContext: [imageAttachment]
 		});
 		await rm(join(sessionStore.getSessionDir(metadata.id), "attachments", `${imageAttachment.id}.png`));
 		await rm(join(sessionStore.getSessionDir(metadata.id), "attachments", "images", generatedImage.fileName));

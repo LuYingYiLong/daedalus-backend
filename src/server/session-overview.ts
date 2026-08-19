@@ -1,7 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { getSessionDir, openSession, type SessionMetadata } from "../session/session-store.js";
-import type { GeneratedImageArtifactMetadata, ImageAttachmentMetadata, TextAttachmentMetadata } from "../session/session-attachments.js";
+import {
+	listMessageAttachmentIds,
+	type GeneratedImageArtifactMetadata,
+	type ImageAttachmentMetadata,
+	type TextAttachmentMetadata
+} from "../session/session-attachments.js";
 import { getSessionDatabase, parseSqlJson } from "../session/session-database.js";
 import { isInsideGitWorkTree, readGitBranch, runGit } from "./git-utils.js";
 import { findWorkspace } from "../workspace/registry.js";
@@ -277,12 +282,15 @@ async function listSourceItems(
 	includeImageData: boolean
 ): Promise<{ total: number; items: SessionOverviewSourceItem[] }> {
 	const db = await getSessionDatabase();
-	const countRow = db.prepare("SELECT COUNT(*) AS total FROM attachments WHERE session_id = ?").get(sessionId) as Record<string, unknown>;
+	const messageAttachmentIds: Set<string> = await listMessageAttachmentIds(sessionId);
 	const rows = db.prepare(`
-		SELECT kind, metadata_json FROM attachments WHERE session_id = ? ORDER BY created_at DESC LIMIT ?
-	`).all(sessionId, limit) as Record<string, unknown>[];
+		SELECT attachment_id, kind, metadata_json FROM attachments WHERE session_id = ? ORDER BY created_at DESC
+	`).all(sessionId) as Record<string, unknown>[];
+	const visibleRows = rows.filter((row: Record<string, unknown>): boolean => {
+		return row.kind === "generated_image" || messageAttachmentIds.has(String(row.attachment_id));
+	});
 	const items: SessionOverviewSourceItem[] = [];
-	for (const row of rows) {
+	for (const row of visibleRows.slice(0, limit)) {
 		const metadata: Record<string, unknown> = parseSqlJson<Record<string, unknown>>(row.metadata_json);
 		const item: SessionOverviewSourceItem | null = row.kind === "generated_image"
 			? await readGeneratedImageSource(sessionId, metadata, includeImageData)
@@ -295,7 +303,7 @@ async function listSourceItems(
 	}
 
 	return {
-		total: Number(countRow.total),
+		total: visibleRows.length,
 		items
 	};
 }

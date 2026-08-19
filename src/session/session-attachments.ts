@@ -176,6 +176,21 @@ function collectPersistedAttachmentIds(value: unknown, ids: Set<string>): void {
 	}
 }
 
+export async function listMessageAttachmentIds(sessionId: string): Promise<Set<string>> {
+	const ids: Set<string> = new Set();
+	const rows = (await getSessionDatabase()).prepare(`
+		SELECT payload_json FROM messages WHERE session_id = ?
+	`).all(sessionId) as Record<string, unknown>[];
+	for (const row of rows) {
+		try {
+			collectPersistedAttachmentIds(parseSqlJson<unknown>(row.payload_json), ids);
+		} catch {
+			// Ignore damaged legacy message payloads while preserving valid sources.
+		}
+	}
+	return ids;
+}
+
 /**
  * Composer-only attachments are intentionally short-lived. Only snapshots that
  * were persisted with a message or queued event survive a backend restart.

@@ -1,8 +1,8 @@
 import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { getWorktreesRoot } from "../app-paths.js";
 import { runGit, type GitResult } from "../server/git-utils.js";
+import { readWorktreeSettings } from "./worktree-settings.js";
 import type { SessionWorktreeMetadata, SessionWorktreeSource, WorktreeStartingState, WorkspaceConfig, WorkspaceSourceFolder } from "./types.js";
 import { registerSessionRuntimeWorkspace, unregisterSessionRuntimeWorkspace } from "./registry.js";
 
@@ -50,8 +50,8 @@ function isSameDirectory(left: string, right: string): boolean {
 	return leftStats.dev === rightStats.dev && leftStats.ino === rightStats.ino;
 }
 
-function assertManagedPath(pathValue: string): string {
-	const root: string = resolve(getWorktreesRoot());
+function assertManagedPath(rootValue: string, pathValue: string): string {
+	const root: string = resolve(rootValue);
 	const target: string = resolve(pathValue);
 	const relativePath: string = relative(root, target);
 	if (relativePath.length === 0 || relativePath.startsWith("..") || isAbsolute(relativePath)) {
@@ -262,19 +262,30 @@ export async function createManagedWorktree(params: { sessionId: string; workspa
 	if (!WORKTREE_ID_PATTERN.test(params.sessionId)) {
 		throw new WorktreeOperationError("worktree_session_invalid", "Session id is not safe for a managed worktree.");
 	}
+	const settings = await readWorktreeSettings();
+	if (settings.fetchBeforeCreate) {
+		await Promise.all(params.workspace.sourceFolders.map(async (source): Promise<void> => {
+			const inspected = await inspectSource(source);
+			if (inspected.repositoryRoot !== null && inspected.commonDirectory !== null) {
+				await withRepositoryLock(inspected.commonDirectory, async (): Promise<void> => {
+					await runGit(inspected.repositoryRoot!, ["fetch", "--all", "--prune"], { timeoutMs: WORKTREE_GIT_TIMEOUT_MS * 4 });
+				});
+			}
+		}));
+	}
 	const eligibility: WorktreeEligibilityResult = await inspectWorkspaceWorktreeEligibility(params.workspace);
 	if (!eligibility.eligible) {
 		const reason: string = eligibility.sources.find((source): boolean => !source.eligible)?.reason ?? "Workspace is not eligible for worktrees.";
 		throw new WorktreeOperationError("worktree_ineligible", reason);
 	}
-	const sessionRoot: string = assertManagedPath(resolve(getWorktreesRoot(), params.sessionId));
+	const sessionRoot: string = assertManagedPath(settings.rootDirectory, resolve(settings.rootDirectory, params.sessionId));
 	const targetPaths: Map<string, string> = new Map();
 	for (const source of eligibility.sources) {
 		const sourceFolderId: string = source.sourceFolderId;
 		if (!WORKTREE_ID_PATTERN.test(sourceFolderId)) {
 			throw new WorktreeOperationError("worktree_source_invalid", `Invalid source folder id: ${sourceFolderId}`);
 		}
-		const worktreePath: string = assertManagedPath(resolve(sessionRoot, sourceFolderId));
+		const worktreePath: string = assertManagedPath(settings.rootDirectory, resolve(sessionRoot, sourceFolderId));
 		if (existsSync(worktreePath)) {
 			throw new WorktreeOperationError("worktree_path_exists", `Worktree path already exists: ${worktreePath}`);
 		}
@@ -394,7 +405,8 @@ export async function deleteManagedWorktree(metadata: SessionWorktreeMetadata): 
 		});
 	}
 	unregisterSessionRuntimeWorkspace(metadata.runtimeWorkspaceId);
-	await rm(assertManagedPath(resolve(getWorktreesRoot(), metadata.id.replace(/^(?:managed|permanent)-/u, ""))), {
+	const managedRoot: string = resolve(metadata.sources[0]?.worktreePath ?? ".", "..", "..");
+	await rm(assertManagedPath(managedRoot, resolve(managedRoot, metadata.id.replace(/^(?:managed|permanent)-/u, ""))), {
 		recursive: true,
 		force: true
 	});

@@ -31,6 +31,7 @@ import {
 	createSession,
 	openSession,
 	listSessions,
+	listTemporarySessions,
 	archiveSession,
 	deleteArchivedSession,
 	deleteSession,
@@ -200,6 +201,7 @@ import type { SkillWorkspace } from "../skills/types.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace } from "../tools/tool-catalog.js";
 import { SessionSearchError, sessionSearchService } from "../session-search/service.js";
 import { createManagedWorktree, deleteManagedWorktree, restoreManagedWorktreeWorkspace, WorktreeOperationError } from "../workspace/worktree-manager.js";
+import { readWorktreeSettings } from "../workspace/worktree-settings.js";
 import { runWorktreeSetup, skipPendingWorktreeSetup } from "../workspace/local-environment-runtime.js";
 import { cancelWorktreeOperation, getWorktreeOperation, runTrackedWorktreeOperation } from "../workspace/worktree-operations.js";
 import { executeWorktreeHandoff, previewWorktreeHandoff } from "../workspace/worktree-handoff.js";
@@ -222,6 +224,28 @@ function sessionRpcError(error: unknown, fallbackCode: string, fallbackMessage: 
 		code: fallbackCode,
 		message: error instanceof Error ? error.message : fallbackMessage
 	};
+}
+
+async function cleanupOldManagedWorktrees(): Promise<void> {
+	const settings = await readWorktreeSettings();
+	if (!settings.autoDeleteManaged) return;
+	const [active, temporary, archived] = await Promise.all([listSessions(), listTemporarySessions(), listArchivedSessions()]);
+	const managedCount = [...active, ...temporary, ...archived].filter((candidate): boolean => candidate.worktree?.permanent !== true).length;
+	let remaining = Math.max(0, managedCount + 1 - settings.autoDeleteLimit);
+	if (remaining === 0) return;
+	const candidates = archived.filter((candidate): boolean => candidate.worktree !== undefined && candidate.worktree.permanent !== true).sort((left, right): number => left.worktree!.createdAt.localeCompare(right.worktree!.createdAt));
+	for (const candidate of candidates) {
+		if (remaining === 0 || candidate.worktree === undefined) break;
+		const sourceWorkspace = findWorkspace(candidate.worktree.sourceWorkspaceId);
+		if (sourceWorkspace === undefined) continue;
+		try {
+			await deleteManagedWorktree(candidate.worktree);
+			await replaceSessionWorkspaceBinding({ sessionId: candidate.id, workspace: sourceWorkspace, worktree: undefined });
+			remaining -= 1;
+		} catch (error: unknown) {
+			logger.warn("worktree", "automatic_cleanup_skipped", { sessionId: candidate.id }, error instanceof Error ? error.message : String(error));
+		}
+	}
 }
 
 function restoreWorkspaceFromSessionMetadata(metadata: SessionMetadata): WorkspaceConfig | undefined {
@@ -828,6 +852,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					const profile = environmentDocument.profiles.find((candidate): boolean => candidate.id === environmentId);
 					sourceOptions[source.id] = { ...sourceOptions[source.id], environmentId, environmentFingerprint: profile?.fingerprint ?? null };
 				}
+				await cleanupOldManagedWorktrees();
 				const trackedCreate = await runTrackedWorktreeOperation({
 					type: "create",
 					sessionId: request.params.sessionId,

@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { existsSync, lstatSync } from "node:fs";
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { getWorktreesRoot } from "../app-paths.js";
 import { runGit } from "../server/git-utils.js";
 import type { SessionWorktreeLocation, SessionWorktreeMetadata, WorkspaceConfig } from "./types.js";
 import { WorktreeOperationError } from "./worktree-manager.js";
+import { readWorktreeSettings } from "./worktree-settings.js";
 
 export type WorktreeHandoffSourcePreview = {
 	sourceFolderId: string;
@@ -131,7 +131,7 @@ export async function executeWorktreeHandoff(params: {
 }): Promise<SessionWorktreeMetadata> {
 	const preview: WorktreeHandoffPreview = await previewWorktreeHandoff(params);
 	if (!preview.allowed) throw new WorktreeOperationError("worktree_handoff_blocked", preview.sources.find((source): boolean => source.blockedReason !== null)?.blockedReason ?? "Handoff is blocked.");
-	const snapshotRoot: string = join(getWorktreesRoot(), ".handoff", params.sessionId, Date.now().toString(36));
+	const snapshotRoot: string = join((await readWorktreeSettings()).rootDirectory, ".handoff", params.sessionId, Date.now().toString(36));
 	await mkdir(snapshotRoot, { recursive: true });
 	await writeFile(join(snapshotRoot, "preview.json"), `${JSON.stringify(preview, null, 2)}\n`, "utf8");
 	const applied: WorktreeHandoffSourcePreview[] = [];

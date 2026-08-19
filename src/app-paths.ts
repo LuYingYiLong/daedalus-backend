@@ -16,6 +16,7 @@ export type DaedalusPathKey =
 	| "config.approval"
 	| "config.hookTrust"
 	| "config.environmentTrust"
+	| "config.worktreeSettings"
 	| "hooks.globalConfig"
 	| "hooks.dataRoot"
 	| "cache.hookOutputs"
@@ -64,6 +65,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"config.approval": join(configRoot, "approval.json"),
 		"config.hookTrust": join(configRoot, "hook-trust.json"),
 		"config.environmentTrust": join(configRoot, "environment-trust.json"),
+		"config.worktreeSettings": join(configRoot, "worktree-settings.json"),
 		"hooks.globalConfig": join(root, "hooks.json"),
 		"hooks.dataRoot": join(root, "hook-data"),
 		"cache.hookOutputs": join(root, "cache", "hook-outputs"),
@@ -120,6 +122,10 @@ export function getWorktreesRoot(): string {
 
 export function getEnvironmentTrustConfigPath(): string {
 	return getDaedalusPath("config.environmentTrust");
+}
+
+export function getWorktreeSettingsConfigPath(): string {
+	return getDaedalusPath("config.worktreeSettings");
 }
 
 export function getSkillSettingsPath(): string {

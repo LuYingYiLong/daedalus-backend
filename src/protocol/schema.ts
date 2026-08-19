@@ -2133,6 +2133,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.status.list"), params: z.object({}).strict()
 	}),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.settings.get"), params: z.object({}).strict() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.settings.update"), params: z.object({ rootDirectory: z.union([z.string().trim().min(1).max(4096), z.null()]).optional(), fetchBeforeCreate: z.boolean().optional(), autoDeleteManaged: z.boolean().optional(), autoDeleteLimit: z.number().int().min(1).max(100).optional() }).strict() }),
 	z.object({
 		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.repair"), params: z.object({ sessionId: z.string().min(1) }).strict()
 	}),

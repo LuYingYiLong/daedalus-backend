@@ -19,6 +19,7 @@ import { createManagedWorktree, deleteManagedWorktree, inspectWorkspaceWorktreeE
 import { inspectWorktreeHealth, repairManagedWorktree, findOrphanedManagedWorktreeDirectories } from "../../workspace/worktree-health.js";
 import { listWorktreeOperations, runTrackedWorktreeOperation } from "../../workspace/worktree-operations.js";
 import { runWorktreeSetup } from "../../workspace/local-environment-runtime.js";
+import { readWorktreeSettings, updateWorktreeSettings } from "../../workspace/worktree-settings.js";
 
 async function loadWorkspaceTreeOrderInventory(): Promise<WorkspaceTreeOrderInventory> {
 	const [sessions, archivedSessions] = await Promise.all([listSessions(), listArchivedSessions()]);
@@ -365,6 +366,16 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			})));
 			const permanent = await Promise.all(permanentWorkspaces.map(async (workspace) => ({ workspace, health: await inspectWorktreeHealth(workspace.permanentWorktree!) })));
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { sessions, permanent, orphans: await findOrphanedManagedWorktreeDirectories(knownDirectoryKeys), operations: await listWorktreeOperations() } });
+			break;
+		}
+
+		case "workspace.worktree.settings.get": {
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: await readWorktreeSettings() });
+			break;
+		}
+
+		case "workspace.worktree.settings.update": {
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: await updateWorktreeSettings(request.params) });
 			break;
 		}
 

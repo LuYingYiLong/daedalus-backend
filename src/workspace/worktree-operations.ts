@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getWorktreesRoot } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 import { broadcastGlobalEvent } from "../server/client-connections.js";
+import { readWorktreeSettings } from "./worktree-settings.js";
 
 export type WorktreeOperationType = "create" | "setup" | "handoff" | "repair" | "delete" | "permanent-create" | "permanent-delete";
 export type WorktreeOperationStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "interrupted";
@@ -39,12 +39,12 @@ const activeOperations: Map<string, ActiveOperation> = new Map();
 const snapshots: Map<string, WorktreeOperationSnapshot> = new Map();
 let initialized: Promise<void> | null = null;
 
-function operationsRoot(): string {
-	return join(getWorktreesRoot(), ".operations");
+async function operationsRoot(): Promise<string> {
+	return join((await readWorktreeSettings()).rootDirectory, ".operations");
 }
 
-function operationPath(id: string): string {
-	return join(operationsRoot(), `${id}.json`);
+async function operationPath(id: string): Promise<string> {
+	return join(await operationsRoot(), `${id}.json`);
 }
 
 function publicSnapshot(snapshot: WorktreeOperationSnapshot): WorktreeOperationSnapshot {
@@ -52,7 +52,7 @@ function publicSnapshot(snapshot: WorktreeOperationSnapshot): WorktreeOperationS
 }
 
 async function persist(snapshot: WorktreeOperationSnapshot): Promise<void> {
-	await writeJsonFileAtomic(operationPath(snapshot.id), snapshot);
+	await writeJsonFileAtomic(await operationPath(snapshot.id), snapshot);
 }
 
 async function emit(snapshot: WorktreeOperationSnapshot): Promise<void> {
@@ -63,11 +63,12 @@ async function emit(snapshot: WorktreeOperationSnapshot): Promise<void> {
 export async function initializeWorktreeOperations(): Promise<void> {
 	if (initialized !== null) return await initialized;
 	initialized = (async (): Promise<void> => {
-		await mkdir(operationsRoot(), { recursive: true });
-		for (const entry of await readdir(operationsRoot(), { withFileTypes: true })) {
+		const root: string = await operationsRoot();
+		await mkdir(root, { recursive: true });
+		for (const entry of await readdir(root, { withFileTypes: true })) {
 			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
 			try {
-				const snapshot = JSON.parse(await readFile(join(operationsRoot(), entry.name), "utf8")) as WorktreeOperationSnapshot;
+				const snapshot = JSON.parse(await readFile(join(root, entry.name), "utf8")) as WorktreeOperationSnapshot;
 				if (snapshot.status === "running" || snapshot.status === "queued") {
 					snapshot.status = "interrupted";
 					snapshot.stage = "interrupted";
@@ -207,5 +208,5 @@ export function hasActiveWorktreeOperation(sessionId: string): boolean {
 
 export async function removeMissingOperationFiles(): Promise<void> {
 	await initializeWorktreeOperations();
-	for (const [id] of snapshots) if (!existsSync(operationPath(id))) snapshots.delete(id);
+	for (const [id] of snapshots) if (!existsSync(await operationPath(id))) snapshots.delete(id);
 }

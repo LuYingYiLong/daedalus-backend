@@ -1,10 +1,10 @@
 import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { getWorktreesRoot } from "../app-paths.js";
 import { runGit } from "../server/git-utils.js";
 import type { SessionWorktreeMetadata } from "./types.js";
 import { WorktreeOperationError } from "./worktree-manager.js";
+import { readWorktreeSettings } from "./worktree-settings.js";
 
 export type WorktreeHealthStatus = "healthy" | "unavailable" | "recovery-required";
 
@@ -48,7 +48,7 @@ export async function inspectWorktreeHealth(metadata: SessionWorktreeMetadata): 
 			issues.push({ code: "worktree_git_invalid", message: error instanceof Error ? error.message : "Worktree Git metadata is invalid.", sourceFolderId: source.sourceFolderId });
 		}
 	}
-	const root: string = metadata.sources[0] === undefined ? getWorktreesRoot() : resolve(metadata.sources[0].worktreePath, "..");
+	const root: string = metadata.sources[0] === undefined ? (await readWorktreeSettings()).rootDirectory : resolve(metadata.sources[0].worktreePath, "..");
 	return {
 		worktreeId: metadata.id,
 		status: issues.length === 0 ? "healthy" : issues.some((issue): boolean => issue.code === "worktree_not_registered" || issue.code === "worktree_git_invalid") ? "recovery-required" : "unavailable",
@@ -67,7 +67,7 @@ export async function repairManagedWorktree(metadata: SessionWorktreeMetadata): 
 }
 
 export async function findOrphanedManagedWorktreeDirectories(knownSessionIds: ReadonlySet<string>): Promise<string[]> {
-	const root: string = getWorktreesRoot();
+	const root: string = (await readWorktreeSettings()).rootDirectory;
 	if (!existsSync(root)) return [];
 	const entries = await readdir(root, { withFileTypes: true });
 	return entries.filter((entry): boolean => entry.isDirectory() && !entry.name.startsWith(".") && !knownSessionIds.has(entry.name)).map((entry): string => join(root, entry.name));

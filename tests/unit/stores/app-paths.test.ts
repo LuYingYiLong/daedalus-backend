@@ -12,6 +12,7 @@ import {
 	getGeneralSettingsConfigPath,
 	getGodotDocumentationConfigPath,
 	getGodotDocumentationRoot,
+	getWorktreeSettingsConfigPath,
 	getLogsDir,
 	getMcpServersConfigPath,
 	getPersonalSkillsDir,
@@ -50,6 +51,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getGodotDocumentationConfigPath(), join(configRoot, "godot-documentation.json"));
 		assert.equal(getWebSearchSettingsConfigPath(), join(configRoot, "web-search-settings.json"));
 		assert.equal(getApprovalConfigPath(), join(configRoot, "approval.json"));
+		assert.equal(getWorktreeSettingsConfigPath(), join(configRoot, "worktree-settings.json"));
 		assert.equal(getPersonalSkillsDir(), join(root, "skills"));
 		assert.equal(getWorktreesRoot(), join(root, "worktrees"));
 		assert.equal(getDefaultSessionsDir(), join(root, "sessions"));
@@ -73,6 +75,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("config.godotDocumentation"), getGodotDocumentationConfigPath());
 		assert.equal(getDaedalusPath("config.webSearchSettings"), getWebSearchSettingsConfigPath());
 		assert.equal(getDaedalusPath("config.approval"), getApprovalConfigPath());
+		assert.equal(getDaedalusPath("config.worktreeSettings"), getWorktreeSettingsConfigPath());
 		assert.equal(getDaedalusPath("skills.root"), getPersonalSkillsDir());
 		assert.equal(getDaedalusPath("worktrees.root"), getWorktreesRoot());
 		assert.equal(getDaedalusPath("sessions.activeRoot"), getDefaultSessionsDir());

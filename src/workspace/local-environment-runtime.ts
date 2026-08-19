@@ -1,11 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { getWorktreesRoot } from "../app-paths.js";
 import { runCommandInvocationWait } from "../mcp/terminal/process-runner.js";
 import { createSandboxInvocation } from "../mcp/terminal/sandbox-runner.js";
 import type { TerminalCommandResult } from "../mcp/terminal/types.js";
 import type { SessionWorktreeMetadata, SessionWorktreeSource, WorkspaceConfig, WorkspaceSourceFolder } from "./types.js";
 import { readLocalEnvironmentConfig } from "./local-environment.js";
+import { readWorktreeSettings } from "./worktree-settings.js";
 
 const MAX_LOG_CHARS: number = 200_000;
 const SECRET_PATTERN: RegExp = /((?:api[_-]?key|authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|secret|password|passwd|bearer|cookie)\s*[:=]\s*)([^\s,;]+)/giu;
@@ -107,7 +107,7 @@ export async function runWorktreeSetup(params: {
 				signal: params.signal
 			});
 		}
-		const logDirectory: string = join(getWorktreesRoot(), ".logs", metadata.id);
+		const logDirectory: string = join((await readWorktreeSettings()).rootDirectory, ".logs", metadata.id);
 		await mkdir(logDirectory, { recursive: true });
 		const logPath: string = join(logDirectory, `${source.id}-setup.log`);
 		await writeFile(logPath, redact(`${result.stdout}\n${result.stderr}`).slice(0, MAX_LOG_CHARS), "utf8");

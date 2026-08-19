@@ -20,6 +20,7 @@ export type ProviderModelCapabilities = {
 	reasoningEfforts?: ProviderReasoningEffortOption[] | undefined;
 	tools?: boolean | undefined;
 	webSearch?: boolean | undefined;
+	/** @deprecated Studio derives its Vision label from imageInput/videoInput. */
 	vision?: boolean | undefined;
 	imageGeneration?: boolean | undefined;
 	imageEdit?: boolean | undefined;
@@ -201,7 +202,8 @@ export function normalizeProviderModelCapabilities(capabilities: ProviderModelCa
 	if (reasoningEfforts !== undefined) {
 		normalized.reasoningEfforts = reasoningEfforts;
 	}
-	normalized.vision = source.vision ?? (source.imageInput === true || source.videoInput === true);
+	// `vision` remains protocol-compatible, but it must never diverge from the input modalities.
+	normalized.vision = normalized.imageInput === true || normalized.videoInput === true;
 
 	return normalized;
 }

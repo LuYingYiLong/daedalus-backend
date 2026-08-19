@@ -144,6 +144,40 @@ test("image attachments are saved under the session and hydrate to dataUrl", asy
 	});
 });
 
+test("large image attachments omit oversized previews and remain valid workbench context", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		const sessionStore = await import("../../../src/session/session-store.js");
+		const attachments = await import("../../../src/session/session-attachments.js");
+		const metadata = await sessionStore.createSession("Large attachment test");
+		const bytes: Buffer = Buffer.alloc(1_200_000);
+		PNG_BYTES.copy(bytes);
+		const dataUrl: string = `data:image/png;base64,${bytes.toString("base64")}`;
+
+		const context = await attachments.saveImageAttachment({
+			sessionId: metadata.id,
+			mimeType: "image/png",
+			dataUrl,
+			byteSize: bytes.byteLength,
+			title: "Large dropped image"
+		});
+		const contextData: Record<string, unknown> = context.data as Record<string, unknown>;
+
+		assert.equal(typeof contextData.attachmentId, "string");
+		assert.equal(contextData.dataUrl, undefined);
+		assert.equal(contextData.thumbnailDataUrl, undefined);
+		assert.equal(aiChatParamsSchema.safeParse({
+			message: "Describe this image",
+			additionalContext: [context]
+		}).success, true);
+
+		const hydrated = await attachments.hydrateImageAttachmentContexts(metadata.id, {
+			message: "Describe this image",
+			additionalContext: [context]
+		});
+		assert.equal((hydrated.additionalContext?.[0]?.data as Record<string, unknown>).dataUrl, dataUrl);
+	});
+});
+
 test("timeline result hydrates session-backed image thumbnails without persisting base64", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");

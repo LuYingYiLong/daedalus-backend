@@ -11,7 +11,7 @@ import {
 	SUPPORTED_IMAGE_MIME_TYPES
 } from "../protocol/image-attachments.js";
 import { getProviderModelsCache } from "./provider-config-store.js";
-import { getProviderFallbackModels, type ProviderModelInfo } from "./provider-registry.js";
+import { mergeProviderModelsWithCatalog, type ProviderModelInfo } from "./provider-registry.js";
 
 export class ProviderImageInputError extends Error {
 	readonly code: "invalid_image_attachment" | "too_many_image_attachments" | "model_does_not_support_images";
@@ -164,12 +164,11 @@ export function createProviderMessages(params: AiChatParams, history: ChatMessag
 
 export async function modelSupportsImageInput(provider: ProviderId, modelId: string): Promise<boolean> {
 	const cache = await getProviderModelsCache(provider);
-	const cachedModel: ProviderModelInfo | undefined = cache?.models.find((model: ProviderModelInfo): boolean => model.id === modelId);
-	if (cachedModel !== undefined) {
-		return cachedModel.capabilities.imageInput === true;
-	}
-
-	const fallbackModel: ProviderModelInfo | undefined = getProviderFallbackModels(provider)
+	const effectiveModel: ProviderModelInfo | undefined = mergeProviderModelsWithCatalog(
+		provider,
+		cache?.models ?? [],
+		{ includeExcluded: true }
+	)
 		.find((model: ProviderModelInfo): boolean => model.id === modelId);
-	return fallbackModel?.capabilities.imageInput === true;
+	return effectiveModel?.capabilities.imageInput === true;
 }

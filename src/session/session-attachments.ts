@@ -2,7 +2,11 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { AdditionalContextItem, AiChatParams } from "../protocol/types.js";
-import { MAX_IMAGE_BYTES, SUPPORTED_IMAGE_MIME_TYPES } from "../protocol/image-attachments.js";
+import {
+	MAX_IMAGE_BYTES,
+	MAX_IMAGE_THUMBNAIL_DATA_URL_CHARS,
+	SUPPORTED_IMAGE_MIME_TYPES
+} from "../protocol/image-attachments.js";
 import { assertSupportedImageSignature } from "../protocol/image-file-signature.js";
 import { getSessionDir, openSession } from "./session-store.js";
 import { getSessionDatabase, parseSqlJson, sqlJson } from "./session-database.js";
@@ -328,7 +332,7 @@ export async function saveImageAttachment(input: SaveImageAttachmentInput): Prom
 		throw new Error("Unsupported image mimeType.");
 	}
 	if (input.byteSize <= 0 || input.byteSize > MAX_IMAGE_BYTES) {
-		throw new Error("Image is larger than 1 MiB.");
+		throw new Error(`Image is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MiB.`);
 	}
 
 	const bytes: Buffer = parseImageDataUrl(input.mimeType, input.dataUrl);
@@ -364,7 +368,10 @@ export async function saveImageAttachment(input: SaveImageAttachmentInput): Prom
 		await rm(attachmentImagePath(input.sessionId, attachmentId), { force: true });
 		throw error;
 	}
-	return createImageAttachmentContext(metadata, input.dataUrl);
+	const thumbnailDataUrl: string | undefined = input.dataUrl.length <= MAX_IMAGE_THUMBNAIL_DATA_URL_CHARS
+		? input.dataUrl
+		: undefined;
+	return createImageAttachmentContext(metadata, thumbnailDataUrl);
 }
 
 export async function readImageAttachmentDataUrl(sessionId: string, attachmentId: string): Promise<string> {

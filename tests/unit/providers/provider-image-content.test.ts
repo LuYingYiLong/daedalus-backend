@@ -164,7 +164,7 @@ test("image preprocessing requires recognition model when current model lacks im
 			(error: unknown): boolean => {
 				assert.equal(error instanceof ProviderImageInputError, true);
 				assert.equal((error as ProviderImageInputError).code, "model_does_not_support_images");
-				assert.match((error as Error).message, /Configure an image recognition model/);
+				assert.match((error as Error).message, /Enable Vision/);
 				return true;
 			}
 		);

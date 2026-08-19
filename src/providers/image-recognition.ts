@@ -98,13 +98,13 @@ export async function preprocessImageAttachmentsForTextModel(
 	if (imageModel.source === "current") {
 		throw new ProviderImageInputError(
 			"model_does_not_support_images",
-			`${getProviderDisplayName(currentOptions.provider)} model ${currentModelId} does not support image input. Configure an image recognition model in backend settings.`
+			`Daedalus does not have Vision enabled for ${getProviderDisplayName(currentOptions.provider)} model ${currentModelId}. Enable Vision for the model or configure another image recognition model.`
 		);
 	}
 	if (!await modelSupportsImageInput(imageModel.provider, imageModel.model)) {
 		throw new ProviderImageInputError(
 			"model_does_not_support_images",
-			`${getProviderDisplayName(imageModel.provider)} model ${imageModel.model} does not support image input. Choose an image-capable recognition model.`
+			`Daedalus does not have Vision enabled for ${getProviderDisplayName(imageModel.provider)} model ${imageModel.model}. Enable Vision for the model or choose another recognition model.`
 		);
 	}
 

@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { MAX_IMAGE_BYTES, MAX_IMAGE_DATA_URL_CHARS, SUPPORTED_IMAGE_MIME_TYPES } from "./image-attachments.js";
+import {
+	MAX_IMAGE_BYTES,
+	MAX_IMAGE_DATA_URL_CHARS,
+	MAX_IMAGE_THUMBNAIL_DATA_URL_CHARS,
+	SUPPORTED_IMAGE_MIME_TYPES
+} from "./image-attachments.js";
 
 export const promptIdSchema = z.enum([
 	"godot.assistant",
@@ -61,12 +66,13 @@ const providerWebsiteUrlSchema = z.string()
 
 const imageContextDataSchema = z.object({
 	mimeType: z.enum(SUPPORTED_IMAGE_MIME_TYPES as [string, ...string[]]),
-	dataUrl: z.string().min(1).max(1_500_000).optional(),
+	dataUrl: z.string().min(1).max(MAX_IMAGE_DATA_URL_CHARS).optional(),
 	attachmentId: z.string().min(1).max(160).optional(),
-	thumbnailDataUrl: z.string().min(1).max(1_500_000).optional(),
+	thumbnailDataUrl: z.string().min(1).max(MAX_IMAGE_THUMBNAIL_DATA_URL_CHARS).optional(),
 	byteSize: z.number().int().positive().max(MAX_IMAGE_BYTES),
 	width: z.number().int().positive().optional(),
-	height: z.number().int().positive().optional()
+	height: z.number().int().positive().optional(),
+	sourcePath: z.string().min(1).max(1000).optional()
 });
 
 const textAttachmentContextDataSchema = z.object({
@@ -339,7 +345,7 @@ export const additionalContextItemSchema = z.object({
 		context.addIssue({
 			code: "custom",
 			path: ["data"],
-			message: "Image context data must contain mimeType, dataUrl, and byteSize."
+			message: "Image context data must contain valid attachment metadata and a bounded optional preview."
 		});
 		return;
 	}

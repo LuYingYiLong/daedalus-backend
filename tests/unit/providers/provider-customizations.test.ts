@@ -33,6 +33,7 @@ import {
 	saveProviderModelsCache,
 	setProviderEnabled
 } from "../../../src/providers/provider-config-store.js";
+import { modelSupportsImageInput } from "../../../src/providers/provider-image-content.js";
 import { installMemorySecretStore, resetSecretStoreDriver } from "../../helpers/secret-store.js";
 
 const allEditableCapabilities = {
@@ -263,6 +264,7 @@ test("model overrides survive reload and preserve capabilities outside the edita
 		assert.equal(model?.capabilities.tools, true);
 		assert.equal(model?.capabilities.imageGeneration, true);
 		assert.equal(model?.capabilities.imageEdit, true);
+		assert.equal(await modelSupportsImageInput("deepseek", "api-special"), true);
 		assert.deepEqual(model?.capabilities.reasoningEfforts, [
 			{ id: "low", fallback: "low" },
 			{ id: "xhigh", fallback: "high", default: true }

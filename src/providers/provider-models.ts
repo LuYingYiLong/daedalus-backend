@@ -154,8 +154,7 @@ function normalizeCapabilities(raw: Record<string, unknown>, fallback: ProviderM
 			? raw.supports_image_edit
 			: typeof raw.image_edit === "boolean"
 				? raw.image_edit
-				: fallback?.capabilities.imageEdit,
-		vision: fallback?.capabilities.vision
+				: fallback?.capabilities.imageEdit
 	};
 
 	return normalizeProviderModelCapabilities(capabilities);

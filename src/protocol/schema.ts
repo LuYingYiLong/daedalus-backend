@@ -88,321 +88,378 @@ const providerTaskModelRefSchema = z.object({
 	model: z.string().min(1)
 });
 
-const providerModelRoutingSchema = z.object({
-	imageRecognition: providerTaskModelRefSchema.nullable().optional(),
-	sessionTitle: providerTaskModelRefSchema.nullable().optional(),
-	nextStepHints: providerTaskModelRefSchema.nullable().optional(),
-	imageGeneration: providerTaskModelRefSchema.nullable().optional(),
-	gitCommit: providerTaskModelRefSchema.nullable().optional(),
-	commandReview: providerTaskModelRefSchema.nullable().optional(),
-	goalEvaluator: providerTaskModelRefSchema.nullable().optional(),
-	contextCompression: providerTaskModelRefSchema.nullable().optional()
-}).strict();
+const providerModelRoutingSchema = z
+	.object({
+		imageRecognition: providerTaskModelRefSchema.nullable().optional(),
+		sessionTitle: providerTaskModelRefSchema.nullable().optional(),
+		nextStepHints: providerTaskModelRefSchema.nullable().optional(),
+		imageGeneration: providerTaskModelRefSchema.nullable().optional(),
+		gitCommit: providerTaskModelRefSchema.nullable().optional(),
+		commandReview: providerTaskModelRefSchema.nullable().optional(),
+		goalEvaluator: providerTaskModelRefSchema.nullable().optional(),
+		contextCompression: providerTaskModelRefSchema.nullable().optional()
+	})
+	.strict();
 
-const providerRequestJsonValueSchema: z.ZodType<unknown> = z.lazy(() => z.union([
-	z.string().max(16_000),
-	z.number().finite(),
-	z.boolean(),
-	z.null(),
-	z.array(providerRequestJsonValueSchema).max(512),
-	z.record(z.string().min(1).max(160), providerRequestJsonValueSchema)
-]));
+const providerRequestJsonValueSchema: z.ZodType<unknown> = z.lazy(() =>
+	z.union([
+		z.string().max(16_000),
+		z.number().finite(),
+		z.boolean(),
+		z.null(),
+		z.array(providerRequestJsonValueSchema).max(512),
+		z.record(z.string().min(1).max(160), providerRequestJsonValueSchema)
+	])
+);
 
-const providerRequestOverridesSchema = z.object({
-	headers: z.record(z.string().min(1).max(160), z.string().max(8_000)).optional(),
-	body: z.record(z.string().min(1).max(160), providerRequestJsonValueSchema).optional()
-}).strict();
+const providerRequestOverridesSchema = z
+	.object({
+		headers: z.record(z.string().min(1).max(160), z.string().max(8_000)).optional(),
+		body: z.record(z.string().min(1).max(160), providerRequestJsonValueSchema).optional()
+	})
+	.strict();
 
-const providerReasoningEffortOptionSchema = z.object({
-	id: z.string().trim().min(1).max(32),
-	fallback: z.enum(["low", "medium", "high", "max"]),
-	default: z.boolean().optional()
-}).strict();
+const providerReasoningEffortOptionSchema = z
+	.object({
+		id: z.string().trim().min(1).max(32),
+		fallback: z.enum(["low", "medium", "high", "max"]),
+		default: z.boolean().optional()
+	})
+	.strict();
 
-const providerReasoningEffortsSchema = z.array(providerReasoningEffortOptionSchema).max(16).superRefine((options, context): void => {
-	const ids: Set<string> = new Set();
-	let defaultCount: number = 0;
-	for (const [index, option] of options.entries()) {
-		if (ids.has(option.id)) {
+const providerReasoningEffortsSchema = z
+	.array(providerReasoningEffortOptionSchema)
+	.max(16)
+	.superRefine((options, context): void => {
+		const ids: Set<string> = new Set();
+		let defaultCount: number = 0;
+		for (const [index, option] of options.entries()) {
+			if (ids.has(option.id)) {
+				context.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: "Reasoning effort IDs must be unique.",
+					path: [index, "id"]
+				});
+			}
+			ids.add(option.id);
+			defaultCount += option.default === true ? 1 : 0;
+		}
+		if (defaultCount > 1) {
 			context.addIssue({
 				code: z.ZodIssueCode.custom,
-				message: "Reasoning effort IDs must be unique.",
-				path: [index, "id"]
+				message: "Only one reasoning effort can be the default."
 			});
 		}
-		ids.add(option.id);
-		defaultCount += option.default === true ? 1 : 0;
-	}
-	if (defaultCount > 1) {
-		context.addIssue({
-			code: z.ZodIssueCode.custom,
-			message: "Only one reasoning effort can be the default."
-		});
-	}
-});
+	});
 
-const providerModelCapabilitiesSchema = z.object({
-	imageInput: z.boolean().optional(),
-	videoInput: z.boolean().optional(),
-	reasoning: z.boolean().optional(),
-	reasoningEfforts: providerReasoningEffortsSchema.optional(),
-	tools: z.boolean().optional(),
-	webSearch: z.boolean().optional(),
-	vision: z.boolean().optional(),
-	imageGeneration: z.boolean().optional(),
-	imageEdit: z.boolean().optional()
-}).strict();
+const providerModelCapabilitiesSchema = z
+	.object({
+		imageInput: z.boolean().optional(),
+		videoInput: z.boolean().optional(),
+		reasoning: z.boolean().optional(),
+		reasoningEfforts: providerReasoningEffortsSchema.optional(),
+		tools: z.boolean().optional(),
+		webSearch: z.boolean().optional(),
+		vision: z.boolean().optional(),
+		imageGeneration: z.boolean().optional(),
+		imageEdit: z.boolean().optional()
+	})
+	.strict();
 
-const discoveredProviderModelSchema = z.object({
-	id: z.string().trim().min(1).max(200),
-	displayName: z.string().trim().min(1).max(120),
-	contextWindowTokens: z.number().int().positive().max(2_000_000_000),
-	maxOutputTokens: z.number().int().positive().max(2_000_000_000),
-	capabilities: providerModelCapabilitiesSchema,
-	ownedBy: z.string().trim().min(1).max(200).optional()
-}).strict();
+const discoveredProviderModelSchema = z
+	.object({
+		id: z.string().trim().min(1).max(200),
+		displayName: z.string().trim().min(1).max(120),
+		contextWindowTokens: z.number().int().positive().max(2_000_000_000),
+		maxOutputTokens: z.number().int().positive().max(2_000_000_000),
+		capabilities: providerModelCapabilitiesSchema,
+		ownedBy: z.string().trim().min(1).max(200).optional()
+	})
+	.strict();
 
-const sessionUiMetadataParamsSchema = z.object({
-	provider: providerIdSchema.optional(),
-	model: z.string().min(1).optional(),
-	reasoningEffort: z.string().min(1).max(32).optional(),
-	chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
-	approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
-	workflowTodoCollapsed: z.boolean().optional(),
-	workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
-	workspaceLaunch: z.enum(["file-explorer", "terminal", "vscode", "visual-studio", "github-desktop", "git-bash", "godot"]).optional(),
-}).strict();
-
-const editableProviderModelCapabilitiesSchema = z.object({
-	imageInput: z.boolean(),
-	videoInput: z.boolean(),
-	reasoning: z.boolean(),
-	tools: z.boolean(),
-	webSearch: z.boolean(),
-	imageGeneration: z.boolean(),
-	imageEdit: z.boolean()
-}).strict();
-
-const editableProviderModelCapabilityOverridesSchema = z.object({
-	imageInput: z.boolean().nullable(),
-	videoInput: z.boolean().nullable(),
-	reasoning: z.boolean().nullable(),
-	tools: z.boolean().nullable(),
-	webSearch: z.boolean().nullable(),
-	imageGeneration: z.boolean().nullable(),
-	imageEdit: z.boolean().nullable()
-}).strict();
-
-export const messageTextAnchorSchema = z.object({
-	entryId: z.string().trim().min(1).max(240),
-	requestId: z.string().trim().min(1).max(240),
-	role: z.enum(["user", "assistant"]),
-	segmentKey: z.string().trim().min(1).max(240),
-	startOffset: z.number().int().min(0).max(2_000_000_000),
-	endOffset: z.number().int().positive().max(2_000_000_000),
-	quote: z.string().min(1).max(8000),
-	contextBefore: z.string().max(800),
-	contextAfter: z.string().max(800)
-}).strict().superRefine((anchor, context): void => {
-	if (anchor.endOffset <= anchor.startOffset) {
-		context.addIssue({
-			code: "custom",
-			path: ["endOffset"],
-			message: "Selection endOffset must be greater than startOffset."
-		});
-	}
-});
-
-const messageSelectionContextDataSchema = z.object({
-	anchor: messageTextAnchorSchema,
-	selectedText: z.string().min(1).max(8000),
-	annotation: z.string().max(1200)
-}).strict();
-
-const fileSelectionContextDataSchema = z.object({
-	selectedText: z.string().min(1).max(8000),
-	annotation: z.string().max(1200),
-	lineStart: z.number().int().positive().max(2_000_000_000),
-	lineEnd: z.number().int().positive().max(2_000_000_000),
-	columnStart: z.number().int().positive().max(2_000_000_000),
-	columnEnd: z.number().int().positive().max(2_000_000_000),
-	workspaceId: z.string().min(1).max(200).optional(),
-	sourceFolderId: z.string().min(1).max(200),
-	relativePath: z.string().min(1).max(1000)
-}).strict().superRefine((selection, context): void => {
-	if (selection.lineEnd < selection.lineStart
-		|| (selection.lineEnd === selection.lineStart && selection.columnEnd <= selection.columnStart)) {
-		context.addIssue({
-			code: "custom",
-			path: ["lineEnd"],
-			message: "File selection end must be after its start."
-		});
-	}
-});
-
-const webElementContextDataSchema = z.object({
-	url: z.url().max(2048).refine((value: string): boolean => value.startsWith("https://") || value.startsWith("http://"), "Web element URL must use HTTP or HTTPS."),
-	pageTitle: z.string().max(300),
-	selector: z.string().min(1).max(1000),
-	tagName: z.string().min(1).max(80),
-	role: z.string().max(120),
-	accessibleName: z.string().max(500),
-	selectedText: z.string().max(8000),
-	attributes: z.record(z.string().min(1).max(120), z.string().max(500)).superRefine((attributes, context): void => {
-		if (Object.keys(attributes).length > 20) {
-			context.addIssue({ code: "custom", message: "Web element attributes cannot contain more than 20 entries." });
-		}
-	}),
-	annotation: z.string().max(1200)
-}).strict();
-
-export const additionalContextItemSchema = z.object({
-	id: z.string().min(1).max(160),
-	kind: z.enum(["editor_selection", "scene", "node", "file", "folder", "script", "script_selection", "filesystem_selection", "image", "text_attachment", "git_diff_comment", "message_selection", "file_selection", "web_element"]),
-	title: z.string().min(1).max(200),
-	subtitle: z.string().max(400).optional(),
-	pinned: z.boolean().optional(),
-	source: z.enum(["editor", "manual"]),
-	resourcePath: z.string().max(1000).optional(),
-	nodePath: z.string().max(500).optional(),
-	nodeType: z.string().max(160).optional(),
-	scriptPath: z.string().max(500).optional(),
-	summary: z.string().max(1200).optional(),
-	data: z.unknown().optional()
-}).superRefine((item, context): void => {
-	if (item.kind === "web_element") {
-		if (!webElementContextDataSchema.safeParse(item.data).success) {
-			context.addIssue({
-				code: "custom",
-				path: ["data"],
-				message: "Web element context data must contain a validated page and element snapshot."
-			});
-		}
-		if (item.pinned === true) {
-			context.addIssue({
-				code: "custom",
-				path: ["pinned"],
-				message: "Web element context cannot be pinned."
-			});
-		}
-		return;
-	}
-
-	if (item.kind === "file_selection") {
-		if (!fileSelectionContextDataSchema.safeParse(item.data).success || item.resourcePath === undefined) {
-			context.addIssue({
-				code: "custom",
-				path: ["data"],
-				message: "File selection context data must contain a path, selection range, selectedText, and annotation."
-			});
-		}
-		if (item.pinned === true) {
-			context.addIssue({
-				code: "custom",
-				path: ["pinned"],
-				message: "File selection context cannot be pinned."
-			});
-		}
-		return;
-	}
-
-	if (item.kind === "message_selection") {
-		const parsed = messageSelectionContextDataSchema.safeParse(item.data);
-		if (!parsed.success || parsed.data.selectedText !== parsed.data.anchor.quote) {
-			context.addIssue({
-				code: "custom",
-				path: ["data"],
-				message: "Message selection context data must contain a matching anchor, selectedText, and annotation."
-			});
-		}
-		if (item.pinned === true) {
-			context.addIssue({
-				code: "custom",
-				path: ["pinned"],
-				message: "Message selection context cannot be pinned."
-			});
-		}
-		return;
-	}
-
-	if (item.kind === "text_attachment") {
-		if (!textAttachmentContextDataSchema.safeParse(item.data).success) {
-			context.addIssue({
-				code: "custom",
-				path: ["data"],
-				message: "Text attachment context data must contain attachment metadata."
-			});
-		}
-		return;
-	}
-
-	if (item.kind !== "image") {
-		return;
-	}
-
-	const parsed = imageContextDataSchema.safeParse(item.data);
-	if (!parsed.success) {
-		context.addIssue({
-			code: "custom",
-			path: ["data"],
-			message: "Image context data must contain valid attachment metadata and a bounded optional preview."
-		});
-		return;
-	}
-
-	if (parsed.data.dataUrl === undefined && parsed.data.attachmentId === undefined) {
-		context.addIssue({
-			code: "custom",
-			path: ["data"],
-			message: "Image context data must contain dataUrl or attachmentId."
-		});
-		return;
-	}
-
-	if (parsed.data.dataUrl !== undefined && !parsed.data.dataUrl.startsWith(`data:${parsed.data.mimeType};base64,`)) {
-		context.addIssue({
-			code: "custom",
-			path: ["data", "dataUrl"],
-			message: "Image dataUrl must match mimeType."
-		});
-	}
-});
-
-export const aiChatParamsSchema = z.object({
-	message: z.string(),
-	mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
-	provider: providerIdSchema.optional(),
-	model: z.string().min(1).optional(),
-	promptId: promptIdSchema.optional(),
-	skillRefs: z.array(skillRefSchema).max(4).optional(),
-	systemPrompt: z.string().optional(),
-	retryFromRequestId: z.string().min(1).optional(),
-	retryOfRunId: z.string().min(1).optional(),
-	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
-	options: z.object({
-		temperature: z.number().min(0).max(2).optional(),
-		topP: z.number().min(0).max(1).optional(),
-		maxTokens: z.number().int().positive().optional(),
+const sessionUiMetadataParamsSchema = z
+	.object({
+		provider: providerIdSchema.optional(),
+		model: z.string().min(1).optional(),
 		reasoningEffort: z.string().min(1).max(32).optional(),
-		stop: z.union([z.string(), z.array(z.string())]).optional(),
-		responseFormat: z.union([z.literal("text"), z.literal("json")]).optional(),
-		stream: z.boolean().optional(),
-		toolBudget: z.enum(["simple", "normal", "codegen", "project_edit"]).optional(),
-		executionPolicy: z.enum(["auto", "read_only"]).optional(),
-		verificationPolicy: z.enum(["required", "best_effort", "skip"]).optional(),
-		outputTarget: z.enum(["chat", "workspace"]).optional(),
-		workflow: z.enum(["auto", "single", "multi_phase", "llm_planned"]).optional(),
-		queueItemId: z.number().int().positive().optional(),
-	}).optional()
-}).superRefine((params, context): void => {
-	if (params.message.trim().length === 0 && (params.additionalContext?.length ?? 0) === 0) {
-		context.addIssue({
-			code: "custom",
-			path: ["message"],
-			message: "Message or additional context is required."
-		});
-	}
-});
+		chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
+		approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
+		workflowTodoCollapsed: z.boolean().optional(),
+		workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
+		workspaceLaunch: z.enum(["file-explorer", "terminal", "vscode", "visual-studio", "github-desktop", "git-bash", "godot"]).optional()
+	})
+	.strict();
+
+const editableProviderModelCapabilitiesSchema = z
+	.object({
+		imageInput: z.boolean(),
+		videoInput: z.boolean(),
+		reasoning: z.boolean(),
+		tools: z.boolean(),
+		webSearch: z.boolean(),
+		imageGeneration: z.boolean(),
+		imageEdit: z.boolean()
+	})
+	.strict();
+
+const editableProviderModelCapabilityOverridesSchema = z
+	.object({
+		imageInput: z.boolean().nullable(),
+		videoInput: z.boolean().nullable(),
+		reasoning: z.boolean().nullable(),
+		tools: z.boolean().nullable(),
+		webSearch: z.boolean().nullable(),
+		imageGeneration: z.boolean().nullable(),
+		imageEdit: z.boolean().nullable()
+	})
+	.strict();
+
+export const messageTextAnchorSchema = z
+	.object({
+		entryId: z.string().trim().min(1).max(240),
+		requestId: z.string().trim().min(1).max(240),
+		role: z.enum(["user", "assistant"]),
+		segmentKey: z.string().trim().min(1).max(240),
+		startOffset: z.number().int().min(0).max(2_000_000_000),
+		endOffset: z.number().int().positive().max(2_000_000_000),
+		quote: z.string().min(1).max(8000),
+		contextBefore: z.string().max(800),
+		contextAfter: z.string().max(800)
+	})
+	.strict()
+	.superRefine((anchor, context): void => {
+		if (anchor.endOffset <= anchor.startOffset) {
+			context.addIssue({
+				code: "custom",
+				path: ["endOffset"],
+				message: "Selection endOffset must be greater than startOffset."
+			});
+		}
+	});
+
+const messageSelectionContextDataSchema = z
+	.object({
+		anchor: messageTextAnchorSchema,
+		selectedText: z.string().min(1).max(8000),
+		annotation: z.string().max(1200)
+	})
+	.strict();
+
+const fileSelectionContextDataSchema = z
+	.object({
+		selectedText: z.string().min(1).max(8000),
+		annotation: z.string().max(1200),
+		lineStart: z.number().int().positive().max(2_000_000_000),
+		lineEnd: z.number().int().positive().max(2_000_000_000),
+		columnStart: z.number().int().positive().max(2_000_000_000),
+		columnEnd: z.number().int().positive().max(2_000_000_000),
+		workspaceId: z.string().min(1).max(200).optional(),
+		sourceFolderId: z.string().min(1).max(200),
+		relativePath: z.string().min(1).max(1000)
+	})
+	.strict()
+	.superRefine((selection, context): void => {
+		if (selection.lineEnd < selection.lineStart || (selection.lineEnd === selection.lineStart && selection.columnEnd <= selection.columnStart)) {
+			context.addIssue({
+				code: "custom",
+				path: ["lineEnd"],
+				message: "File selection end must be after its start."
+			});
+		}
+	});
+
+const webElementContextDataSchema = z
+	.object({
+		url: z
+			.url()
+			.max(2048)
+			.refine((value: string): boolean => value.startsWith("https://") || value.startsWith("http://"), "Web element URL must use HTTP or HTTPS."),
+		pageTitle: z.string().max(300),
+		selector: z.string().min(1).max(1000),
+		tagName: z.string().min(1).max(80),
+		role: z.string().max(120),
+		accessibleName: z.string().max(500),
+		selectedText: z.string().max(8000),
+		attributes: z.record(z.string().min(1).max(120), z.string().max(500)).superRefine((attributes, context): void => {
+			if (Object.keys(attributes).length > 20) {
+				context.addIssue({
+					code: "custom",
+					message: "Web element attributes cannot contain more than 20 entries."
+				});
+			}
+		}),
+		annotation: z.string().max(1200)
+	})
+	.strict();
+
+export const additionalContextItemSchema = z
+	.object({
+		id: z.string().min(1).max(160),
+		kind: z.enum([
+			"editor_selection",
+			"scene",
+			"node",
+			"file",
+			"folder",
+			"script",
+			"script_selection",
+			"filesystem_selection",
+			"image",
+			"text_attachment",
+			"git_diff_comment",
+			"message_selection",
+			"file_selection",
+			"web_element"
+		]),
+		title: z.string().min(1).max(200),
+		subtitle: z.string().max(400).optional(),
+		pinned: z.boolean().optional(),
+		source: z.enum(["editor", "manual"]),
+		resourcePath: z.string().max(1000).optional(),
+		nodePath: z.string().max(500).optional(),
+		nodeType: z.string().max(160).optional(),
+		scriptPath: z.string().max(500).optional(),
+		summary: z.string().max(1200).optional(),
+		data: z.unknown().optional()
+	})
+	.superRefine((item, context): void => {
+		if (item.kind === "web_element") {
+			if (!webElementContextDataSchema.safeParse(item.data).success) {
+				context.addIssue({
+					code: "custom",
+					path: ["data"],
+					message: "Web element context data must contain a validated page and element snapshot."
+				});
+			}
+			if (item.pinned === true) {
+				context.addIssue({
+					code: "custom",
+					path: ["pinned"],
+					message: "Web element context cannot be pinned."
+				});
+			}
+			return;
+		}
+
+		if (item.kind === "file_selection") {
+			if (!fileSelectionContextDataSchema.safeParse(item.data).success || item.resourcePath === undefined) {
+				context.addIssue({
+					code: "custom",
+					path: ["data"],
+					message: "File selection context data must contain a path, selection range, selectedText, and annotation."
+				});
+			}
+			if (item.pinned === true) {
+				context.addIssue({
+					code: "custom",
+					path: ["pinned"],
+					message: "File selection context cannot be pinned."
+				});
+			}
+			return;
+		}
+
+		if (item.kind === "message_selection") {
+			const parsed = messageSelectionContextDataSchema.safeParse(item.data);
+			if (!parsed.success || parsed.data.selectedText !== parsed.data.anchor.quote) {
+				context.addIssue({
+					code: "custom",
+					path: ["data"],
+					message: "Message selection context data must contain a matching anchor, selectedText, and annotation."
+				});
+			}
+			if (item.pinned === true) {
+				context.addIssue({
+					code: "custom",
+					path: ["pinned"],
+					message: "Message selection context cannot be pinned."
+				});
+			}
+			return;
+		}
+
+		if (item.kind === "text_attachment") {
+			if (!textAttachmentContextDataSchema.safeParse(item.data).success) {
+				context.addIssue({
+					code: "custom",
+					path: ["data"],
+					message: "Text attachment context data must contain attachment metadata."
+				});
+			}
+			return;
+		}
+
+		if (item.kind !== "image") {
+			return;
+		}
+
+		const parsed = imageContextDataSchema.safeParse(item.data);
+		if (!parsed.success) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "Image context data must contain valid attachment metadata and a bounded optional preview."
+			});
+			return;
+		}
+
+		if (parsed.data.dataUrl === undefined && parsed.data.attachmentId === undefined) {
+			context.addIssue({
+				code: "custom",
+				path: ["data"],
+				message: "Image context data must contain dataUrl or attachmentId."
+			});
+			return;
+		}
+
+		if (parsed.data.dataUrl !== undefined && !parsed.data.dataUrl.startsWith(`data:${parsed.data.mimeType};base64,`)) {
+			context.addIssue({
+				code: "custom",
+				path: ["data", "dataUrl"],
+				message: "Image dataUrl must match mimeType."
+			});
+		}
+	});
+
+export const aiChatParamsSchema = z
+	.object({
+		message: z.string(),
+		mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
+		provider: providerIdSchema.optional(),
+		model: z.string().min(1).optional(),
+		promptId: promptIdSchema.optional(),
+		skillRefs: z.array(skillRefSchema).max(4).optional(),
+		systemPrompt: z.string().optional(),
+		retryFromRequestId: z.string().min(1).optional(),
+		retryOfRunId: z.string().min(1).optional(),
+		additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
+		options: z
+			.object({
+				temperature: z.number().min(0).max(2).optional(),
+				topP: z.number().min(0).max(1).optional(),
+				maxTokens: z.number().int().positive().optional(),
+				reasoningEffort: z.string().min(1).max(32).optional(),
+				stop: z.union([z.string(), z.array(z.string())]).optional(),
+				responseFormat: z.union([z.literal("text"), z.literal("json")]).optional(),
+				stream: z.boolean().optional(),
+				toolBudget: z.enum(["simple", "normal", "codegen", "project_edit"]).optional(),
+				executionPolicy: z.enum(["auto", "read_only"]).optional(),
+				verificationPolicy: z.enum(["required", "best_effort", "skip"]).optional(),
+				outputTarget: z.enum(["chat", "workspace"]).optional(),
+				workflow: z.enum(["auto", "single", "multi_phase", "llm_planned"]).optional(),
+				queueItemId: z.number().int().positive().optional()
+			})
+			.optional()
+	})
+	.superRefine((params, context): void => {
+		if (params.message.trim().length === 0 && (params.additionalContext?.length ?? 0) === 0) {
+			context.addIssue({
+				code: "custom",
+				path: ["message"],
+				message: "Message or additional context is required."
+			});
+		}
+	});
 
 const guideTextSchema = z.string().min(1).max(4000);
 const queuedMessageSnapshotShape = {
@@ -456,108 +513,127 @@ const workbenchAdditionalContextActionSchema = z.discriminatedUnion("action", [
 		action: z.literal("clearUnpinned")
 	})
 ]);
-const workbenchPatchParamsSchema = z.object({
-	clientSequence: z.number().int().nonnegative().optional(),
-	composer: z.object({
-		text: z.string().max(20000).optional(),
-		chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
-		provider: providerIdSchema.optional(),
-		model: z.string().min(1).optional(),
-		reasoningEffort: z.string().min(1).max(32).optional(),
-		additionalContext: z.array(additionalContextItemSchema).max(10).optional()
-	}).strict().optional(),
-	additionalContextAction: workbenchAdditionalContextActionSchema.optional(),
-	nextStepHintsAction: z.literal("clear").optional(),
-	activeRun: z.object({
-		status: z.enum(["idle", "streaming", "paused", "approval", "cancelling"]).optional(),
-		requestId: z.string().min(1).optional(),
-		startedAt: z.string().min(1).optional(),
-		queueItemId: z.number().int().positive().optional(),
-		statusCode: z.string().max(80).optional()
-	}).strict().optional()
-}).strict();
+const workbenchPatchParamsSchema = z
+	.object({
+		clientSequence: z.number().int().nonnegative().optional(),
+		composer: z
+			.object({
+				text: z.string().max(20000).optional(),
+				chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
+				provider: providerIdSchema.optional(),
+				model: z.string().min(1).optional(),
+				reasoningEffort: z.string().min(1).max(32).optional(),
+				additionalContext: z.array(additionalContextItemSchema).max(10).optional()
+			})
+			.strict()
+			.optional(),
+		additionalContextAction: workbenchAdditionalContextActionSchema.optional(),
+		nextStepHintsAction: z.literal("clear").optional(),
+		activeRun: z
+			.object({
+				status: z.enum(["idle", "streaming", "paused", "approval", "cancelling"]).optional(),
+				requestId: z.string().min(1).optional(),
+				startedAt: z.string().min(1).optional(),
+				queueItemId: z.number().int().positive().optional(),
+				statusCode: z.string().max(80).optional()
+			})
+			.strict()
+			.optional()
+	})
+	.strict();
 const usageMetricsStatusSchema = z.enum(["success", "error", "cancelled"]);
 const usageMetricsSourceSchema = z.enum(["provider", "estimated", "missing"]);
-const usageMetricsFiltersSchema = z.object({
-	startAt: z.string().min(1).optional(),
-	endAt: z.string().min(1).optional(),
-	provider: providerIdSchema.optional(),
-	model: z.string().min(1).optional(),
-	sessionId: z.string().min(1).optional(),
-	workspaceId: z.string().min(1).optional(),
-	operation: z.string().min(1).max(120).optional(),
-	status: usageMetricsStatusSchema.optional(),
-	usageSource: usageMetricsSourceSchema.optional()
-}).strict();
-const usageMetricsLogsParamsSchema = usageMetricsFiltersSchema.extend({
-	limit: z.number().int().min(1).max(500).optional(),
-	offset: z.number().int().min(0).optional()
-}).strict();
-const usageMetricsTrendsParamsSchema = usageMetricsFiltersSchema.extend({
-	bucket: z.enum(["hour", "day"]).optional()
-}).strict();
+const usageMetricsFiltersSchema = z
+	.object({
+		startAt: z.string().min(1).optional(),
+		endAt: z.string().min(1).optional(),
+		provider: providerIdSchema.optional(),
+		model: z.string().min(1).optional(),
+		sessionId: z.string().min(1).optional(),
+		workspaceId: z.string().min(1).optional(),
+		operation: z.string().min(1).max(120).optional(),
+		status: usageMetricsStatusSchema.optional(),
+		usageSource: usageMetricsSourceSchema.optional()
+	})
+	.strict();
+const usageMetricsLogsParamsSchema = usageMetricsFiltersSchema
+	.extend({
+		limit: z.number().int().min(1).max(500).optional(),
+		offset: z.number().int().min(0).optional()
+	})
+	.strict();
+const usageMetricsTrendsParamsSchema = usageMetricsFiltersSchema
+	.extend({
+		bucket: z.enum(["hour", "day"]).optional()
+	})
+	.strict();
 const workspaceTreeOrderIdSchema = z.string().trim().min(1).max(240);
 const workspaceTreeSectionKeySchema = z.enum(["pinned", "projects", "recent"]);
-const workspaceTreeOrderUpdateParamsSchema = z.object({
-	workspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000),
-	sessionIdsByWorkspace: z.record(
-		workspaceTreeOrderIdSchema,
-		z.array(workspaceTreeOrderIdSchema).max(100_000)
-	),
-	pinnedSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
-	recentSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
-	expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3),
-	expandedWorkspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000)
-}).strict().superRefine((value, context): void => {
-	if (new Set(value.workspaceIds).size !== value.workspaceIds.length) {
-		context.addIssue({
-			code: "custom",
-			path: ["workspaceIds"],
-			message: "Workspace ids must be unique."
-		});
-	}
-	if (new Set(value.expandedSectionKeys).size !== value.expandedSectionKeys.length) {
-		context.addIssue({
-			code: "custom",
-			path: ["expandedSectionKeys"],
-			message: "Expanded section keys must be unique."
-		});
-	}
-	if (new Set(value.expandedWorkspaceIds).size !== value.expandedWorkspaceIds.length) {
-		context.addIssue({
-			code: "custom",
-			path: ["expandedWorkspaceIds"],
-			message: "Expanded workspace ids must be unique."
-		});
-	}
-	const seenSessionIds: Set<string> = new Set();
-	const sessionOrderGroups: Array<{ path: Array<string>; sessionIds: string[] }> = [
-		{ path: ["pinnedSessionIds"], sessionIds: value.pinnedSessionIds },
-		{ path: ["recentSessionIds"], sessionIds: value.recentSessionIds },
-		...Object.entries(value.sessionIdsByWorkspace).map(([workspaceId, sessionIds]) => ({
-			path: ["sessionIdsByWorkspace", workspaceId],
-			sessionIds
-		}))
-	];
-	for (const { path, sessionIds } of sessionOrderGroups) {
-		const localIds: Set<string> = new Set();
-		for (const sessionId of sessionIds) {
-			if (localIds.has(sessionId) || seenSessionIds.has(sessionId)) {
-				context.addIssue({
-					code: "custom",
-					path,
-					message: "Session ids must be unique across all workspace tree sections."
-				});
-				return;
-			}
-			localIds.add(sessionId);
-			seenSessionIds.add(sessionId);
+const workspaceTreeOrderUpdateParamsSchema = z
+	.object({
+		workspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000),
+		sessionIdsByWorkspace: z.record(workspaceTreeOrderIdSchema, z.array(workspaceTreeOrderIdSchema).max(100_000)),
+		pinnedSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
+		recentSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
+		expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3),
+		expandedWorkspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000)
+	})
+	.strict()
+	.superRefine((value, context): void => {
+		if (new Set(value.workspaceIds).size !== value.workspaceIds.length) {
+			context.addIssue({
+				code: "custom",
+				path: ["workspaceIds"],
+				message: "Workspace ids must be unique."
+			});
 		}
-	}
-});
-const customMcpSecretRecordSchema = z.record(z.string().min(1).max(160), z.string().max(20000))
+		if (new Set(value.expandedSectionKeys).size !== value.expandedSectionKeys.length) {
+			context.addIssue({
+				code: "custom",
+				path: ["expandedSectionKeys"],
+				message: "Expanded section keys must be unique."
+			});
+		}
+		if (new Set(value.expandedWorkspaceIds).size !== value.expandedWorkspaceIds.length) {
+			context.addIssue({
+				code: "custom",
+				path: ["expandedWorkspaceIds"],
+				message: "Expanded workspace ids must be unique."
+			});
+		}
+		const seenSessionIds: Set<string> = new Set();
+		const sessionOrderGroups: Array<{
+			path: Array<string>;
+			sessionIds: string[];
+		}> = [
+			{ path: ["pinnedSessionIds"], sessionIds: value.pinnedSessionIds },
+			{ path: ["recentSessionIds"], sessionIds: value.recentSessionIds },
+			...Object.entries(value.sessionIdsByWorkspace).map(([workspaceId, sessionIds]) => ({
+				path: ["sessionIdsByWorkspace", workspaceId],
+				sessionIds
+			}))
+		];
+		for (const { path, sessionIds } of sessionOrderGroups) {
+			const localIds: Set<string> = new Set();
+			for (const sessionId of sessionIds) {
+				if (localIds.has(sessionId) || seenSessionIds.has(sessionId)) {
+					context.addIssue({
+						code: "custom",
+						path,
+						message: "Session ids must be unique across all workspace tree sections."
+					});
+					return;
+				}
+				localIds.add(sessionId);
+				seenSessionIds.add(sessionId);
+			}
+		}
+	});
+const customMcpSecretRecordSchema = z
+	.record(z.string().min(1).max(160), z.string().max(20000))
 	.refine((value: Record<string, string>): boolean => Object.keys(value).length <= 64, "Too many secret entries");
-const customMcpSecretUpdateRecordSchema = z.record(z.string().min(1).max(160), z.union([z.string().max(20000), z.null()]))
+const customMcpSecretUpdateRecordSchema = z
+	.record(z.string().min(1).max(160), z.union([z.string().max(20000), z.null()]))
 	.refine((value: Record<string, string | null>): boolean => Object.keys(value).length <= 64, "Too many secret entries");
 const customMcpPlanAccessSchema = z.enum(["disabled", "read"]).optional();
 const customMcpServerInputSchema = z.discriminatedUnion("transport", [
@@ -678,38 +754,54 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			bridgeVersion: z.string().min(1).max(64).optional(),
 			bridgeProtocolVersion: z.number().int().positive().optional(),
 			godotVersion: z.string().min(1).max(64).optional(),
-			capabilities: z.record(z.string().min(1), z.boolean()).optional(),
-		}),
+			capabilities: z.record(z.string().min(1), z.boolean()).optional()
+		})
 	}),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("client.info"),
-		params: z.object({}).optional(),
+		params: z.object({}).optional()
 	}),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("client.capabilities.update"),
-		params: z.object({ capabilities: z.object({ browserTools: z.boolean() }).strict() }),
+		params: z.object({
+			capabilities: z.object({ browserTools: z.boolean() }).strict()
+		})
 	}),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("browser.tool.result"),
-		params: z.object({
-			callId: z.string().min(1).max(160),
-			ok: z.boolean(),
-			result: z.record(z.string(), z.unknown()).optional(),
-			error: z.object({
-				code: z.string().min(1).max(120),
-				message: z.string().min(1).max(4000),
-				retryable: z.boolean(),
-			}).strict().optional(),
-		}).strict().superRefine((value, context): void => {
-			if (value.ok && value.result === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful browser tool results require result." });
-			if (!value.ok && value.error === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Failed browser tool results require error." });
-		}),
+		params: z
+			.object({
+				callId: z.string().min(1).max(160),
+				ok: z.boolean(),
+				result: z.record(z.string(), z.unknown()).optional(),
+				error: z
+					.object({
+						code: z.string().min(1).max(120),
+						message: z.string().min(1).max(4000),
+						retryable: z.boolean()
+					})
+					.strict()
+					.optional()
+			})
+			.strict()
+			.superRefine((value, context): void => {
+				if (value.ok && value.result === undefined)
+					context.addIssue({
+						code: z.ZodIssueCode.custom,
+						message: "Successful browser tool results require result."
+					});
+				if (!value.ok && value.error === undefined)
+					context.addIssue({
+						code: z.ZodIssueCode.custom,
+						message: "Failed browser tool results require error."
+					});
+			})
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1221,6 +1313,27 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			sourceRequestId: z.string().min(1).optional(),
 			title: z.string().trim().min(1).max(200),
 		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.worktree.create"),
+		params: z
+			.object({
+				sessionId: z.string().min(1),
+				workspaceId: z.string().min(1)
+			})
+			.strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.worktree.delete"),
+		params: z
+			.object({
+				sessionId: z.string().min(1)
+			})
+			.strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1957,6 +2070,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("workspace.info"),
 		params: z.object({}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("workspace.worktree.eligibility.get"),
+		params: z
+			.object({
+				workspaceId: z.string().min(1)
+			})
+			.strict()
 	}),
 	z.object({
 		type: z.literal("request"),

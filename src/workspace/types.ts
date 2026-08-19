@@ -20,6 +20,23 @@ export type WorkspaceSourceFolder = {
 	capabilities: WorkspaceSourceCapabilities;
 };
 
+export type SessionWorktreeSource = {
+	sourceFolderId: string;
+	sourcePath: string;
+	worktreePath: string;
+	baseCommit: string;
+	baseRef: string | null;
+};
+
+export type SessionWorktreeMetadata = {
+	id: string;
+	sourceWorkspaceId: string;
+	sourceWorkspaceName: string;
+	runtimeWorkspaceId: string;
+	sources: SessionWorktreeSource[];
+	createdAt: string;
+};
+
 export type WorkspaceConfig = {
 	id: string;
 	name: string;

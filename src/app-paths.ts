@@ -21,6 +21,7 @@ export type DaedalusPathKey =
 	| "godotDocumentation.root"
 	| "goalCheckpoints.root"
 	| "skills.root"
+	| "worktrees.root"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
@@ -67,6 +68,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"godotDocumentation.root": join(root, "godot-docs"),
 		"goalCheckpoints.root": join(root, "goal-checkpoints"),
 		"skills.root": join(root, "skills"),
+		"worktrees.root": join(root, "worktrees"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),
@@ -108,6 +110,10 @@ export function getMcpServersConfigPath(): string {
 
 export function getPersonalSkillsDir(): string {
 	return getDaedalusPath("skills.root");
+}
+
+export function getWorktreesRoot(): string {
+	return getDaedalusPath("worktrees.root");
 }
 
 export function getSkillSettingsPath(): string {

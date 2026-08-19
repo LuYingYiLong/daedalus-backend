@@ -3,11 +3,12 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { getDefaultWorkspaceConfigPath } from "../app-paths.js";
 import { writeJsonFileAtomicSync } from "../json-file-store.js";
-import type { WorkspaceColor, WorkspaceConfig, WorkspaceIcon, WorkspaceSourceFolder } from "./types.js";
+import type { SessionWorktreeMetadata, WorkspaceColor, WorkspaceConfig, WorkspaceIcon, WorkspaceSourceFolder } from "./types.js";
 import { logger } from "../logger.js";
 
 let configuredWorkspaceCache: WorkspaceConfig[] | null = null;
 const runtimeWorkspaces: Map<string, WorkspaceConfig> = new Map();
+const sessionRuntimeWorkspaces: Map<string, WorkspaceConfig> = new Map();
 
 export type WorkspaceMetadataSource = {
 	workspaceId?: string | undefined;
@@ -15,6 +16,7 @@ export type WorkspaceMetadataSource = {
 	workspaceKind?: "godot" | undefined;
 	workspaceRoot?: string | undefined;
 	godotExecutablePath?: string | undefined;
+	worktree?: SessionWorktreeMetadata | undefined;
 };
 
 type LegacyWorkspaceConfig = Partial<WorkspaceConfig> & {
@@ -432,9 +434,22 @@ export function upsertRuntimeWorkspace(workspace: WorkspaceConfig): WorkspaceCon
 	return next;
 }
 
+export function registerSessionRuntimeWorkspace(workspace: WorkspaceConfig): WorkspaceConfig {
+	const next: WorkspaceConfig = normalizeWorkspaceConfig(workspace);
+	sessionRuntimeWorkspaces.set(next.id, next);
+	return next;
+}
+
+export function unregisterSessionRuntimeWorkspace(workspaceId: string): void {
+	sessionRuntimeWorkspaces.delete(workspaceId);
+}
+
 export function hydrateWorkspacesFromSessionMetadata(metadataList: WorkspaceMetadataSource[]): WorkspaceConfig[] {
 	const hydrated: WorkspaceConfig[] = [];
 	for (const metadata of metadataList) {
+		if (metadata.worktree !== undefined) {
+			continue;
+		}
 		if (metadata.workspaceId === undefined || metadata.workspaceRoot === undefined) {
 			continue;
 		}
@@ -491,6 +506,10 @@ export function loadWorkspaces(): WorkspaceConfig[] {
 }
 
 export function findWorkspace(workspaceId: string): WorkspaceConfig | undefined {
+	const sessionWorkspace: WorkspaceConfig | undefined = sessionRuntimeWorkspaces.get(workspaceId);
+	if (sessionWorkspace !== undefined) {
+		return sessionWorkspace;
+	}
 	const workspaces: WorkspaceConfig[] = loadWorkspaces();
 	const direct: WorkspaceConfig | undefined = workspaces.find((workspace: WorkspaceConfig): boolean => workspace.id === workspaceId);
 	if (direct !== undefined) {

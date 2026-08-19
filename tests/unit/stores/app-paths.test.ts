@@ -24,6 +24,7 @@ import {
 	getUsageMetricsDbPath,
 	getUserPromptConfigPath,
 	getWebSearchSettingsConfigPath,
+	getWorktreesRoot,
 	getWorkspaceTreeOrderConfigPath
 } from "../../../src/app-paths.js";
 
@@ -50,6 +51,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getWebSearchSettingsConfigPath(), join(configRoot, "web-search-settings.json"));
 		assert.equal(getApprovalConfigPath(), join(configRoot, "approval.json"));
 		assert.equal(getPersonalSkillsDir(), join(root, "skills"));
+		assert.equal(getWorktreesRoot(), join(root, "worktrees"));
 		assert.equal(getDefaultSessionsDir(), join(root, "sessions"));
 		assert.equal(getDefaultArchivedSessionsDir(), join(root, "archived_sessions"));
 		assert.equal(getLogsDir(), join(root, "logs"));
@@ -72,6 +74,7 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		assert.equal(getDaedalusPath("config.webSearchSettings"), getWebSearchSettingsConfigPath());
 		assert.equal(getDaedalusPath("config.approval"), getApprovalConfigPath());
 		assert.equal(getDaedalusPath("skills.root"), getPersonalSkillsDir());
+		assert.equal(getDaedalusPath("worktrees.root"), getWorktreesRoot());
 		assert.equal(getDaedalusPath("sessions.activeRoot"), getDefaultSessionsDir());
 		assert.equal(getDaedalusPath("sessions.archivedRoot"), getDefaultArchivedSessionsDir());
 		assert.equal(getDaedalusPath("logs.root"), getLogsDir());

@@ -24,22 +24,38 @@ import { computeInputBudget, selectMessagesWithinBudget } from "../session/sessi
 import { composeSkillPrompt, getSkill, isSkillId, listSkills } from "../skills/registry.js";
 import type { SkillId } from "../skills/registry.js";
 import { legacySkillIdToRef } from "../skills/catalog.js";
-import {
-	createRuntimeWorkspace,
-	findWorkspace,
-	upsertRuntimeWorkspace
-} from "../workspace/registry.js";
+import { createRuntimeWorkspace, findWorkspace, upsertRuntimeWorkspace } from "../workspace/registry.js";
 import type { WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
-	createSession, openSession, listSessions,
-	archiveSession, deleteArchivedSession, deleteSession, listArchivedSessions, renameSession, restoreArchivedSession,
+	createSession,
+	openSession,
+	listSessions,
+	archiveSession,
+	deleteArchivedSession,
+	deleteSession,
+	listArchivedSessions,
+	renameSession,
+	restoreArchivedSession,
 	rewindSessionFromRequest,
-	readSummary, writeSummary, deleteSummary,
-	appendSessionEvent, appendApprovalEvent, appendWorkflowEvent, appendAgentEvent, clearSessionEvents, readApprovalEvents,
+	readSummary,
+	writeSummary,
+	deleteSummary,
+	appendSessionEvent,
+	appendApprovalEvent,
+	appendWorkflowEvent,
+	appendAgentEvent,
+	clearSessionEvents,
+	readApprovalEvents,
 	checkSessionIntegrity,
 	updateSessionMetadata,
-	getSessionTimelineNavigationIndex, openSessionRecentTimeline, openSessionTimelinePage, openSessionTimelinePageAfter,
+	replaceSessionWorkspaceBinding,
+	getStoredSessionMetadata,
+	promoteTemporarySession,
+	getSessionTimelineNavigationIndex,
+	openSessionRecentTimeline,
+	openSessionTimelinePage,
+	openSessionTimelinePageAfter,
 	type SessionChatMode,
 	type SessionMetadata,
 	type SessionSummary,
@@ -183,17 +199,15 @@ import { createGlobalSkillWorkspace, composeSkillCatalogPrompt } from "../skills
 import type { SkillWorkspace } from "../skills/types.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace } from "../tools/tool-catalog.js";
 import { SessionSearchError, sessionSearchService } from "../session-search/service.js";
+import { createManagedWorktree, deleteManagedWorktree, restoreManagedWorktreeWorkspace, WorktreeOperationError } from "../workspace/worktree-manager.js";
 
-function sessionRpcError(
-	error: unknown,
-	fallbackCode: string,
-	fallbackMessage: string
-): { code: string; message: string } {
+function sessionRpcError(error: unknown, fallbackCode: string, fallbackMessage: string): { code: string; message: string } {
 	const candidate = error as Error & { code?: string };
 	if (
-		candidate.code === "session_storage_unavailable"
-		|| candidate.code === "session_not_found"
-		|| candidate.code?.startsWith("session_fork_") === true
+		candidate.code === "session_storage_unavailable" ||
+		candidate.code === "session_not_found" ||
+		candidate.code?.startsWith("session_fork_") === true ||
+		candidate.code?.startsWith("worktree_") === true
 	) {
 		return {
 			code: candidate.code,
@@ -207,6 +221,9 @@ function sessionRpcError(
 }
 
 function restoreWorkspaceFromSessionMetadata(metadata: SessionMetadata): WorkspaceConfig | undefined {
+	if (metadata.worktree !== undefined) {
+		return restoreManagedWorktreeWorkspace(metadata.worktree, findWorkspace(metadata.worktree.sourceWorkspaceId));
+	}
 	if (metadata.workspaceId === undefined || metadata.workspaceRoot === undefined) {
 		return undefined;
 	}
@@ -287,11 +304,32 @@ async function applySessionApprovalMode(session: ClientSession, _metadata?: Pick
 	await synchronizeSessionApprovalMode(session);
 }
 
+function findOrRestoreSessionWorkspace(metadata: SessionMetadata): WorkspaceConfig | undefined {
+	if (metadata.worktree !== undefined) {
+		return restoreWorkspaceFromSessionMetadata(metadata);
+	}
+	return metadata.workspaceId === undefined ? undefined : (findWorkspace(metadata.workspaceId) ?? restoreWorkspaceFromSessionMetadata(metadata));
+}
+
+function assertWorktreeSessionIdle(runtime: ClientSession | undefined, currentRequestId?: string): void {
+	if (runtime === undefined) {
+		return;
+	}
+	const busy: boolean =
+		(currentRequestId === undefined ? runtime.inFlightRequestIds.size > 0 : hasOtherInFlightRequest(runtime, currentRequestId)) ||
+		runtime.activeAbortControllers.size > 0 ||
+		runtime.queuedMessages.length > 0 ||
+		runtime.messageQueueDrainActive ||
+		runtime.activeRunRequestId !== undefined ||
+		runtime.workbenchActiveRun.status !== "idle";
+	if (busy) {
+		throw new WorktreeOperationError("worktree_session_busy", "Wait for the session to become idle before changing its worktree.");
+	}
+}
+
 async function loadSessionForEndHook(sessionId: string): Promise<ClientSession> {
 	const stored: Awaited<ReturnType<typeof openSession>> = await openSession(sessionId);
-	const workspace: WorkspaceConfig | undefined = stored.metadata.workspaceId === undefined
-		? undefined
-		: findWorkspace(stored.metadata.workspaceId) ?? restoreWorkspaceFromSessionMetadata(stored.metadata);
+	const workspace: WorkspaceConfig | undefined = findOrRestoreSessionWorkspace(stored.metadata);
 	const hookSession: ClientSession = createClientSession(workspace);
 	applySessionMetadata(hookSession, stored.metadata);
 	await applySessionApprovalMode(hookSession, stored.metadata);
@@ -409,42 +447,30 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 		await waitForFullSessionLoad(session);
 	}
 
-	const provider: ProviderId = params?.provider !== undefined && isProviderId(params.provider)
-		? params.provider
-		: session.activeProvider;
-	const model: string = params?.model?.trim() || (provider === session.activeProvider
-		? session.providerModel ?? session.modelProfile.model
-		: getProviderDefaultModel(provider));
+	const provider: ProviderId = params?.provider !== undefined && isProviderId(params.provider) ? params.provider : session.activeProvider;
+	const model: string = params?.model?.trim() || (provider === session.activeProvider ? (session.providerModel ?? session.modelProfile.model) : getProviderDefaultModel(provider));
 	const profile: ModelProfile = resolveModelProfile(provider, model);
 	const providerOptions: ProviderChatOptions | null = await createContextEstimateProviderOptions(session, provider, model);
 	const message: string = params?.message ?? session.workbenchComposer.text;
 	const mode: "agent" | "ask" | "plan" | "goal" = params?.mode ?? session.workbenchComposer.chatMode ?? "agent";
 	const additionalContext: AdditionalContextItem[] = cloneAdditionalContextItems(params?.additionalContext ?? session.workbenchComposer.additionalContext) ?? [];
 	const rawChatParams: AiChatParams = { message, mode, additionalContext };
-	const chatParams: AiChatParams = activeSession
-		? await hydrateImageAttachmentContexts(session.sessionId, rawChatParams)
-		: rawChatParams;
+	const chatParams: AiChatParams = activeSession ? await hydrateImageAttachmentContexts(session.sessionId, rawChatParams) : rawChatParams;
 	const storedUserPrompt: string = await getUserPrompt();
-	const baseSystemPrompt: string = await composeSystemPrompt(
-		undefined,
-		undefined,
-		createProviderRuntimeContextText(provider, model),
-		mode
-	);
-	const systemPrompt: string = await composeSystemPrompt(
-		undefined,
-		storedUserPrompt.length > 0 ? storedUserPrompt : undefined,
-		createProviderRuntimeContextText(provider, model),
-		mode
-	);
+	const baseSystemPrompt: string = await composeSystemPrompt(undefined, undefined, createProviderRuntimeContextText(provider, model), mode);
+	const systemPrompt: string = await composeSystemPrompt(undefined, storedUserPrompt.length > 0 ? storedUserPrompt : undefined, createProviderRuntimeContextText(provider, model), mode);
 	const additionalContextSection: string = createAdditionalContextPromptSection(chatParams.additionalContext);
 	const baseSystemPart = await estimateTextPart(providerOptions, baseSystemPrompt);
 	const fullSystemPart = await estimateTextPart(providerOptions, systemPrompt);
 	const customInstructionsTokens = Math.max(0, fullSystemPart.tokens - baseSystemPart.tokens);
 	const additionalContextPart = await estimateTextPart(providerOptions, additionalContextSection);
-	const skillWorkspace: SkillWorkspace = session.activeWorkspace === undefined
-		? createGlobalSkillWorkspace()
-		: { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath };
+	const skillWorkspace: SkillWorkspace =
+		session.activeWorkspace === undefined
+			? createGlobalSkillWorkspace()
+			: {
+					id: session.activeWorkspace.id,
+					rootPath: session.activeWorkspace.rootPath
+				};
 	const skillsPrompt = await composeSkillCatalogPrompt(skillWorkspace);
 	const skillsPart = await estimateTextPart(providerOptions, skillsPrompt);
 	let mcpContext: string = "";
@@ -768,27 +794,154 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 		}
 
+		case "session.worktree.create": {
+			let createdWorktree: Awaited<ReturnType<typeof createManagedWorktree>> | undefined;
+			let workspaceBindingCommitted: boolean = false;
+			try {
+				if (getClientConnection(socket)?.clientType !== "studio") {
+					throw new WorktreeOperationError("worktree_studio_only", "Managed worktrees are only available to Daedalus Studio.");
+				}
+				if (session.sessionId !== request.params.sessionId) {
+					throw new WorktreeOperationError("worktree_session_not_active", "Open the draft session before creating its worktree.");
+				}
+				assertWorktreeSessionIdle(session, request.id);
+				const stored = await openSession(request.params.sessionId);
+				if (stored.metadata.temporary !== true || stored.messages.length > 0 || stored.metadata.worktree !== undefined) {
+					throw new WorktreeOperationError("worktree_session_not_empty", "Worktrees can only be attached to an empty temporary session.");
+				}
+				if (stored.metadata.workspaceId !== request.params.workspaceId) {
+					throw new WorktreeOperationError("worktree_workspace_mismatch", "The selected workspace does not match the draft session.");
+				}
+				const sourceWorkspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+				if (sourceWorkspace === undefined) {
+					throw new WorktreeOperationError("worktree_workspace_not_found", `Workspace not found: ${request.params.workspaceId}`);
+				}
+				const created = await createManagedWorktree({
+					sessionId: request.params.sessionId,
+					workspace: sourceWorkspace
+				});
+				createdWorktree = created;
+				try {
+					await mcpHost.ensureWorkspace(created.workspace);
+					const boundMetadata: SessionMetadata = await replaceSessionWorkspaceBinding({
+						sessionId: request.params.sessionId,
+						workspace: created.workspace,
+						worktree: created.metadata
+					});
+					workspaceBindingCommitted = true;
+					applyWorkspaceToSessionRuntime(socket, session, created.workspace);
+					applySessionMetadata(session, boundMetadata);
+					emitWorkbenchUpdated(socket, request.id, session);
+					const metadata: SessionMetadata = await promoteTemporarySession(request.params.sessionId);
+					applySessionMetadata(session, metadata);
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: true,
+						result: {
+							metadata,
+							workspace: created.workspace,
+							workbench: serializeWorkbench(session)
+						}
+					});
+				} catch (error: unknown) {
+					await deleteManagedWorktree(created.metadata).catch((): void => undefined);
+					createdWorktree = undefined;
+					if (workspaceBindingCommitted) {
+						const restoredMetadata: SessionMetadata = await replaceSessionWorkspaceBinding({
+							sessionId: request.params.sessionId,
+							workspace: sourceWorkspace
+						});
+						applyWorkspaceToSessionRuntime(socket, session, sourceWorkspace);
+						applySessionMetadata(session, restoredMetadata);
+					}
+					throw error;
+				}
+			} catch (error: unknown) {
+				if (createdWorktree !== undefined && !workspaceBindingCommitted) {
+					await deleteManagedWorktree(createdWorktree.metadata).catch((): void => undefined);
+				}
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "worktree_create_failed", "Failed to create managed worktree")
+				});
+			}
+			break;
+		}
+
+		case "session.worktree.delete": {
+			try {
+				if (getClientConnection(socket)?.clientType !== "studio") {
+					throw new WorktreeOperationError("worktree_studio_only", "Managed worktrees are only available to Daedalus Studio.");
+				}
+				const runtime: ClientSession | undefined = getSessionRuntime(request.params.sessionId);
+				assertWorktreeSessionIdle(runtime, request.id);
+				const storedMetadata: SessionMetadata = await getStoredSessionMetadata(request.params.sessionId);
+				if (storedMetadata.worktree === undefined) {
+					throw new WorktreeOperationError("worktree_not_found", "Session does not have a managed worktree.");
+				}
+				const sourceWorkspace: WorkspaceConfig | undefined = findWorkspace(storedMetadata.worktree.sourceWorkspaceId);
+				if (sourceWorkspace === undefined) {
+					throw new WorktreeOperationError("worktree_source_workspace_missing", "The source workspace no longer exists.");
+				}
+				await deleteManagedWorktree(storedMetadata.worktree);
+				const metadata: SessionMetadata = await replaceSessionWorkspaceBinding({
+					sessionId: request.params.sessionId,
+					workspace: sourceWorkspace
+				});
+				if (session.sessionId === request.params.sessionId) {
+					await mcpHost.ensureWorkspace(sourceWorkspace);
+					applyWorkspaceToSessionRuntime(socket, session, sourceWorkspace);
+					applySessionMetadata(session, metadata);
+					emitWorkbenchUpdated(socket, request.id, session);
+				}
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: {
+						metadata,
+						workspace: sourceWorkspace,
+						workbench: session.sessionId === request.params.sessionId ? serializeWorkbench(session) : null
+					}
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "worktree_delete_failed", "Failed to delete managed worktree")
+				});
+			}
+			break;
+		}
+
 		case "session.fork": {
 			try {
 				if (getClientConnection(socket)?.clientType !== "studio") {
 					throw Object.assign(new Error("Session forking is only available to Daedalus Studio."), {
-						code: "session_fork_studio_only",
+						code: "session_fork_studio_only"
+					});
+				}
+				if ((await getStoredSessionMetadata(request.params.sourceSessionId)).worktree !== undefined) {
+					throw Object.assign(new Error("Managed worktree sessions cannot be conversation-forked in this MVP."), {
+						code: "session_fork_worktree_unsupported"
 					});
 				}
 				const sourceRuntime: ClientSession | undefined = getSessionRuntime(request.params.sourceSessionId);
 				if (
-					sourceRuntime !== undefined
-					&& (
-						sourceRuntime.workbenchActiveRun.status !== "idle"
-						|| sourceRuntime.activeRunRequestId !== undefined
-						|| hasOtherInFlightRequest(sourceRuntime, request.id)
-						|| sourceRuntime.pendingAiContinuations.size > 0
-						|| sourceRuntime.pendingToolBudgets.size > 0
-						|| sourceRuntime.approvalGateway.listPending().length > 0
-					)
+					sourceRuntime !== undefined &&
+					(sourceRuntime.workbenchActiveRun.status !== "idle" ||
+						sourceRuntime.activeRunRequestId !== undefined ||
+						hasOtherInFlightRequest(sourceRuntime, request.id) ||
+						sourceRuntime.pendingAiContinuations.size > 0 ||
+						sourceRuntime.pendingToolBudgets.size > 0 ||
+						sourceRuntime.approvalGateway.listPending().length > 0)
 				) {
 					throw Object.assign(new Error("Wait for the source session to finish before forking."), {
-						code: "session_fork_source_busy",
+						code: "session_fork_source_busy"
 					});
 				}
 				if (sourceRuntime !== undefined) {
@@ -799,8 +952,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				let workspace: WorkspaceConfig | undefined;
 				let workspaceWarning: string | undefined;
 				if (fork.metadata.workspaceId !== undefined) {
-					workspace = findWorkspace(fork.metadata.workspaceId)
-						?? restoreWorkspaceFromSessionMetadata(fork.metadata);
+					workspace = findOrRestoreSessionWorkspace(fork.metadata);
 					if (workspace === undefined) {
 						workspaceWarning = `Session workspace not found: ${fork.metadata.workspaceId}`;
 					} else {
@@ -893,8 +1045,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				let workspaceWarning: string | undefined;
 
 				if (timeline.metadata.workspaceId) {
-					workspace = findWorkspace(timeline.metadata.workspaceId)
-						?? restoreWorkspaceFromSessionMetadata(timeline.metadata);
+					workspace = findOrRestoreSessionWorkspace(timeline.metadata);
 
 					if (!workspace) {
 						workspaceWarning = `Session workspace not found: ${timeline.metadata.workspaceId}`;
@@ -1155,7 +1306,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						type: "response",
 						id: request.id,
 						ok: true,
-						result: { cancelled: sessionSearchService.cancel(connectionId, request.params.searchId) }
+						result: {
+							cancelled: sessionSearchService.cancel(connectionId, request.params.searchId)
+						}
 					});
 					break;
 				}
@@ -1278,6 +1431,18 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		}
 
 		case "session.archived.delete":
+			if ((await getStoredSessionMetadata(request.params.sessionId)).worktree !== undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "session_has_managed_worktree",
+						message: "Delete the managed worktree before deleting this session."
+					}
+				});
+				break;
+			}
 			await deleteArchivedSession(request.params.sessionId);
 			sendJson(socket, {
 				type: "response",
@@ -1356,7 +1521,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: { code: "no_session", message: "No active session to save. Create one first with session.create." }
+					error: {
+						code: "no_session",
+						message: "No active session to save. Create one first with session.create."
+					}
 				});
 				break;
 			}
@@ -1379,7 +1547,11 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				type: "response",
 				id: request.id,
 				ok: true,
-				result: { saved: true, sessionId: session.sessionId, messageCount: session.messages.length }
+				result: {
+					saved: true,
+					sessionId: session.sessionId,
+					messageCount: session.messages.length
+				}
 			});
 			break;
 
@@ -1390,7 +1562,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: { code: "no_session", message: "No active session to update. Open or create a session first." }
+					error: {
+						code: "no_session",
+						message: "No active session to update. Open or create a session first."
+					}
 				});
 				break;
 			}
@@ -1403,7 +1578,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: { code: "invalid_model", message: "Invalid provider or model." }
+					error: {
+						code: "invalid_model",
+						message: "Invalid provider or model."
+					}
 				});
 				break;
 			}
@@ -1415,7 +1593,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: { code: "invalid_model", message: `Model ${model} is not enabled for provider ${provider}.` }
+					error: {
+						code: "invalid_model",
+						message: `Model ${model} is not enabled for provider ${provider}.`
+					}
 				});
 				break;
 			}
@@ -1468,6 +1649,18 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		}
 
 		case "session.delete":
+			if ((await getStoredSessionMetadata(request.params.sessionId)).worktree !== undefined) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "session_has_managed_worktree",
+						message: "Delete the managed worktree before deleting this session."
+					}
+				});
+				break;
+			}
 			if (session.sessionId === request.params.sessionId) {
 				await waitForFullSessionLoad(session);
 				await waitForSessionEventPersistence(session);
@@ -1620,7 +1813,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					type: "response",
 					id: request.id,
 					ok: false,
-					error: { code: "no_api_key", message: `${getProviderDisplayName(session.activeProvider)} API key not configured` }
+					error: {
+						code: "no_api_key",
+						message: `${getProviderDisplayName(session.activeProvider)} API key not configured`
+					}
 				});
 				break;
 			}

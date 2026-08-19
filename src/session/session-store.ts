@@ -3,22 +3,10 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getDefaultArchivedSessionsDir, getDefaultSessionsDir, getGoalCheckpointsRoot } from "../app-paths.js";
 import type { ChatMessage } from "../protocol/types.js";
-import type { WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
+import type { SessionWorktreeMetadata, WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { findContainingWorkspaceSourceFolder } from "../workspace/registry.js";
-import {
-	getSessionDatabase,
-	parseSqlJson,
-	runSessionTransaction,
-	sqlJson,
-	toSqlValue
-} from "./session-database.js";
-import {
-	buildCanonicalTimelineBlocks,
-	getVisibleAssistantMarkdownSegments,
-	type TimelineBlock,
-	type TimelinePlanApproval,
-	type TimelinePlanClarification
-} from "./timeline-blocks.js";
+import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson, toSqlValue } from "./session-database.js";
+import { buildCanonicalTimelineBlocks, getVisibleAssistantMarkdownSegments, type TimelineBlock, type TimelinePlanApproval, type TimelinePlanClarification } from "./timeline-blocks.js";
 import { estimateTimelineValueBytes, TimelineCache, type TimelineCacheStats } from "./timeline-cache.js";
 import { notifySessionDeleted } from "../session-search/lifecycle.js";
 
@@ -55,6 +43,7 @@ export type SessionMetadata = {
 	workflowTodoDismissedKey?: string | null | undefined;
 	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
 	forkedFrom?: SessionForkOrigin | undefined;
+	worktree?: SessionWorktreeMetadata | undefined;
 	archivedAt?: string | undefined;
 	createdAt: string;
 	updatedAt: string;
@@ -289,7 +278,9 @@ async function pathExists(path: string): Promise<boolean> {
 
 function rowMetadata(row: Record<string, unknown> | undefined, sessionId: string): SessionMetadata {
 	if (row === undefined) {
-		throw Object.assign(new Error(`Session not found: ${sessionId}`), { code: "session_not_found" });
+		throw Object.assign(new Error(`Session not found: ${sessionId}`), {
+			code: "session_not_found"
+		});
 	}
 	return parseSqlJson<SessionMetadata>(row.metadata_json);
 }
@@ -306,7 +297,10 @@ async function readSessionMetadata(sessionId: string, archived?: boolean): Promi
 }
 
 function mergeSessionMetadata(existing: SessionMetadata, metadata?: Partial<SessionMetadata>): SessionMetadata {
-	const updated: SessionMetadata = { ...existing, updatedAt: new Date().toISOString() };
+	const updated: SessionMetadata = {
+		...existing,
+		updatedAt: new Date().toISOString()
+	};
 	delete (updated as SessionMetadata & { webSearchEnabled?: unknown }).webSearchEnabled;
 	if (metadata !== undefined) {
 		for (const [key, value] of Object.entries(metadata) as [keyof SessionMetadata, SessionMetadata[keyof SessionMetadata]][]) {
@@ -792,7 +786,11 @@ export async function getSessionTimelineNavigationIndex(sessionId: string): Prom
 			preview: createTimelineNavigationPreview(block.content)
 		});
 	}
-	return { sessionId: safeSessionId, blockCount: timeline.blocks.length, entries };
+	return {
+		sessionId: safeSessionId,
+		blockCount: timeline.blocks.length,
+		entries
+	};
 }
 
 export async function openSessionTimelinePage(sessionId: string, beforeOffset: number, limit: number): Promise<StoredSessionTimelinePage> {
@@ -940,7 +938,10 @@ function replaceMessages(db: DatabaseSync, sessionId: string, messages: ChatMess
 	const timestamp: string = new Date().toISOString();
 	for (let index: number = 0; index < messages.length; index += 1) {
 		const message: ChatMessage = messages[index]!;
-		const stored: StoredMessage = { ...message, createdAt: message.createdAt ?? timestamp };
+		const stored: StoredMessage = {
+			...message,
+			createdAt: message.createdAt ?? timestamp
+		};
 		insert.run(sessionId, index + 1, toSqlValue(message.requestId), message.role, sqlJson(stored), stored.createdAt);
 	}
 }
@@ -972,6 +973,28 @@ export async function updateSessionMetadata(sessionId: string, metadata: Partial
 	const updated: SessionMetadata = mergeSessionMetadata(existing, metadata);
 	writeMetadataRow(await getSessionDatabase(), updated);
 	invalidateTimelineCache(sessionId);
+	return updated;
+}
+
+export async function getStoredSessionMetadata(sessionId: string): Promise<SessionMetadata> {
+	return readSessionMetadata(sessionId);
+}
+
+export async function replaceSessionWorkspaceBinding(params: { sessionId: string; workspace: WorkspaceConfig; worktree?: SessionWorktreeMetadata | undefined }): Promise<SessionMetadata> {
+	const existing: SessionMetadata = await readSessionMetadata(params.sessionId);
+	const updated: SessionMetadata = {
+		...existing,
+		...createWorkspaceMetadataSnapshot(params.workspace),
+		workspaceId: params.workspace.id,
+		updatedAt: new Date().toISOString()
+	};
+	if (params.worktree === undefined) {
+		delete updated.worktree;
+	} else {
+		updated.worktree = params.worktree;
+	}
+	writeMetadataRow(await getSessionDatabase(), updated);
+	invalidateTimelineCache(params.sessionId);
 	return updated;
 }
 
@@ -1066,32 +1089,40 @@ export async function rewindSessionFromRequest(sessionId: string, requestId: str
 			const ids: string[] = [...removedRequestIds];
 			if (ids.length > 0) {
 				const placeholders: string = ids.map((): string => "?").join(",");
-				db.prepare(`
+				db.prepare(
+					`
 					DELETE FROM selection_ask_threads
 					WHERE session_id = ? AND source_request_id IN (${placeholders})
-				`).run(sessionId, ...ids);
-				db.prepare(`
+				`
+				).run(sessionId, ...ids);
+				db.prepare(
+					`
 					DELETE FROM session_events
 					WHERE session_id = ? AND channel = 'timeline'
 						AND (request_id IN (${placeholders}) OR (? IS NOT NULL AND sequence >= ?))
-				`).run(sessionId, ...ids, timelineSequence, timelineSequence);
-				db.prepare(`
+				`
+				).run(sessionId, ...ids, timelineSequence, timelineSequence);
+				db.prepare(
+					`
 					DELETE FROM session_events
 					WHERE session_id = ? AND channel = 'approval' AND request_id IN (${placeholders})
-				`).run(sessionId, ...ids);
-				db.prepare(`DELETE FROM plans WHERE session_id = ? AND request_id IN (${placeholders})`)
-					.run(sessionId, ...ids);
-				db.prepare(`DELETE FROM file_edit_batches WHERE session_id = ? AND request_id IN (${placeholders})`)
-					.run(sessionId, ...ids);
-				db.prepare(`DELETE FROM agent_goals WHERE session_id = ? AND root_request_id IN (${placeholders})`)
-					.run(sessionId, ...ids);
-				db.prepare(`
+				`
+				).run(sessionId, ...ids);
+				db.prepare(`DELETE FROM plans WHERE session_id = ? AND request_id IN (${placeholders})`).run(sessionId, ...ids);
+				db.prepare(`DELETE FROM file_edit_batches WHERE session_id = ? AND request_id IN (${placeholders})`).run(sessionId, ...ids);
+				db.prepare(`DELETE FROM agent_goals WHERE session_id = ? AND root_request_id IN (${placeholders})`).run(sessionId, ...ids);
+				db.prepare(
+					`
 					DELETE FROM agent_runs
 					WHERE session_id = ? AND (request_id IN (${placeholders}) OR root_request_id IN (${placeholders}))
-				`).run(sessionId, ...ids, ...ids);
+				`
+				).run(sessionId, ...ids, ...ids);
 			}
 			db.prepare("DELETE FROM summaries WHERE session_id = ?").run(sessionId);
-			const updated: SessionMetadata = { ...stored.metadata, updatedAt: new Date().toISOString() };
+			const updated: SessionMetadata = {
+				...stored.metadata,
+				updatedAt: new Date().toISOString()
+			};
 			writeMetadataRow(db, updated);
 		});
 		invalidateTimelineCache(sessionId);
@@ -1103,11 +1134,16 @@ export async function appendMessage(sessionId: string, message: ChatMessage): Pr
 	await enqueueTranscriptWrite(sessionId, async (): Promise<void> => {
 		const db: DatabaseSync = await getSessionDatabase();
 		const row = db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS value FROM messages WHERE session_id = ?").get(sessionId) as Record<string, unknown>;
-		const stored: StoredMessage = { ...message, createdAt: message.createdAt ?? new Date().toISOString() };
-		db.prepare(`
+		const stored: StoredMessage = {
+			...message,
+			createdAt: message.createdAt ?? new Date().toISOString()
+		};
+		db.prepare(
+			`
 			INSERT INTO messages(session_id, sequence, request_id, role, payload_json, created_at)
 			VALUES (?, ?, ?, ?, ?, ?)
-		`).run(sessionId, Number(row.value), toSqlValue(message.requestId), message.role, sqlJson(stored), stored.createdAt);
+		`
+		).run(sessionId, Number(row.value), toSqlValue(message.requestId), message.role, sqlJson(stored), stored.createdAt);
 		invalidateTimelineCache(sessionId);
 	});
 }
@@ -1196,7 +1232,15 @@ export async function appendSessionEvent(
 }
 
 export async function appendApprovalEvent(sessionId: string, approvalId: string, requestId: string, event: string, data: unknown): Promise<void> {
-	await appendEventRecord({ sessionId, approvalId, requestId, event, data, channel: "approval", idPrefix: "approval-event" });
+	await appendEventRecord({
+		sessionId,
+		approvalId,
+		requestId,
+		event,
+		data,
+		channel: "approval",
+		idPrefix: "approval-event"
+	});
 }
 
 // Compatibility wrappers no longer duplicate payloads. Canonical events already index workflowId/runId.
@@ -1315,7 +1359,11 @@ export async function archiveSession(sessionId: string): Promise<SessionMetadata
 	const safeSessionId: string = assertSafeSessionId(sessionId);
 	const metadata: SessionMetadata = await readSessionMetadata(safeSessionId, false);
 	const archivedAt: string = new Date().toISOString();
-	const updated: SessionMetadata = { ...metadata, archivedAt, updatedAt: archivedAt };
+	const updated: SessionMetadata = {
+		...metadata,
+		archivedAt,
+		updatedAt: archivedAt
+	};
 	const source: string = getSessionDir(safeSessionId);
 	const target: string = getArchivedSessionDir(safeSessionId);
 	const movedAssets: boolean = await moveSessionAssetDir(source, target);
@@ -1334,7 +1382,11 @@ export async function archiveSession(sessionId: string): Promise<SessionMetadata
 export async function restoreArchivedSession(sessionId: string): Promise<SessionMetadata> {
 	const safeSessionId: string = assertSafeSessionId(sessionId);
 	const metadata: SessionMetadata = await readSessionMetadata(safeSessionId, true);
-	const updated: SessionMetadata = { ...metadata, archivedAt: undefined, updatedAt: new Date().toISOString() };
+	const updated: SessionMetadata = {
+		...metadata,
+		archivedAt: undefined,
+		updatedAt: new Date().toISOString()
+	};
 	const source: string = getArchivedSessionDir(safeSessionId);
 	const target: string = getSessionDir(safeSessionId);
 	const movedAssets: boolean = await moveSessionAssetDir(source, target);
@@ -1374,7 +1426,10 @@ async function deleteSessionRecord(sessionId: string, archived: boolean): Promis
 		await rm(staging, { recursive: true, force: true });
 	}
 	for (const goalId of goalIds) {
-		await rm(join(getGoalCheckpointsRoot(), goalId), { recursive: true, force: true });
+		await rm(join(getGoalCheckpointsRoot(), goalId), {
+			recursive: true,
+			force: true
+		});
 	}
 	invalidateTimelineCache(safeSessionId);
 	notifySessionDeleted(safeSessionId);
@@ -1388,7 +1443,10 @@ export async function deleteArchivedSession(sessionId: string): Promise<void> {
 	await deleteSessionRecord(sessionId, true);
 }
 
-export async function deleteSessionsByWorkspace(workspaceId: string): Promise<{ deletedSessionIds: string[]; deletedArchivedSessionIds: string[] }> {
+export async function deleteSessionsByWorkspace(workspaceId: string): Promise<{
+	deletedSessionIds: string[];
+	deletedArchivedSessionIds: string[];
+}> {
 	const sessions: SessionMetadata[] = await listSessions();
 	const archived: SessionMetadata[] = await listArchivedSessions();
 	const deletedSessionIds: string[] = sessions.filter((item) => item.workspaceId === workspaceId).map((item) => item.id);
@@ -1474,7 +1532,10 @@ export async function reassignOrDeleteSessionsForWorkspace(
 		const metadata: SessionMetadata = parseSqlJson<SessionMetadata>(row.metadata_json);
 		const destination: WorkspaceConfig | undefined = findSessionDestination(metadata, remainingWorkspaces);
 		if (destination === undefined) {
-			deleteTargets.push({ id: metadata.id, archived: metadata.archivedAt !== undefined });
+			deleteTargets.push({
+				id: metadata.id,
+				archived: metadata.archivedAt !== undefined
+			});
 			continue;
 		}
 		movedMetadata.push({

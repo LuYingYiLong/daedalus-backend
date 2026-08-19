@@ -684,6 +684,30 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("client.capabilities.update"),
+		params: z.object({ capabilities: z.object({ browserTools: z.boolean() }).strict() }),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("browser.tool.result"),
+		params: z.object({
+			callId: z.string().min(1).max(160),
+			ok: z.boolean(),
+			result: z.record(z.string(), z.unknown()).optional(),
+			error: z.object({
+				code: z.string().min(1).max(120),
+				message: z.string().min(1).max(4000),
+				retryable: z.boolean(),
+			}).strict().optional(),
+		}).strict().superRefine((value, context): void => {
+			if (value.ok && value.result === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful browser tool results require result." });
+			if (!value.ok && value.error === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Failed browser tool results require error." });
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("provider.configure"),
 		params: z.object({
 			provider: providerIdSchema,

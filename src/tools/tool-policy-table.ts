@@ -1,6 +1,15 @@
 import type { ToolPolicy } from "./tool-policy.js";
 
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
+	"mcp_browser_observe": { risk: "read" },
+	"mcp_browser_navigate": { risk: "read" },
+	"mcp_browser_navigation": { risk: "read" },
+	"mcp_browser_scroll": { risk: "read" },
+	"mcp_browser_wait": { risk: "read" },
+	"mcp_browser_screenshot": { risk: "read" },
+	"mcp_browser_click": { risk: "write" },
+	"mcp_browser_type": { risk: "write" },
+	"mcp_browser_select": { risk: "write" },
 	"mcp_skills_load": { risk: "read" },
 	"mcp_skills_propose_create": { risk: "propose" },
 	"mcp_skills_create": { risk: "write" },

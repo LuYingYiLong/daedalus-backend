@@ -138,7 +138,9 @@ export type ServerEventNameInput = CanonicalServerEventName | InternalLegacyServ
 export type StudioDirectEventName =
 	| "session.selectionAsk.message.delta"
 	| "session.selectionAsk.message.done"
-	| "session.selectionAsk.message.error";
+	| "session.selectionAsk.message.error"
+	| "browser.tool.request"
+	| "browser.tool.cancel";
 
 export type ServerEvent = {
 	protocolVersion: 3;

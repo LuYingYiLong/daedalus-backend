@@ -26,6 +26,8 @@ import { createAgentToolEventForwarder } from "./workflow/tool-events.js";
 import { loadCorePrompt } from "../prompts/registry.js";
 import { getClientConnection } from "./client-connections.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
+import { getStudioBrowserControl } from "./studio-browser-context.js";
+import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
 const CLARIFICATION_REPLY_MAX_COUNT: number = 3;
@@ -590,6 +592,12 @@ async function runPlanAgentDecision(
 		}
 		baseForwarder(event);
 	};
+	const screenshotEnricher = createSceneViewToolResultEnricher({
+		session: runtime.session,
+		options,
+		phaseInstruction: plannerParams.message,
+		abortSignal
+	});
 	const agentResult = await runProviderAgentStreaming(
 		plannerParams,
 		options,
@@ -600,14 +608,15 @@ async function runPlanAgentDecision(
 		allowedToolNames,
 		onEvent,
 		abortSignal,
-		undefined,
+		screenshotEnricher.enricher,
 		{
 			workspaceId: runtime.session.activeWorkspace?.id,
 			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(runtime.session.activeWorkspace),
 			editorInstanceId: runtime.session.editorInstanceId,
 			sessionId: runtime.session.sessionId,
 			requestId: planThreadRequestId,
-			clientType: getClientConnection(runtime.socket)?.clientType
+			clientType: getClientConnection(runtime.socket)?.clientType,
+			browserControl: getStudioBrowserControl(runtime.socket, runtime.session.sessionId)
 		}
 	);
 	if (agentResult.status === "approval_required") {

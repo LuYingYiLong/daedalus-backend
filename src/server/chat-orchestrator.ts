@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { composeSystemPrompt, listPromptTemplates } from "../prompts/registry.js";
 import { getGeneralSettings } from "../general-settings-store.js";
+import { getStudioBrowserControl } from "./studio-browser-context.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
@@ -75,6 +76,7 @@ import { hydrateImageAttachmentContexts } from "../session/session-attachments.j
 import { clearSessionForkDraft } from "../session/session-fork.js";
 import {
 	clearPendingSessionModelTransition,
+	hasSessionUserTurn,
 	readPendingSessionModelTransition,
 	recordPendingSessionModelTransition,
 	type SessionModelRef,
@@ -882,6 +884,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
+			browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
 			executionControl,
 			executionControlAvailable: params.routeDecision.lane !== "probe",
 			chatCompletion,
@@ -970,6 +973,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 				sessionId: params.session.sessionId,
 				requestId: params.requestId,
 				clientType: getClientConnection(params.socket)?.clientType,
+				browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
 				executionControl
 			}
 		), params.abortSignal);
@@ -2068,6 +2072,7 @@ async function runToolBudgetDecisionContinuation(params: {
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
 			clientType: getClientConnection(socket)?.clientType,
+			browserControl: getStudioBrowserControl(socket, session.sessionId),
 			executionControl: pendingContinuation.executionControl,
 			chatCompletion: pendingContinuation.chatCompletion,
 			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
@@ -2566,10 +2571,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				await clearContextLedger(session.sessionId);
 				await deleteSummary(session.sessionId);
 			}
+			const hadPriorUserTurn: boolean = hasSessionUserTurn(session.messages);
 			const modelSnapshotChange: ChatModelSnapshotChange | null = applyChatRequestModelSnapshot(session, params);
 			if (modelSnapshotChange !== null && session.sessionId !== undefined) {
 				await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
-				if (modelSnapshotChange.modelTransition !== undefined) {
+				if (hadPriorUserTurn && modelSnapshotChange.modelTransition !== undefined) {
 					await recordPendingSessionModelTransition(
 						session.sessionId,
 						modelSnapshotChange.modelTransition.from,

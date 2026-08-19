@@ -16,6 +16,10 @@ export type PendingSessionModelTransition = {
 	to: SessionModelRef;
 };
 
+export function hasSessionUserTurn(messages: readonly { role: string }[]): boolean {
+	return messages.some((message: { role: string }): boolean => message.role === "user");
+}
+
 function isModelRef(value: unknown): value is SessionModelRef {
 	return typeof value === "object"
 		&& value !== null

@@ -41,6 +41,7 @@ import {
 	SUMMARY_PREPARATION_TOOL_NAME,
 	type SummaryPreparationContext
 } from "./summary-control.js";
+import { BROWSER_TOOL_NAMES, BROWSER_TOOL_NAME_SET, type BrowserControlContext } from "./browser-tools.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -70,6 +71,7 @@ export type ToolExecutionContext = {
 		approvalMode: "manual" | "auto-safe" | "full-trust";
 		chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	} | undefined;
+	browserControl?: BrowserControlContext | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -79,6 +81,12 @@ export type WorkflowToolGroup = "read" | "verify" | "write";
 // 这是 workflow 的保守默认工具集，不等同于同风险工具的全集。
 const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> = {
 	read: [
+		"mcp_browser_observe",
+		"mcp_browser_navigate",
+		"mcp_browser_navigation",
+		"mcp_browser_scroll",
+		"mcp_browser_wait",
+		"mcp_browser_screenshot",
 		"mcp_skills_load",
 		"mcp_web_search",
 		"mcp_image_inspect",
@@ -143,6 +151,9 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_terminal_run_safe_preset"
 	],
 	write: [
+		"mcp_browser_click",
+		"mcp_browser_type",
+		"mcp_browser_select",
 		"mcp_image_generate",
 		"mcp_image_propose_import_to_workspace",
 		"mcp_image_import_to_workspace",
@@ -201,6 +212,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 };
 
 const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	...BROWSER_TOOL_NAMES,
 	"mcp_skills_load",
 	"mcp_skills_propose_create",
 	"mcp_skills_create",
@@ -246,6 +258,9 @@ function isGodotToolName(toolName: string | undefined): boolean {
 }
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
+	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
+		return context.clientType === "studio" && context.browserControl !== undefined;
+	}
 	if (!isGodotToolName(toolName)) {
 		return true;
 	}

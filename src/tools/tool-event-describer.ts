@@ -72,6 +72,22 @@ function createDisplay(
 }
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
+	if (toolName.startsWith("mcp_browser_")) {
+		const action = toolName.slice("mcp_browser_".length);
+		const labels: Record<string, [ToolEventCategory, string, string]> = {
+			observe: ["read", "观察网页", "读取当前网页的可见内容与交互元素"],
+			navigate: ["read", "打开网页", getStringArg(args, "url") ?? "导航到网页"],
+			navigation: ["read", "网页导航", getStringArg(args, "action") ?? "导航网页"],
+			scroll: ["read", "滚动网页", getStringArg(args, "direction") ?? "滚动当前网页"],
+			wait: ["read", "等待网页", getStringArg(args, "condition") ?? "等待页面状态"],
+			screenshot: ["image", "截取网页", "捕获当前浏览器视口"],
+			click: ["write", "点击网页元素", `元素 ${String(args.elementId ?? "")}`],
+			type: ["write", "输入网页内容", `元素 ${String(args.elementId ?? "")}`],
+			select: ["write", "选择网页选项", `元素 ${String(args.elementId ?? "")}`]
+		};
+		const [category, title, summary] = labels[action] ?? ["unknown", "操作网页", action];
+		return createDisplay("studio_browser", "Daedalus Browser", category, title, summary, { kind: "unknown", label: action });
+	}
 	if (toolName === "daedalus_prepare_summary") {
 		return createDisplay("workflow", "Daedalus Workflow", "read", "准备总结", "检查 Agent Loop 是否可以开始总结", {
 			kind: "unknown",

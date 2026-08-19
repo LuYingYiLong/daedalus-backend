@@ -54,7 +54,7 @@ import {
 	createSessionFork,
 	readSessionForkDraft,
 } from "../session/session-fork.js";
-import { recordPendingSessionModelTransition } from "../session/session-model-transition.js";
+import { hasSessionUserTurn, recordPendingSessionModelTransition } from "../session/session-model-transition.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -1394,6 +1394,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				});
 				break;
 			}
+			const hadPriorUserTurn: boolean = hasSessionUserTurn(session.messages);
 
 			const provider: ProviderId = request.params.provider;
 			const model: string = request.params.model.trim();
@@ -1444,11 +1445,13 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			bumpWorkbenchRevision(session);
 			await waitForSessionEventPersistence(session);
 			await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
-			await recordPendingSessionModelTransition(
-				session.sessionId,
-				{ provider: previousProvider, model: previousModel },
-				{ provider, model },
-			);
+			if (hadPriorUserTurn) {
+				await recordPendingSessionModelTransition(
+					session.sessionId,
+					{ provider: previousProvider, model: previousModel },
+					{ provider, model },
+				);
+			}
 
 			const stored = await openSession(session.sessionId);
 			emitWorkbenchUpdated(socket, request.id, session);

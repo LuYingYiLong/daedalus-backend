@@ -23,6 +23,7 @@ import { withMcpRequestContext } from "../mcp/request-context.js";
 import { logger } from "../logger.js";
 import { timingSafeEqual } from "node:crypto";
 import { BACKEND_PROTOCOL_VERSION } from "../runtime/build-metadata.js";
+import { studioBrowserRuntime } from "./studio-browser-runtime.js";
 
 export type WebSocketServerRuntimeOptions = {
 	host?: string | undefined;
@@ -259,6 +260,7 @@ function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: M
 		});
 	}
 	detachEditorBridgeSocket(socket, mcpHost);
+	studioBrowserRuntime.detachSocket(socket);
 	unregisterClientConnection(socket);
 	if (!hasOtherConnections) {
 		abortActiveRequests(connectionSession);

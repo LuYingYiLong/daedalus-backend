@@ -189,6 +189,15 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		CUSTOM_MCP_TOOLS_SENTINEL
 	].sort());
 	assert.deepEqual(getNoWorkspaceToolNames().sort(), [
+		"mcp_browser_observe",
+		"mcp_browser_navigate",
+		"mcp_browser_navigation",
+		"mcp_browser_scroll",
+		"mcp_browser_wait",
+		"mcp_browser_screenshot",
+		"mcp_browser_click",
+		"mcp_browser_type",
+		"mcp_browser_select",
 		"mcp_godot_search_documentation",
 		"mcp_image_generate",
 		"mcp_image_inspect",
@@ -198,7 +207,12 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_web_search",
 		CUSTOM_MCP_TOOLS_SENTINEL
 	].sort());
-	assert.deepEqual(filterToolNamesForWorkspace(getDefaultWorkflowToolNames("write"), undefined), ["mcp_image_generate"]);
+	assert.deepEqual(filterToolNamesForWorkspace(getDefaultWorkflowToolNames("write"), undefined).sort(), [
+		"mcp_browser_click",
+		"mcp_browser_select",
+		"mcp_browser_type",
+		"mcp_image_generate"
+	].sort());
 });
 
 test("workspace tool catalog hides every Godot tool for a non-Godot workspace", (): void => {
@@ -245,7 +259,12 @@ test("workspace tool catalog exposes global dynamic MCP tools without workspace"
 });
 
 test("workflow defaults are catalog-backed and resolve to known tools", (): void => {
-	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-a", hasGodotWorkspaceCapability: true });
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "workspace-a",
+		hasGodotWorkspaceCapability: true,
+		clientType: "studio",
+		browserControl: { execute: async (): Promise<Record<string, unknown>> => ({}) }
+	});
 	for (const group of ["read", "verify", "write"] as const) {
 		for (const toolName of getDefaultWorkflowToolNames(group)) {
 			if (toolName === CUSTOM_MCP_TOOLS_SENTINEL) {

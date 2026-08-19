@@ -6,6 +6,15 @@ export type ToolMapping = {
 };
 
 export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
+	"mcp_browser_observe": { serverId: "studio_browser", toolName: "observe" },
+	"mcp_browser_navigate": { serverId: "studio_browser", toolName: "navigate" },
+	"mcp_browser_navigation": { serverId: "studio_browser", toolName: "navigation" },
+	"mcp_browser_scroll": { serverId: "studio_browser", toolName: "scroll" },
+	"mcp_browser_wait": { serverId: "studio_browser", toolName: "wait" },
+	"mcp_browser_screenshot": { serverId: "studio_browser", toolName: "screenshot" },
+	"mcp_browser_click": { serverId: "studio_browser", toolName: "click" },
+	"mcp_browser_type": { serverId: "studio_browser", toolName: "type" },
+	"mcp_browser_select": { serverId: "studio_browser", toolName: "select" },
 	"mcp_skills_load": { serverId: "skills", toolName: "load" },
 	"mcp_skills_propose_create": { serverId: "skills", toolName: "propose_create" },
 	"mcp_skills_create": { serverId: "skills", toolName: "create" },

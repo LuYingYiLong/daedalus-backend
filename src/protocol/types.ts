@@ -108,7 +108,8 @@ export type CanonicalServerEventName =
 	| "editor.tool.requested"
 	| "mcp.config.updated"
 	| "skill.catalog.changed"
-	| "usage.metrics.recorded";
+	| "usage.metrics.recorded"
+	| "worktree.operation.updated";
 
 export type InternalLegacyServerEventName =
 	| "ai.delta"

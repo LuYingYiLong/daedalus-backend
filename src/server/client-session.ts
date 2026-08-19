@@ -6,7 +6,7 @@ import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-profiles.js";
 import { getProviderDefaultModel, isProviderId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort } from "../providers/reasoning-effort.js";
-import type { WorkspaceConfig } from "../workspace/types.js";
+import type { WorktreeLifecycleStatus, WorkspaceConfig } from "../workspace/types.js";
 import type { AgentRunState } from "../workflow/agent-run-state.js";
 import type { ToolRisk } from "../tools/tool-policy.js";
 import { createActivityGroupAccumulator, type ActivityGroupAccumulator } from "../session/activity-groups.js";
@@ -134,6 +134,7 @@ export type ClientSession = {
 	activityGroupAccumulators: Map<string, ActivityGroupAccumulator>;
 	hookDeveloperContext: string[];
 	stopHookContinuationCount: number;
+	worktreeStatus?: WorktreeLifecycleStatus | undefined;
 };
 
 export function createClientSession(defaultWorkspace: WorkspaceConfig | undefined): ClientSession {
@@ -226,11 +227,13 @@ export function clearActiveSession(session: ClientSession): void {
 	session.activityGroupAccumulators.clear();
 	session.hookDeveloperContext = [];
 	session.stopHookContinuationCount = 0;
+	session.worktreeStatus = undefined;
 }
 
 export function applySessionMetadata(session: ClientSession, metadata: SessionMetadata): void {
 	session.sessionId = metadata.id;
 	session.sessionTitle = metadata.title;
+	session.worktreeStatus = metadata.worktree?.status;
 	if (metadata.provider !== undefined && isProviderId(metadata.provider)) {
 		session.activeProvider = metadata.provider;
 		session.providerModel = metadata.model ?? getProviderDefaultModel(metadata.provider);

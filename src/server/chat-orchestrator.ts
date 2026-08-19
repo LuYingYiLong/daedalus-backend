@@ -2496,6 +2496,10 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 
 		case "ai.chat": {
 			await waitForFullSessionLoad(session);
+			if (session.worktreeStatus !== undefined && session.worktreeStatus !== "ready") {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "worktree_not_ready", message: "The worktree must finish setup or be explicitly skipped before starting the Agent." } });
+				break;
+			}
 			const slashCommandResult: SlashCommandResult = await handleSlashCommand({
 				socket,
 				request,

@@ -1,20 +1,24 @@
 import type WebSocket from "ws";
+import { randomUUID } from "node:crypto";
 import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { clearActiveSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
-import { deleteWorkspace, findWorkspace, getWorkspaceSourceFolder, hydrateWorkspacesFromSessionMetadata, loadWorkspaces, updateWorkspace } from "../../workspace/registry.js";
+import { deleteWorkspace, findWorkspace, getWorkspaceSourceFolder, hydrateWorkspacesFromSessionMetadata, loadWorkspaces, unregisterSessionRuntimeWorkspace, updateWorkspace, upsertRuntimeWorkspace } from "../../workspace/registry.js";
 import type { WorkspaceColor, WorkspaceConfig, WorkspaceIcon } from "../../workspace/types.js";
 import { getClientConnection, updateClientConnection } from "../client-connections.js";
 import { logger } from "../../logger.js";
-import { listArchivedSessions, listSessions, listTemporarySessions, reassignOrDeleteSessionsForWorkspace, updateSessionsForWorkspace } from "../../session/session-store.js";
+import { getStoredSessionMetadata, listArchivedSessions, listSessions, listTemporarySessions, reassignOrDeleteSessionsForWorkspace, updateSessionsForWorkspace } from "../../session/session-store.js";
 import { checkoutWorkspaceGitBranch, createWorkspaceGitBranch, listWorkspaceGitBranches } from "../workspace-git-branches.js";
 import { commitOrPushWorkspaceGit, generateWorkspaceGitCommitMessage, GitCommitMessageGenerationTimeoutError } from "../workspace-git-commit.js";
 import { readWorkspaceGitDiff, readWorkspaceGitDiffFile, readWorkspaceGitDiffSummary } from "../workspace-git-diff.js";
 import { evaluateWorkspaceSelectionForSession, type WorkspaceSelectionDecision } from "../workspace-selection-guard.js";
 import { getWorkspaceTreeOrder, updateWorkspaceTreeOrder, type WorkspaceTreeOrderInventory } from "../../workspace/tree-order-store.js";
-import { inspectWorkspaceWorktreeEligibility } from "../../workspace/worktree-manager.js";
+import { createManagedWorktree, deleteManagedWorktree, inspectWorkspaceWorktreeEligibility } from "../../workspace/worktree-manager.js";
+import { inspectWorktreeHealth, repairManagedWorktree, findOrphanedManagedWorktreeDirectories } from "../../workspace/worktree-health.js";
+import { listWorktreeOperations, runTrackedWorktreeOperation } from "../../workspace/worktree-operations.js";
+import { runWorktreeSetup } from "../../workspace/local-environment-runtime.js";
 
 async function loadWorkspaceTreeOrderInventory(): Promise<WorkspaceTreeOrderInventory> {
 	const [sessions, archivedSessions] = await Promise.all([listSessions(), listArchivedSessions()]);
@@ -256,6 +260,11 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				});
 				break;
 			}
+			const permanentWorktree: WorkspaceConfig | undefined = loadWorkspaces().find((candidate): boolean => candidate.permanentWorktree?.sourceWorkspaceId === workspace.id);
+			if (permanentWorktree !== undefined) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "workspace_has_permanent_worktree", message: `Delete permanent worktree ${permanentWorktree.name} first.` } });
+				break;
+			}
 
 			const remainingWorkspaces: WorkspaceConfig[] = loadWorkspaces().filter((candidate: WorkspaceConfig): boolean => candidate.id !== workspace.id);
 			const deletion = await reassignOrDeleteSessionsForWorkspace(workspace.id, remainingWorkspaces);
@@ -339,6 +348,91 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				ok: true,
 				result: await inspectWorkspaceWorktreeEligibility(workspace)
 			});
+			break;
+		}
+
+		case "workspace.worktree.status.list": {
+			const allSessions = [...(await listSessions()), ...(await listTemporarySessions()), ...(await listArchivedSessions())];
+			const worktreeSessions = allSessions.filter((candidate): boolean => candidate.worktree !== undefined);
+			const permanentWorkspaces = loadWorkspaces().filter((workspace): boolean => workspace.permanentWorktree !== undefined);
+			const knownDirectoryKeys = new Set<string>([
+				...worktreeSessions.map((candidate): string => candidate.id),
+				...permanentWorkspaces.map((workspace): string => workspace.permanentWorktree!.id.replace(/^(?:managed|permanent)-/u, ""))
+			]);
+			const sessions = await Promise.all(worktreeSessions.map(async (candidate) => ({
+				session: candidate,
+				health: await inspectWorktreeHealth(candidate.worktree!)
+			})));
+			const permanent = await Promise.all(permanentWorkspaces.map(async (workspace) => ({ workspace, health: await inspectWorktreeHealth(workspace.permanentWorktree!) })));
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { sessions, permanent, orphans: await findOrphanedManagedWorktreeDirectories(knownDirectoryKeys), operations: await listWorktreeOperations() } });
+			break;
+		}
+
+		case "workspace.worktree.repair": {
+			try {
+				const metadata = await getStoredSessionMetadata(request.params.sessionId);
+				if (metadata.worktree === undefined) throw Object.assign(new Error("Session does not have a managed worktree."), { code: "worktree_not_found" });
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: await repairManagedWorktree(metadata.worktree) });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "worktree_repair_failed", message: error instanceof Error ? error.message : "Failed to repair worktree." } });
+			}
+			break;
+		}
+
+		case "workspace.worktree.permanent.create": {
+			try {
+				const sourceWorkspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+				if (sourceWorkspace === undefined) throw Object.assign(new Error(`Workspace not found: ${request.params.workspaceId}`), { code: "workspace_not_found" });
+				const directoryKey: string = `permanent-${randomUUID()}`;
+				const trackedCreate = await runTrackedWorktreeOperation({
+					type: "permanent-create",
+					workspaceId: sourceWorkspace.id,
+					task: async ({ signal, update }) => {
+						await update({ stage: "creating", progress: 0.05 });
+						const created = await createManagedWorktree({ sessionId: directoryKey, workspace: sourceWorkspace, sources: request.params.sources, permanentName: request.params.name });
+						try {
+							if (signal.aborted) throw Object.assign(new Error("Permanent worktree creation cancelled."), { code: "worktree_operation_cancelled" });
+							await update({ stage: "setup", progress: 0.55 });
+							const setupResult = await runWorktreeSetup({ metadata: created.metadata, sourceWorkspace, signal });
+							return { created, setupResult };
+						} catch (error: unknown) {
+							await deleteManagedWorktree(created.metadata).catch((): void => undefined);
+							throw error;
+						}
+					}
+				});
+				const { created, setupResult } = trackedCreate.result;
+				unregisterSessionRuntimeWorkspace(created.workspace.id);
+				const workspaceId: string = `permanent-worktree-${randomUUID()}`;
+				const metadata = { ...setupResult.metadata, runtimeWorkspaceId: workspaceId };
+				const workspace: WorkspaceConfig = upsertRuntimeWorkspace({ ...created.workspace, id: workspaceId, name: request.params.name, permanentWorktree: metadata });
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { workspace, metadata, operation: trackedCreate.operation } });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "permanent_worktree_create_failed", message: error instanceof Error ? error.message : "Failed to create permanent worktree." } });
+			}
+			break;
+		}
+
+		case "workspace.worktree.permanent.delete": {
+			try {
+				const workspace: WorkspaceConfig | undefined = findWorkspace(request.params.workspaceId);
+				if (workspace?.permanentWorktree === undefined) throw Object.assign(new Error("Permanent worktree not found."), { code: "permanent_worktree_not_found" });
+				const boundSession = [...(await listSessions()), ...(await listTemporarySessions()), ...(await listArchivedSessions())].find((candidate): boolean => candidate.workspaceId === workspace.id);
+				if (boundSession !== undefined) throw Object.assign(new Error(`Delete or move session ${boundSession.id} first.`), { code: "permanent_worktree_in_use" });
+				const trackedDelete = await runTrackedWorktreeOperation({
+					type: "permanent-delete",
+					workspaceId: workspace.id,
+					task: async ({ signal, update }): Promise<void> => {
+						if (signal.aborted) throw Object.assign(new Error("Permanent worktree deletion cancelled."), { code: "worktree_operation_cancelled" });
+						await update({ stage: "deleting", progress: 0.1 });
+						await deleteManagedWorktree(workspace.permanentWorktree!);
+					}
+				});
+				deleteWorkspace(workspace.id);
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { deleted: true, workspaceId: workspace.id, operation: trackedDelete.operation } });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "permanent_worktree_delete_failed", message: error instanceof Error ? error.message : "Failed to delete permanent worktree." } });
+			}
 			break;
 		}
 

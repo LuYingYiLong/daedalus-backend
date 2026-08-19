@@ -58,8 +58,18 @@ test("worktree manager validates, creates, restores, and safely deletes managed 
 
 		await fs.writeFile(path.join(repositoryRoot, "untracked.txt"), "dirty\n", "utf8");
 		const dirtyEligibility = await inspectWorkspaceWorktreeEligibility(workspace);
-		assert.equal(dirtyEligibility.eligible, false);
+		assert.equal(dirtyEligibility.eligible, true);
 		assert.equal(dirtyEligibility.sources[0]?.dirty, true);
+		await assert.rejects(
+			createManagedWorktree({
+				sessionId: "session-worktree-dirty-head",
+				workspace
+			}),
+			(error: unknown): boolean =>
+				error instanceof Error
+				&& "code" in error
+				&& error.code === "worktree_dirty_confirmation_required"
+		);
 		await fs.rm(path.join(repositoryRoot, "untracked.txt"));
 
 		const created = await createManagedWorktree({
@@ -131,6 +141,51 @@ test("worktree eligibility rejects nested roots and duplicate repositories", asy
 		assert.equal(duplicateEligibility.eligible, false);
 		assert.match(duplicateEligibility.sources[1]?.reason ?? "", /different Git repository/u, JSON.stringify(duplicateEligibility));
 	} finally {
+		await fs.rm(testRoot, { recursive: true, force: true });
+	}
+});
+
+test("working-tree starting state preserves staged, unstaged, untracked, and included ignored files", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const testRoot: string = await fs.mkdtemp(path.join(os.tmpdir(), "daedalus-worktree-state-"));
+	const profileRoot: string = path.join(testRoot, "profile");
+	const repositoryRoot: string = path.join(testRoot, "repository");
+	process.env.USERPROFILE = profileRoot;
+
+	try {
+		await initializeRepository(repositoryRoot, "README.md");
+		await fs.writeFile(path.join(repositoryRoot, ".gitignore"), "cache/\n", "utf8");
+		await fs.writeFile(path.join(repositoryRoot, ".worktreeinclude"), "cache/*.json\n", "utf8");
+		await runGit(repositoryRoot, ["add", "--", ".gitignore", ".worktreeinclude"]);
+		await runGit(repositoryRoot, ["commit", "-m", "worktree include"]);
+		await fs.writeFile(path.join(repositoryRoot, "README.md"), "staged\n", "utf8");
+		await runGit(repositoryRoot, ["add", "--", "README.md"]);
+		await fs.appendFile(path.join(repositoryRoot, "README.md"), "unstaged\n", "utf8");
+		await fs.writeFile(path.join(repositoryRoot, "untracked.txt"), "untracked\n", "utf8");
+		await fs.mkdir(path.join(repositoryRoot, "cache"));
+		await fs.writeFile(path.join(repositoryRoot, "cache", "settings.json"), "{}\n", "utf8");
+
+		const created = await createManagedWorktree({
+			sessionId: "session-worktree-state",
+			workspace: createWorkspace(repositoryRoot),
+			sources: {
+				"source-main": {
+					startingState: { type: "working-tree" },
+				},
+			},
+		});
+		const worktreePath: string = created.metadata.sources[0]!.worktreePath;
+		assert.equal((await fs.readFile(path.join(worktreePath, "README.md"), "utf8")).replaceAll("\r\n", "\n"), "staged\nunstaged\n");
+		assert.equal(await fs.readFile(path.join(worktreePath, "untracked.txt"), "utf8"), "untracked\n");
+		assert.equal(await fs.readFile(path.join(worktreePath, "cache", "settings.json"), "utf8"), "{}\n");
+		const status: string = (await runGit(worktreePath, ["status", "--porcelain=v1"])).stdout;
+		assert.match(status, /^MM README\.md$/mu);
+		assert.match(status, /^\?\? untracked\.txt$/mu);
+
+		await fs.rm(worktreePath, { recursive: true, force: true });
+	} finally {
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
 		await fs.rm(testRoot, { recursive: true, force: true });
 	}
 });

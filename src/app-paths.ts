@@ -15,6 +15,7 @@ export type DaedalusPathKey =
 	| "config.godotDocumentation"
 	| "config.approval"
 	| "config.hookTrust"
+	| "config.environmentTrust"
 	| "hooks.globalConfig"
 	| "hooks.dataRoot"
 	| "cache.hookOutputs"
@@ -62,6 +63,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"config.godotDocumentation": join(configRoot, "godot-documentation.json"),
 		"config.approval": join(configRoot, "approval.json"),
 		"config.hookTrust": join(configRoot, "hook-trust.json"),
+		"config.environmentTrust": join(configRoot, "environment-trust.json"),
 		"hooks.globalConfig": join(root, "hooks.json"),
 		"hooks.dataRoot": join(root, "hook-data"),
 		"cache.hookOutputs": join(root, "cache", "hook-outputs"),
@@ -114,6 +116,10 @@ export function getPersonalSkillsDir(): string {
 
 export function getWorktreesRoot(): string {
 	return getDaedalusPath("worktrees.root");
+}
+
+export function getEnvironmentTrustConfigPath(): string {
+	return getDaedalusPath("config.environmentTrust");
 }
 
 export function getSkillSettingsPath(): string {

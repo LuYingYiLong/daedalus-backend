@@ -29,6 +29,7 @@ type LegacyWorkspaceConfig = Partial<WorkspaceConfig> & {
 	sourceFolders?: unknown;
 	primarySourceFolderId?: unknown;
 	godotExecutablePath?: unknown;
+	permanentWorktree?: unknown;
 };
 
 export type WorkspaceUpdateInput = {
@@ -174,6 +175,9 @@ export function normalizeWorkspaceConfig(rawInput: unknown): WorkspaceConfig {
 		primarySourceFolderId: primary.id,
 		godotExecutablePath: typeof raw.godotExecutablePath === "string" && raw.godotExecutablePath.trim().length > 0
 			? raw.godotExecutablePath
+			: undefined,
+		permanentWorktree: raw.permanentWorktree !== null && typeof raw.permanentWorktree === "object"
+			? raw.permanentWorktree as SessionWorktreeMetadata
 			: undefined
 	};
 }
@@ -366,7 +370,8 @@ function sameWorkspace(left: WorkspaceConfig, right: WorkspaceConfig): boolean {
 		&& left.color === right.color
 		&& left.primarySourceFolderId === right.primarySourceFolderId
 		&& JSON.stringify(left.sourceFolders) === JSON.stringify(right.sourceFolders)
-		&& left.godotExecutablePath === right.godotExecutablePath;
+		&& left.godotExecutablePath === right.godotExecutablePath
+		&& JSON.stringify(left.permanentWorktree) === JSON.stringify(right.permanentWorktree);
 }
 
 function persistRuntimeWorkspace(workspace: WorkspaceConfig): void {

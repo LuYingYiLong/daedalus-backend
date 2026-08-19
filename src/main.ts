@@ -26,6 +26,7 @@ import { initializeGodotDocumentationManager } from "./godot-documentation/manag
 import { cleanupAgentGoalCheckpoints } from "./server/goal-checkpoints.js";
 import { startSessionSearchPrebuildScheduler, stopSessionSearchPrebuildScheduler } from "./session-search/scheduler.js";
 import { sessionSearchService } from "./session-search/service.js";
+import { initializeWorktreeOperations } from "./workspace/worktree-operations.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
@@ -63,6 +64,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 	});
 	await initializeProviderCustomizations();
 	await initializeUsageMetricsStore();
+	await initializeWorktreeOperations();
 	try {
 		await initializeGodotDocumentationManager();
 	} catch (error: unknown) {

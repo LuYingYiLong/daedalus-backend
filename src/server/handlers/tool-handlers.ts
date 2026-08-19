@@ -74,6 +74,10 @@ function sendToolError(socket: WebSocket, request: ClientRequest, code: string, 
 }
 
 export async function handleToolRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
+	if (session.worktreeStatus !== undefined && session.worktreeStatus !== "ready") {
+		sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "worktree_not_ready", message: "Worktree tools are disabled until setup completes or is explicitly skipped." } });
+		return;
+	}
 	switch (request.method) {
 	case "tool.catalog.list": {
 		const mode: ExternalMcpMode = parseExternalMcpMode(request.params?.mode);

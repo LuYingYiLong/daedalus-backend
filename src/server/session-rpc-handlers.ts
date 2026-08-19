@@ -200,6 +200,10 @@ import type { SkillWorkspace } from "../skills/types.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace } from "../tools/tool-catalog.js";
 import { SessionSearchError, sessionSearchService } from "../session-search/service.js";
 import { createManagedWorktree, deleteManagedWorktree, restoreManagedWorktreeWorkspace, WorktreeOperationError } from "../workspace/worktree-manager.js";
+import { runWorktreeSetup, skipPendingWorktreeSetup } from "../workspace/local-environment-runtime.js";
+import { cancelWorktreeOperation, getWorktreeOperation, runTrackedWorktreeOperation } from "../workspace/worktree-operations.js";
+import { executeWorktreeHandoff, previewWorktreeHandoff } from "../workspace/worktree-handoff.js";
+import { readLocalEnvironmentConfig } from "../workspace/local-environment.js";
 
 function sessionRpcError(error: unknown, fallbackCode: string, fallbackMessage: string): { code: string; message: string } {
 	const candidate = error as Error & { code?: string };
@@ -816,19 +820,56 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				if (sourceWorkspace === undefined) {
 					throw new WorktreeOperationError("worktree_workspace_not_found", `Workspace not found: ${request.params.workspaceId}`);
 				}
-				const created = await createManagedWorktree({
+				const sourceOptions = { ...(request.params.sources ?? {}) };
+				for (const source of sourceWorkspace.sourceFolders) {
+					if (sourceOptions[source.id]?.environmentId !== undefined) continue;
+					const environmentDocument = await readLocalEnvironmentConfig(sourceWorkspace, source.id);
+					const environmentId = environmentDocument.config.defaultEnvironmentId ?? null;
+					const profile = environmentDocument.profiles.find((candidate): boolean => candidate.id === environmentId);
+					sourceOptions[source.id] = { ...sourceOptions[source.id], environmentId, environmentFingerprint: profile?.fingerprint ?? null };
+				}
+				const trackedCreate = await runTrackedWorktreeOperation({
+					type: "create",
 					sessionId: request.params.sessionId,
-					workspace: sourceWorkspace
+					workspaceId: sourceWorkspace.id,
+					task: async ({ signal, update }) => {
+						if (signal.aborted) throw Object.assign(new Error("Worktree creation cancelled."), { code: "worktree_operation_cancelled" });
+						await update({ stage: "creating", progress: 0.05 });
+						return await createManagedWorktree({
+							sessionId: request.params.sessionId,
+							workspace: sourceWorkspace,
+							sources: sourceOptions
+						});
+					}
 				});
+				const created = trackedCreate.result;
 				createdWorktree = created;
 				try {
 					await mcpHost.ensureWorkspace(created.workspace);
-					const boundMetadata: SessionMetadata = await replaceSessionWorkspaceBinding({
+					let boundMetadata: SessionMetadata = await replaceSessionWorkspaceBinding({
 						sessionId: request.params.sessionId,
 						workspace: created.workspace,
 						worktree: created.metadata
 					});
 					workspaceBindingCommitted = true;
+					const trackedSetup = await runTrackedWorktreeOperation({
+						type: "setup",
+						sessionId: request.params.sessionId,
+						workspaceId: created.workspace.id,
+						task: async ({ signal, update }) => await runWorktreeSetup({
+							metadata: created.metadata,
+							sourceWorkspace,
+							signal,
+							onProgress: async (source, index, total): Promise<void> => update({ stage: "setup", sourceFolderId: source.sourceFolderId, progress: total === 0 ? 1 : index / total })
+						})
+					});
+					const setup = trackedSetup.result;
+					created.metadata = setup.metadata;
+					boundMetadata = await replaceSessionWorkspaceBinding({
+						sessionId: request.params.sessionId,
+						workspace: created.workspace,
+						worktree: created.metadata
+					});
 					applyWorkspaceToSessionRuntime(socket, session, created.workspace);
 					applySessionMetadata(session, boundMetadata);
 					emitWorkbenchUpdated(socket, request.id, session);
@@ -841,7 +882,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						result: {
 							metadata,
 							workspace: created.workspace,
-							workbench: serializeWorkbench(session)
+							workbench: serializeWorkbench(session),
+							operation: trackedSetup.operation,
+							createOperation: trackedCreate.operation
 						}
 					});
 				} catch (error: unknown) {
@@ -867,6 +910,102 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					ok: false,
 					error: sessionRpcError(error, "worktree_create_failed", "Failed to create managed worktree")
 				});
+			}
+			break;
+		}
+
+		case "session.worktree.operation.get": {
+			const operation = await getWorktreeOperation(request.params.operationId);
+			sendJson(socket, operation === null
+				? { type: "response", id: request.id, ok: false, error: { code: "worktree_operation_not_found", message: "Worktree operation not found." } }
+				: { type: "response", id: request.id, ok: true, result: operation });
+			break;
+		}
+
+		case "session.worktree.operation.cancel": {
+			try {
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: await cancelWorktreeOperation(request.params.operationId) });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: sessionRpcError(error, "worktree_operation_cancel_failed", "Failed to cancel worktree operation") });
+			}
+			break;
+		}
+
+		case "session.worktree.setup.retry":
+		case "session.worktree.setup.skip": {
+			try {
+				assertWorktreeSessionIdle(getSessionRuntime(request.params.sessionId), request.id);
+				const storedMetadata: SessionMetadata = await getStoredSessionMetadata(request.params.sessionId);
+				if (storedMetadata.worktree === undefined) throw new WorktreeOperationError("worktree_not_found", "Session does not have a managed worktree.");
+				const sourceWorkspace: WorkspaceConfig | undefined = findWorkspace(storedMetadata.worktree.sourceWorkspaceId);
+				if (sourceWorkspace === undefined) throw new WorktreeOperationError("worktree_source_workspace_missing", "The source workspace no longer exists.");
+				const trackedSetup = request.method === "session.worktree.setup.skip"
+					? null
+					: await runTrackedWorktreeOperation({
+						type: "setup",
+						sessionId: request.params.sessionId,
+						workspaceId: storedMetadata.worktree.runtimeWorkspaceId,
+						task: async ({ signal, update }) => (await runWorktreeSetup({
+							metadata: storedMetadata.worktree!,
+							sourceWorkspace,
+							signal,
+							onProgress: async (source, index, total): Promise<void> => update({ stage: "setup", sourceFolderId: source.sourceFolderId, progress: total === 0 ? 1 : index / total })
+						})).metadata
+					});
+				const worktree = trackedSetup === null ? skipPendingWorktreeSetup(storedMetadata.worktree) : trackedSetup.result;
+				const runtimeWorkspace: WorkspaceConfig | undefined = restoreManagedWorktreeWorkspace(worktree, sourceWorkspace);
+				if (runtimeWorkspace === undefined) throw new WorktreeOperationError("worktree_unavailable", "The managed worktree is unavailable.");
+				const metadata: SessionMetadata = await replaceSessionWorkspaceBinding({ sessionId: request.params.sessionId, workspace: runtimeWorkspace, worktree });
+				if (session.sessionId === request.params.sessionId) {
+					applyWorkspaceToSessionRuntime(socket, session, runtimeWorkspace);
+					applySessionMetadata(session, metadata);
+					emitWorkbenchUpdated(socket, request.id, session);
+				}
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { metadata, workspace: runtimeWorkspace, workbench: session.sessionId === request.params.sessionId ? serializeWorkbench(session) : null, operation: trackedSetup?.operation ?? null } });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: sessionRpcError(error, "worktree_setup_failed", "Failed to update worktree setup") });
+			}
+			break;
+		}
+
+		case "session.worktree.handoff.preview":
+		case "session.worktree.handoff.execute": {
+			try {
+				assertWorktreeSessionIdle(getSessionRuntime(request.params.sessionId), request.id);
+				const storedMetadata: SessionMetadata = await getStoredSessionMetadata(request.params.sessionId);
+				if (storedMetadata.worktree === undefined) throw new WorktreeOperationError("worktree_not_found", "Session does not have an associated worktree.");
+				const sourceWorkspace: WorkspaceConfig | undefined = findWorkspace(storedMetadata.worktree.sourceWorkspaceId);
+				if (sourceWorkspace === undefined) throw new WorktreeOperationError("worktree_source_workspace_missing", "The source workspace no longer exists.");
+				if (request.method === "session.worktree.handoff.preview") {
+					const result = await previewWorktreeHandoff({ sessionId: request.params.sessionId, metadata: storedMetadata.worktree, sourceWorkspace, target: request.params.target, branchBySource: request.params.branchBySource });
+					sendJson(socket, { type: "response", id: request.id, ok: true, result });
+					break;
+				}
+				const trackedHandoff = await runTrackedWorktreeOperation({
+					type: "handoff",
+					sessionId: request.params.sessionId,
+					workspaceId: storedMetadata.worktree.runtimeWorkspaceId,
+					task: async ({ signal, update }) => {
+						if (signal.aborted) throw Object.assign(new Error("Worktree handoff cancelled."), { code: "worktree_operation_cancelled" });
+						await update({ stage: "handoff", progress: 0.1 });
+						const result = await executeWorktreeHandoff({ sessionId: request.params.sessionId, metadata: storedMetadata.worktree!, sourceWorkspace, target: request.params.target, branchBySource: request.params.branchBySource });
+						await update({ stage: "handoff", progress: 0.9 });
+						return result;
+					}
+				});
+				const worktree = trackedHandoff.result;
+				const workspace: WorkspaceConfig | undefined = restoreManagedWorktreeWorkspace(worktree, sourceWorkspace);
+				if (workspace === undefined) throw new WorktreeOperationError("worktree_unavailable", "The handoff target is unavailable.");
+				const metadata: SessionMetadata = await replaceSessionWorkspaceBinding({ sessionId: request.params.sessionId, workspace, worktree });
+				if (session.sessionId === request.params.sessionId) {
+					await mcpHost.ensureWorkspace(workspace);
+					applyWorkspaceToSessionRuntime(socket, session, workspace);
+					applySessionMetadata(session, metadata);
+					emitWorkbenchUpdated(socket, request.id, session);
+				}
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { metadata, workspace, workbench: session.sessionId === request.params.sessionId ? serializeWorkbench(session) : null, operation: trackedHandoff.operation } });
+			} catch (error: unknown) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: sessionRpcError(error, "worktree_handoff_failed", "Failed to hand off worktree") });
 			}
 			break;
 		}
@@ -1049,6 +1188,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 					if (!workspace) {
 						workspaceWarning = `Session workspace not found: ${timeline.metadata.workspaceId}`;
+						if (timeline.metadata.worktree !== undefined && timeline.metadata.worktree.status !== "recovery-required") {
+							timeline.metadata.worktree = { ...timeline.metadata.worktree, status: "recovery-required" };
+							await updateSessionMetadata(timeline.metadata.id, { worktree: timeline.metadata.worktree });
+						}
 						logger.warn("session", "workspace_not_found_on_open", {
 							sessionId: timeline.metadata.id,
 							workspaceId: timeline.metadata.workspaceId

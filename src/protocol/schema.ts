@@ -1321,9 +1321,42 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z
 			.object({
 				sessionId: z.string().min(1),
-				workspaceId: z.string().min(1)
+				workspaceId: z.string().min(1),
+				sources: z.record(z.string().min(1), z.object({
+					startingState: z.discriminatedUnion("type", [
+						z.object({ type: z.literal("head") }).strict(),
+						z.object({ type: z.literal("branch"), ref: z.string().min(1).max(500) }).strict(),
+						z.object({ type: z.literal("working-tree") }).strict()
+					]).optional(),
+					environmentId: z.string().min(1).max(64).nullable().optional(),
+					environmentFingerprint: z.string().length(64).nullable().optional()
+				}).strict()).optional()
 			})
 			.strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.operation.get"),
+		params: z.object({ operationId: z.string().uuid() }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.operation.cancel"),
+		params: z.object({ operationId: z.string().uuid() }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.setup.retry"),
+		params: z.object({ sessionId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.setup.skip"),
+		params: z.object({ sessionId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.handoff.preview"),
+		params: z.object({ sessionId: z.string().min(1), target: z.enum(["local", "worktree"]), branchBySource: z.record(z.string(), z.string().min(1)).optional() }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("session.worktree.handoff.execute"),
+		params: z.object({ sessionId: z.string().min(1), target: z.enum(["local", "worktree"]), branchBySource: z.record(z.string(), z.string().min(1)).optional() }).strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1334,6 +1367,22 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 				sessionId: z.string().min(1)
 			})
 			.strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("environment.config.get"),
+		params: z.object({ workspaceId: z.string().min(1), sourceFolderId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("environment.config.update"),
+		params: z.object({ workspaceId: z.string().min(1), sourceFolderId: z.string().min(1), content: z.string().max(262144), expectedRevision: z.string().length(64) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("environment.trust.update"),
+		params: z.object({ workspaceId: z.string().min(1), sourceFolderId: z.string().min(1), fingerprint: z.string().length(64), status: z.enum(["trusted", "network-approved", "disabled"]) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("environment.actions.list"),
+		params: z.object({ workspaceId: z.string().min(1), sourceFolderId: z.string().min(1), environmentId: z.string().min(1).optional() }).strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -2080,6 +2129,19 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 				workspaceId: z.string().min(1)
 			})
 			.strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.status.list"), params: z.object({}).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.repair"), params: z.object({ sessionId: z.string().min(1) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.permanent.create"),
+		params: z.object({ workspaceId: z.string().min(1), name: z.string().trim().min(1).max(100), sources: z.record(z.string(), z.object({ startingState: z.discriminatedUnion("type", [z.object({ type: z.literal("head") }).strict(), z.object({ type: z.literal("branch"), ref: z.string().min(1).max(500) }).strict()]), environmentId: z.string().min(1).nullable().optional() }).strict()).optional() }).strict()
+	}),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("workspace.worktree.permanent.delete"), params: z.object({ workspaceId: z.string().min(1) }).strict()
 	}),
 	z.object({
 		type: z.literal("request"),

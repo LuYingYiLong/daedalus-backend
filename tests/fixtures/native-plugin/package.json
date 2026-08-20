@@ -1,0 +1,12 @@
+{
+  "name": "daedalus-fixture-native-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "daedalus": {
+    "plugin": {
+      "apiVersion": 1,
+      "entry": "./index.js",
+      "capabilities": ["tools", "skills", "hooks", "mcp"]
+    }
+  }
+}

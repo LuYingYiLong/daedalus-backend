@@ -1,7 +1,39 @@
 import assert from "node:assert/strict";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { resolve } from "node:path";
 import { clearPluginRegistrations, getPluginTool, listPluginMcpTools, listPluginSkills, registerPluginMcp, registerPluginSkill, registerPluginTool } from "../../../src/plugins/runtime/registries.js";
 import { encodeWorkerMessage, parseWorkerEvent } from "../../../src/plugins/runtime/worker-protocol.js";
+
+const fixturePath: string = fileURLToPath(new URL("../../fixtures/native-plugin", import.meta.url));
+
+async function readWorkerEvents(child: ChildProcessWithoutNullStreams, count: number): Promise<Array<Record<string, unknown>>> {
+	const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+	const events: Array<Record<string, unknown>> = [];
+	return new Promise((resolveEvents, reject): void => {
+		const timeout = setTimeout((): void => {
+			lines.close();
+			reject(new Error("Native plugin fixture worker timed out."));
+		}, 10_000);
+		lines.on("line", (line: string): void => {
+			try {
+				events.push(parseWorkerEvent(line) as unknown as Record<string, unknown>);
+			} catch (error: unknown) {
+				clearTimeout(timeout);
+				lines.close();
+				reject(error);
+				return;
+			}
+			if (events.length >= count) {
+				clearTimeout(timeout);
+				lines.close();
+				resolveEvents(events);
+			}
+		});
+	});
+}
 
 test("native plugin registrations use stable namespaces and can be cleared", (): void => {
 	const pluginId = "fixture-runtime-plugin";
@@ -24,4 +56,36 @@ test("worker protocol accepts JSON line events and rejects malformed envelopes",
 	assert.equal(encoded.endsWith("\n"), true);
 	assert.equal(parseWorkerEvent(JSON.stringify({ type: "ready", protocolVersion: 1 })).type, "ready");
 	assert.throws(() => parseWorkerEvent(JSON.stringify({ value: true })), /Invalid plugin worker event/);
+});
+
+test("native plugin fixture registers and invokes through the worker protocol", async (): Promise<void> => {
+	const backendRoot: string = resolve(".");
+	const bootstrap: string = resolve("src/plugins/runtime/worker-bootstrap.ts");
+	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, ["--import", "tsx", bootstrap, "--plugin-worker"], {
+		cwd: backendRoot,
+		stdio: ["pipe", "pipe", "pipe"],
+		windowsHide: true,
+	});
+	let stderr = "";
+	child.stderr.on("data", (chunk: Buffer): void => { stderr += chunk.toString("utf8"); });
+	try {
+		child.stdin.write(encodeWorkerMessage({
+			type: "initialize",
+			protocolVersion: 1,
+			entry: resolve(fixturePath, "index.js"),
+			context: { pluginId: "fixture", sessionId: "test", workspaceId: "workspace", workspaceRoot: backendRoot, capabilities: ["tools", "skills", "hooks", "mcp"] },
+		}));
+		const registrations = await readWorkerEvents(child, 5);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.tool").length, 1);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.skill").length, 1);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.hook").length, 1);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.mcp").length, 1);
+		assert.equal(registrations.filter((event): boolean => event.type === "ready").length, 1);
+		child.stdin.write(encodeWorkerMessage({ type: "invoke", id: "echo", kind: "tool", name: "fixture_echo", args: { text: "hello" } }));
+		const [result] = await readWorkerEvents(child, 1);
+		assert.equal(result?.type, "result", stderr);
+		assert.deepEqual(result?.value, { echo: "hello" });
+	} finally {
+		if (child.exitCode === null) child.kill();
+	}
 });

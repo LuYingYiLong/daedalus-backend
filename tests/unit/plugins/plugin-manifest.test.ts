@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { analyzePluginDirectory } from "../../../src/plugins/manifest.js";
+
+const fixturePath: string = fileURLToPath(new URL("../../fixtures/native-plugin", import.meta.url));
 
 async function withPackage(packageJson: Record<string, unknown>, patchText?: string): Promise<{ root: string; dispose: () => Promise<void> }> {
 	const root: string = await mkdtemp(join(tmpdir(), "daedalus-plugin-test-"));
@@ -57,4 +60,15 @@ test("plugin manifest rejects malformed package metadata", async (): Promise<voi
 	} finally {
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+test("native plugin fixture exposes a validated runtime entry without executing it", async (): Promise<void> => {
+	const result = await analyzePluginDirectory(fixturePath);
+	assert.equal(result.packageName, "daedalus-fixture-native-plugin");
+	assert.equal(result.compatibility.classification, "native");
+	assert.deepEqual(result.nativePlugin, {
+		apiVersion: 1,
+		entry: "./index.js",
+		capabilities: ["tools", "skills", "hooks", "mcp"],
+	});
 });

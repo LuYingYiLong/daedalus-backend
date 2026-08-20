@@ -1632,6 +1632,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.workspace.move"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			workspaceId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.compress"),
 		params: z.object({
 			keepRecent: z.number().int().min(2).max(50).optional(),

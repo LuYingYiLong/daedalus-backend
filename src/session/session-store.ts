@@ -998,6 +998,24 @@ export async function replaceSessionWorkspaceBinding(params: { sessionId: string
 	return updated;
 }
 
+export async function moveSessionToWorkspace(sessionId: string, workspace: WorkspaceConfig): Promise<SessionMetadata> {
+	const existing: SessionMetadata = await readSessionMetadata(sessionId, false);
+	const updated: SessionMetadata = {
+		...existing,
+		...createWorkspaceMetadataSnapshot(workspace),
+		workspaceId: workspace.id,
+		updatedAt: new Date().toISOString()
+	};
+	if (workspace.godotExecutablePath === undefined) {
+		delete updated.godotExecutablePath;
+	} else {
+		updated.godotExecutablePath = workspace.godotExecutablePath;
+	}
+	writeMetadataRow(await getSessionDatabase(), updated);
+	invalidateTimelineCache(sessionId);
+	return updated;
+}
+
 /** Promotes a Studio-only draft before its first accepted chat request. */
 export async function promoteTemporarySession(sessionId: string): Promise<SessionMetadata> {
 	const existing: SessionMetadata = await readSessionMetadata(sessionId, false);

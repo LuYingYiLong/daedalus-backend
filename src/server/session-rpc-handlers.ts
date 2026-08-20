@@ -24,7 +24,7 @@ import { computeInputBudget, selectMessagesWithinBudget } from "../session/sessi
 import { composeSkillPrompt, getSkill, isSkillId, listSkills } from "../skills/registry.js";
 import type { SkillId } from "../skills/registry.js";
 import { legacySkillIdToRef } from "../skills/catalog.js";
-import { createRuntimeWorkspace, findWorkspace, upsertRuntimeWorkspace } from "../workspace/registry.js";
+import { createRuntimeWorkspace, findWorkspace, loadWorkspaces, upsertRuntimeWorkspace } from "../workspace/registry.js";
 import type { WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
@@ -51,6 +51,7 @@ import {
 	checkSessionIntegrity,
 	updateSessionMetadata,
 	replaceSessionWorkspaceBinding,
+	moveSessionToWorkspace,
 	getStoredSessionMetadata,
 	promoteTemporarySession,
 	getSessionTimelineNavigationIndex,
@@ -139,6 +140,10 @@ import type { ContextBudgetSnapshot } from "../context/context-types.js";
 import { clearContextLedger } from "../context/context-ledger.js";
 import { CONTEXT_CONTROL_TOOL_DEFINITIONS } from "../tools/context-control.js";
 import { createSessionOverview } from "./session-overview.js";
+import {
+	assertSessionWorkspaceMoveAllowed,
+	createSessionWorkspaceMoveError
+} from "./session-workspace-move.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
@@ -191,7 +196,7 @@ import {
 	serializeAgentRunRuntime
 } from "./agent-run-recovery.js";
 import { getLatestAgentGoal } from "./goal-controller.js";
-import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection } from "./client-connections.js";
+import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection, updateClientConnectionsForSession } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
 import { logger } from "../logger.js";
 import { resolveSessionCreateWorkspaceId } from "./session-create-workspace.js";
@@ -212,6 +217,7 @@ function sessionRpcError(error: unknown, fallbackCode: string, fallbackMessage: 
 	if (
 		candidate.code === "session_storage_unavailable" ||
 		candidate.code === "session_not_found" ||
+		candidate.code?.startsWith("session_workspace_") === true ||
 		candidate.code?.startsWith("session_fork_") === true ||
 		candidate.code?.startsWith("worktree_") === true
 	) {
@@ -1861,6 +1867,79 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result: metadata
 			});
+			break;
+		}
+
+		case "session.workspace.move": {
+			try {
+				if (getClientConnection(socket)?.clientType !== "studio") {
+					throw createSessionWorkspaceMoveError(
+						"session_workspace_studio_only",
+						"Moving sessions between projects is only available to Daedalus Studio."
+					);
+				}
+				const storedMetadata: SessionMetadata = await getStoredSessionMetadata(request.params.sessionId);
+				if (storedMetadata.worktree !== undefined) {
+					throw createSessionWorkspaceMoveError(
+						"session_workspace_managed_worktree",
+						"Hand off or delete the managed worktree before moving this session."
+					);
+				}
+				if (storedMetadata.workspaceId === request.params.workspaceId) {
+					throw createSessionWorkspaceMoveError(
+						"session_workspace_unchanged",
+						"The session already belongs to this project."
+					);
+				}
+				const workspace: WorkspaceConfig | undefined = loadWorkspaces().find(
+					(candidate: WorkspaceConfig): boolean => candidate.id === request.params.workspaceId
+				);
+				if (workspace === undefined) {
+					throw createSessionWorkspaceMoveError(
+						"session_workspace_not_found",
+						`Workspace not found: ${request.params.workspaceId}`
+					);
+				}
+
+				const runtime: ClientSession | undefined = getSessionRuntime(request.params.sessionId);
+				assertSessionWorkspaceMoveAllowed(runtime, request.id);
+				await mcpHost.ensureWorkspace(workspace);
+				const metadata: SessionMetadata = await moveSessionToWorkspace(request.params.sessionId, workspace);
+				if (runtime !== undefined) {
+					applyWorkspaceToSession(runtime, workspace);
+					runtime.editorInstanceId = undefined;
+					applySessionMetadata(runtime, metadata);
+					updateClientConnectionsForSession(request.params.sessionId, {
+						workspaceId: workspace.id,
+						workspaceRoot: workspace.rootPath,
+						editorInstanceId: null
+					});
+					emitWorkbenchUpdated(socket, request.id, runtime);
+				}
+
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: {
+						moved: true,
+						metadata,
+						workspace,
+						workbench: runtime === undefined ? null : serializeWorkbench(runtime)
+					}
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(
+						error,
+						"session_workspace_move_failed",
+						"Failed to move session to another project."
+					)
+				});
+			}
 			break;
 		}
 

@@ -125,6 +125,23 @@ export function updateClientConnection(socket: WebSocket, update: {
 	return toPublicInfo(record);
 }
 
+export function updateClientConnectionsForSession(sessionId: string, update: {
+	workspaceId: string | null;
+	workspaceRoot: string | null;
+	editorInstanceId?: string | null;
+}): void {
+	for (const record of socketConnections.values()) {
+		if (record.session.sessionId !== sessionId) {
+			continue;
+		}
+		record.workspaceId = update.workspaceId ?? undefined;
+		record.workspaceRoot = update.workspaceRoot ?? undefined;
+		if (update.editorInstanceId !== undefined) {
+			record.editorInstanceId = update.editorInstanceId ?? undefined;
+		}
+	}
+}
+
 export function getClientConnection(socket: WebSocket): ClientConnectionInfo | null {
 	const record: ConnectionRecord | undefined = socketConnections.get(socket);
 	return record === undefined ? null : toPublicInfo(record);

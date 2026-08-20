@@ -435,6 +435,51 @@ test("session metadata updates do not rewrite persisted messages", async (): Pro
 	});
 });
 
+test("moving a session updates only its workspace snapshot", async (): Promise<void> => {
+	await withTempAppData(async (store): Promise<void> => {
+		const originalWorkspace = {
+			id: "workspace-a",
+			name: "Project A",
+			kind: "godot" as const,
+			rootPath: "D:/ProjectA",
+			icon: 0 as const,
+			color: 0 as const,
+			sourceFolders: [{ id: "primary-a", path: "D:/ProjectA", capabilities: { git: false, godot: false } }],
+			primarySourceFolderId: "primary-a"
+		};
+		const targetWorkspace = {
+			id: "workspace-b",
+			name: "Project B",
+			kind: "godot" as const,
+			rootPath: "D:/ProjectB",
+			icon: 2 as const,
+			color: 3 as const,
+			sourceFolders: [{ id: "primary-b", path: "D:/ProjectB", capabilities: { git: true, godot: false } }],
+			primarySourceFolderId: "primary-b"
+		};
+		const metadata = await store.createSession("Movable session", originalWorkspace.id, undefined, originalWorkspace, {
+			pinned: true,
+			model: "mimo-v2.5-pro",
+			reasoningEffort: "high"
+		});
+		await store.appendMessage(metadata.id, {
+			role: "user",
+			content: "keep history",
+			requestId: "req-move",
+			createdAt: "2026-08-20T00:00:00.000Z"
+		});
+
+		const moved = await store.moveSessionToWorkspace(metadata.id, targetWorkspace);
+		assert.equal(moved.workspaceId, targetWorkspace.id);
+		assert.equal(moved.workspaceName, targetWorkspace.name);
+		assert.equal(moved.workspaceRoot, targetWorkspace.rootPath);
+		assert.equal(moved.pinned, true);
+		assert.equal(moved.model, "mimo-v2.5-pro");
+		assert.equal(moved.reasoningEffort, "high");
+		assert.deepEqual((await store.openSession(metadata.id)).messages.map((message): string => message.content), ["keep history"]);
+	});
+});
+
 test("workspace metadata backfill does not overwrite an existing session workspace", async (): Promise<void> => {
 	await withTempAppData(async (store): Promise<void> => {
 		const originalWorkspace = {

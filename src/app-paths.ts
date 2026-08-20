@@ -24,6 +24,12 @@ export type DaedalusPathKey =
 	| "goalCheckpoints.root"
 	| "skills.root"
 	| "worktrees.root"
+	| "plugins.root"
+	| "plugins.packages"
+	| "plugins.records"
+	| "plugins.profiles"
+	| "plugins.trust"
+	| "plugins.audit"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
@@ -73,6 +79,12 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"goalCheckpoints.root": join(root, "goal-checkpoints"),
 		"skills.root": join(root, "skills"),
 		"worktrees.root": join(root, "worktrees"),
+		"plugins.root": join(root, "plugins"),
+		"plugins.packages": join(root, "plugins", "packages"),
+		"plugins.records": join(root, "plugins", "records.json"),
+		"plugins.profiles": join(root, "plugins", "profiles.json"),
+		"plugins.trust": join(root, "plugins", "trust.json"),
+		"plugins.audit": join(root, "plugins", "audit.jsonl"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),

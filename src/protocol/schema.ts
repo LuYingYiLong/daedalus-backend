@@ -679,6 +679,28 @@ const customMcpServerUpdateSchema = z.discriminatedUnion("transport", [
 	}).strict()
 ]);
 
+const pluginSourceSchema = z.discriminatedUnion("type", [
+	z.object({
+		type: z.literal("local"),
+		path: z.string().min(1).max(2000)
+	}).strict(),
+	z.object({
+		type: z.literal("tarball"),
+		path: z.string().min(1).max(2000),
+		sha256: z.string().regex(/^[0-9a-f]{64}$/iu)
+	}).strict(),
+	z.object({
+		type: z.literal("npm"),
+		packageName: z.string().regex(/^(?:@?[a-z0-9][a-z0-9._-]*)(?:\/[a-z0-9][a-z0-9._-]*)?$/iu).max(160),
+		version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u).max(80)
+	}).strict(),
+	z.object({
+		type: z.literal("git"),
+		url: z.string().url().max(2000),
+		commit: z.string().regex(/^[0-9a-f]{7,64}$/iu)
+	}).strict()
+]);
+
 export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
@@ -1281,6 +1303,52 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("skill.reload"),
 		params: skillTargetSchema.optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.catalog.list"),
+		params: z.object({}).strict().optional()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.scan"),
+		params: z.object({ source: pluginSourceSchema }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.install"),
+		params: z.object({ source: pluginSourceSchema }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.remove"),
+		params: z.object({ pluginId: z.string().min(1).max(240) }).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.trust.update"),
+		params: z.object({
+			pluginId: z.string().min(1).max(240),
+			fingerprint: z.string().length(64),
+			status: z.enum(["trusted", "disabled"])
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.profile.get"),
+		params: z.object({}).strict().optional()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.profile.update"),
+		params: z.object({ pluginIds: z.array(z.string().min(1).max(240)).max(256) }).strict()
 	}),
 	z.object({
 		type: z.literal("request"),

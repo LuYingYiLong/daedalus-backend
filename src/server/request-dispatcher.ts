@@ -109,6 +109,10 @@ const handleHookRequest: RequestHandler = createLazyHandler(async (): Promise<Re
 	return (await import("./handlers/hook-handlers.js")).handleHookRequest;
 });
 
+const handlePluginRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/plugin-handlers.js")).handlePluginRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -184,6 +188,13 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"skill.remove",
 	"skill.install",
 	"skill.reload",
+	"plugin.catalog.list",
+	"plugin.scan",
+	"plugin.install",
+	"plugin.remove",
+	"plugin.trust.update",
+	"plugin.profile.get",
+	"plugin.profile.update",
 	"session.reset",
 	"session.info",
 	"session.create",
@@ -330,6 +341,13 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["hooks.config.update", handleHookRequest],
 	["hooks.trust.update", handleHookRequest],
 	["hooks.runs.list", handleHookRequest],
+	["plugin.catalog.list", handlePluginRequest],
+	["plugin.scan", handlePluginRequest],
+	["plugin.install", handlePluginRequest],
+	["plugin.remove", handlePluginRequest],
+	["plugin.trust.update", handlePluginRequest],
+	["plugin.profile.get", handlePluginRequest],
+	["plugin.profile.update", handlePluginRequest],
 	["godotDocumentation.get", handleGodotDocumentationRequest],
 	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
 	["godotDocumentation.install", handleGodotDocumentationRequest],

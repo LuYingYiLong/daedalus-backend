@@ -1,4 +1,5 @@
 import { getDynamicMcpToolMapping } from "./dynamic-mcp-tools.js";
+import { getPluginMcpToolByLlmName, getPluginTool } from "../plugins/runtime/registries.js";
 
 export type ToolMapping = {
 	serverId: string;
@@ -419,7 +420,11 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 };
 
 export function resolveToolMapping(llmToolName: string, workspaceId?: string | undefined): ToolMapping {
-	const mapping: ToolMapping | undefined = BUILTIN_TOOL_MAPPINGS[llmToolName] ?? getDynamicMcpToolMapping(llmToolName, workspaceId);
+	const pluginMcpTool = getPluginMcpToolByLlmName(llmToolName);
+	const mapping: ToolMapping | undefined = BUILTIN_TOOL_MAPPINGS[llmToolName]
+		?? getDynamicMcpToolMapping(llmToolName, workspaceId)
+		?? getPluginTool(llmToolName)?.mapping
+		?? (pluginMcpTool === undefined ? undefined : { serverId: pluginMcpTool.serverId, toolName: pluginMcpTool.name });
 
 	if (!mapping) {
 		throw new Error(`Unknown tool: ${llmToolName}`);

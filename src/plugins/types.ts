@@ -19,6 +19,43 @@ export type PluginCompatibility = {
 	classification: "native" | "harness-bundle" | "harness-client" | "both" | "metadata-only" | "unsupported";
 };
 
+export const PLUGIN_CAPABILITIES = ["tools", "skills", "hooks", "mcp"] as const;
+export type PluginCapability = typeof PLUGIN_CAPABILITIES[number];
+
+export type NativePluginDeclaration = {
+	apiVersion: number;
+	entry: string;
+	capabilities: PluginCapability[];
+};
+
+export type PluginRuntimeStatus = "stopped" | "starting" | "ready" | "failed" | "disabled";
+
+export type PluginDependencyStatus = "not_required" | "pending" | "ready" | "needs_network" | "failed";
+
+export type PluginRuntimeLog = {
+	id: string;
+	pluginId: string;
+	sessionId?: string | undefined;
+	event: "start" | "ready" | "register" | "invoke" | "stop" | "error" | "dependency";
+	status: "ok" | "failed" | "cancelled";
+	message?: string | undefined;
+	durationMs?: number | undefined;
+	createdAt: string;
+};
+
+export type PluginRuntimeSnapshot = {
+	pluginId: string;
+	status: PluginRuntimeStatus;
+	activeSessions: number;
+	registeredTools: number;
+	registeredSkills: number;
+	registeredHooks: number;
+	registeredMcpServers: number;
+	dependencyStatus: PluginDependencyStatus;
+	lastError?: string | undefined;
+	updatedAt: string;
+};
+
 export type PluginRecord = {
 	id: string;
 	packageName: string;
@@ -34,6 +71,9 @@ export type PluginRecord = {
 	installedAt: string;
 	updatedAt: string;
 	lastError?: string | undefined;
+	nativePlugin?: NativePluginDeclaration | undefined;
+	dependencyLockHash?: string | undefined;
+	runtime?: PluginRuntimeSnapshot | undefined;
 };
 
 export type PluginProfile = {
@@ -63,6 +103,8 @@ export type PluginScanResult = {
 	manifestHash: string;
 	contentHash: string;
 	compatibility: PluginCompatibility;
+	nativePlugin?: NativePluginDeclaration | undefined;
+	dependencyLockHash?: string | undefined;
 	packageRoot?: string | undefined;
 };
 

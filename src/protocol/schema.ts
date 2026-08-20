@@ -1350,6 +1350,11 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("plugin.profile.update"),
 		params: z.object({ pluginIds: z.array(z.string().min(1).max(240)).max(256) }).strict()
 	}),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.list"), params: z.object({}).strict().optional() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.restart"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.disable"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.logs.list"), params: z.object({ pluginId: z.string().min(1).max(240).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().optional() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.dependencies.install"), params: z.object({ pluginId: z.string().min(1).max(240), allowNetwork: z.boolean() }).strict() }),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),

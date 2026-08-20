@@ -15,6 +15,7 @@ import {
 	updatePluginTrustStatus
 } from "../../plugins/manager.js";
 import type { PluginCatalogResult, PluginRecord, PluginScanResult, PluginSource } from "../../plugins/types.js";
+import { getPluginRuntimeSnapshot } from "../../plugins/runtime/manager.js";
 
 type PluginRequest = Extract<ClientRequest, { method: `plugin.${string}` }>;
 
@@ -43,7 +44,7 @@ function publicPluginRecord(record: PluginRecord): PluginRecord {
 			source = { ...record.source, url: "[redacted-url]" };
 		}
 	}
-	return { ...record, source, packageRoot: `[daedalus]/plugins/packages/${basename(record.packageRoot)}` };
+	return { ...record, source, packageRoot: `[daedalus]/plugins/packages/${basename(record.packageRoot)}`, runtime: getPluginRuntimeSnapshot(record.id) };
 }
 
 function publicCatalog(catalog: PluginCatalogResult): PluginCatalogResult {

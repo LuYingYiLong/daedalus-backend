@@ -1,0 +1,9 @@
+export const MAX_PLUGIN_TOOLS = 64;
+export const MAX_PLUGIN_SKILLS = 64;
+export const MAX_PLUGIN_HOOKS = 64;
+export const MAX_PLUGIN_MCP_SERVERS = 16;
+export const MAX_PLUGIN_MESSAGE_BYTES = 1_048_576;
+export const MAX_PLUGIN_RESULT_CHARS = 200_000;
+export const PLUGIN_START_TIMEOUT_MS = 10_000;
+export const PLUGIN_CALL_TIMEOUT_MS = 30_000;
+export const MAX_PLUGIN_LOGS = 100;

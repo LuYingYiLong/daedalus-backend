@@ -242,7 +242,7 @@ export async function installSkillFromPath(
 
 export async function removeSkill(workspace: SkillWorkspace, ref: SkillRef): Promise<void> {
 	const skill = await resolveCatalogEntry(workspace, ref);
-	if (skill.source === "builtin" || !skill.removable) {
+	if (skill.source !== "project" && skill.source !== "personal") {
 		throw new Error(`Skill ${ref} is not removable.`);
 	}
 	const rootReal: string = await realpath(skillRoot(workspace, skill.source));

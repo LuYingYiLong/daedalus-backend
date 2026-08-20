@@ -1,6 +1,7 @@
 import { isDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { HARD_BLOCKED_TOOLS, TOOL_POLICIES } from "./tool-policy-table.js";
 import { findWorkspace, isPathInsideWorkspaceSources } from "../workspace/registry.js";
+import { getPluginMcpToolByLlmName, getPluginTool } from "../plugins/runtime/registries.js";
 import type { DownloadAuthorizationScope } from "./download-authorization.js";
 import type { NetworkAccessRequired } from "./download-authorization.js";
 
@@ -62,7 +63,10 @@ export function getToolPolicy(toolName: string, _workspaceId?: string | undefine
 		return { risk: "write" };
 	}
 
-	return TOOL_POLICIES[toolName];
+	const pluginTool = getPluginTool(toolName);
+	if (pluginTool !== undefined) return { risk: pluginTool.risk };
+	const pluginMcpTool = getPluginMcpToolByLlmName(toolName);
+	return TOOL_POLICIES[toolName] ?? (pluginMcpTool === undefined ? undefined : { risk: pluginMcpTool.risk });
 }
 
 export function getEffectiveToolPolicy(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolPolicy | undefined {

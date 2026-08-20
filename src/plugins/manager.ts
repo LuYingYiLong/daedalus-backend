@@ -167,8 +167,8 @@ function createPluginId(packageName: string, version: string, contentHash: strin
 	return `${packageName}@${version}:${contentHash.slice(0, 12)}`;
 }
 
-function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility): string {
-	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility })).digest("hex");
+function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility, nativePlugin?: unknown, dependencyLockHash?: string): string {
+	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash })).digest("hex");
 }
 
 async function copyPreparedPackage(sourceRoot: string, packageId: string, contentHash: string): Promise<string> {
@@ -202,7 +202,7 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 		const packageRoot: string = await copyPreparedPackage(prepared.root, id, scan.contentHash);
 		const now: string = new Date().toISOString();
 		const trust = await readPluginTrust();
-		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility);
+		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash);
 		const trustEntry = trust[id];
 		const trustStatus: PluginTrustStatus = trustEntry?.fingerprint === fingerprint ? trustEntry.status : "review_required";
 		const record: PluginRecord = {
@@ -218,7 +218,9 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 			trust: trustStatus,
 			enabled: false,
 			installedAt: now,
-			updatedAt: now
+			updatedAt: now,
+			...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
+			...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash })
 		};
 		const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => {
 			const index: number = current.findIndex((candidate): boolean => candidate.id === id);
@@ -238,6 +240,8 @@ export async function removePlugin(pluginId: string): Promise<void> {
 	const records: PluginRecord[] = await readPluginRecords();
 	const record: PluginRecord | undefined = records.find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
+	const runtime = await import("./runtime/manager.js");
+	await runtime.stopPlugin(pluginId);
 	const packagesRoot: string = resolve(getDaedalusPath("plugins.packages"));
 	const packageRoot: string = resolve(record.packageRoot);
 	if (!isPathInside(packagesRoot, packageRoot) || packageRoot === packagesRoot) throw Object.assign(new Error("Plugin path is outside the managed package directory."), { code: "plugin_path_escape" });
@@ -255,11 +259,23 @@ export async function removePlugin(pluginId: string): Promise<void> {
 export async function updatePluginTrustStatus(pluginId: string, fingerprint: string, status: Exclude<PluginTrustStatus, "review_required">): Promise<PluginRecord> {
 	const record: PluginRecord | undefined = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
-	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility);
+	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash);
 	if (expected !== fingerprint) throw Object.assign(new Error("Plugin fingerprint is stale. Rescan the plugin before updating trust."), { code: "plugin_fingerprint_stale" });
 	const updatedAt: string = new Date().toISOString();
 	await updatePluginTrust((entries): typeof entries => ({ ...entries, [pluginId]: { fingerprint, status, updatedAt } }));
-	const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => current.map((candidate): PluginRecord => candidate.id === pluginId ? { ...candidate, trust: status, enabled: status === "disabled" ? false : candidate.enabled, updatedAt } : candidate));
+	const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => current.map((candidate): PluginRecord => candidate.id === pluginId ? { ...candidate, trust: status, enabled: status === "trusted", updatedAt } : candidate));
+	await updatePluginProfiles((profiles): PluginProfile[] => profiles.map((profile): PluginProfile => {
+		const active: boolean = profile.active;
+		if (!active) return { ...profile, active: false };
+		const pluginIds: string[] = status === "trusted"
+			? [...new Set([...profile.pluginIds, pluginId])]
+			: profile.pluginIds.filter((id): boolean => id !== pluginId);
+		return { ...profile, pluginIds, active: true, updatedAt };
+	}));
+	if (status === "disabled") {
+		const runtime = await import("./runtime/manager.js");
+		await runtime.stopPlugin(pluginId, undefined, "disabled");
+	}
 	await appendPluginAudit({ action: "trust.update", pluginId, status });
 	return records.find((candidate): boolean => candidate.id === pluginId)!;
 }
@@ -286,5 +302,5 @@ export async function getPluginCatalog(): Promise<PluginCatalogResult> {
 }
 
 export function pluginFingerprint(record: PluginRecord): string {
-	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility);
+	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash);
 }

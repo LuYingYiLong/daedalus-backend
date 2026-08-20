@@ -107,6 +107,7 @@ import {
 import { getToolPolicy } from "../tools/tool-policy.js";
 import { isPlanSafeDynamicMcpToolName } from "../tools/dynamic-mcp-tools.js";
 import { createWorkspaceToolCatalog, filterToolNamesForWorkspace, getNoWorkspaceToolNames } from "../tools/tool-catalog.js";
+import { ensureSessionPluginRuntimes } from "../plugins/runtime/manager.js";
 import { ApprovalGateway, ReadOnlyToolApprovalGateway, type PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError, type ExecutionControlContext } from "../tools/execution-control.js";
 import { CHAT_COMPLETION_CONTROL_TOOL_NAME, type ChatCompletionContext } from "../tools/chat-completion-control.js";
@@ -2522,6 +2523,13 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				mode: rawParams.mode ?? session.workbenchComposer.chatMode,
 				additionalContext: rawParams.additionalContext ?? session.workbenchComposer.additionalContext
 			});
+			if (session.sessionId !== undefined) {
+				await ensureSessionPluginRuntimes({
+					sessionId: session.sessionId,
+					workspaceId: session.activeWorkspace?.id,
+					workspaceRoot: session.activeWorkspace?.sourceFolders.find((source): boolean => source.id === session.activeWorkspace?.primarySourceFolderId)?.path
+				});
+			}
 			session.stopHookContinuationCount = 0;
 			const promptHookDecision = await runUserPromptSubmitHooks(
 				session,

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { PluginCompatibility, PluginPackageManifest, PluginScanResult } from "./types.js";
+import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginScanResult } from "./types.js";
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;
@@ -222,6 +222,18 @@ async function analyzeCompatibility(root: string, manifest: PluginPackageManifes
 	};
 }
 
+export function readNativePluginDeclaration(manifest: PluginPackageManifest): NativePluginDeclaration | undefined {
+	if (!isRecord(manifest.daedalus) || !isRecord(manifest.daedalus.plugin)) return undefined;
+	const value: Record<string, unknown> = manifest.daedalus.plugin;
+	const apiVersion: unknown = value.apiVersion;
+	const entry: unknown = value.entry;
+	const capabilities: unknown = value.capabilities;
+	if (apiVersion !== 1 || typeof entry !== "string" || !entry.startsWith(".") || !Array.isArray(capabilities)) return undefined;
+	const normalized: string[] = [...new Set(capabilities.filter((item): item is string => typeof item === "string" && (PLUGIN_CAPABILITIES as readonly string[]).includes(item)))];
+	if (normalized.length !== capabilities.length || normalized.length === 0) return undefined;
+	return { apiVersion: 1, entry, capabilities: normalized as NativePluginDeclaration["capabilities"] };
+}
+
 export async function analyzePluginDirectory(root: string): Promise<PluginScanResult> {
 	const normalizedRoot: string = resolve(root);
 	const info = await lstat(normalizedRoot);
@@ -229,6 +241,23 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 	const files: FileEntry[] = await collectFiles(normalizedRoot);
 	const { manifest, manifestHash } = await readManifest(normalizedRoot);
 	const contentHash: string = await hashPackage(normalizedRoot, files);
+	const nativePlugin: NativePluginDeclaration | undefined = readNativePluginDeclaration(manifest);
+	if (nativePlugin !== undefined) {
+		const nativeEntryPath: string = resolve(normalizedRoot, nativePlugin.entry);
+		assertInside(normalizedRoot, nativeEntryPath);
+		if (!(await existsFile(nativeEntryPath))) {
+			throw Object.assign(new Error(`Daedalus plugin entry does not exist: ${nativePlugin.entry}`), { code: "plugin_native_entry_missing" });
+		}
+	}
+	let dependencyLockHash: string | undefined;
+	for (const lockName of ["package-lock.json", "npm-shrinkwrap.json"]) {
+		try {
+			dependencyLockHash = createHash("sha256").update(await readFile(join(normalizedRoot, lockName))).digest("hex");
+			break;
+		} catch {
+			// A plugin may not declare runtime dependencies.
+		}
+	}
 	return {
 		packageName: manifest.name,
 		version: manifest.version,
@@ -236,6 +265,8 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 		manifestHash,
 		contentHash,
 		compatibility: await analyzeCompatibility(normalizedRoot, manifest),
+		...(nativePlugin === undefined ? {} : { nativePlugin }),
+		...(dependencyLockHash === undefined ? {} : { dependencyLockHash }),
 		packageRoot: normalizedRoot
 	};
 }

@@ -6,6 +6,8 @@ import { parseSkillDocument } from "../../skills/frontmatter.js";
 import { resolveCatalogSkill } from "../../skills/catalog.js";
 import { isGlobalSkillWorkspace } from "../../skills/runtime.js";
 import type { SkillWorkspace } from "../../skills/types.js";
+import { getPluginSkill } from "../../plugins/runtime/registries.js";
+import { ensurePluginRuntime } from "../../plugins/runtime/manager.js";
 
 export const SKILL_CREATION_SCOPES = ["project", "personal"] as const;
 
@@ -46,6 +48,11 @@ export function registerSkillTools(server: McpServer, workspace: SkillWorkspace)
 		description: "读取当前工作区已启用 skill 的正文。只读，不会改变工具权限。",
 		inputSchema: z.object({ ref: z.string().min(3).max(96) })
 	}, async ({ ref }) => {
+		const pluginSkill = getPluginSkill(ref);
+		if (pluginSkill !== undefined) {
+			await ensurePluginRuntime(pluginSkill.pluginId, { sessionId: workspace.id, workspaceId: workspace.id, workspaceRoot: workspace.rootPath });
+			return asJsonResult({ ref: pluginSkill.ref, name: pluginSkill.name, description: pluginSkill.description, activation: "automatic", instructions: pluginSkill.body });
+		}
 		const skill = await resolveCatalogSkill(workspace, ref, true);
 		return asJsonResult({ ref: skill.ref, name: skill.name, description: skill.description, activation: "automatic", instructions: skill.document!.body });
 	});

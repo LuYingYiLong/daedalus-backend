@@ -19,6 +19,7 @@ export type SandboxInvocation =
 		args: string[];
 		env: Record<string, string>;
 		sandboxMode: "os-sandbox";
+		network: boolean;
 	}
 	| {
 		available: false;
@@ -167,10 +168,11 @@ function createMacSandboxProfile(workspaceRoot: string, readOnlyPaths: readonly 
 	].join("\n");
 }
 
-function createWindowsHelperArgs(command: SandboxCommand, workspaceRoot: string, cwd: string, readOnlyPaths: readonly string[]): string[] {
+function createWindowsHelperArgs(command: SandboxCommand, workspaceRoot: string, cwd: string, readOnlyPaths: readonly string[], network: boolean): string[] {
 	const commonArgs: string[] = [
 		"--workspace", workspaceRoot,
 		"--cwd", cwd,
+		...(network ? ["--network"] : ["--no-network"]),
 		...readOnlyPaths.flatMap((value: string): string[] => ["--read-only", value])
 	];
 	return command.kind === "shell"
@@ -232,12 +234,14 @@ export function createSandboxInvocation(params: {
 	workspaceRoot: string;
 	env?: Record<string, string> | undefined;
 	readOnlyPaths?: readonly string[] | undefined;
+	network?: boolean | undefined;
 	runtime?: SandboxRuntimeOptions | undefined;
 }): SandboxInvocation {
 	const runtime: SandboxRuntimeOptions = params.runtime ?? {};
 	const platform: NodeJS.Platform = runtime.platform ?? process.platform;
 	const env: Record<string, string> = createSandboxEnvironment(params.env, runtime);
 	const readOnlyPaths: string[] = resolveReadOnlyPaths(params.readOnlyPaths, env, platform, params.workspaceRoot);
+	const network: boolean = params.network === true;
 	const availability: SandboxAvailability = getSandboxAvailability(runtime);
 	if (!availability.available) {
 		return {
@@ -250,9 +254,10 @@ export function createSandboxInvocation(params: {
 		return {
 			available: true,
 			command: availability.helperPath!,
-			args: createWindowsHelperArgs(params.command, params.workspaceRoot, params.cwd, readOnlyPaths),
+			args: createWindowsHelperArgs(params.command, params.workspaceRoot, params.cwd, readOnlyPaths, network),
 			env,
-			sandboxMode: "os-sandbox"
+			sandboxMode: "os-sandbox",
+			network
 		};
 	}
 
@@ -265,6 +270,7 @@ export function createSandboxInvocation(params: {
 			command: availability.helperPath!,
 			args: [
 				"--unshare-all",
+				...(network ? ["--share-net"] : []),
 				"--die-with-parent",
 				"--new-session",
 				"--clearenv",
@@ -286,7 +292,8 @@ export function createSandboxInvocation(params: {
 				...commandArgs
 			],
 			env,
-			sandboxMode: "os-sandbox"
+			sandboxMode: "os-sandbox",
+			network
 		};
 	}
 
@@ -300,7 +307,8 @@ export function createSandboxInvocation(params: {
 			command: availability.helperPath!,
 			args: ["-p", profile, ...commandArgs],
 			env,
-			sandboxMode: "os-sandbox"
+			sandboxMode: "os-sandbox",
+			network
 		};
 	}
 

@@ -386,7 +386,8 @@ async function executeMappedTool(
 	commandAuthorization?: TerminalCommandAuthorization | undefined,
 	preserveFullResultForEnrichment: boolean = false,
 	abortSignal?: AbortSignal | undefined,
-	onProgress?: ((progress: McpProgressNotification) => void) | undefined
+	onProgress?: ((progress: McpProgressNotification) => void) | undefined,
+	sessionId?: string | undefined
 ): Promise<IdempotentToolExecutionResult> {
 	const result = await mcpHost.callTool(
 		serverId,
@@ -396,7 +397,8 @@ async function executeMappedTool(
 		editorInstanceId,
 		commandAuthorization,
 		abortSignal,
-		onProgress
+		onProgress,
+		sessionId
 	) as ToolResultContent;
 	const textResult: string = extractTextContent(result);
 	const truncated: boolean = textResult.length > MAX_TOOL_RESULT_CHARS;
@@ -589,7 +591,8 @@ export async function executeLlmToolWithIdempotency(
 				commandAuthorization,
 				preserveFullResultForEnrichment,
 				abortSignal,
-				onProgress
+				onProgress,
+				sessionId
 			)
 		);
 		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
@@ -633,7 +636,8 @@ export async function executeLlmToolWithIdempotency(
 				undefined,
 				preserveFullResultForEnrichment,
 				abortSignal,
-				onProgress
+				onProgress,
+			sessionId
 			)
 		);
 		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);

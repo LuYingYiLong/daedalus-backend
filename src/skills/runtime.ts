@@ -2,6 +2,7 @@ import { loadSkillCatalog, resolveCatalogSkill } from "./catalog.js";
 import type { CatalogSkill, SkillRef, SkillWorkspace } from "./types.js";
 import { getDaedalusDir } from "../app-paths.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import { listPluginSkills } from "../plugins/runtime/registries.js";
 
 export const GLOBAL_SKILL_WORKSPACE_ID: string = "studio:global";
 
@@ -48,6 +49,13 @@ export async function resolveExplicitSkills(workspace: SkillWorkspace, refs: rea
 
 export async function composeSkillCatalogPrompt(workspace: SkillWorkspace): Promise<string> {
 	const enabled = (await loadSkillCatalog(workspace)).skills.filter((skill): boolean => skill.enabled && skill.valid);
+	const pluginSkills = listPluginSkills().map((skill): CatalogSkill => ({
+		ref: skill.ref, slug: skill.slug, name: skill.name, description: skill.description, source: "plugin",
+		enabled: true, valid: true, editable: false, removable: false,
+		displayPath: `plugin://${skill.pluginId}/${skill.slug}`, filePath: "",
+		document: { name: skill.name, description: skill.description, body: skill.body }, allowedTools: skill.allowedTools
+	}));
+	enabled.push(...pluginSkills);
 	if (enabled.length === 0) {
 		return "";
 	}

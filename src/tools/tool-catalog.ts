@@ -42,6 +42,7 @@ import {
 	type SummaryPreparationContext
 } from "./summary-control.js";
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_NAME_SET, type BrowserControlContext } from "./browser-tools.js";
+import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -223,7 +224,9 @@ const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 export function isToolAvailableWithoutWorkspace(toolName: string): boolean {
-	return NO_WORKSPACE_TOOL_NAMES.has(toolName)
+	const pluginTool = getPluginToolEntries().find((entry): boolean => entry.llmToolName === toolName);
+	return (pluginTool?.global === true && pluginTool.risk === "read")
+		|| NO_WORKSPACE_TOOL_NAMES.has(toolName)
 		|| toolName === CUSTOM_MCP_TOOLS_SENTINEL
 		|| isDynamicMcpToolName(toolName);
 }
@@ -236,7 +239,7 @@ export function filterToolNamesForWorkspace(toolNames: readonly string[], worksp
 }
 
 export function getNoWorkspaceToolNames(): string[] {
-	return [...NO_WORKSPACE_TOOL_NAMES, CUSTOM_MCP_TOOLS_SENTINEL];
+	return [...NO_WORKSPACE_TOOL_NAMES, ...getPluginToolEntries().filter((entry): boolean => entry.global && entry.risk === "read").map((entry): string => entry.llmToolName), CUSTOM_MCP_TOOLS_SENTINEL];
 }
 
 export type ToolCatalogEntry = {
@@ -362,6 +365,40 @@ function createExecutionControlEntry(): ToolCatalogEntry {
 	};
 }
 
+function createPluginEntry(pluginTool: ReturnType<typeof getPluginToolEntries>[number]): ToolCatalogEntry {
+	return {
+		id: pluginTool.llmToolName,
+		definition: {
+			type: "function",
+			function: {
+				name: pluginTool.llmToolName,
+				description: pluginTool.description,
+				parameters: pluginTool.inputSchema
+			}
+		},
+		mapping: pluginTool.mapping,
+		policy: { risk: pluginTool.risk },
+		phaseEligibility: getPhaseEligibility(pluginTool.risk)
+	};
+}
+
+function createPluginMcpEntry(pluginTool: ReturnType<typeof listPluginMcpTools>[number]): ToolCatalogEntry {
+	return {
+		id: pluginTool.llmToolName,
+		definition: {
+			type: "function",
+			function: {
+				name: pluginTool.llmToolName,
+				description: pluginTool.description ?? pluginTool.name,
+				parameters: pluginTool.inputSchema
+			}
+		},
+		mapping: { serverId: pluginTool.serverId, toolName: pluginTool.name },
+		policy: { risk: pluginTool.risk },
+		phaseEligibility: getPhaseEligibility(pluginTool.risk)
+	};
+}
+
 function createChatCompletionControlEntry(): ToolCatalogEntry {
 	return {
 		id: CHAT_COMPLETION_CONTROL_TOOL_NAME,
@@ -427,6 +464,10 @@ export class WorkspaceToolCatalog {
 			.map(createStaticEntry);
 		const dynamicEntries: ToolCatalogEntry[] = getDynamicMcpToolDefinitions(this.context.workspaceId)
 			.map((definition: ChatCompletionTool): ToolCatalogEntry => createDynamicEntry(withApprovalReasonSchema(definition), this.context.workspaceId));
+		const pluginEntries: ToolCatalogEntry[] = [
+			...getPluginToolEntries(this.context.workspaceId).map(createPluginEntry),
+			...(this.context.workspaceId === undefined ? [] : listPluginMcpTools().map(createPluginMcpEntry))
+		];
 		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined || this.context.executionControlAvailable === false
 			? []
 			: [createExecutionControlEntry()];
@@ -442,7 +483,7 @@ export class WorkspaceToolCatalog {
 		const summaryPreparationEntries: ToolCatalogEntry[] = this.context.summaryPreparation === undefined || this.context.summaryPreparationAvailable === false
 			? []
 			: [createSummaryPreparationEntry()];
-		return [...staticEntries, ...dynamicEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries, ...summaryPreparationEntries];
+		return [...staticEntries, ...dynamicEntries, ...pluginEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries, ...summaryPreparationEntries];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -500,5 +541,6 @@ export function createWorkspaceToolCatalog(context: ToolExecutionContext = {}): 
 }
 
 export function getDefaultWorkflowToolNames(group: WorkflowToolGroup): string[] {
-	return [...DEFAULT_WORKFLOW_TOOL_NAMES[group]];
+	const pluginNames: string[] = getPluginToolEntries().filter((entry): boolean => entry.workflow && ((group === "read" && entry.risk === "read") || (group === "verify" && (entry.risk === "verify" || entry.risk === "read")) || (group === "write" && (entry.risk === "write" || entry.risk === "destructive" || entry.risk === "propose")))).map((entry): string => entry.llmToolName);
+	return [...DEFAULT_WORKFLOW_TOOL_NAMES[group], ...pluginNames];
 }

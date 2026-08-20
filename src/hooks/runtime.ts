@@ -19,6 +19,7 @@ import type {
 	HookRunRequest,
 	HookRuntimeEvent
 } from "./types.js";
+import { runPluginHooks } from "../plugins/runtime/hook-adapter.js";
 
 const MAX_RUN_RECORDS: number = 100;
 const DEFAULT_CONTEXT_TOKEN_LIMIT: number = 2500;
@@ -411,6 +412,7 @@ export class HookRuntime {
 	}
 
 	async run(request: HookRunRequest, onEvent?: ((event: HookRuntimeEvent) => void) | undefined): Promise<HookDecision> {
+		const pluginDecision = await runPluginHooks(request, onEvent);
 		const matched: MatchedHook[] = await this.collectMatchedHooks(request);
 		const synchronous: MatchedHook[] = [];
 		for (const hook of matched) {
@@ -434,7 +436,7 @@ export class HookRuntime {
 		const systemMessages: string[] = outputs.flatMap((output: ParsedHookOutput): string[] => output.systemMessage === undefined ? [] : [output.systemMessage]);
 		const approved: boolean = outputs.some((output: ParsedHookOutput): boolean => output.approved === true);
 		if (request.event === "SessionEnd") this.cancelBackground(request.sessionId);
-		return {
+		const commandDecision: HookDecision = {
 			blocked: blocked !== undefined,
 			reason: blocked?.reason,
 			continueTurn: blocked?.continueTurn,
@@ -442,6 +444,15 @@ export class HookRuntime {
 			additionalContext: additionalContext.length > 0 ? additionalContext : undefined,
 			systemMessages,
 			approved: approved ? true : undefined
+		};
+		return {
+			blocked: pluginDecision.blocked || commandDecision.blocked,
+			reason: pluginDecision.reason ?? commandDecision.reason,
+			continueTurn: pluginDecision.continueTurn ?? commandDecision.continueTurn,
+			updatedInput: pluginDecision.updatedInput ?? commandDecision.updatedInput,
+			additionalContext: [pluginDecision.additionalContext, commandDecision.additionalContext].filter((value): value is string => value !== undefined && value.length > 0).join("\n\n") || undefined,
+			systemMessages: [...pluginDecision.systemMessages, ...commandDecision.systemMessages],
+			approved: commandDecision.approved
 		};
 	}
 }

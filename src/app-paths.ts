@@ -30,6 +30,8 @@ export type DaedalusPathKey =
 	| "plugins.profiles"
 	| "plugins.trust"
 	| "plugins.audit"
+	| "plugins.runtime"
+	| "plugins.dependencies"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
@@ -85,6 +87,8 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"plugins.profiles": join(root, "plugins", "profiles.json"),
 		"plugins.trust": join(root, "plugins", "trust.json"),
 		"plugins.audit": join(root, "plugins", "audit.jsonl"),
+		"plugins.runtime": join(root, "plugins", "runtime"),
+		"plugins.dependencies": join(root, "plugins", "dependencies"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),

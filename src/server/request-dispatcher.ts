@@ -113,6 +113,10 @@ const handlePluginRequest: RequestHandler = createLazyHandler(async (): Promise<
 	return (await import("./handlers/plugin-handlers.js")).handlePluginRequest;
 });
 
+const handlePluginRuntimeRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/plugin-runtime-handlers.js")).handlePluginRuntimeRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -195,6 +199,11 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"plugin.trust.update",
 	"plugin.profile.get",
 	"plugin.profile.update",
+	"plugin.runtime.list",
+	"plugin.runtime.restart",
+	"plugin.runtime.disable",
+	"plugin.runtime.logs.list",
+	"plugin.runtime.dependencies.install",
 	"session.reset",
 	"session.info",
 	"session.create",
@@ -348,6 +357,11 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["plugin.trust.update", handlePluginRequest],
 	["plugin.profile.get", handlePluginRequest],
 	["plugin.profile.update", handlePluginRequest],
+	["plugin.runtime.list", handlePluginRuntimeRequest],
+	["plugin.runtime.restart", handlePluginRuntimeRequest],
+	["plugin.runtime.disable", handlePluginRuntimeRequest],
+	["plugin.runtime.logs.list", handlePluginRuntimeRequest],
+	["plugin.runtime.dependencies.install", handlePluginRuntimeRequest],
 	["godotDocumentation.get", handleGodotDocumentationRequest],
 	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
 	["godotDocumentation.install", handleGodotDocumentationRequest],

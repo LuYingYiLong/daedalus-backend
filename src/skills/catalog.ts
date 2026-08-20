@@ -6,6 +6,7 @@ import { getSkill, listSkills as listBuiltinSkills, type SkillId } from "./regis
 import { parseSkillDocument } from "./frontmatter.js";
 import { getWorkspaceSkillEnablement } from "./settings-store.js";
 import type { CatalogSkill, SkillRef, SkillSource, SkillSummary, SkillWorkspace } from "./types.js";
+import { getPluginSkill } from "../plugins/runtime/registries.js";
 
 export const SKILL_SLUG_PATTERN: RegExp = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const BUILTIN_SLUGS: Record<SkillId, string> = {
@@ -189,6 +190,24 @@ export async function resolveCatalogSkill(workspace: SkillWorkspace, ref: SkillR
 }
 
 export async function resolveCatalogEntry(workspace: SkillWorkspace, ref: SkillRef): Promise<CatalogSkill> {
+	const pluginSkill = getPluginSkill(ref);
+	if (pluginSkill !== undefined) {
+		return {
+			ref: pluginSkill.ref,
+			slug: pluginSkill.slug,
+			name: pluginSkill.name,
+			description: pluginSkill.description,
+			source: "plugin",
+			enabled: true,
+			valid: true,
+			editable: false,
+			removable: false,
+			displayPath: `plugin://${pluginSkill.pluginId}/${pluginSkill.slug}`,
+			filePath: "",
+			document: { name: pluginSkill.name, description: pluginSkill.description, body: pluginSkill.body },
+			allowedTools: pluginSkill.allowedTools
+		};
+	}
 	const catalog = await loadSkillCatalog(workspace);
 	let skill: CatalogSkill | undefined = catalog.skills.find((entry): boolean => entry.ref === ref);
 	if (skill === undefined && /^project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u.test(ref)) {

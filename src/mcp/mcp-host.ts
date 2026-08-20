@@ -48,6 +48,8 @@ import { readGodotProjectFeatureVersion } from "../godot-documentation/project-v
 import { logger } from "../logger.js";
 import { resolveCatalogEntry } from "../skills/catalog.js";
 import { createSkillWorkspace } from "../skills/runtime.js";
+import { callPluginMcpTool, isPluginMcpServer, listPluginMcpResourcesForServer, listPluginMcpToolsForServer, readPluginMcpResource } from "../plugins/runtime/mcp-adapter.js";
+import { ensurePluginRuntime } from "../plugins/runtime/manager.js";
 import {
 	COMMAND_TIMEOUT_MS,
 	findPreset,
@@ -920,6 +922,7 @@ export class McpHost {
 	}
 
 	async listTools(serverId: string, workspaceId?: string | undefined) {
+		if (isPluginMcpServer(serverId)) return listPluginMcpToolsForServer(serverId);
 		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
@@ -943,8 +946,13 @@ export class McpHost {
 		editorInstanceId?: string | undefined,
 		commandAuthorization?: TerminalCommandAuthorization | undefined,
 		abortSignal?: AbortSignal | undefined,
-		onProgress?: ((progress: McpProgressNotification) => void) | undefined
+		onProgress?: ((progress: McpProgressNotification) => void) | undefined,
+		sessionId?: string | undefined
 	) {
+		if (isPluginMcpServer(serverId)) {
+			if (sessionId === undefined) throw new Error("Plugin tool calls require an active session.");
+			return createTextToolResult(await callPluginMcpTool(serverId, name, args, sessionId));
+		}
 		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
 			? args.sourceFolderId
 			: undefined;
@@ -1026,6 +1034,10 @@ export class McpHost {
 		let routedSourceFolderId: string | undefined = sourceFolderId;
 		if (serverId === "skills" && name === "load" && workspace !== undefined) {
 			const ref: string = typeof args.ref === "string" ? args.ref : "";
+			if (ref.startsWith("plugin:")) {
+				const pluginId: string | undefined = ref.split(":")[1];
+				if (pluginId !== undefined) await ensurePluginRuntime(pluginId, { sessionId: sessionId ?? workspace.id, workspaceId: workspace.id, workspaceRoot: workspace.rootPath });
+			}
 			const skill = await resolveCatalogEntry(createSkillWorkspace(workspace), ref);
 			routedSourceFolderId = skill.sourceFolderId ?? workspace.primarySourceFolderId;
 			args.sourceFolderId = routedSourceFolderId;
@@ -1093,6 +1105,7 @@ export class McpHost {
 	}
 
 	async listResources(serverId: string, workspaceId?: string | undefined) {
+		if (isPluginMcpServer(serverId)) return listPluginMcpResourcesForServer(serverId);
 		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
@@ -1110,6 +1123,11 @@ export class McpHost {
 	}
 
 	async readResource(serverId: string, uri: string, workspaceId?: string | undefined) {
+		if (isPluginMcpServer(serverId)) {
+			const runtimeSessionId = workspaceId ?? this.activeWorkspaceId;
+			if (runtimeSessionId === undefined) throw new Error("Plugin resource requires an active session.");
+			return readPluginMcpResource(serverId, uri, runtimeSessionId);
+		}
 		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}

@@ -1,4 +1,4 @@
-export const SKILL_SOURCES = ["builtin", "personal", "project"] as const;
+export const SKILL_SOURCES = ["builtin", "personal", "project", "plugin"] as const;
 
 export type SkillSource = typeof SKILL_SOURCES[number];
 export type SkillRef = string;

@@ -2,6 +2,7 @@ import type WebSocket from "ws";
 import type { AdditionalContextItem, AiChatParams, ClientRequest } from "../protocol/types.js";
 import { appendSessionEvent, type StoredSessionEvent } from "../session/session-store.js";
 import type { ClientSession, QueuedMessage, QueuedMessageStatus } from "./client-session.js";
+import type { ScheduledTaskSessionOrigin } from "../session/session-store.js";
 import { cloneAdditionalContextItems } from "./additional-context.js";
 import { sendSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
 
@@ -25,6 +26,7 @@ export type QueueMessageInput = {
 	verificationPolicy?: "required" | "best_effort" | "skip" | undefined;
 	outputTarget?: "chat" | "workspace" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
+	scheduledTaskOrigin?: ScheduledTaskSessionOrigin | undefined;
 };
 
 export type QueueMutationResult = {
@@ -57,7 +59,8 @@ function normalizeQueueInput(input: QueueMessageInput, existing?: QueuedMessage 
 		executionPolicy: input.executionPolicy ?? existing?.executionPolicy,
 		verificationPolicy: input.verificationPolicy ?? existing?.verificationPolicy,
 		outputTarget: input.outputTarget ?? existing?.outputTarget,
-		skillRefs: cloneSkillRefs(input.skillRefs ?? existing?.skillRefs)
+		skillRefs: cloneSkillRefs(input.skillRefs ?? existing?.skillRefs),
+		scheduledTaskOrigin: input.scheduledTaskOrigin ?? existing?.scheduledTaskOrigin,
 	};
 }
 
@@ -114,6 +117,14 @@ function readSkillRefs(value: unknown): AiChatParams["skillRefs"] {
 	return Array.isArray(value) ? value.filter((item: unknown): item is string => typeof item === "string" && item.length > 0).slice(0, 4) : undefined;
 }
 
+function readScheduledTaskOrigin(value: unknown): ScheduledTaskSessionOrigin | undefined {
+	const record = readRecord(value);
+	if (record === null || typeof record.taskId !== "string" || typeof record.runId !== "string" ||
+		(record.kind !== "agent" && record.kind !== "monitor") || typeof record.scheduledAt !== "string" ||
+		(record.executionPolicy !== "read_only" && record.executionPolicy !== "auto_safe")) return undefined;
+	return { taskId: record.taskId, runId: record.runId, kind: record.kind, scheduledAt: record.scheduledAt, executionPolicy: record.executionPolicy };
+}
+
 function normalizeHydratedStatus(status: QueuedMessageStatus): QueuedMessageStatus {
 	return status === "sending" || status === "approval" ? "failed" : status;
 }
@@ -143,6 +154,7 @@ function readQueuedMessage(value: unknown): QueuedMessage | null {
 		verificationPolicy: readVerificationPolicy(record.verificationPolicy),
 		outputTarget: readOutputTarget(record.outputTarget),
 		skillRefs: readSkillRefs(record.skillRefs),
+		scheduledTaskOrigin: readScheduledTaskOrigin(record.scheduledTaskOrigin),
 		status: normalizeHydratedStatus(readStatus(record.status)),
 		createdAt,
 		updatedAt
@@ -181,6 +193,7 @@ export function serializeQueuedMessage(message: QueuedMessage): Record<string, u
 		verificationPolicy: message.verificationPolicy ?? null,
 		outputTarget: message.outputTarget ?? null,
 		skillRefs: message.skillRefs ?? [],
+		scheduledTaskOrigin: message.scheduledTaskOrigin ?? null,
 		status: message.status,
 		createdAt: message.createdAt,
 		updatedAt: message.updatedAt
@@ -288,6 +301,7 @@ export function enqueueMessage(session: ClientSession, input: QueueMessageInput)
 		verificationPolicy: normalized.verificationPolicy,
 		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
+		scheduledTaskOrigin: normalized.scheduledTaskOrigin,
 		status: "pending",
 		createdAt: now,
 		updatedAt: now
@@ -342,6 +356,7 @@ export function updateQueuedMessage(
 		&& existing.verificationPolicy === normalized.verificationPolicy
 		&& existing.outputTarget === normalized.outputTarget
 		&& JSON.stringify(existing.skillRefs ?? []) === JSON.stringify(normalized.skillRefs ?? [])
+		&& JSON.stringify(existing.scheduledTaskOrigin ?? null) === JSON.stringify(normalized.scheduledTaskOrigin ?? null)
 	) {
 		return { item: existing, changed: false };
 	}
@@ -358,6 +373,7 @@ export function updateQueuedMessage(
 		verificationPolicy: normalized.verificationPolicy,
 		outputTarget: normalized.outputTarget,
 		skillRefs: normalized.skillRefs,
+		scheduledTaskOrigin: normalized.scheduledTaskOrigin,
 		status: "pending",
 		updatedAt: new Date().toISOString()
 	};

@@ -1768,6 +1768,7 @@ async function removeQueueItemForCompletedRun(
 	if (queueItemId === undefined || findQueuedMessage(session, queueItemId) === undefined) {
 		return;
 	}
+	const queuedMessage = findQueuedMessage(session, queueItemId);
 	const removed: boolean = removeQueuedMessage(session, queueItemId);
 	if (!removed) {
 		return;
@@ -1780,6 +1781,9 @@ async function removeQueueItemForCompletedRun(
 	bumpWorkbenchRevision(session);
 	emitMessageQueueUpdated(socket, requestId, session);
 	emitWorkbenchUpdated(socket, requestId, session);
+	if (queuedMessage?.scheduledTaskOrigin !== undefined && session.scheduledTaskOrigin?.runId === queuedMessage.scheduledTaskOrigin.runId) {
+		session.scheduledTaskOrigin = undefined;
+	}
 }
 
 export async function finishQueueItemForRun(
@@ -1794,6 +1798,10 @@ export async function finishQueueItemForRun(
 	}
 	if (forcedStatus !== undefined) {
 		await setQueueStatusForRun(socket, requestId, session, queueItemId, forcedStatus);
+		const queuedMessage = findQueuedMessage(session, queueItemId);
+		if (queuedMessage?.scheduledTaskOrigin !== undefined && session.scheduledTaskOrigin?.runId === queuedMessage.scheduledTaskOrigin.runId) {
+			session.scheduledTaskOrigin = undefined;
+		}
 		return;
 	}
 	if (hasPendingContinuationForRequest(session, requestId) || hasPendingToolBudgetForRequest(session, requestId)) {
@@ -1905,6 +1913,7 @@ export async function drainMessageQueue(socket: WebSocket, requestId: string, se
 				return;
 			}
 			const queueRequestId: string = createQueueRunRequestId(nextMessage.id);
+			if (nextMessage.scheduledTaskOrigin !== undefined) session.scheduledTaskOrigin = structuredClone(nextMessage.scheduledTaskOrigin);
 			await setQueueStatusForRun(socket, requestId, session, nextMessage.id, "sending");
 			await handleChatRequest(socket, createQueuedChatRequest(nextMessage, queueRequestId), session, mcpHost);
 		}

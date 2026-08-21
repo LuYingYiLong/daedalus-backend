@@ -17,6 +17,7 @@ import {
 } from "../message-queue.js";
 import { bumpWorkbenchRevision, emitWorkbenchUpdated, serializeWorkbench } from "../workbench.js";
 import { getCurrentAgentGoal, pauseAgentGoal } from "../goal-controller.js";
+import { getClientConnection } from "../client-connections.js";
 
 function sendQueueResult(socket: WebSocket, request: ClientRequest, session: ClientSession, extra: Record<string, unknown> = {}): void {
 	sendJson(socket, {
@@ -51,6 +52,9 @@ export async function handleMessageQueueRequest(socket: WebSocket, request: Clie
 		break;
 
 	case "message.queue.add": {
+		if (request.params.scheduledTaskOrigin !== undefined && getClientConnection(socket)?.clientType !== "studio_scheduler") {
+			throw new Error("scheduled_task_queue_origin_not_allowed");
+		}
 		const item: QueuedMessage = enqueueMessage(session, request.params);
 		if (item.mode !== "goal" && session.sessionId !== undefined) {
 			const activeGoal = await getCurrentAgentGoal(session.sessionId);

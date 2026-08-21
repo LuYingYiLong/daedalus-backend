@@ -398,6 +398,13 @@ test("message queue stores text context and reorders pending messages", (): void
 	const first = enqueueMessage(session, {
 		text: "先解释这个 hook",
 		skillRefs: ["skill-a"],
+		scheduledTaskOrigin: {
+			taskId: "task-1",
+			runId: "run-1",
+			kind: "monitor",
+			scheduledAt: "2026-08-22T00:00:00.000Z",
+			executionPolicy: "read_only",
+		},
 		additionalContext: [makeContext("ctx-a", "src/hooks/useDiskSpaceCheck.ts")]
 	});
 	const second = enqueueMessage(session, {
@@ -411,6 +418,7 @@ test("message queue stores text context and reorders pending messages", (): void
 	assert.equal((serialized[0] as Record<string, unknown>).provider, null);
 	assert.equal((serialized[0] as Record<string, unknown>).model, null);
 	assert.deepEqual((serialized[0] as Record<string, unknown>).skillRefs, ["skill-a"]);
+	assert.deepEqual((serialized[0] as Record<string, unknown>).scheduledTaskOrigin, first.scheduledTaskOrigin);
 
 	const result = reorderQueuedMessages(session, [2, 1]);
 	assert.equal(result.changed, true);

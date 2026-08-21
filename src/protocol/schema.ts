@@ -469,6 +469,13 @@ export const aiChatParamsSchema = z
 	});
 
 const guideTextSchema = z.string().min(1).max(4000);
+const scheduledQueueOriginSchema = z.object({
+	taskId: z.string().min(1).max(160),
+	runId: z.string().min(1).max(160),
+	kind: z.enum(["agent", "monitor"]),
+	scheduledAt: z.string().min(1).max(100),
+	executionPolicy: z.enum(["read_only", "auto_safe"]),
+}).strict();
 const queuedMessageSnapshotShape = {
 	text: z.string().max(20000),
 	mode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
@@ -480,6 +487,7 @@ const queuedMessageSnapshotShape = {
 	outputTarget: z.enum(["chat", "workspace"]).optional(),
 	skillRefs: z.array(skillRefSchema).max(4).optional(),
 	additionalContext: z.array(additionalContextItemSchema).max(32).optional(),
+	scheduledTaskOrigin: scheduledQueueOriginSchema.optional(),
 };
 function requireQueuedMessageContent(
 	params: { text: string; additionalContext?: unknown[] | undefined },

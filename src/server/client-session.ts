@@ -36,6 +36,7 @@ export type QueuedMessage = {
 	verificationPolicy?: "required" | "best_effort" | "skip" | undefined;
 	outputTarget?: "chat" | "workspace" | undefined;
 	skillRefs?: AiChatParams["skillRefs"];
+	scheduledTaskOrigin?: ScheduledTaskSessionOrigin | undefined;
 	status: QueuedMessageStatus;
 	createdAt: string;
 	updatedAt: string;

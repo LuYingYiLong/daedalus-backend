@@ -219,6 +219,7 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 			enabled: false,
 			installedAt: now,
 			updatedAt: now,
+			...(scan.presentation === undefined ? {} : { presentation: scan.presentation }),
 			...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
 			...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash })
 		};

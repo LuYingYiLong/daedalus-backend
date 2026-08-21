@@ -28,6 +28,13 @@ export type NativePluginDeclaration = {
 	capabilities: PluginCapability[];
 };
 
+export type PluginPresentation = {
+	description?: string | undefined;
+	readme?: string | undefined;
+	changelog?: string | undefined;
+	iconDataUrl?: string | undefined;
+};
+
 export type PluginRuntimeStatus = "stopped" | "starting" | "ready" | "failed" | "disabled";
 
 export type PluginDependencyStatus = "not_required" | "pending" | "ready" | "needs_network" | "failed";
@@ -71,6 +78,7 @@ export type PluginRecord = {
 	installedAt: string;
 	updatedAt: string;
 	lastError?: string | undefined;
+	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
 	dependencyLockHash?: string | undefined;
 	runtime?: PluginRuntimeSnapshot | undefined;
@@ -87,6 +95,7 @@ export type PluginProfile = {
 export type PluginPackageManifest = {
 	name: string;
 	version: string;
+	description?: string | undefined;
 	type?: string | undefined;
 	main?: string | undefined;
 	exports?: unknown;
@@ -103,6 +112,7 @@ export type PluginScanResult = {
 	manifestHash: string;
 	contentHash: string;
 	compatibility: PluginCompatibility;
+	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
 	dependencyLockHash?: string | undefined;
 	packageRoot?: string | undefined;

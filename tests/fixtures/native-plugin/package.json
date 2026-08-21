@@ -1,6 +1,7 @@
 {
   "name": "daedalus-fixture-native-plugin",
   "version": "1.0.0",
+  "description": "A safe fixture for testing the native plugin runtime.",
   "type": "module",
   "daedalus": {
     "plugin": {

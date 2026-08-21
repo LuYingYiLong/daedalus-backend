@@ -71,4 +71,19 @@ test("native plugin fixture exposes a validated runtime entry without executing 
 		entry: "./index.js",
 		capabilities: ["tools", "skills", "hooks", "mcp"],
 	});
+	assert.match(result.presentation?.readme ?? "", /safe local fixture/u);
+	assert.match(result.presentation?.changelog ?? "", /1\.0\.0/u);
+	assert.equal(result.presentation?.description, "A safe fixture for testing the native plugin runtime.");
+	assert.equal(result.presentation?.iconDataUrl, undefined);
+});
+
+test("plugin manifest exposes a bounded PNG icon as a data URL", async (): Promise<void> => {
+	const fixture = await withPackage({ name: "icon-plugin", version: "1.0.0" });
+	try {
+		await writeFile(join(fixture.root, "icon.png"), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+		const result = await analyzePluginDirectory(fixture.root);
+		assert.match(result.presentation?.iconDataUrl ?? "", /^data:image\/png;base64,/u);
+	} finally {
+		await fixture.dispose();
+	}
 });

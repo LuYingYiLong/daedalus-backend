@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginScanResult } from "./types.js";
+import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;
 const MAX_PACKAGE_FILES: number = 10_000;
 const MAX_PACKAGE_BYTES: number = 128 * 1024 * 1024;
+const MAX_PRESENTATION_TEXT_BYTES: number = 128 * 1024;
+const MAX_ICON_BYTES: number = 256 * 1024;
 
 type FileEntry = { relativePath: string; absolutePath: string; size: number };
 
@@ -112,6 +114,7 @@ function createManifest(value: unknown): PluginPackageManifest {
 	return {
 		name,
 		version,
+		...(readString(value.description) === undefined ? {} : { description: readString(value.description) }),
 		...(readString(value.type) === undefined ? {} : { type: readString(value.type) }),
 		...(readString(value.main) === undefined ? {} : { main: readString(value.main) }),
 		...(value.exports === undefined ? {} : { exports: value.exports }),
@@ -119,6 +122,50 @@ function createManifest(value: unknown): PluginPackageManifest {
 		...(value.engines === undefined ? {} : { engines: value.engines }),
 		...(value.dsh === undefined ? {} : { dsh: value.dsh }),
 		...(value.daedalus === undefined ? {} : { daedalus: value.daedalus })
+	};
+}
+
+async function readOptionalTextAsset(root: string, fileName: string): Promise<string | undefined> {
+	const path: string = join(root, fileName);
+	assertInside(root, path);
+	try {
+		const info = await lstat(path);
+		if (!info.isFile() || info.size > MAX_PRESENTATION_TEXT_BYTES) return undefined;
+		const bytes: Buffer = await readFile(path);
+		const decoder = new TextDecoder("utf-8", { fatal: true });
+		return decoder.decode(bytes);
+	} catch (error: unknown) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof TypeError) return undefined;
+		throw error;
+	}
+}
+
+async function readOptionalIcon(root: string): Promise<string | undefined> {
+	for (const [fileName, mimeType] of [["icon.png", "image/png"], ["icon.svg", "image/svg+xml"]] as const) {
+		const path: string = join(root, fileName);
+		assertInside(root, path);
+		try {
+			const info = await lstat(path);
+			if (!info.isFile() || info.size > MAX_ICON_BYTES) continue;
+			const bytes: Buffer = await readFile(path);
+			return `data:${mimeType};base64,${bytes.toString("base64")}`;
+		} catch (error: unknown) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+	return undefined;
+}
+
+async function readPresentation(root: string, manifest: PluginPackageManifest): Promise<PluginPresentation | undefined> {
+	const readme: string | undefined = await readOptionalTextAsset(root, "README.md");
+	const changelog: string | undefined = await readOptionalTextAsset(root, "CHANGELOG.md");
+	const iconDataUrl: string | undefined = await readOptionalIcon(root);
+	if (manifest.description === undefined && readme === undefined && changelog === undefined && iconDataUrl === undefined) return undefined;
+	return {
+		...(manifest.description === undefined ? {} : { description: manifest.description }),
+		...(readme === undefined ? {} : { readme }),
+		...(changelog === undefined ? {} : { changelog }),
+		...(iconDataUrl === undefined ? {} : { iconDataUrl })
 	};
 }
 
@@ -258,6 +305,7 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 			// A plugin may not declare runtime dependencies.
 		}
 	}
+	const presentation: PluginPresentation | undefined = await readPresentation(normalizedRoot, manifest);
 	return {
 		packageName: manifest.name,
 		version: manifest.version,
@@ -265,6 +313,7 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 		manifestHash,
 		contentHash,
 		compatibility: await analyzeCompatibility(normalizedRoot, manifest),
+		...(presentation === undefined ? {} : { presentation }),
 		...(nativePlugin === undefined ? {} : { nativePlugin }),
 		...(dependencyLockHash === undefined ? {} : { dependencyLockHash }),
 		packageRoot: normalizedRoot

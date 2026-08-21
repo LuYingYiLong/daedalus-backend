@@ -202,7 +202,7 @@ export async function resolveCatalogEntry(workspace: SkillWorkspace, ref: SkillR
 			valid: true,
 			editable: false,
 			removable: false,
-			displayPath: `plugin://${pluginSkill.pluginId}/${pluginSkill.slug}`,
+			displayPath: `${pluginSkill.namespace}://${pluginSkill.pluginId}/${pluginSkill.slug}`,
 			filePath: "",
 			document: { name: pluginSkill.name, description: pluginSkill.description, body: pluginSkill.body },
 			allowedTools: pluginSkill.allowedTools

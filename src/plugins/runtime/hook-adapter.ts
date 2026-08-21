@@ -35,15 +35,16 @@ export async function runPluginHooks(request: HookRunRequest, onEvent?: ((event:
 	const outputs: Array<Record<string, unknown>> = [];
 	const matcherValue = request.matcherValue ?? String(request.input.tool_name ?? request.input.prompt ?? "");
 	for (const record of records) {
-		if (!record.enabled || record.trust !== "trusted" || record.nativePlugin?.capabilities.includes("hooks") !== true) continue;
-		const hooks = listPluginHooks(request.event).filter((hook): boolean => hook.pluginId === record.id && matches(hook.matcher, matcherValue));
-		if (hooks.length === 0) continue;
+		const hookCapable: boolean = record.nativePlugin?.capabilities.includes("hooks") === true || record.compatibility.harnessBundle;
+		if (!record.enabled || record.trust !== "trusted" || !hookCapable) continue;
 		try {
 			await ensurePluginRuntime(record.id, {
 				sessionId: request.sessionId,
 				workspaceId: request.workspace?.id,
 				workspaceRoot: request.workspace?.sourceFolders.find((source): boolean => source.id === request.targetSourceFolderId)?.path
 			});
+			const hooks = listPluginHooks(request.event).filter((hook): boolean => hook.pluginId === record.id && matches(hook.matcher, matcherValue));
+			if (hooks.length === 0) continue;
 			for (const hook of hooks) {
 				if (hook.async) {
 					void invokePlugin(record.id, request.sessionId, "hook", hook.handlerName, request.input).catch((): void => undefined);
@@ -60,6 +61,7 @@ export async function runPluginHooks(request: HookRunRequest, onEvent?: ((event:
 				onEvent?.({ statusMessage: undefined, systemMessage: typeof value?.systemMessage === "string" ? value.systemMessage : undefined });
 			}
 		} catch (error: unknown) {
+			const hooks = listPluginHooks(request.event).filter((hook): boolean => hook.pluginId === record.id && matches(hook.matcher, matcherValue));
 			if (hooks.some((hook): boolean => hook.failurePolicy === "block")) outputs.push({ blocked: true, reason: error instanceof Error ? error.message : String(error) });
 			else onEvent?.({ systemMessage: `Plugin hook ${record.packageName} failed: ${error instanceof Error ? error.message : String(error)}` });
 		}

@@ -117,6 +117,10 @@ const handlePluginRuntimeRequest: RequestHandler = createLazyHandler(async (): P
 	return (await import("./handlers/plugin-runtime-handlers.js")).handlePluginRuntimeRequest;
 });
 
+const handlePluginHarnessRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/plugin-harness-handlers.js")).handlePluginHarnessRequest;
+});
+
 export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"ping",
 	"backend.health",
@@ -204,6 +208,11 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"plugin.runtime.disable",
 	"plugin.runtime.logs.list",
 	"plugin.runtime.dependencies.install",
+	"plugin.harness.config.get",
+	"plugin.harness.config.update",
+	"plugin.harness.detect",
+	"plugin.harness.preview",
+	"plugin.harness.runtime.status",
 	"session.reset",
 	"session.info",
 	"session.create",
@@ -362,6 +371,11 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["plugin.runtime.disable", handlePluginRuntimeRequest],
 	["plugin.runtime.logs.list", handlePluginRuntimeRequest],
 	["plugin.runtime.dependencies.install", handlePluginRuntimeRequest],
+	["plugin.harness.config.get", handlePluginHarnessRequest],
+	["plugin.harness.config.update", handlePluginHarnessRequest],
+	["plugin.harness.detect", handlePluginHarnessRequest],
+	["plugin.harness.preview", handlePluginHarnessRequest],
+	["plugin.harness.runtime.status", handlePluginHarnessRequest],
 	["godotDocumentation.get", handleGodotDocumentationRequest],
 	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
 	["godotDocumentation.install", handleGodotDocumentationRequest],

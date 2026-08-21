@@ -52,7 +52,7 @@ export async function composeSkillCatalogPrompt(workspace: SkillWorkspace): Prom
 	const pluginSkills = listPluginSkills().map((skill): CatalogSkill => ({
 		ref: skill.ref, slug: skill.slug, name: skill.name, description: skill.description, source: "plugin",
 		enabled: true, valid: true, editable: false, removable: false,
-		displayPath: `plugin://${skill.pluginId}/${skill.slug}`, filePath: "",
+		displayPath: `${skill.namespace}://${skill.pluginId}/${skill.slug}`, filePath: "",
 		document: { name: skill.name, description: skill.description, body: skill.body }, allowedTools: skill.allowedTools
 	}));
 	enabled.push(...pluginSkills);

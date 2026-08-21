@@ -37,6 +37,59 @@ export type PluginPresentation = {
 
 export type PluginRuntimeStatus = "stopped" | "starting" | "ready" | "failed" | "disabled";
 
+export type PluginRuntimeKind = "native" | "harness";
+
+export type HarnessRuntimeStatus =
+	| "unconfigured"
+	| "detected"
+	| "needs_setup"
+	| "ready"
+	| "running"
+	| "failed"
+	| "disabled";
+
+export type HarnessSkippedRow = {
+	index: number;
+	id?: string | undefined;
+	name?: string | undefined;
+	reason: string;
+};
+
+export type HarnessBundleSummary = {
+	patchPath?: string | undefined;
+	totalRows: number;
+	bridgeableRows: number;
+	skippedRows: HarnessSkippedRow[];
+	operations: Array<"insert" | "replace" | "override">;
+	warnings: string[];
+	dangerousConstructs: string[];
+	contentHash: string;
+};
+
+export type HarnessRuntimeConfig = {
+	enabled: boolean;
+	executablePath: string | null;
+	sourceRoot: string | null;
+	launchMode: "installed" | "source";
+	bridgeProtocolVersion: number;
+	network: "disabled";
+	revision: string;
+	updatedAt: string;
+};
+
+export type HarnessInstallation = {
+	status: "unconfigured" | "detected" | "needs_setup" | "failed";
+	launchMode: "installed" | "source";
+	version?: string | undefined;
+	command?: string | undefined;
+	args: string[];
+	readOnlyPaths: string[];
+	bridgeProtocolVersion: number;
+	bridgeCompatible: boolean;
+	dependenciesReady: boolean;
+	error?: string | undefined;
+};
+
 export type PluginDependencyStatus = "not_required" | "pending" | "ready" | "needs_network" | "failed";
 
 export type PluginRuntimeLog = {
@@ -52,6 +105,7 @@ export type PluginRuntimeLog = {
 
 export type PluginRuntimeSnapshot = {
 	pluginId: string;
+	runtimeKind?: PluginRuntimeKind | undefined;
 	status: PluginRuntimeStatus;
 	activeSessions: number;
 	registeredTools: number;
@@ -59,6 +113,10 @@ export type PluginRuntimeSnapshot = {
 	registeredHooks: number;
 	registeredMcpServers: number;
 	dependencyStatus: PluginDependencyStatus;
+	harnessStatus?: HarnessRuntimeStatus | undefined;
+	harnessVersion?: string | undefined;
+	bridgeProtocolVersion?: number | undefined;
+	bundleSummary?: HarnessBundleSummary | undefined;
 	lastError?: string | undefined;
 	updatedAt: string;
 };
@@ -81,6 +139,8 @@ export type PluginRecord = {
 	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
 	dependencyLockHash?: string | undefined;
+	harnessBundle?: HarnessBundleSummary | undefined;
+	harnessRuntimeFingerprint?: string | undefined;
 	runtime?: PluginRuntimeSnapshot | undefined;
 };
 
@@ -115,6 +175,7 @@ export type PluginScanResult = {
 	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
 	dependencyLockHash?: string | undefined;
+	harnessBundle?: HarnessBundleSummary | undefined;
 	packageRoot?: string | undefined;
 };
 

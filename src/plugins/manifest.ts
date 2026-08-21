@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
+import { parseHarnessBundlePatch } from "./harness/patch-parser.js";
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;
@@ -169,6 +170,12 @@ async function readPresentation(root: string, manifest: PluginPackageManifest): 
 	};
 }
 
+export async function readPluginPresentation(root: string): Promise<PluginPresentation | undefined> {
+	const normalizedRoot: string = resolve(root);
+	const { manifest } = await readManifest(normalizedRoot);
+	return await readPresentation(normalizedRoot, manifest);
+}
+
 async function readManifest(root: string): Promise<{ manifest: PluginPackageManifest; manifestHash: string }> {
 	const manifestPath: string = join(root, "package.json");
 	assertInside(root, manifestPath);
@@ -230,9 +237,9 @@ async function analyzeCompatibility(root: string, manifest: PluginPackageManifes
 				if (patchContent.byteLength > MAX_PATCH_BYTES) warnings.push(`Cordis patch file exceeds ${MAX_PATCH_BYTES} bytes.`);
 				else {
 					const text: string = patchContent.toString("utf8");
-					if (/!!js\b/iu.test(text)) unsupportedFeatures.push("Cordis !!js expressions");
-					if (/^\s*inject\s*:/imu.test(text)) unsupportedFeatures.push("Cordis service injection");
-					if (/\b(?:dynamic|group|include)\s*:/iu.test(text)) unsupportedFeatures.push("dynamic Cordis composition");
+					if (/!!js\b/iu.test(text)) warnings.push("Cordis patch contains !!js expressions that execute only inside the trusted Harness Sidecar.");
+					if (/^\s*inject\s*:/imu.test(text)) warnings.push("Cordis patch declares service injection.");
+					if (/\b(?:dynamic|group|include)\s*:/iu.test(text)) warnings.push("Cordis patch contains dynamic composition that may not be bridgeable.");
 					for (const operation of ["insert", "replace", "override"]) {
 						if (new RegExp(`\\b${operation}\\s*:`, "iu").test(text)) warnings.push(`Cordis patch declares ${operation}.`);
 					}
@@ -306,16 +313,21 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 		}
 	}
 	const presentation: PluginPresentation | undefined = await readPresentation(normalizedRoot, manifest);
+	const compatibility: PluginCompatibility = await analyzeCompatibility(normalizedRoot, manifest);
+	const harnessBundle = compatibility.harnessBundle && compatibility.patchPath !== undefined && compatibility.patchExists
+		? await parseHarnessBundlePatch(normalizedRoot, compatibility.patchPath)
+		: undefined;
 	return {
 		packageName: manifest.name,
 		version: manifest.version,
 		manifest,
 		manifestHash,
 		contentHash,
-		compatibility: await analyzeCompatibility(normalizedRoot, manifest),
+		compatibility,
 		...(presentation === undefined ? {} : { presentation }),
 		...(nativePlugin === undefined ? {} : { nativePlugin }),
 		...(dependencyLockHash === undefined ? {} : { dependencyLockHash }),
+		...(harnessBundle === undefined ? {} : { harnessBundle }),
 		packageRoot: normalizedRoot
 	};
 }

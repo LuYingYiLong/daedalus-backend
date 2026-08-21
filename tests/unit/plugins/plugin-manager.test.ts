@@ -18,11 +18,18 @@ test("plugin manager installs, trusts, profiles, and removes a local package wit
 		daedalus: { plugin: { entry: "./index.js" } }
 	}), "utf8");
 	await writeFile(join(packageRoot, "index.js"), "export const value = 1;\n", "utf8");
+	await writeFile(join(packageRoot, "README.md"), "# Fixture plugin\n\nThis README is loaded from the managed package.\n", "utf8");
 	try {
 		process.env.USERPROFILE = profileRoot;
 		const installed = await installPlugin({ type: "local", path: packageRoot });
 		assert.equal(installed.trust, "review_required");
-		assert.equal((await getPluginCatalog()).plugins.length, 1);
+		const recordsPath: string = getDaedalusPath("plugins.records");
+		const stored = JSON.parse(await readFile(recordsPath, "utf8")) as { plugins: Array<Record<string, unknown>> };
+		delete stored.plugins[0]!.presentation;
+		await writeFile(recordsPath, JSON.stringify(stored), "utf8");
+		const hydratedCatalog = await getPluginCatalog();
+		assert.equal(hydratedCatalog.plugins.length, 1);
+		assert.match(hydratedCatalog.plugins[0]?.presentation?.readme ?? "", /managed package/u);
 		const trusted = await updatePluginTrustStatus(installed.id, installed.fingerprint, "trusted");
 		assert.equal(trusted.trust, "trusted");
 		const catalog = await updateActivePluginProfile([installed.id]);

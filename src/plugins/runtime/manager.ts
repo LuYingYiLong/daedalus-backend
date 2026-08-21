@@ -10,6 +10,17 @@ import { getPluginCatalog, pluginFingerprint } from "../manager.js";
 import { readPluginRecords } from "../store.js";
 import type { PluginRecord, PluginRuntimeSnapshot } from "../types.js";
 import {
+	ensureHarnessRuntime,
+	getHarnessRuntimeSnapshot,
+	hasHarnessHandle,
+	invokeHarnessPlugin,
+	listHarnessRuntimeSnapshots,
+	restartHarnessPlugin,
+	stopAllHarnessRuntimes,
+	stopHarnessPlugin
+} from "../harness/manager.js";
+import type { HarnessHandle } from "../harness/runner.js";
+import {
 	clearPluginRegistrations,
 	registerPluginHook,
 	registerPluginMcp,
@@ -197,9 +208,12 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	return handle;
 }
 
-export async function ensurePluginRuntime(pluginId: string, context: Omit<PluginRuntimeContext, "pluginId" | "capabilities">): Promise<WorkerHandle> {
+export type PluginRuntimeHandle = WorkerHandle | HarnessHandle;
+
+export async function ensurePluginRuntime(pluginId: string, context: Omit<PluginRuntimeContext, "pluginId" | "capabilities">): Promise<PluginRuntimeHandle> {
 	const record = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw new Error("Plugin not found.");
+	if (record.compatibility.harnessBundle && ["harness-bundle", "both"].includes(record.compatibility.classification)) return await ensureHarnessRuntime(pluginId, context);
 	validateRecord(record);
 	const dependency = await installPluginDependencies(record, false);
 	setSnapshot(pluginId, { dependencyStatus: dependency.status });
@@ -223,6 +237,7 @@ export async function installPluginRuntimeDependencies(pluginId: string, allowNe
 }
 
 export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
+	if (hasHarnessHandle(pluginId, sessionId)) return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
 	const handle = handles.get(key(pluginId, sessionId));
 	if (handle === undefined) throw new Error("Plugin runtime is not running.");
 	const id = randomUUID();
@@ -234,6 +249,7 @@ export async function invokePlugin(pluginId: string, sessionId: string, kind: "t
 }
 
 export async function stopPlugin(pluginId: string, sessionId?: string, status: "stopped" | "disabled" = "stopped"): Promise<void> {
+	await stopHarnessPlugin(pluginId, sessionId, status);
 	const targets = [...handles.values()].filter((handle): boolean => handle.pluginId === pluginId && (sessionId === undefined || handle.sessionId === sessionId));
 	for (const handle of targets) {
 		handle.child.stdin.write(encodeWorkerMessage({ type: "shutdown" }));
@@ -247,6 +263,10 @@ export async function stopPlugin(pluginId: string, sessionId?: string, status: "
 }
 
 export async function restartPlugin(pluginId: string): Promise<void> {
+	if (getHarnessRuntimeSnapshot(pluginId) !== undefined) {
+		await restartHarnessPlugin(pluginId);
+		return;
+	}
 	const contexts: PluginRuntimeContext[] = [...handles.values()].filter((handle): boolean => handle.pluginId === pluginId).map((handle): PluginRuntimeContext => handle.context);
 	await stopPlugin(pluginId);
 	for (const context of contexts) {
@@ -255,15 +275,23 @@ export async function restartPlugin(pluginId: string): Promise<void> {
 	}
 }
 
-export function listPluginRuntimeSnapshots(): PluginRuntimeSnapshot[] { return [...snapshots.values()].map((snapshot): PluginRuntimeSnapshot => structuredClone(snapshot)); }
+export function listPluginRuntimeSnapshots(): PluginRuntimeSnapshot[] {
+	const merged = new Map<string, PluginRuntimeSnapshot>();
+	for (const snapshot of snapshots.values()) merged.set(snapshot.pluginId, structuredClone(snapshot));
+	for (const snapshot of listHarnessRuntimeSnapshots()) merged.set(snapshot.pluginId, snapshot);
+	return [...merged.values()];
+}
 
-export function getPluginRuntimeSnapshot(pluginId: string): PluginRuntimeSnapshot | undefined { return snapshots.get(pluginId); }
+export function getPluginRuntimeSnapshot(pluginId: string): PluginRuntimeSnapshot | undefined { return getHarnessRuntimeSnapshot(pluginId) ?? snapshots.get(pluginId); }
 
-export async function stopAllPluginRuntimes(): Promise<void> { for (const pluginId of new Set([...handles.values()].map((handle): string => handle.pluginId))) await stopPlugin(pluginId); }
+export async function stopAllPluginRuntimes(): Promise<void> {
+	await stopAllHarnessRuntimes();
+	for (const pluginId of new Set([...handles.values()].map((handle): string => handle.pluginId))) await stopPlugin(pluginId);
+}
 
 export async function ensureSessionPluginRuntimes(context: { sessionId: string; workspaceId?: string | undefined; workspaceRoot?: string | undefined }): Promise<void> {
 	const catalog = await getPluginCatalog();
-	for (const plugin of catalog.plugins.filter((candidate): boolean => candidate.enabled && candidate.nativePlugin !== undefined)) {
+	for (const plugin of catalog.plugins.filter((candidate): boolean => candidate.enabled && (candidate.nativePlugin !== undefined || candidate.compatibility.harnessBundle))) {
 		try {
 			await ensurePluginRuntime(plugin.id, context);
 		} catch (error: unknown) {

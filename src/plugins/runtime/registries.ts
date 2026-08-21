@@ -2,10 +2,11 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ToolMapping } from "../../tools/tool-mapping.js";
 import type { PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
 
-export type RegisteredPluginTool = PluginToolRegistration & { llmToolName: string; pluginId: string; mapping: ToolMapping };
-export type RegisteredPluginSkill = PluginSkillRegistration & { pluginId: string; ref: string };
-export type RegisteredPluginHook = PluginHookRegistration & { pluginId: string; handlerName: string };
-export type RegisteredPluginMcp = PluginMcpRegistration & { pluginId: string; serverId: string; localServerId: string };
+export type PluginRegistryNamespace = "plugin" | "harness";
+export type RegisteredPluginTool = PluginToolRegistration & { llmToolName: string; pluginId: string; namespace: PluginRegistryNamespace; mapping: ToolMapping };
+export type RegisteredPluginSkill = PluginSkillRegistration & { pluginId: string; namespace: PluginRegistryNamespace; ref: string };
+export type RegisteredPluginHook = PluginHookRegistration & { pluginId: string; namespace: PluginRegistryNamespace; handlerName: string };
+export type RegisteredPluginMcp = PluginMcpRegistration & { pluginId: string; namespace: PluginRegistryNamespace; serverId: string; localServerId: string };
 export type RegisteredPluginMcpTool = {
 	pluginId: string;
 	serverId: string;
@@ -22,12 +23,8 @@ const skills = new Map<string, RegisteredPluginSkill>();
 const hooks = new Map<string, RegisteredPluginHook[]>();
 const mcps = new Map<string, RegisteredPluginMcp>();
 
-function toolName(pluginId: string, name: string): string {
-	return `mcp_plugin_${pluginId.replace(/[^a-z0-9]+/giu, "_").slice(0, 24)}_${name.replace(/[^a-z0-9]+/giu, "_").slice(0, 32)}`;
-}
-
-function mcpToolName(pluginId: string, serverId: string, name: string): string {
-	return toolName(pluginId, `${serverId}_${name}`);
+function toolName(pluginId: string, name: string, namespace: PluginRegistryNamespace = "plugin"): string {
+	return `mcp_${namespace}_${pluginId.replace(/[^a-z0-9]+/giu, "_").slice(0, 24)}_${name.replace(/[^a-z0-9]+/giu, "_").slice(0, 32)}`;
 }
 
 export function clearPluginRegistrations(pluginId: string): void {
@@ -40,30 +37,30 @@ export function clearPluginRegistrations(pluginId: string): void {
 	for (const [serverId, entry] of mcps) if (entry.pluginId === pluginId) mcps.delete(serverId);
 }
 
-export function registerPluginTool(pluginId: string, registration: PluginToolRegistration): RegisteredPluginTool {
-	const llmToolName = toolName(pluginId, registration.name);
-	const entry: RegisteredPluginTool = { ...registration, pluginId, llmToolName, mapping: { serverId: `plugin:${pluginId}`, toolName: registration.name } };
+export function registerPluginTool(pluginId: string, registration: PluginToolRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginTool {
+	const llmToolName = toolName(pluginId, registration.name, namespace);
+	const entry: RegisteredPluginTool = { ...registration, pluginId, namespace, llmToolName, mapping: { serverId: `${namespace}:${pluginId}`, toolName: registration.name } };
 	tools.set(llmToolName, entry);
 	definitions.set(llmToolName, { type: "function", function: { name: llmToolName, description: registration.description.slice(0, 1024), parameters: registration.inputSchema } });
 	return entry;
 }
 
-export function registerPluginSkill(pluginId: string, registration: PluginSkillRegistration): RegisteredPluginSkill {
-	const ref = `plugin:${pluginId}:${registration.slug}`;
-	const entry: RegisteredPluginSkill = { ...registration, pluginId, ref };
+export function registerPluginSkill(pluginId: string, registration: PluginSkillRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginSkill {
+	const ref = `${namespace}:${pluginId}:${registration.slug}`;
+	const entry: RegisteredPluginSkill = { ...registration, pluginId, namespace, ref };
 	skills.set(ref, entry);
 	return entry;
 }
 
-export function registerPluginHook(pluginId: string, registration: PluginHookRegistration, handlerName: string): RegisteredPluginHook {
-	const entry: RegisteredPluginHook = { ...registration, pluginId, handlerName };
+export function registerPluginHook(pluginId: string, registration: PluginHookRegistration, handlerName: string, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginHook {
+	const entry: RegisteredPluginHook = { ...registration, pluginId, namespace, handlerName };
 	hooks.set(registration.event, [...(hooks.get(registration.event) ?? []), entry]);
 	return entry;
 }
 
-export function registerPluginMcp(pluginId: string, registration: PluginMcpRegistration): RegisteredPluginMcp {
-	const serverId = `plugin:${pluginId}:${registration.serverId}`;
-	const entry: RegisteredPluginMcp = { ...registration, pluginId, serverId, localServerId: registration.serverId };
+export function registerPluginMcp(pluginId: string, registration: PluginMcpRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginMcp {
+	const serverId = `${namespace}:${pluginId}:${registration.serverId}`;
+	const entry: RegisteredPluginMcp = { ...registration, pluginId, namespace, serverId, localServerId: registration.serverId };
 	mcps.set(serverId, entry);
 	return entry;
 }
@@ -72,7 +69,7 @@ export function listPluginMcpTools(): RegisteredPluginMcpTool[] {
 	return [...mcps.values()].flatMap((server): RegisteredPluginMcpTool[] => server.tools.map((tool): RegisteredPluginMcpTool => ({
 		pluginId: server.pluginId,
 		serverId: server.serverId,
-		llmToolName: mcpToolName(server.pluginId, server.serverId, tool.name),
+		llmToolName: toolName(server.pluginId, `${server.serverId}_${tool.name}`, server.namespace),
 		...tool
 	})));
 }

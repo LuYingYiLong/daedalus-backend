@@ -28,3 +28,23 @@ test("plugin RPC requests reject unpinned package sources", (): void => {
 	});
 	assert.equal(result.success, false);
 });
+
+test("Harness runtime RPC requests require revisioned configuration and package-relative previews", (): void => {
+	const update = clientRequestSchema.safeParse({
+		type: "request",
+		id: "harness-update",
+		method: "plugin.harness.config.update",
+		params: {
+			expectedRevision: "a".repeat(64),
+			enabled: true,
+			executablePath: "C:\\Tools\\dsh.cmd",
+			sourceRoot: null,
+			launchMode: "installed"
+		}
+	});
+	assert.equal(update.success, true);
+	const preview = clientRequestSchema.safeParse({ type: "request", id: "harness-preview", method: "plugin.harness.preview", params: { pluginId: "plugin-1" } });
+	assert.equal(preview.success, true);
+	const invalid = clientRequestSchema.safeParse({ type: "request", id: "harness-update-bad", method: "plugin.harness.config.update", params: { expectedRevision: "latest", config: { enabled: true, launchMode: "installed" } } });
+	assert.equal(invalid.success, false);
+});

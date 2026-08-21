@@ -27,8 +27,8 @@ export const skillIdSchema = z.enum([
 
 export const skillRefSchema = z.string()
 	.min(3)
-	.max(96)
-	.regex(/^(?:builtin|personal):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$|^project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:@[a-f0-9]{12})?$/u, "Invalid skill reference.");
+	.max(320)
+	.regex(/^(?:(?:builtin|personal):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?|project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:@[a-f0-9]{12})?|(?:plugin|harness):[A-Za-z0-9@._:-]+:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/u, "Invalid skill reference.");
 
 const skillTargetSchema = z.object({
 	workspaceId: z.string().min(1).max(200).optional(),
@@ -1355,6 +1355,20 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.disable"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.logs.list"), params: z.object({ pluginId: z.string().min(1).max(240).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().optional() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.dependencies.install"), params: z.object({ pluginId: z.string().min(1).max(240), allowNetwork: z.boolean() }).strict() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.config.get"), params: z.object({}).strict().optional() }),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.config.update"),
+		params: z.object({
+			expectedRevision: z.string().length(64),
+			enabled: z.boolean(),
+			executablePath: z.string().trim().min(1).max(4096).nullable(),
+			sourceRoot: z.string().trim().min(1).max(4096).nullable(),
+			launchMode: z.enum(["installed", "source"])
+		}).strict()
+	}),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.detect"), params: z.object({}).strict().optional() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.preview"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.runtime.status"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),

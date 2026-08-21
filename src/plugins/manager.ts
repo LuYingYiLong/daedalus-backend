@@ -4,7 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getDaedalusPath } from "../app-paths.js";
-import { analyzePluginDirectory, isPathInside } from "./manifest.js";
+import { analyzePluginDirectory, isPathInside, readPluginPresentation } from "./manifest.js";
 import {
 	appendPluginAudit,
 	getActivePluginProfile,
@@ -16,6 +16,9 @@ import {
 	updatePluginTrust
 } from "./store.js";
 import type { PluginCatalogResult, PluginCompatibility, PluginProfile, PluginRecord, PluginScanResult, PluginSource, PluginTrustStatus } from "./types.js";
+import { readHarnessRuntimeConfig } from "./harness/config-store.js";
+import { detectHarnessInstallation } from "./harness/installation.js";
+import { createHarnessRuntimeFingerprint } from "./harness/trust.js";
 
 const MAX_PROCESS_OUTPUT: number = 2 * 1024 * 1024;
 const EXACT_NPM_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
@@ -167,8 +170,8 @@ function createPluginId(packageName: string, version: string, contentHash: strin
 	return `${packageName}@${version}:${contentHash.slice(0, 12)}`;
 }
 
-function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility, nativePlugin?: unknown, dependencyLockHash?: string): string {
-	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash })).digest("hex");
+function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility, nativePlugin?: unknown, dependencyLockHash?: string, harnessBundle?: unknown): string {
+	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash, harnessBundle })).digest("hex");
 }
 
 async function copyPreparedPackage(sourceRoot: string, packageId: string, contentHash: string): Promise<string> {
@@ -202,7 +205,7 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 		const packageRoot: string = await copyPreparedPackage(prepared.root, id, scan.contentHash);
 		const now: string = new Date().toISOString();
 		const trust = await readPluginTrust();
-		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash);
+		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle);
 		const trustEntry = trust[id];
 		const trustStatus: PluginTrustStatus = trustEntry?.fingerprint === fingerprint ? trustEntry.status : "review_required";
 		const record: PluginRecord = {
@@ -221,7 +224,8 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 			updatedAt: now,
 			...(scan.presentation === undefined ? {} : { presentation: scan.presentation }),
 			...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
-			...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash })
+			...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash }),
+			...(scan.harnessBundle === undefined ? {} : { harnessBundle: scan.harnessBundle })
 		};
 		const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => {
 			const index: number = current.findIndex((candidate): boolean => candidate.id === id);
@@ -260,11 +264,22 @@ export async function removePlugin(pluginId: string): Promise<void> {
 export async function updatePluginTrustStatus(pluginId: string, fingerprint: string, status: Exclude<PluginTrustStatus, "review_required">): Promise<PluginRecord> {
 	const record: PluginRecord | undefined = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
-	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash);
+	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.harnessBundle);
 	if (expected !== fingerprint) throw Object.assign(new Error("Plugin fingerprint is stale. Rescan the plugin before updating trust."), { code: "plugin_fingerprint_stale" });
 	const updatedAt: string = new Date().toISOString();
+	let harnessRuntimeFingerprint: string | undefined;
+	if (status === "trusted" && record.compatibility.harnessBundle) {
+		const config = await readHarnessRuntimeConfig();
+		const installation = await detectHarnessInstallation(config);
+		if (installation.status !== "detected") throw Object.assign(new Error(installation.error ?? "Configure a compatible Harness runtime before trusting this Bundle."), { code: "plugin_harness_unavailable" });
+		harnessRuntimeFingerprint = createHarnessRuntimeFingerprint(record, config, installation);
+	}
 	await updatePluginTrust((entries): typeof entries => ({ ...entries, [pluginId]: { fingerprint, status, updatedAt } }));
-	const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => current.map((candidate): PluginRecord => candidate.id === pluginId ? { ...candidate, trust: status, enabled: status === "trusted", updatedAt } : candidate));
+	const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => current.map((candidate): PluginRecord => {
+		if (candidate.id !== pluginId) return candidate;
+		const { harnessRuntimeFingerprint: _previous, ...rest } = candidate;
+		return { ...rest, trust: status, enabled: status === "trusted", updatedAt, ...(harnessRuntimeFingerprint === undefined ? {} : { harnessRuntimeFingerprint }) };
+	}));
 	await updatePluginProfiles((profiles): PluginProfile[] => profiles.map((profile): PluginProfile => {
 		const active: boolean = profile.active;
 		if (!active) return { ...profile, active: false };
@@ -299,9 +314,26 @@ export async function getPluginCatalog(): Promise<PluginCatalogResult> {
 	const plugins: PluginRecord[] = await readPluginRecords();
 	const profiles: PluginProfile[] = await readPluginProfiles();
 	const activeProfile: PluginProfile = getActivePluginProfile(profiles);
-	return { plugins: plugins.map((plugin): PluginRecord => ({ ...plugin, enabled: plugin.trust === "trusted" && activeProfile.pluginIds.includes(plugin.id) })), profiles, activeProfile };
+	const hydratedPlugins: PluginRecord[] = await Promise.all(plugins.map(async (plugin): Promise<PluginRecord> => {
+		if (plugin.presentation !== undefined) return plugin;
+		try {
+			const presentation = await readPluginPresentation(plugin.packageRoot);
+			return presentation === undefined ? plugin : { ...plugin, presentation };
+		} catch {
+			return plugin;
+		}
+	}));
+	if (hydratedPlugins.some((plugin, index): boolean => plugin.presentation !== undefined && plugins[index]?.presentation === undefined)) {
+		await updatePluginState((current): PluginRecord[] => current.map((record): PluginRecord => {
+			const hydrated: PluginRecord | undefined = hydratedPlugins.find((plugin): boolean => plugin.id === record.id);
+			return hydrated?.presentation === undefined || record.presentation !== undefined
+				? record
+				: { ...record, presentation: hydrated.presentation };
+		}));
+	}
+	return { plugins: hydratedPlugins.map((plugin): PluginRecord => ({ ...plugin, enabled: plugin.trust === "trusted" && activeProfile.pluginIds.includes(plugin.id) })), profiles, activeProfile };
 }
 
 export function pluginFingerprint(record: PluginRecord): string {
-	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash);
+	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.harnessBundle);
 }

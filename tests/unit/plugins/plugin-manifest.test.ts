@@ -36,16 +36,17 @@ test("plugin manifest identifies a native Harness bundle without executing it", 
 	}
 });
 
-test("plugin manifest marks dynamic Cordis patch expressions unsupported", async (): Promise<void> => {
+test("plugin manifest keeps dynamic Cordis expressions reviewable for the isolated Harness Sidecar", async (): Promise<void> => {
 	const fixture = await withPackage({
 		name: "unsafe-plugin",
 		version: "0.1.0",
 		dsh: { bundle: { patch: "./cordis.patch.yml" } }
-	}, "- insert:\n    - id: unsafe\n      config: !!js ctx.secret\n");
+	}, "- insert:\n    - id: unsafe\n      name: unsafe-plugin\n      config: !!js ctx.secret\n");
 	try {
 		const result = await analyzePluginDirectory(fixture.root);
-		assert.equal(result.compatibility.classification, "unsupported");
-		assert.match(result.compatibility.unsupportedFeatures.join("\n"), /!!js/u);
+		assert.equal(result.compatibility.classification, "harness-bundle");
+		assert.match(result.compatibility.warnings.join("\n"), /!!js/u);
+		assert.deepEqual(result.harnessBundle?.dangerousConstructs, ["Cordis !!js expression"]);
 	} finally {
 		await fixture.dispose();
 	}

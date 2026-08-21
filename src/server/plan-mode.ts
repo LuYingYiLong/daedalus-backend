@@ -27,6 +27,7 @@ import { loadCorePrompt } from "../prompts/registry.js";
 import { getClientConnection } from "./client-connections.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
+import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
 import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
@@ -616,7 +617,9 @@ async function runPlanAgentDecision(
 			sessionId: runtime.session.sessionId,
 			requestId: planThreadRequestId,
 			clientType: getClientConnection(runtime.socket)?.clientType,
-			browserControl: getStudioBrowserControl(runtime.socket, runtime.session.sessionId)
+			browserControl: getStudioBrowserControl(runtime.socket, runtime.session.sessionId),
+			scheduledTaskControl: getStudioScheduledTaskControl(runtime.socket, runtime.session.sessionId),
+			scheduledMonitorRun: runtime.session.scheduledTaskOrigin?.kind === "monitor"
 		}
 	);
 	if (agentResult.status === "approval_required") {

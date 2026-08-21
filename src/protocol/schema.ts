@@ -186,7 +186,14 @@ const sessionUiMetadataParamsSchema = z
 		approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
 		workflowTodoCollapsed: z.boolean().optional(),
 		workflowTodoDismissedKey: z.string().trim().min(1).max(300).nullable().optional(),
-		workspaceLaunch: z.enum(["file-explorer", "terminal", "vscode", "visual-studio", "github-desktop", "git-bash", "godot"]).optional()
+		workspaceLaunch: z.enum(["file-explorer", "terminal", "vscode", "visual-studio", "github-desktop", "git-bash", "godot"]).optional(),
+		scheduledTaskOrigin: z.object({
+			taskId: z.string().min(1).max(160),
+			runId: z.string().min(1).max(160),
+			kind: z.enum(["agent", "monitor"]),
+			scheduledAt: z.string().datetime(),
+			executionPolicy: z.enum(["read_only", "auto_safe"]),
+		}).strict().optional()
 	})
 	.strict();
 
@@ -764,7 +771,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.hello"),
 		params: z.object({
 			protocolVersion: z.literal(3),
-			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "cli", "smoke", "external_mcp"]).optional(),
+			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
 			workspaceId: z.string().min(1).optional(),
@@ -790,7 +797,11 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("client.capabilities.update"),
 		params: z.object({
-			capabilities: z.object({ browserTools: z.boolean() }).strict()
+			capabilities: z.object({
+				browserTools: z.boolean().optional(),
+				scheduledTasks: z.boolean().optional(),
+				scheduledTaskReport: z.boolean().optional(),
+			}).strict()
 		})
 	}),
 	z.object({
@@ -1303,6 +1314,20 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("skill.reload"),
 		params: skillTargetSchema.optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("scheduled-task.tool.result"),
+		params: z.object({
+			callId: z.string().min(1).max(160),
+			ok: z.boolean(),
+			result: z.record(z.string(), z.unknown()).optional(),
+			error: z.object({ code: z.string().min(1).max(120), message: z.string().min(1).max(4000), retryable: z.boolean() }).strict().optional(),
+		}).strict().superRefine((value, context): void => {
+			if (value.ok && value.result === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful scheduled task tool results require result." });
+			if (!value.ok && value.error === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Failed scheduled task tool results require error." });
+		}),
 	}),
 	z.object({
 		type: z.literal("request"),

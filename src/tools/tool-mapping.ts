@@ -7,6 +7,13 @@ export type ToolMapping = {
 };
 
 export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
+	"mcp_scheduled_tasks_list": { serverId: "studio_scheduled_tasks", toolName: "list" },
+	"mcp_scheduled_task_create": { serverId: "studio_scheduled_tasks", toolName: "create" },
+	"mcp_scheduled_task_update": { serverId: "studio_scheduled_tasks", toolName: "update" },
+	"mcp_scheduled_task_pause": { serverId: "studio_scheduled_tasks", toolName: "pause" },
+	"mcp_scheduled_task_resume": { serverId: "studio_scheduled_tasks", toolName: "resume" },
+	"mcp_scheduled_task_delete": { serverId: "studio_scheduled_tasks", toolName: "delete" },
+	"mcp_scheduled_task_report": { serverId: "studio_scheduled_tasks", toolName: "report" },
 	"mcp_browser_observe": { serverId: "studio_browser", toolName: "observe" },
 	"mcp_browser_navigate": { serverId: "studio_browser", toolName: "navigate" },
 	"mcp_browser_navigation": { serverId: "studio_browser", toolName: "navigation" },

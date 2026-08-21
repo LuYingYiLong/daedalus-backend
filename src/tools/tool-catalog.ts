@@ -42,6 +42,7 @@ import {
 	type SummaryPreparationContext
 } from "./summary-control.js";
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_NAME_SET, type BrowserControlContext } from "./browser-tools.js";
+import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskControlContext } from "./scheduled-task-tools.js";
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 
 export type ToolExecutionContext = {
@@ -53,7 +54,7 @@ export type ToolExecutionContext = {
 	executionControlAvailable?: boolean | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
 	chatCompletionAvailable?: boolean | undefined;
-	clientType?: "studio" | "godot_editor_bridge" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
+	clientType?: "studio" | "studio_scheduler" | "godot_editor_bridge" | "godot_plugin" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
 	imageRouting?: {
 		options: ProviderChatOptions;
 		contextText: string;
@@ -73,6 +74,8 @@ export type ToolExecutionContext = {
 		chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	} | undefined;
 	browserControl?: BrowserControlContext | undefined;
+	scheduledTaskControl?: ScheduledTaskControlContext | undefined;
+	scheduledMonitorRun?: boolean | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -82,6 +85,8 @@ export type WorkflowToolGroup = "read" | "verify" | "write";
 // 这是 workflow 的保守默认工具集，不等同于同风险工具的全集。
 const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> = {
 	read: [
+		"mcp_scheduled_tasks_list",
+		"mcp_scheduled_task_report",
 		"mcp_browser_observe",
 		"mcp_browser_navigate",
 		"mcp_browser_navigation",
@@ -152,6 +157,11 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_terminal_run_safe_preset"
 	],
 	write: [
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_update",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_delete",
 		"mcp_browser_click",
 		"mcp_browser_type",
 		"mcp_browser_select",
@@ -213,6 +223,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 };
 
 const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
+	...SCHEDULED_TASK_TOOL_NAMES,
 	...BROWSER_TOOL_NAMES,
 	"mcp_skills_load",
 	"mcp_skills_propose_create",
@@ -261,6 +272,12 @@ function isGodotToolName(toolName: string | undefined): boolean {
 }
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
+	if (toolName !== undefined && SCHEDULED_TASK_TOOL_NAME_SET.has(toolName)) {
+		if (context.scheduledTaskControl === undefined) return false;
+		return context.clientType === "studio_scheduler"
+			? toolName === "mcp_scheduled_task_report"
+			: context.clientType === "studio" && (SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES.has(toolName) || (toolName === "mcp_scheduled_task_report" && context.scheduledMonitorRun === true));
+	}
 	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
 		return context.clientType === "studio" && context.browserControl !== undefined;
 	}

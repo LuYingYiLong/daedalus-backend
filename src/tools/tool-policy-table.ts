@@ -1,6 +1,13 @@
 import type { ToolPolicy } from "./tool-policy.js";
 
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
+	"mcp_scheduled_tasks_list": { risk: "read" },
+	"mcp_scheduled_task_create": { risk: "write" },
+	"mcp_scheduled_task_update": { risk: "write" },
+	"mcp_scheduled_task_pause": { risk: "write" },
+	"mcp_scheduled_task_resume": { risk: "write" },
+	"mcp_scheduled_task_delete": { risk: "destructive" },
+	"mcp_scheduled_task_report": { risk: "read" },
 	"mcp_browser_observe": { risk: "read" },
 	"mcp_browser_navigate": { risk: "read" },
 	"mcp_browser_navigation": { risk: "read" },

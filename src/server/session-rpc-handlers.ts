@@ -296,6 +296,7 @@ function createSessionUiMetadata(params: {
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
 	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
+	scheduledTaskOrigin?: { taskId: string; runId: string; kind: "agent" | "monitor"; scheduledAt: string; executionPolicy: "read_only" | "auto_safe" } | undefined;
 	temporary?: boolean | undefined;
 } | undefined): Partial<SessionMetadata> {
 	if (params === undefined) {
@@ -327,6 +328,7 @@ function createSessionUiMetadata(params: {
 	if (params.workspaceLaunch !== undefined) {
 		metadata.workspaceLaunch = params.workspaceLaunch;
 	}
+	if (params.scheduledTaskOrigin !== undefined) metadata.scheduledTaskOrigin = structuredClone(params.scheduledTaskOrigin);
 	if (params.temporary === true) {
 		metadata.temporary = true;
 	}

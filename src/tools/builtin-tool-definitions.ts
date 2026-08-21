@@ -4,6 +4,7 @@ import { getDynamicMcpToolDefinitions, isDynamicMcpToolName } from "./dynamic-mc
 import { getToolPolicy } from "./tool-policy.js";
 import { APPROVAL_REASON_ARG, APPROVAL_REASON_SCHEMA_PROPERTY } from "./approval-reason.js";
 import { BROWSER_TOOL_DEFINITIONS } from "./browser-tools.js";
+import { SCHEDULED_TASK_TOOL_DEFINITIONS } from "./scheduled-task-tools.js";
 
 type ChatCompletionFunctionTool = Extract<ChatCompletionTool, { type: "function" }>;
 
@@ -2017,7 +2018,7 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 ];
 
 export const BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = withApprovalReasonSchemas(
-	withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS])
+	withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS, ...SCHEDULED_TASK_TOOL_DEFINITIONS])
 );
 
 export function getToolDefinitions(workspaceId?: string | undefined): ChatCompletionTool[] {

@@ -141,7 +141,9 @@ export type StudioDirectEventName =
 	| "session.selectionAsk.message.done"
 	| "session.selectionAsk.message.error"
 	| "browser.tool.request"
-	| "browser.tool.cancel";
+	| "browser.tool.cancel"
+	| "scheduled-task.tool.request"
+	| "scheduled-task.tool.cancel";
 
 export type ServerEvent = {
 	protocolVersion: 3;

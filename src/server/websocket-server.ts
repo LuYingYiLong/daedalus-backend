@@ -24,6 +24,7 @@ import { logger } from "../logger.js";
 import { timingSafeEqual } from "node:crypto";
 import { BACKEND_PROTOCOL_VERSION } from "../runtime/build-metadata.js";
 import { studioBrowserRuntime } from "./studio-browser-runtime.js";
+import { studioScheduledTaskRuntime } from "./studio-scheduled-task-runtime.js";
 
 export type WebSocketServerRuntimeOptions = {
 	host?: string | undefined;
@@ -261,6 +262,7 @@ function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: M
 	}
 	detachEditorBridgeSocket(socket, mcpHost);
 	studioBrowserRuntime.detachSocket(socket);
+	studioScheduledTaskRuntime.detachSocket(socket);
 	unregisterClientConnection(socket);
 	if (!hasOtherConnections) {
 		abortActiveRequests(connectionSession);

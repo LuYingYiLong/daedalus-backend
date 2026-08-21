@@ -23,6 +23,8 @@ export type SessionForkOrigin = {
 	messagePreview: string;
 };
 
+export type ScheduledTaskSessionOrigin = { taskId: string; runId: string; kind: "agent" | "monitor"; scheduledAt: string; executionPolicy: "read_only" | "auto_safe" };
+
 export type SessionMetadata = {
 	id: string;
 	title: string;
@@ -44,6 +46,7 @@ export type SessionMetadata = {
 	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
 	forkedFrom?: SessionForkOrigin | undefined;
 	worktree?: SessionWorktreeMetadata | undefined;
+	scheduledTaskOrigin?: ScheduledTaskSessionOrigin | undefined;
 	archivedAt?: string | undefined;
 	createdAt: string;
 	updatedAt: string;

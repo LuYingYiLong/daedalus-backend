@@ -161,6 +161,16 @@ export function evaluateToolCall(
 		return { action: "deny", reason: "该工具已被硬性禁用" };
 	}
 
+	if ([
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_update",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_delete",
+	].includes(toolName)) {
+		return { action: "request_approval", reason: "定时任务会持久化未来行为，需要你明确确认。" };
+	}
+
 	const requiredConsent: ToolRequiredConsent | undefined = getRequiredConsentForToolCall(toolName, args, workspaceId);
 	if (requiredConsent !== undefined && mode !== "full-trust") {
 		return {

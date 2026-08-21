@@ -72,6 +72,20 @@ function createDisplay(
 }
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
+	if (toolName.startsWith("mcp_scheduled_task")) {
+		const labels: Record<string, [ToolEventCategory, string]> = {
+			mcp_scheduled_tasks_list: ["read", "查看定时任务"],
+			mcp_scheduled_task_create: ["write", "创建定时任务"],
+			mcp_scheduled_task_update: ["write", "修改定时任务"],
+			mcp_scheduled_task_pause: ["write", "暂停定时任务"],
+			mcp_scheduled_task_resume: ["write", "恢复定时任务"],
+			mcp_scheduled_task_delete: ["write", "删除定时任务"],
+			mcp_scheduled_task_report: ["read", "报告监测结果"],
+		};
+		const [category, title] = labels[toolName] ?? ["unknown", "操作定时任务"];
+		const label = getStringArg(args, "title") ?? getStringArg(args, "taskId") ?? "scheduled task";
+		return createDisplay("studio_scheduled_tasks", "Daedalus Scheduler", category, title, label, { kind: "unknown", label });
+	}
 	if (toolName.startsWith("mcp_browser_")) {
 		const action = toolName.slice("mcp_browser_".length);
 		const labels: Record<string, [ToolEventCategory, string, string]> = {

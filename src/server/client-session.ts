@@ -1,5 +1,5 @@
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ModelProfile, ProviderId } from "../protocol/types.js";
-import type { SessionMetadata } from "../session/session-store.js";
+import type { ScheduledTaskSessionOrigin, SessionMetadata } from "../session/session-store.js";
 import type { PendingAiContinuation } from "../session/pending-continuation.js";
 import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
@@ -135,6 +135,7 @@ export type ClientSession = {
 	hookDeveloperContext: string[];
 	stopHookContinuationCount: number;
 	worktreeStatus?: WorktreeLifecycleStatus | undefined;
+	scheduledTaskOrigin?: ScheduledTaskSessionOrigin | undefined;
 };
 
 export function createClientSession(defaultWorkspace: WorkspaceConfig | undefined): ClientSession {
@@ -228,12 +229,14 @@ export function clearActiveSession(session: ClientSession): void {
 	session.hookDeveloperContext = [];
 	session.stopHookContinuationCount = 0;
 	session.worktreeStatus = undefined;
+	session.scheduledTaskOrigin = undefined;
 }
 
 export function applySessionMetadata(session: ClientSession, metadata: SessionMetadata): void {
 	session.sessionId = metadata.id;
 	session.sessionTitle = metadata.title;
 	session.worktreeStatus = metadata.worktree?.status;
+	session.scheduledTaskOrigin = metadata.scheduledTaskOrigin;
 	if (metadata.provider !== undefined && isProviderId(metadata.provider)) {
 		session.activeProvider = metadata.provider;
 		session.providerModel = metadata.model ?? getProviderDefaultModel(metadata.provider);

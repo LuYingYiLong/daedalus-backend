@@ -23,9 +23,10 @@ import {
 	MIN_BRIDGE_PROTOCOL_VERSION
 } from "../bridge-compatibility.js";
 import { studioBrowserRuntime } from "../studio-browser-runtime.js";
+import { studioScheduledTaskRuntime } from "../studio-scheduled-task-runtime.js";
 
 function readClientType(value: unknown): ClientType {
-	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "cli" || value === "smoke" || value === "external_mcp"
+	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
 		? value
 		: "legacy";
 }
@@ -187,20 +188,24 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 		case "client.capabilities.update": {
 			const current = getClientConnection(socket);
 			if (current?.clientType !== "studio") {
-				throw new Error("Only Daedalus Studio can update browser capabilities.");
+				throw new Error("Only Daedalus Studio can update runtime capabilities.");
 			}
-			const info = updateClientConnection(socket, {
-				capabilities: {
-					...current.capabilities,
-					browserTools: request.params!.capabilities.browserTools
-				}
-			});
+			const capabilities: ClientCapabilities = { ...current.capabilities };
+			for (const [key, value] of Object.entries(request.params!.capabilities)) {
+				if (typeof value === "boolean") capabilities[key as keyof ClientCapabilities] = value;
+			}
+			const info = updateClientConnection(socket, { capabilities });
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { connection: info } });
 			break;
 		}
 
 		case "browser.tool.result":
 			studioBrowserRuntime.handleResult(socket, request.params!);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
+			break;
+
+		case "scheduled-task.tool.result":
+			studioScheduledTaskRuntime.handleResult(socket, request.params!);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
 			break;
 

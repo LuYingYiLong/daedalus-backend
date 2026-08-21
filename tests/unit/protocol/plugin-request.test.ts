@@ -43,6 +43,20 @@ test("Harness runtime RPC requests require revisioned configuration and package-
 		}
 	});
 	assert.equal(update.success, true);
+	const draftDetect = clientRequestSchema.safeParse({
+		type: "request",
+		id: "harness-detect-draft",
+		method: "plugin.harness.detect",
+		params: {
+			draft: {
+				enabled: false,
+				executablePath: null,
+				sourceRoot: "C:\\Users\\example\\deepseek-harness",
+				launchMode: "source"
+			}
+		}
+	});
+	assert.equal(draftDetect.success, true);
 	const preview = clientRequestSchema.safeParse({ type: "request", id: "harness-preview", method: "plugin.harness.preview", params: { pluginId: "plugin-1" } });
 	assert.equal(preview.success, true);
 	const invalid = clientRequestSchema.safeParse({ type: "request", id: "harness-update-bad", method: "plugin.harness.config.update", params: { expectedRevision: "latest", config: { enabled: true, launchMode: "installed" } } });

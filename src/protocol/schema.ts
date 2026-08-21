@@ -1366,7 +1366,18 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			launchMode: z.enum(["installed", "source"])
 		}).strict()
 	}),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.detect"), params: z.object({}).strict().optional() }),
+	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.detect"),
+		params: z.object({
+			// Detection may inspect the values currently being edited in Studio without persisting them.
+			draft: z.object({
+				enabled: z.boolean(),
+				executablePath: z.string().trim().max(4096).nullable(),
+				sourceRoot: z.string().trim().max(4096).nullable(),
+				launchMode: z.enum(["installed", "source"]),
+			}).strict().optional(),
+		}).strict().optional(),
+	}),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.preview"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.runtime.status"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
 	z.object({

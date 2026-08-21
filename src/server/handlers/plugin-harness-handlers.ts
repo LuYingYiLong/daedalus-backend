@@ -48,7 +48,22 @@ export async function handlePluginHarnessRequest(socket: WebSocket, request: Cli
 	}
 	case "plugin.harness.detect": {
 		const config: HarnessRuntimeConfig = await readHarnessRuntimeConfig();
-		result = { config, installation: publicInstallation(await detectHarnessInstallation(config)) };
+		const params = harnessRequest.params as { draft?: { enabled: boolean; executablePath: string | null; sourceRoot: string | null; launchMode: "installed" | "source" } } | undefined;
+		const draft = params?.draft;
+		const responseConfig: HarnessRuntimeConfig = draft === undefined
+			? config
+			: {
+				...config,
+				enabled: draft.enabled,
+				executablePath: draft.executablePath?.trim() || null,
+				sourceRoot: draft.sourceRoot?.trim() || null,
+				launchMode: draft.launchMode,
+			};
+		// 检测独立校验草稿路径，保存时仍保留开关状态，不会因检测隐式启用运行时
+		const detectionConfig: HarnessRuntimeConfig = draft === undefined
+			? config
+			: { ...responseConfig, enabled: true };
+		result = { config: responseConfig, installation: publicInstallation(await detectHarnessInstallation(detectionConfig)) };
 		break;
 	}
 	case "plugin.harness.preview": {

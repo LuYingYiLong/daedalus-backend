@@ -226,6 +226,12 @@ Project and personal Skills are parsed as instructions, not permissions. They ca
 - Tool execution uses idempotency and write fingerprints to avoid duplicate effects across continuation, retry, and workflow escalation.
 - Validation must match the modified artifact and occur after the relevant write.
 
+Backend 的完整安全边界、插件运行时约束、沙箱不可用时的拒绝行为和故障恢复流程见：
+
+- [安全模型与硬性要求](./docs/security-model.md)
+- [插件平台与开发规范](./docs/plugin-platform.md)
+- [运维、诊断与恢复](./docs/operations.md)
+
 No agentic system removes the need for review. Use version control, inspect approvals, and run project-specific tests before shipping generated changes.
 
 ## Runtime Data
@@ -313,6 +319,12 @@ docs/                Production, automation, architecture, and release notes
 
 ## Documentation
 
+- [Backend 架构与生命周期](./docs/backend-architecture.md)
+- [WebSocket/RPC 协议](./docs/protocol.md)
+- [插件平台与开发规范](./docs/plugin-platform.md)
+- [安全模型与硬性要求](./docs/security-model.md)
+- [运维、诊断与恢复](./docs/operations.md)
+- [测试、发布与贡献流程](./docs/testing-and-release.md)
 - [Production binary and update contract](./docs/production-binary.md)
 - [Automation MCP](./docs/automation-mcp.md)
 - [Frontend boundary and Studio roadmap](./docs/frontend-boundary-and-studio-roadmap.md)

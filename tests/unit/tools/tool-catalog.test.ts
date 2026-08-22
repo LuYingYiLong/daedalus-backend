@@ -173,6 +173,13 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_godot_search_documentation",
 		"mcp_image_generate",
 		"mcp_image_inspect",
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_delete",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_report",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_update",
+		"mcp_scheduled_tasks_list",
 		"mcp_web_search",
 		CUSTOM_MCP_TOOLS_SENTINEL,
 		"mcp_custom_context7_get_library_docs_12345678"
@@ -182,6 +189,13 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_image_generate",
 		"mcp_image_inspect",
 		"mcp_godot_search_documentation",
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_delete",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_report",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_update",
+		"mcp_scheduled_tasks_list",
 		"mcp_skills_create",
 		"mcp_skills_load",
 		"mcp_skills_propose_create",
@@ -201,6 +215,13 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_godot_search_documentation",
 		"mcp_image_generate",
 		"mcp_image_inspect",
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_delete",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_report",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_update",
+		"mcp_scheduled_tasks_list",
 		"mcp_skills_create",
 		"mcp_skills_load",
 		"mcp_skills_propose_create",
@@ -211,7 +232,12 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		"mcp_browser_click",
 		"mcp_browser_select",
 		"mcp_browser_type",
-		"mcp_image_generate"
+		"mcp_image_generate",
+		"mcp_scheduled_task_create",
+		"mcp_scheduled_task_delete",
+		"mcp_scheduled_task_pause",
+		"mcp_scheduled_task_resume",
+		"mcp_scheduled_task_update",
 	].sort());
 });
 
@@ -263,6 +289,8 @@ test("workflow defaults are catalog-backed and resolve to known tools", (): void
 		workspaceId: "workspace-a",
 		hasGodotWorkspaceCapability: true,
 		clientType: "studio",
+		scheduledTaskControl: { execute: async (): Promise<Record<string, unknown>> => ({}) },
+		scheduledMonitorRun: true,
 		browserControl: { execute: async (): Promise<Record<string, unknown>> => ({}) }
 	});
 	for (const group of ["read", "verify", "write"] as const) {

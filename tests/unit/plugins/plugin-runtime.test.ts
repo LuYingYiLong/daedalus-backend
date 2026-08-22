@@ -75,7 +75,10 @@ test("native plugin fixture registers and invokes through the worker protocol", 
 			entry: resolve(fixturePath, "index.js"),
 			context: { pluginId: "fixture", sessionId: "test", workspaceId: "workspace", workspaceRoot: backendRoot, capabilities: ["tools", "skills", "hooks", "mcp"] },
 		}));
-		const registrations = await readWorkerEvents(child, 5);
+		// fixture 会先发送 P2 命令和上下文提供器注册，再发送原生能力注册；等待完整快照，避免依赖 CI 的 stdout 分块方式
+		const registrations = await readWorkerEvents(child, 7);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.command").length, 1);
+		assert.equal(registrations.filter((event): boolean => event.type === "register.context-provider").length, 1);
 		assert.equal(registrations.filter((event): boolean => event.type === "register.tool").length, 1);
 		assert.equal(registrations.filter((event): boolean => event.type === "register.skill").length, 1);
 		assert.equal(registrations.filter((event): boolean => event.type === "register.hook").length, 1);

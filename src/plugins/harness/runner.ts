@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { dirname } from "node:path";
 import { createSandboxInvocation } from "../../mcp/terminal/sandbox-runner.js";
+import { terminateProcess } from "../../mcp/terminal/process-runner.js";
 import {
 	clearPluginRegistrations
 } from "../runtime/registries.js";
@@ -41,6 +42,9 @@ type PendingCall = {
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
 	timer: NodeJS.Timeout;
+	startedAt: number;
+	started: boolean;
+	message: HarnessBridgeRequest;
 };
 
 export type HarnessHandle = {
@@ -61,6 +65,12 @@ export type HarnessHandle = {
 	closed: Promise<void>;
 	resolveClosed: () => void;
 	finalized: boolean;
+	activeCalls: number;
+	stopping: boolean;
+	failed: boolean;
+	lastUsedAt: number;
+	resourceTimer?: NodeJS.Timeout | undefined;
+	idleTimer?: NodeJS.Timeout | undefined;
 };
 
 export type HarnessRunnerCallbacks = {
@@ -103,6 +113,27 @@ function rejectPending(handle: HarnessHandle, error: Error): void {
 		pending.reject(error);
 		handle.pending.delete(id);
 	}
+	handle.activeCalls = 0;
+}
+
+function dispatchQueued(handle: HarnessHandle): void {
+	if (handle.stopping) return;
+	for (const pending of handle.pending.values()) {
+		if (handle.activeCalls >= 4 || pending.started) {
+			if (handle.activeCalls >= 4) break;
+			continue;
+		}
+		pending.started = true;
+		handle.activeCalls += 1;
+		try {
+			handle.child.stdin.write(encodeHarnessRequest(pending.message));
+		} catch (error: unknown) {
+			clearTimeout(pending.timer);
+			handle.pending.delete(pending.message.id);
+			handle.activeCalls = Math.max(0, handle.activeCalls - 1);
+			pending.reject(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
 }
 
 function finalizeHandle(handle: HarnessHandle, callbacks: HarnessRunnerCallbacks, error: Error): void {
@@ -127,12 +158,15 @@ function applyRegistrySnapshot(pluginId: string, registry: HarnessRegistrySnapsh
 function handleEvent(handle: HarnessHandle, event: HarnessBridgeEvent, callbacks: HarnessRunnerCallbacks): void {
 	if ("id" in event) {
 		const pending = handle.pending.get(event.id);
-		if (pending === undefined) return;
+		if (pending === undefined) throw new Error("Harness bridge returned an unknown response ID.");
 		clearTimeout(pending.timer);
 		handle.pending.delete(event.id);
+		if (pending.started) handle.activeCalls = Math.max(0, handle.activeCalls - 1);
 		if ("error" in event) pending.reject(Object.assign(new Error(event.error.message), { code: "plugin_harness_call_failed" }));
 		else if (resultBytes(event.result) > MAX_HARNESS_RESULT_BYTES) pending.reject(new Error("Harness result exceeds the size limit."));
 		else pending.resolve(event.result);
+		addPluginRuntimeLog({ pluginId: handle.pluginId, sessionId: handle.sessionId, event: "invoke", status: "error" in event ? "failed" : "ok", durationMs: Date.now() - pending.startedAt, message: "error" in event ? event.error.message : undefined });
+		dispatchQueued(handle);
 		return;
 	}
 	if (event.method === "log") {
@@ -173,10 +207,39 @@ function request(handle: HarnessHandle, method: HarnessBridgeRequest["method"], 
 	return new Promise((resolve, reject): void => {
 		const timer = setTimeout((): void => {
 			handle.pending.delete(id);
+			handle.activeCalls = Math.max(0, handle.activeCalls - 1);
 			reject(Object.assign(new Error(`Harness ${method} timed out.`), { code: "plugin_harness_timeout" }));
 		}, timeoutMs);
-		handle.pending.set(id, { resolve, reject, timer });
-		handle.child.stdin.write(encodeHarnessRequest(message));
+		handle.pending.set(id, { resolve, reject, timer, startedAt: Date.now(), started: true, message });
+		handle.activeCalls += 1;
+		try {
+			handle.child.stdin.write(encodeHarnessRequest(message));
+		} catch (error: unknown) {
+			clearTimeout(timer);
+			handle.pending.delete(id);
+			handle.activeCalls = Math.max(0, handle.activeCalls - 1);
+			reject(error instanceof Error ? error : new Error(String(error)));
+		}
+	});
+}
+
+function queuedInvoke(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource", name: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+	const id: string = randomUUID();
+	const message = { jsonrpc: "2.0", id, method: "invoke", params: { kind, name, args } } as HarnessBridgeRequest;
+	return new Promise((resolve, reject): void => {
+		const timer = setTimeout((): void => {
+			const pending = handle.pending.get(id);
+			if (pending === undefined) return;
+			handle.pending.delete(id);
+			if (pending.started) handle.activeCalls = Math.max(0, handle.activeCalls - 1);
+			reject(Object.assign(new Error("Harness invoke timed out."), { code: "plugin_harness_timeout" }));
+			handle.failed = true;
+			handle.stopping = true;
+			terminateProcess(handle.child, true);
+			dispatchQueued(handle);
+		}, timeoutMs);
+		handle.pending.set(id, { resolve, reject, timer, startedAt: Date.now(), started: false, message });
+		dispatchQueued(handle);
 	});
 }
 
@@ -209,13 +272,13 @@ export async function startHarnessSidecar(
 	let resolveClosed!: () => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
 	const closed = new Promise<void>((resolve): void => { resolveClosed = resolve; });
-	const handle: HarnessHandle = { pluginId: record.id, sessionId: context.sessionId, child, context, prepared, installation, bundleFingerprint: record.fingerprint, initializeSent: false, pending: new Map(), buffer: "", stderr: "", ready, resolveReady, rejectReady, closed, resolveClosed, finalized: false };
+	const handle: HarnessHandle = { pluginId: record.id, sessionId: context.sessionId, child, context, prepared, installation, bundleFingerprint: record.fingerprint, initializeSent: false, pending: new Map(), buffer: "", stderr: "", ready, resolveReady, rejectReady, closed, resolveClosed, finalized: false, activeCalls: 0, stopping: false, failed: false, lastUsedAt: Date.now() };
 	child.stdout.setEncoding("utf8");
 	child.stdout.on("data", (chunk: string): void => {
 		handle.buffer += chunk;
 		if (Buffer.byteLength(handle.buffer, "utf8") > MAX_HARNESS_FRAME_BYTES * 2) {
 			handle.rejectReady(new Error("Harness bridge output exceeds the buffer limit."));
-			child.kill();
+			terminateProcess(child, true);
 			return;
 		}
 		let newline: number;
@@ -223,16 +286,15 @@ export async function startHarnessSidecar(
 			const line: string = handle.buffer.slice(0, newline).trim();
 			handle.buffer = handle.buffer.slice(newline + 1);
 			if (line.length === 0) continue;
-			try { handleEvent(handle, parseHarnessEvent(line), callbacks); }
+			try {
+				if (!line.startsWith("{")) throw new Error("Harness stdout contained a non-JSON protocol frame.");
+				handleEvent(handle, parseHarnessEvent(line), callbacks);
+			}
 			catch (error: unknown) {
-				if (!line.startsWith("{")) {
-					addPluginRuntimeLog({ pluginId: record.id, sessionId: context.sessionId, event: "error", status: "failed", message: redact(line) });
-					continue;
-				}
 				const failure = error instanceof Error ? error : new Error(String(error));
 				rejectPending(handle, failure);
 				handle.rejectReady(failure);
-				child.kill();
+				terminateProcess(child, true);
 			}
 		}
 	});
@@ -242,7 +304,8 @@ export async function startHarnessSidecar(
 		addPluginRuntimeLog({ pluginId: record.id, sessionId: context.sessionId, event: "error", status: "failed", message: handle.stderr.slice(-2_000) });
 	});
 	child.once("error", (error: Error): void => { finalizeHandle(handle, callbacks, error); });
-	child.once("close", (): void => {
+	child.once("close", (exitCode: number | null): void => {
+		callbacks.onSnapshot({ lastExitCode: exitCode });
 		const error = new Error(handle.stderr.trim() || "Harness Sidecar exited.");
 		finalizeHandle(handle, callbacks, error);
 	});
@@ -253,7 +316,7 @@ export async function startHarnessSidecar(
 			new Promise<void>((_resolve, reject): void => { setTimeout((): void => reject(Object.assign(new Error("Harness Sidecar startup timed out."), { code: "plugin_harness_start_timeout" })), HARNESS_START_TIMEOUT_MS); })
 		]);
 	} catch (error: unknown) {
-		if (child.exitCode === null) child.kill();
+		if (child.exitCode === null) terminateProcess(child, true);
 		await Promise.race([closed, new Promise<void>((resolve): void => { setTimeout(resolve, HARNESS_SHUTDOWN_TIMEOUT_MS); })]);
 		await prepared.cleanup();
 		throw error;
@@ -262,13 +325,16 @@ export async function startHarnessSidecar(
 }
 
 export async function invokeHarness(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
-	return await request(handle, "invoke", { kind, name, args }, Math.min(timeoutMs ?? HARNESS_CALL_TIMEOUT_MS, HARNESS_CALL_TIMEOUT_MS));
+	if (handle.pending.size >= 16) throw Object.assign(new Error("Harness runtime call queue is full."), { code: "plugin_runtime_queue_full" });
+	handle.lastUsedAt = Date.now();
+	return await queuedInvoke(handle, kind, name, args, Math.min(timeoutMs ?? HARNESS_CALL_TIMEOUT_MS, HARNESS_CALL_TIMEOUT_MS));
 }
 
 export async function stopHarnessSidecar(handle: HarnessHandle): Promise<void> {
+	handle.stopping = true;
 	try { await request(handle, "shutdown", {}, HARNESS_SHUTDOWN_TIMEOUT_MS); }
 	catch { /* Process termination below remains authoritative. */ }
-	if (handle.child.exitCode === null) handle.child.kill();
+	if (handle.child.exitCode === null) terminateProcess(handle.child, true);
 	await Promise.race([handle.closed, new Promise<void>((resolve): void => { setTimeout(resolve, HARNESS_SHUTDOWN_TIMEOUT_MS); })]);
 	rejectPending(handle, new Error("Harness Sidecar stopped."));
 	await handle.prepared.cleanup();

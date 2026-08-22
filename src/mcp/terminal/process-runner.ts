@@ -424,7 +424,7 @@ export async function runCommandInvocationWait(params: {
 	});
 }
 
-function terminateProcess(child: ChildProcess, processTree: boolean): void {
+export function terminateProcess(child: ChildProcess, processTree: boolean): void {
 	if (!processTree || child.pid === undefined) {
 		child.kill();
 		return;

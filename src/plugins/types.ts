@@ -35,7 +35,23 @@ export type PluginPresentation = {
 	iconDataUrl?: string | undefined;
 };
 
-export type PluginRuntimeStatus = "stopped" | "starting" | "ready" | "failed" | "disabled";
+export type PluginIsolationState = {
+	status: "none" | "quarantined";
+	reason?: string | undefined;
+	failureCount: number;
+	windowStartedAt?: string | undefined;
+	lastFailureAt?: string | undefined;
+	updatedAt: string;
+};
+
+export type PluginResourceUsage = {
+	activeCalls: number;
+	pendingCalls: number;
+	rssBytes?: number | undefined;
+	lastMeasuredAt?: string | undefined;
+};
+
+export type PluginRuntimeStatus = "stopped" | "starting" | "ready" | "failed" | "disabled" | "quarantined";
 
 export type PluginRuntimeKind = "native" | "harness";
 
@@ -118,6 +134,9 @@ export type PluginRuntimeSnapshot = {
 	bridgeProtocolVersion?: number | undefined;
 	bundleSummary?: HarnessBundleSummary | undefined;
 	lastError?: string | undefined;
+	isolation?: PluginIsolationState | undefined;
+	resourceUsage?: PluginResourceUsage | undefined;
+	lastExitCode?: number | null | undefined;
 	updatedAt: string;
 };
 
@@ -141,7 +160,19 @@ export type PluginRecord = {
 	dependencyLockHash?: string | undefined;
 	harnessBundle?: HarnessBundleSummary | undefined;
 	harnessRuntimeFingerprint?: string | undefined;
+	isolation?: PluginIsolationState | undefined;
 	runtime?: PluginRuntimeSnapshot | undefined;
+};
+
+export type PluginVersionRecord = {
+	fingerprint: string;
+	packageRoot: string;
+	packageName: string;
+	version: string;
+	contentHash: string;
+	manifestHash: string;
+	installedAt: string;
+	updatedAt: string;
 };
 
 export type PluginProfile = {

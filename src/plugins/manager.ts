@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { getDaedalusPath } from "../app-paths.js";
@@ -15,10 +16,11 @@ import {
 	updatePluginState,
 	updatePluginTrust
 } from "./store.js";
-import type { PluginCatalogResult, PluginCompatibility, PluginProfile, PluginRecord, PluginScanResult, PluginSource, PluginTrustStatus } from "./types.js";
+import type { PluginCatalogResult, PluginCompatibility, PluginProfile, PluginRecord, PluginScanResult, PluginSource, PluginTrustStatus, PluginVersionRecord } from "./types.js";
 import { readHarnessRuntimeConfig } from "./harness/config-store.js";
 import { detectHarnessInstallation } from "./harness/installation.js";
 import { createHarnessRuntimeFingerprint } from "./harness/trust.js";
+import { archivePluginVersion, getPluginVersion, listPluginVersions } from "./versions.js";
 
 const MAX_PROCESS_OUTPUT: number = 2 * 1024 * 1024;
 const EXACT_NPM_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
@@ -27,6 +29,11 @@ const SAFE_PROCESS_ENV_KEYS = new Set([
 	"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "HOME", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "COMSPEC",
 	"LANG", "LC_ALL", "CI", "NPM_CONFIG_IGNORE_SCRIPTS", "NPM_CONFIG_YES", "NPM_CONFIG_AUDIT", "NPM_CONFIG_FUND", "GIT_CONFIG_NOSYSTEM"
 ]);
+
+function shouldCopyPluginEntry(source: string): boolean {
+	const name = basename(source);
+	return name !== "node_modules" && name !== ".git";
+}
 
 type ProcessResult = { stdout: string; stderr: string; exitCode: number | null };
 
@@ -102,7 +109,21 @@ async function extractTarball(archivePath: string, destination: string): Promise
 	await mkdir(destination, { recursive: true });
 	const listing = await runProcess("tar", ["-tzf", archivePath], destination);
 	if (listing.exitCode !== 0) throw new Error(`Unable to inspect plugin archive: ${listing.stderr.trim()}`);
-	for (const entry of listing.stdout.split(/\r?\n/u).map((value): string => value.trim()).filter(Boolean)) validateArchiveEntry(entry);
+	const seen = new Set<string>();
+	for (const entry of listing.stdout.split(/\r?\n/u).map((value): string => value.trim()).filter(Boolean)) {
+		validateArchiveEntry(entry);
+		const normalized = entry.replace(/\\/gu, "/").replace(/\/$/u, "");
+		if (seen.has(normalized)) throw Object.assign(new Error(`Plugin archive contains a duplicate path: ${entry}`), { code: "plugin_archive_duplicate" });
+		seen.add(normalized);
+	}
+	// Inspect entry types before extraction. A symlink or special file could
+	// otherwise redirect a later archive entry outside the empty staging root.
+	const metadata = await runProcess("tar", ["-tvzf", archivePath], destination);
+	if (metadata.exitCode !== 0) throw new Error(`Unable to inspect plugin archive entries: ${metadata.stderr.trim()}`);
+	for (const line of metadata.stdout.split(/\r?\n/u).map((value): string => value.trim()).filter(Boolean)) {
+		const type = line[0];
+		if (type !== "-" && type !== "d") throw Object.assign(new Error("Plugin archive contains a symlink or unsupported file type."), { code: "plugin_archive_unsafe_type" });
+	}
 	const extraction = await runProcess("tar", ["-xzf", archivePath, "-C", destination], destination);
 	if (extraction.exitCode !== 0) throw new Error(`Unable to extract plugin archive: ${extraction.stderr.trim()}`);
 	const packageDirectory: string = join(destination, "package");
@@ -180,21 +201,41 @@ async function copyPreparedPackage(sourceRoot: string, packageId: string, conten
 	const safeName: string = packageId.replace(/[^a-zA-Z0-9._@-]/gu, "_");
 	const target: string = join(packagesRoot, safeName);
 	if (!isPathInside(packagesRoot, target)) throw new Error("Plugin target path escapes the managed package directory.");
+	const temporary: string = join(packagesRoot, `.${safeName}.${randomUUID()}.staging`);
 	try {
-		await stat(target);
+		const existing = await stat(target);
+		if (!existing.isDirectory()) throw new Error("Managed plugin package path is not a directory.");
+		try {
+			const current = await analyzePluginDirectory(target);
+			if (current.contentHash.startsWith(contentHash.slice(0, 12))) return target;
+		} catch {
+			// Replace an incomplete or tampered package through the same atomic path.
+		}
 	} catch {
-		await cp(sourceRoot, target, { recursive: true, force: false, errorOnExist: true, dereference: false });
+		// The target does not exist yet; the commit below will create it.
+	}
+	await cp(sourceRoot, temporary, { recursive: true, force: false, errorOnExist: true, dereference: false, filter: shouldCopyPluginEntry });
+	try {
+		await analyzePluginDirectory(temporary);
+		const backup: string = join(packagesRoot, `.${safeName}.${randomUUID()}.backup`);
+		let movedExisting: boolean = false;
+		try {
+			await rename(target, backup);
+			movedExisting = true;
+		} catch (error: unknown) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		try {
+			await rename(temporary, target);
+		} catch (error: unknown) {
+			if (movedExisting) await rename(backup, target).catch((): void => undefined);
+			throw error;
+		}
+		if (movedExisting) await rm(backup, { recursive: true, force: true });
 		return target;
+	} finally {
+		await rm(temporary, { recursive: true, force: true }).catch((): void => undefined);
 	}
-	try {
-		const existing = await analyzePluginDirectory(target);
-		if (existing.contentHash.startsWith(contentHash.slice(0, 12))) return target;
-	} catch {
-		// A tampered or incomplete managed package is replaced by the explicit reinstall.
-	}
-	await rm(target, { recursive: true, force: true });
-	await cp(sourceRoot, target, { recursive: true, force: false, errorOnExist: true, dereference: false });
-	return target;
 }
 
 export async function installPlugin(source: PluginSource): Promise<PluginRecord> {
@@ -241,12 +282,110 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 	}
 }
 
+export async function updatePluginFromSource(pluginId: string, source: PluginSource, expectedFingerprint: string): Promise<PluginRecord> {
+	const current = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
+	if (current === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
+	if (current.fingerprint !== expectedFingerprint) throw Object.assign(new Error("Plugin changed while preparing the update. Reload the plugin before updating."), { code: "plugin_fingerprint_stale" });
+	const previousTrust = await readPluginTrust();
+	const previousProfiles = await readPluginProfiles();
+	const prepared = await prepareSource(source);
+	try {
+	const scan = await analyzePluginDirectory(prepared.root);
+		if (scan.packageName !== current.packageName) throw Object.assign(new Error("Plugin update must keep the existing package name."), { code: "plugin_package_name_changed" });
+		const fingerprint = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle);
+		const stagingRoot = join(getDaedalusPath("plugins.root"), "staging", randomUUID());
+		await mkdir(join(getDaedalusPath("plugins.root"), "staging"), { recursive: true });
+		try {
+			await cp(prepared.root, stagingRoot, { recursive: true, force: false, errorOnExist: true, dereference: false, filter: shouldCopyPluginEntry });
+			const runtime = await import("./runtime/manager.js");
+			await runtime.stopPlugin(pluginId);
+			await archivePluginVersion(current);
+			await rm(current.packageRoot, { recursive: true, force: true });
+			await mkdir(resolve(getDaedalusPath("plugins.packages")), { recursive: true });
+			const target = join(getDaedalusPath("plugins.packages"), current.id.replace(/[^a-zA-Z0-9._@-]/gu, "_"));
+			await cp(stagingRoot, target, { recursive: true, force: false, errorOnExist: true, dereference: false, filter: shouldCopyPluginEntry });
+			const now = new Date().toISOString();
+			const next: PluginRecord = {
+				...current,
+				source,
+				version: scan.version,
+				packageRoot: target,
+				contentHash: scan.contentHash,
+				manifestHash: scan.manifestHash,
+				fingerprint,
+				compatibility: scan.compatibility,
+				trust: "review_required",
+				enabled: false,
+				updatedAt: now,
+				...(scan.presentation === undefined ? {} : { presentation: scan.presentation }),
+				...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
+				...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash }),
+				...(scan.harnessBundle === undefined ? {} : { harnessBundle: scan.harnessBundle }),
+				harnessRuntimeFingerprint: undefined,
+				isolation: undefined,
+				lastError: undefined
+			};
+			await updatePluginState((records): PluginRecord[] => records.map((record): PluginRecord => record.id === pluginId ? next : record));
+			await updatePluginTrust((entries): typeof entries => ({ ...entries, [pluginId]: { fingerprint, status: "review_required", updatedAt: now } }));
+			await updatePluginProfiles((profiles): PluginProfile[] => profiles.map((profile): PluginProfile => ({ ...profile, pluginIds: profile.pluginIds.filter((id): boolean => id !== pluginId), updatedAt: now })));
+			await appendPluginAudit({ action: "update", pluginId, previousFingerprint: current.fingerprint, fingerprint, version: scan.version });
+			return next;
+		} catch (error: unknown) {
+			// The previous package is the recovery source if any commit step fails.
+			const previous = await getPluginVersion(current.id, current.fingerprint);
+			if (previous !== undefined) {
+				await rm(current.packageRoot, { recursive: true, force: true }).catch((): void => undefined);
+				await cp(previous.packageRoot, current.packageRoot, { recursive: true, force: false, errorOnExist: true, dereference: false }).catch((): void => undefined);
+			}
+			await updatePluginState((records): PluginRecord[] => records.map((record): PluginRecord => record.id === pluginId ? current : record)).catch((): void => undefined);
+			await updatePluginTrust((): typeof previousTrust => previousTrust).catch((): void => undefined);
+			await updatePluginProfiles((): PluginProfile[] => previousProfiles).catch((): void => undefined);
+			throw error;
+		} finally {
+			await rm(stagingRoot, { recursive: true, force: true }).catch((): void => undefined);
+		}
+	} finally {
+		await prepared.cleanup();
+	}
+}
+
+export async function listPluginVersionRecords(pluginId: string): Promise<PluginVersionRecord[]> {
+	return await listPluginVersions(pluginId);
+}
+
+export async function rollbackPluginVersion(pluginId: string, fingerprint: string): Promise<PluginRecord> {
+	const current = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
+	const version = current === undefined ? undefined : await getPluginVersion(pluginId, fingerprint);
+	if (current === undefined || version === undefined) throw Object.assign(new Error("Plugin version is unavailable."), { code: "plugin_version_unavailable" });
+	if (version.record.trust !== "trusted") throw Object.assign(new Error("Only trusted plugin versions can be restored."), { code: "plugin_version_not_trusted" });
+	const rollbackRoot = await mkdtemp(join(tmpdir(), "daedalus-plugin-rollback-"));
+	try {
+		await cp(version.packageRoot, join(rollbackRoot, "package"), { recursive: true, force: false, errorOnExist: true, dereference: false });
+		const runtime = await import("./runtime/manager.js");
+	await runtime.stopPlugin(pluginId);
+	await archivePluginVersion(current);
+	await rm(current.packageRoot, { recursive: true, force: true });
+	await cp(join(rollbackRoot, "package"), current.packageRoot, { recursive: true, force: false, errorOnExist: true, dereference: false });
+	const restored: PluginRecord = { ...version.record, packageRoot: current.packageRoot, updatedAt: new Date().toISOString(), lastError: undefined, isolation: undefined };
+	await updatePluginState((records): PluginRecord[] => records.map((record): PluginRecord => record.id === pluginId ? restored : record));
+	await updatePluginTrust((entries): typeof entries => ({ ...entries, [pluginId]: { fingerprint: restored.fingerprint, status: restored.trust, updatedAt: restored.updatedAt } }));
+	await updatePluginProfiles((profiles): PluginProfile[] => profiles.map((profile): PluginProfile => profile.active
+		? { ...profile, pluginIds: restored.trust === "trusted" ? [...new Set([...profile.pluginIds, pluginId])] : profile.pluginIds.filter((id): boolean => id !== pluginId), updatedAt: restored.updatedAt }
+		: profile));
+	await appendPluginAudit({ action: "rollback", pluginId, fingerprint: restored.fingerprint });
+	return restored;
+	} finally {
+		await rm(rollbackRoot, { recursive: true, force: true }).catch((): void => undefined);
+	}
+}
+
 export async function removePlugin(pluginId: string): Promise<void> {
 	const records: PluginRecord[] = await readPluginRecords();
 	const record: PluginRecord | undefined = records.find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
 	const runtime = await import("./runtime/manager.js");
 	await runtime.stopPlugin(pluginId);
+	await runtime.clearPluginRuntimeQuarantine(pluginId);
 	const packagesRoot: string = resolve(getDaedalusPath("plugins.packages"));
 	const packageRoot: string = resolve(record.packageRoot);
 	if (!isPathInside(packagesRoot, packageRoot) || packageRoot === packagesRoot) throw Object.assign(new Error("Plugin path is outside the managed package directory."), { code: "plugin_path_escape" });

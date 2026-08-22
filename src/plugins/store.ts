@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { getDaedalusPath } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
@@ -47,7 +47,10 @@ async function readDocument<T>(path: string, fallback: T): Promise<T> {
 		return value as T;
 	} catch (error: unknown) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(fallback);
-		throw error;
+		// A damaged settings file must never prevent the backend from starting.
+		// Preserve it for diagnostics and continue with a safe empty document.
+		try { await rename(path, `${path}.corrupt-${Date.now()}`); } catch { /* Keep the fallback usable even when the backup cannot be made. */ }
+		return structuredClone(fallback);
 	}
 }
 
@@ -76,7 +79,9 @@ export async function readPluginRecords(): Promise<PluginRecord[]> {
 }
 
 export async function readPluginProfiles(): Promise<PluginProfile[]> {
-	return (await readDocument(getDaedalusPath("plugins.profiles"), EMPTY_PROFILE_STORE).then(normalizeProfiles)).profiles;
+	const profiles = (await readDocument(getDaedalusPath("plugins.profiles"), EMPTY_PROFILE_STORE).then(normalizeProfiles)).profiles;
+	const installed = new Set((await readPluginRecords()).map((record): string => record.id));
+	return profiles.map((profile): PluginProfile => ({ ...profile, pluginIds: profile.pluginIds.filter((pluginId): boolean => installed.has(pluginId)) }));
 }
 
 export async function readPluginTrust(): Promise<PluginTrustStoreDocument["entries"]> {
@@ -119,7 +124,22 @@ export async function appendPluginAudit(event: Record<string, unknown>): Promise
 		at: typeof event.at === "string" ? event.at : new Date().toISOString()
 	};
 	await mkdir(dirname(getDaedalusPath("plugins.audit")), { recursive: true });
-	await appendFile(getDaedalusPath("plugins.audit"), `${JSON.stringify(safeEvent)}\n`, "utf8");
+	const auditPath = getDaedalusPath("plugins.audit");
+	await appendFile(auditPath, `${JSON.stringify(safeEvent)}\n`, "utf8");
+	try {
+		const info = await stat(auditPath);
+		if (info.size > 2 * 1024 * 1024 || (await readFile(auditPath, "utf8")).split(/\r?\n/u).filter(Boolean).length > 5000) {
+			const lines = (await readFile(auditPath, "utf8")).split(/\r?\n/u).filter(Boolean).slice(-5000);
+			let kept = lines.join("\n") + "\n";
+			while (Buffer.byteLength(kept, "utf8") > 2 * 1024 * 1024 && lines.length > 1) {
+				lines.shift();
+				kept = lines.join("\n") + "\n";
+			}
+			await writeFile(auditPath, kept, "utf8");
+		}
+	} catch {
+		// 审计日志裁剪失败不影响插件操作，下一次写入继续尝试
+	}
 }
 
 export function getActivePluginProfile(profiles: readonly PluginProfile[]): PluginProfile {

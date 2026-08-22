@@ -14,6 +14,7 @@ import {
 	updateActivePluginProfile,
 	updatePluginTrustStatus
 } from "../../plugins/manager.js";
+import { listPluginVersionRecords, rollbackPluginVersion, updatePluginFromSource } from "../../plugins/manager.js";
 import type { PluginCatalogResult, PluginRecord, PluginScanResult, PluginSource } from "../../plugins/types.js";
 import { getPluginRuntimeSnapshot } from "../../plugins/runtime/manager.js";
 
@@ -79,6 +80,17 @@ export async function handlePluginRequest(socket: WebSocket, request: ClientRequ
 		break;
 	case "plugin.profile.update":
 		result = publicCatalog(await updateActivePluginProfile(pluginRequest.params.pluginIds));
+		break;
+	case "plugin.update.install": {
+		const params = pluginRequest.params as { pluginId: string; expectedFingerprint: string; source: PluginSource };
+		result = publicPluginRecord(await updatePluginFromSource(params.pluginId, params.source, params.expectedFingerprint));
+		break;
+	}
+	case "plugin.versions.list":
+		result = (await listPluginVersionRecords(pluginRequest.params.pluginId)).map((version) => ({ fingerprint: version.fingerprint, packageRoot: `[daedalus]/plugins/versions/${version.fingerprint}`, packageName: version.packageName, version: version.version, contentHash: version.contentHash, manifestHash: version.manifestHash, installedAt: version.installedAt, updatedAt: version.updatedAt }));
+		break;
+	case "plugin.rollback":
+		result = publicPluginRecord(await rollbackPluginVersion(pluginRequest.params.pluginId, pluginRequest.params.fingerprint));
 		break;
 	}
 	sendJson(socket, { type: "response", id: request.id, ok: true, result });

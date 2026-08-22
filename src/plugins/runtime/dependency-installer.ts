@@ -1,4 +1,4 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { runCommandInvocationWait } from "../../mcp/terminal/process-runner.js";
 import { createSandboxInvocation } from "../../mcp/terminal/sandbox-runner.js";
@@ -6,6 +6,14 @@ import type { TerminalCommandResult } from "../../mcp/terminal/types.js";
 import type { PluginRecord, PluginDependencyStatus } from "../types.js";
 
 function npmCommand(): string { return process.platform === "win32" ? "npm.cmd" : "npm"; }
+
+async function rejectDependencyLinks(current: string): Promise<void> {
+	for (const entry of await readdir(current, { withFileTypes: true })) {
+		const path = `${current}/${entry.name}`;
+		if (entry.isSymbolicLink()) throw Object.assign(new Error(`Plugin dependency contains a symbolic link: ${entry.name}`), { code: "plugin_dependency_symlink" });
+		if (entry.isDirectory()) await rejectDependencyLinks(path);
+	}
+}
 
 async function readLockfile(record: PluginRecord): Promise<Buffer> {
 	for (const name of ["package-lock.json", "npm-shrinkwrap.json"]) {
@@ -49,6 +57,7 @@ export async function installPluginDependencies(record: PluginRecord, allowNetwo
 			timeoutMs: 10 * 60 * 1000,
 			killProcessTree: true
 		});
+		if (result.ok) await rejectDependencyLinks(record.packageRoot);
 		return { status: result.ok ? "ready" : "failed", result, lockHash };
 	} catch (error: unknown) {
 		return { status: "failed", result: { preset: "plugin-dependencies", ok: false, status: "spawn_error", exitCode: null, command: [], commandLine: "npm ci", cwd: record.packageRoot, stdout: "", stderr: error instanceof Error ? error.message : String(error), durationMs: 0, truncated: false } };

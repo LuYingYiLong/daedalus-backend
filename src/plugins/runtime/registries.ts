@@ -39,6 +39,8 @@ export function clearPluginRegistrations(pluginId: string): void {
 
 export function registerPluginTool(pluginId: string, registration: PluginToolRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginTool {
 	const llmToolName = toolName(pluginId, registration.name, namespace);
+	const existing = tools.get(llmToolName);
+	if (existing !== undefined) throw Object.assign(new Error(`Plugin tool name conflicts with ${existing.pluginId}.`), { code: "plugin_registry_conflict" });
 	const entry: RegisteredPluginTool = { ...registration, pluginId, namespace, llmToolName, mapping: { serverId: `${namespace}:${pluginId}`, toolName: registration.name } };
 	tools.set(llmToolName, entry);
 	definitions.set(llmToolName, { type: "function", function: { name: llmToolName, description: registration.description.slice(0, 1024), parameters: registration.inputSchema } });
@@ -47,6 +49,7 @@ export function registerPluginTool(pluginId: string, registration: PluginToolReg
 
 export function registerPluginSkill(pluginId: string, registration: PluginSkillRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginSkill {
 	const ref = `${namespace}:${pluginId}:${registration.slug}`;
+	if (skills.has(ref)) throw Object.assign(new Error(`Plugin Skill ref is already registered: ${ref}.`), { code: "plugin_registry_conflict" });
 	const entry: RegisteredPluginSkill = { ...registration, pluginId, namespace, ref };
 	skills.set(ref, entry);
 	return entry;
@@ -54,12 +57,14 @@ export function registerPluginSkill(pluginId: string, registration: PluginSkillR
 
 export function registerPluginHook(pluginId: string, registration: PluginHookRegistration, handlerName: string, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginHook {
 	const entry: RegisteredPluginHook = { ...registration, pluginId, namespace, handlerName };
+	if ((hooks.get(registration.event) ?? []).some((candidate): boolean => candidate.pluginId === pluginId && candidate.handlerName === handlerName)) throw Object.assign(new Error(`Plugin Hook is already registered: ${registration.event}.`), { code: "plugin_registry_conflict" });
 	hooks.set(registration.event, [...(hooks.get(registration.event) ?? []), entry]);
 	return entry;
 }
 
 export function registerPluginMcp(pluginId: string, registration: PluginMcpRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginMcp {
 	const serverId = `${namespace}:${pluginId}:${registration.serverId}`;
+	if (mcps.has(serverId)) throw Object.assign(new Error(`Plugin MCP server is already registered: ${serverId}.`), { code: "plugin_registry_conflict" });
 	const entry: RegisteredPluginMcp = { ...registration, pluginId, namespace, serverId, localServerId: registration.serverId };
 	mcps.set(serverId, entry);
 	return entry;

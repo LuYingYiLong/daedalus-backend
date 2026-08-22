@@ -6,6 +6,7 @@ import { getClientConnection } from "../client-connections.js";
 import { sendJson } from "../send-json.js";
 import {
 	getPluginRuntimeSnapshot,
+	clearPluginRuntimeQuarantine,
 	installPluginRuntimeDependencies,
 	listPluginRuntimeSnapshots,
 	restartPlugin,
@@ -35,6 +36,12 @@ export async function handlePluginRuntimeRequest(socket: WebSocket, request: Cli
 		await stopPlugin((runtimeRequest.params as { pluginId: string }).pluginId);
 		result = getPluginRuntimeSnapshot((runtimeRequest.params as { pluginId: string }).pluginId) ?? null;
 		break;
+	case "plugin.runtime.clear_quarantine": {
+		const params = runtimeRequest.params as { pluginId: string; sessionId?: string };
+		await clearPluginRuntimeQuarantine(params.pluginId, params.sessionId);
+		result = getPluginRuntimeSnapshot(params.pluginId) ?? null;
+		break;
+	}
 	case "plugin.runtime.logs.list":
 		{
 			const params = (runtimeRequest.params ?? {}) as { pluginId?: string; limit?: number };

@@ -12,6 +12,8 @@ const registry = { tools: [], skills: [], hooks: [], mcpServers: [] };
 const allowedHookEvents = new Set(['SessionStart','SessionEnd','UserPromptSubmit','PreToolUse','PermissionRequest','PostToolUse','PreCompact','PostCompact','Stop']);
 let initialized = false;
 let inputBuffer = '';
+let shuttingDown = false;
+let processing = Promise.resolve();
 
 function write(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }
 function notify(method, params) { write({ jsonrpc: '2.0', method, params }); }
@@ -90,18 +92,21 @@ async function invoke(params) {
 }
 
 async function handle(message) {
-  if (!message || message.jsonrpc !== '2.0' || typeof message.id !== 'string' || typeof message.method !== 'string') return;
+  if (!message || message.jsonrpc !== '2.0' || typeof message.id !== 'string' || message.id.length > 128 || typeof message.method !== 'string') return;
   try {
+    if (shuttingDown) throw new Error('Harness bridge is shutting down.');
     if (message.method === 'initialize') {
+      if (initialized) throw new Error('Harness bridge received duplicate initialize.');
       if (message.params?.protocolVersion !== 1) throw new Error('Unsupported Daedalus Harness bridge version.');
       initialized = true;
       write({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1 } });
       notify('ready', { protocolVersion: 1, registry: snapshot() });
       return;
     }
+    if (!initialized) throw new Error('Harness bridge must be initialized before use.');
     if (message.method === 'health') { write({ jsonrpc: '2.0', id: message.id, result: { ready: initialized } }); return; }
     if (message.method === 'invoke') { write({ jsonrpc: '2.0', id: message.id, result: await invoke(message.params) }); return; }
-    if (message.method === 'shutdown') { write({ jsonrpc: '2.0', id: message.id, result: {} }); process.exitCode = 0; process.stdin.pause(); return; }
+    if (message.method === 'shutdown') { shuttingDown = true; write({ jsonrpc: '2.0', id: message.id, result: {} }); process.exitCode = 0; process.stdin.pause(); return; }
     throw new Error('Method not found.');
   } catch (error) {
     write({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: error instanceof Error ? error.message : String(error) } });
@@ -142,7 +147,7 @@ export function apply(ctx) {
     while ((newline = inputBuffer.indexOf('\\n')) >= 0) {
       const line = inputBuffer.slice(0, newline); inputBuffer = inputBuffer.slice(newline + 1);
       if (!line.trim()) continue;
-      try { void handle(JSON.parse(line)); } catch (error) { notify('log', { level: 'error', message: error instanceof Error ? error.message : String(error) }); }
+      try { processing = processing.then(() => handle(JSON.parse(line))).catch((error) => notify('log', { level: 'error', message: error instanceof Error ? error.message : String(error) })); } catch (error) { notify('log', { level: 'error', message: error instanceof Error ? error.message : String(error) }); }
     }
   });
   notify('bridge.loaded', { protocolVersion: 1 });

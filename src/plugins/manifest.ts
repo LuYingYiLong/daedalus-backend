@@ -30,6 +30,10 @@ async function collectFiles(root: string, current: string = ""): Promise<FileEnt
 	const entries = await readdir(directory, { withFileTypes: true });
 	const files: FileEntry[] = [];
 	for (const entry of entries) {
+		// Dependencies and VCS metadata are managed separately from the package
+		// fingerprint; including them would make a trusted plugin change after
+		// an approved dependency install.
+		if (entry.name === "node_modules" || entry.name === ".git") continue;
 		const relativePath: string = current.length === 0 ? entry.name : join(current, entry.name);
 		const absolutePath: string = join(root, relativePath);
 		assertInside(root, absolutePath);

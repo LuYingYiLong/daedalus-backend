@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import {
 	PLUGIN_RUNTIME_PROTOCOL_VERSION,
-	parseWorkerEvent,
+	parseWorkerMessage,
 	type PluginHookRegistration,
 	type PluginMcpRegistration,
 	type PluginRuntimeContext,
@@ -103,6 +103,9 @@ async function handle(message: PluginWorkerMessage, context: PluginRuntimeContex
 }
 
 let initializedContext: PluginRuntimeContext | undefined;
+let initialized: boolean = false;
+let shuttingDown: boolean = false;
+let processing: Promise<void> = Promise.resolve();
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk: string): void => {
@@ -112,19 +115,23 @@ process.stdin.on("data", (chunk: string): void => {
 		const line: string = buffer.slice(0, newline);
 		buffer = buffer.slice(newline + 1);
 		if (line.trim().length === 0) continue;
-		void (async (): Promise<void> => {
+		processing = processing.then(async (): Promise<void> => {
 			try {
-				const message: PluginWorkerMessage = JSON.parse(line) as PluginWorkerMessage;
-				if (message.type === "initialize") initializedContext = message.context;
-				const context: PluginRuntimeContext = initializedContext ?? (message.type === "initialize" ? message.context : {
-					pluginId: "unknown",
-					sessionId: "unknown",
-					capabilities: []
-				});
+				const message: PluginWorkerMessage = parseWorkerMessage(line);
+				if (shuttingDown) throw new Error("Plugin worker is shutting down.");
+				if (message.type === "initialize") {
+					if (initialized) throw new Error("Plugin worker received duplicate initialize.");
+					initialized = true;
+					initializedContext = message.context;
+				}
+				if (!initialized && message.type !== "initialize") throw new Error("Plugin worker must be initialized before use.");
+				if (initializedContext === undefined) throw new Error("Plugin worker context is unavailable.");
+				const context: PluginRuntimeContext = initializedContext;
 				await handle(message, context);
+				if (message.type === "shutdown") shuttingDown = true;
 			} catch (error: unknown) {
 				send({ type: "error", message: error instanceof Error ? error.message : String(error) });
 			}
-		})();
+		}).catch((error: unknown): void => send({ type: "error", message: error instanceof Error ? error.message : String(error) }));
 	}
 });

@@ -3,6 +3,7 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
 import { parseHarnessBundlePatch } from "./harness/patch-parser.js";
+import { pluginP2ManifestSchema, type PluginP2Manifest } from "./p2/protocol.js";
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;
@@ -292,6 +293,17 @@ export function readNativePluginDeclaration(manifest: PluginPackageManifest): Na
 	return { apiVersion: 1, entry, capabilities: normalized as NativePluginDeclaration["capabilities"] };
 }
 
+export function readPluginP2Declaration(manifest: PluginPackageManifest): PluginP2Manifest | undefined {
+	if (!isRecord(manifest.daedalus) || !isRecord(manifest.daedalus.plugin)) return undefined;
+	const candidate: unknown = manifest.daedalus.plugin.p2;
+	if (candidate === undefined) return undefined;
+	const parsed = pluginP2ManifestSchema.safeParse(candidate);
+	if (!parsed.success) {
+		throw Object.assign(new Error("daedalus.plugin.p2 is invalid."), { code: "plugin_p2_manifest_invalid" });
+	}
+	return parsed.data;
+}
+
 export async function analyzePluginDirectory(root: string): Promise<PluginScanResult> {
 	const normalizedRoot: string = resolve(root);
 	const info = await lstat(normalizedRoot);
@@ -300,6 +312,7 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 	const { manifest, manifestHash } = await readManifest(normalizedRoot);
 	const contentHash: string = await hashPackage(normalizedRoot, files);
 	const nativePlugin: NativePluginDeclaration | undefined = readNativePluginDeclaration(manifest);
+	const p2: PluginP2Manifest | undefined = readPluginP2Declaration(manifest);
 	if (nativePlugin !== undefined) {
 		const nativeEntryPath: string = resolve(normalizedRoot, nativePlugin.entry);
 		assertInside(normalizedRoot, nativeEntryPath);
@@ -330,6 +343,7 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 		compatibility,
 		...(presentation === undefined ? {} : { presentation }),
 		...(nativePlugin === undefined ? {} : { nativePlugin }),
+		...(p2 === undefined ? {} : { p2 }),
 		...(dependencyLockHash === undefined ? {} : { dependencyLockHash }),
 		...(harnessBundle === undefined ? {} : { harnessBundle }),
 		packageRoot: normalizedRoot

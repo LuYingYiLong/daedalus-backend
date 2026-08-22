@@ -1,3 +1,5 @@
+import type { PluginP2Manifest } from "./p2/protocol.js";
+
 export const PLUGIN_TRUST_STATUSES = ["review_required", "trusted", "disabled"] as const;
 export type PluginTrustStatus = typeof PLUGIN_TRUST_STATUSES[number];
 
@@ -157,6 +159,7 @@ export type PluginRecord = {
 	lastError?: string | undefined;
 	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
+	p2?: PluginP2Manifest | undefined;
 	dependencyLockHash?: string | undefined;
 	harnessBundle?: HarnessBundleSummary | undefined;
 	harnessRuntimeFingerprint?: string | undefined;
@@ -205,6 +208,7 @@ export type PluginScanResult = {
 	compatibility: PluginCompatibility;
 	presentation?: PluginPresentation | undefined;
 	nativePlugin?: NativePluginDeclaration | undefined;
+	p2?: PluginP2Manifest | undefined;
 	dependencyLockHash?: string | undefined;
 	harnessBundle?: HarnessBundleSummary | undefined;
 	packageRoot?: string | undefined;

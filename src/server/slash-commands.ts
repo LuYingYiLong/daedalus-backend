@@ -14,6 +14,7 @@ import { sendSessionEvent, waitForSessionEventPersistence } from "./session-even
 import { createGlobalSkillWorkspace } from "../skills/runtime.js";
 import { beginAgentRun, updateAgentRun } from "./agent-run-controller.js";
 import type { WorkflowTodoSnapshot } from "../workflow/types.js";
+import { getPluginP2Snapshot } from "../plugins/p2/registry.js";
 
 export type SlashCommandDefinition = {
 	command: string;
@@ -197,6 +198,19 @@ export function createSlashCommandListResult(): { commands: SlashCommandDefiniti
 	return {
 		commands: listSlashCommands()
 	};
+}
+
+export async function createSlashCommandListResultWithPlugins(): Promise<{ commands: SlashCommandDefinition[] }> {
+	const base = createSlashCommandListResult();
+	const pluginCommands = (await getPluginP2Snapshot()).commands.map((command): SlashCommandDefinition => ({
+		command: command.command,
+		usage: command.usage ?? command.command,
+		insertText: `${command.command} `,
+		description: `${command.description}（插件）`,
+		requiresArgument: (command.arguments?.length ?? 0) > 0,
+		examples: [command.usage ?? command.command]
+	}));
+	return { commands: [...base.commands, ...pluginCommands] };
 }
 
 export function createSlashHelpText(): string {

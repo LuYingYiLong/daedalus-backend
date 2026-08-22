@@ -175,6 +175,17 @@ export type TimelineImageGenerationPart = {
 	error?: string | undefined;
 };
 
+export type TimelinePluginPart = {
+	type: "plugin_part";
+	pluginId: string;
+	partType: string;
+	title?: string;
+	summary?: string;
+	icon?: string;
+	status?: "info" | "success" | "warning" | "error";
+	data: Record<string, unknown>;
+};
+
 export type TimelineBodyPart =
 	| TimelineMarkdownPart
 	| TimelineThinkingPart
@@ -185,7 +196,11 @@ export type TimelineBodyPart =
 	| TimelineStatusPart
 	| TimelinePlanPart
 	| TimelineInlineDiffPart
-	| TimelineImageGenerationPart;
+	| TimelineImageGenerationPart
+	| TimelinePluginPart;
+
+// Plugin parts are intentionally kept as external data and never treated as
+// markdown, tool output, or system instructions.
 
 /**
  * Returns the assistant Markdown visible in the normal message body. Parts
@@ -1118,6 +1133,8 @@ function buildAssistantBodyParts(
 			appendThinkingPart(parts, "", true, getActivityMetadata(eventData));
 		} else if (event.event === "agent.provider.reconnect") {
 			appendProviderReconnectPart(parts, eventData);
+		} else if (event.event === "plugin.timeline.part") {
+			appendPluginPart(parts, eventData);
 		} else if (event.event === "ai.status") {
 			appendStatusPart(parts, {
 				status: asString(eventData.status) || "message",
@@ -1225,6 +1242,23 @@ function createUserBlock(message: StoredMessage): TimelineUserBlock {
 		sentAtUtc: message.createdAt,
 		additionalContext: message.additionalContext
 	};
+}
+
+function appendPluginPart(parts: TimelineBodyPart[], eventData: Record<string, unknown>): void {
+	const pluginId: string = asString(eventData.pluginId);
+	const partType: string = asString(eventData.partType);
+	if (pluginId.length === 0 || partType.length === 0 || !isRecord(eventData.data)) return;
+	const statusValue: string = asString(eventData.status);
+	parts.push({
+		type: "plugin_part",
+		pluginId: pluginId.slice(0, 240),
+		partType: partType.slice(0, 240),
+		...(asString(eventData.title).length === 0 ? {} : { title: asString(eventData.title).slice(0, 200) }),
+		...(asString(eventData.summary).length === 0 ? {} : { summary: asString(eventData.summary).slice(0, 1200) }),
+		...(asString(eventData.icon).length === 0 ? {} : { icon: asString(eventData.icon).slice(0, 80) }),
+		...(statusValue === "info" || statusValue === "success" || statusValue === "warning" || statusValue === "error" ? { status: statusValue } : {}),
+		data: Object.fromEntries(Object.entries(eventData.data).slice(0, 64))
+	});
 }
 
 function createForkOriginDividerBlock(session: StoredSession): TimelineDividerBlock | null {
@@ -1604,7 +1638,7 @@ function createRenderHints(block: TimelineBlock): TimelineRenderHints {
 		}
 		if (part.type === "tool") {
 			heavyPartCount += Math.max(1, part.events.length);
-		} else if (part.type === "thinking" || part.type === "inline_diff" || part.type === "plan" || part.type === "image_generation") {
+		} else if (part.type === "thinking" || part.type === "inline_diff" || part.type === "plan" || part.type === "image_generation" || part.type === "plugin_part") {
 			heavyPartCount += 1;
 		}
 	}

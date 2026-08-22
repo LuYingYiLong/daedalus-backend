@@ -25,6 +25,8 @@ import {
 import type { HarnessHandle } from "../harness/runner.js";
 import {
 	clearPluginRegistrations,
+	registerPluginCommand,
+	registerPluginContextProvider,
 	registerPluginHook,
 	registerPluginMcp,
 	registerPluginSkill,
@@ -54,6 +56,7 @@ import {
 import { addPluginRuntimeLog } from "./runtime-logs.js";
 import { installPluginDependencies } from "./dependency-installer.js";
 import { readChildRssBytes } from "./resource-usage.js";
+import { stopAllPluginLanguageServices, stopPluginLanguageServicesForPlugin } from "../p2/language-service.js";
 import {
 	encodeWorkerMessage,
 	parseWorkerEvent,
@@ -64,11 +67,13 @@ import {
 	type PluginToolRegistration,
 	type PluginSkillRegistration,
 	type PluginHookRegistration,
-	type PluginMcpRegistration
+	type PluginMcpRegistration,
+	type PluginCommandRegistration,
+	type PluginContextProviderRegistration
 } from "./worker-protocol.js";
 
-type PendingCall = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; started: boolean; startedAt: number; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource"; name: string; args: Record<string, unknown> };
-type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[] };
+type PendingCall = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; started: boolean; startedAt: number; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider"; name: string; args: Record<string, unknown> };
+type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[]; contextProviders: PluginContextProviderRegistration[] };
 
 export type WorkerHandle = {
 	pluginId: string;
@@ -79,7 +84,7 @@ export type WorkerHandle = {
 	resolveReady: () => void;
 	rejectReady: (error: Error) => void;
 	buffer: string;
-	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number };
+	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number; contextProviders: number };
 	context: PluginRuntimeContext;
 	activeCalls: number;
 	lastUsedAt: number;
@@ -121,6 +126,8 @@ function commitWorkerRegistrations(handle: WorkerHandle): void {
 		for (const registration of handle.stagedRegistrations.skills) registerPluginSkill(handle.pluginId, registration);
 		for (const { registration, handlerName } of handle.stagedRegistrations.hooks) registerPluginHook(handle.pluginId, registration, handlerName);
 		for (const registration of handle.stagedRegistrations.mcps) registerPluginMcp(handle.pluginId, registration);
+		for (const registration of handle.stagedRegistrations.commands) registerPluginCommand(handle.pluginId, registration);
+		for (const registration of handle.stagedRegistrations.contextProviders) registerPluginContextProvider(handle.pluginId, registration);
 	} catch (error: unknown) {
 		clearPluginRegistrations(handle.pluginId);
 		throw error;
@@ -215,6 +222,18 @@ function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 		if (event.registration.tools.length > MAX_PLUGIN_TOOLS || event.registration.resources.length > 64) throw new Error("Plugin MCP registration exceeds the size limit.");
 		handle.stagedRegistrations.mcps.push(event.registration);
 		setSnapshot(handle.pluginId, { registeredMcpServers: handle.registrationCounts.mcps });
+		return;
+	}
+	if (event.type === "register.command") {
+		if (!(handle.context.p2Capabilities ?? []).includes("commands")) throw new Error("Plugin registered an undeclared P2 command capability.");
+		if (++handle.registrationCounts.commands > 128) throw new Error("Plugin command registration limit exceeded.");
+		handle.stagedRegistrations.commands.push(event.registration);
+		return;
+	}
+	if (event.type === "register.context-provider") {
+		if (!(handle.context.p2Capabilities ?? []).includes("contextProviders")) throw new Error("Plugin registered an undeclared context provider capability.");
+		if (++handle.registrationCounts.contextProviders > 64) throw new Error("Plugin context provider registration limit exceeded.");
+		handle.stagedRegistrations.contextProviders.push(event.registration);
 	}
 }
 
@@ -242,7 +261,7 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
-	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [] } };
+	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, contextProviders: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], contextProviders: [] } };
 	handles.set(key(record.id, context.sessionId), handle);
 	setSnapshot(record.id, { status: "starting", activeSessions: [...handles.values()].filter((item): boolean => item.pluginId === record.id).length });
 	child.stdout.setEncoding("utf8");
@@ -334,7 +353,7 @@ export async function ensurePluginRuntime(pluginId: string, context: Omit<Plugin
 	const existing = handles.get(key(pluginId, context.sessionId));
 	if (existing !== undefined) return existing;
 	try {
-		return await startWorker(record, { ...context, pluginId, capabilities: record.nativePlugin!.capabilities });
+		return await startWorker(record, { ...context, pluginId, capabilities: record.nativePlugin!.capabilities, p2Capabilities: Object.keys(record.p2?.capabilities ?? {}) });
 	} catch (error: unknown) {
 		// Failures that happen before a child handle is installed (sandbox setup,
 		// invalid cwd, spawn configuration) would otherwise bypass the circuit
@@ -361,8 +380,10 @@ export async function installPluginRuntimeDependencies(pluginId: string, allowNe
 	return getPluginRuntimeSnapshot(pluginId)!;
 }
 
-export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
-	if (hasHarnessHandle(pluginId, sessionId)) return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
+export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
+	if (hasHarnessHandle(pluginId, sessionId)) {
+		return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
+	}
 	const handle = handles.get(key(pluginId, sessionId));
 	if (handle === undefined) throw new Error("Plugin runtime is not running.");
 	const id = randomUUID();
@@ -387,6 +408,7 @@ export async function invokePlugin(pluginId: string, sessionId: string, kind: "t
 
 export async function stopPlugin(pluginId: string, sessionId?: string, status: "stopped" | "disabled" = "stopped"): Promise<void> {
 	await stopHarnessPlugin(pluginId, sessionId, status);
+	stopPluginLanguageServicesForPlugin(pluginId, sessionId);
 	const targets = [...handles.values()].filter((handle): boolean => handle.pluginId === pluginId && (sessionId === undefined || handle.sessionId === sessionId));
 	for (const handle of targets) {
 		handle.stopping = true;
@@ -437,6 +459,7 @@ export function getPluginRuntimeSnapshot(pluginId: string): PluginRuntimeSnapsho
 
 export async function stopAllPluginRuntimes(): Promise<void> {
 	await stopAllHarnessRuntimes();
+	stopAllPluginLanguageServices();
 	for (const pluginId of new Set([...handles.values()].map((handle): string => handle.pluginId))) await stopPlugin(pluginId);
 }
 

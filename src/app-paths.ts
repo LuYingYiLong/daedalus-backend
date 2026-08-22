@@ -36,6 +36,7 @@ export type DaedalusPathKey =
 	| "plugins.dependencies"
 	| "plugins.harnessConfig"
 	| "plugins.harnessRuntime"
+	| "plugins.events"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
@@ -97,6 +98,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"plugins.dependencies": join(root, "plugins", "dependencies"),
 		"plugins.harnessConfig": join(root, "plugins", "harness.json"),
 		"plugins.harnessRuntime": join(root, "plugins", "harness-runtime"),
+		"plugins.events": join(root, "plugins", "events.json"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),

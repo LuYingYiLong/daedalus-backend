@@ -109,7 +109,9 @@ export type CanonicalServerEventName =
 	| "mcp.config.updated"
 	| "skill.catalog.changed"
 	| "usage.metrics.recorded"
-	| "worktree.operation.updated";
+	| "worktree.operation.updated"
+	| "plugin.timeline.part";
+
 
 export type InternalLegacyServerEventName =
 	| "ai.delta"

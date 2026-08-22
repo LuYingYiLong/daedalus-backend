@@ -4,7 +4,7 @@ import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import { createBackendHealthResult } from "../backend-health.js";
-import { createSlashCommandListResult } from "../slash-commands.js";
+import { createSlashCommandListResultWithPlugins } from "../slash-commands.js";
 import { listPromptTemplates } from "../../prompts/registry.js";
 import { listSkillSummaries } from "../../skills/catalog.js";
 import { getSkillContent, installSkillFromPath, removeSkill, setWorkspaceSkillEnabled, updateSkillContent } from "../../skills/management.js";
@@ -155,7 +155,7 @@ export async function handleCoreRequest(socket: WebSocket, request: ClientReques
 			type: "response",
 			id: request.id,
 			ok: true,
-			result: createSlashCommandListResult()
+			result: await createSlashCommandListResultWithPlugins()
 		});
 		break;
 

@@ -29,7 +29,9 @@ export const RUNTIME_ASSET_PATHS = {
 	"skill.skillCreator": "src/skills/builtin/skill-creator/SKILL.md",
 	"skill.imageGen": "src/skills/builtin/image-gen/SKILL.md",
 	"godot.operationsScript": "src/mcp/godot/scripts/godot_operations.gd",
-	"native.keytar.win32-x64": "node_modules/keytar/build/Release/keytar.node"
+	"native.keytar.win32-x64": "node_modules/keytar/build/Release/keytar.node",
+	"plugin.workerBootstrap": "src/plugins/runtime/worker-bootstrap.js",
+	"plugin.workerProtocol": "src/plugins/runtime/worker-protocol.js"
 } as const;
 
 export type RuntimeAssetKey = keyof typeof RUNTIME_ASSET_PATHS;

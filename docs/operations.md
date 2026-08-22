@@ -32,7 +32,7 @@ Backend 启动时会：
 
 ### `sandbox_unavailable`
 
-表示 OS sandbox helper 未配置、路径非法或不可执行。插件、Hook、Harness 和语言服务会拒绝启动，这是硬性安全行为，不是可通过宿主机回退解决的普通警告。Windows 检查 `DAEDALUS_WINDOWS_SANDBOX_HELPER` 是否为绝对、非符号链接的 helper 文件；修复后重启 Backend，再在 Studio 重新启动 Runtime。
+表示 OS sandbox helper 未配置、路径非法或不可执行。插件、Hook、Harness 和语言服务会拒绝启动，这是硬性安全行为，不是可通过宿主机回退解决的普通警告。Windows 发布包会随 Backend 一起携带 `daedalus-windows-sandbox-helper.exe`，Studio 启动时自动注入其绝对路径；源码开发时先执行 `npm run build:sandbox-helper:win`，再重启 Backend。Backend 也只会在受控的 `build/`、SEA payload 或可执行文件旁边自动发现固定文件名的 helper。辅助程序遇到 `Program Files` 中的 Node 等系统运行时，会先复制到临时受控目录再启动，避免修改系统目录 ACL。也可以显式设置 `DAEDALUS_WINDOWS_SANDBOX_HELPER`，但必须指向绝对、非符号链接的 helper 文件。
 
 ### `review_required` 或 fingerprint 失效
 

@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getDaedalusPath } from "../../app-paths.js";
 import { createSandboxInvocation } from "../../mcp/terminal/sandbox-runner.js";
 import { terminateProcess } from "../../mcp/terminal/process-runner.js";
+import { materializeRuntimeAsset } from "../../runtime/runtime-assets.js";
 import { getPluginCatalog, pluginFingerprint } from "../manager.js";
 import { readPluginRecords } from "../store.js";
 import type { PluginRecord, PluginRuntimeSnapshot } from "../types.js";
@@ -84,6 +85,7 @@ export type WorkerHandle = {
 	resolveReady: () => void;
 	rejectReady: (error: Error) => void;
 	buffer: string;
+	stderrTail: string;
 	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number; contextProviders: number };
 	context: PluginRuntimeContext;
 	activeCalls: number;
@@ -241,18 +243,43 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	const runtimeRoot = join(getDaedalusPath("plugins.runtime"), record.id.replace(/[^a-zA-Z0-9._-]/gu, "_"), context.sessionId.replace(/[^a-zA-Z0-9._-]/gu, "_"));
 	await mkdir(runtimeRoot, { recursive: true });
 	const entry = join(record.packageRoot, record.nativePlugin!.entry);
-	const bootstrapJs = fileURLToPath(new URL("./worker-bootstrap.js", import.meta.url));
+	let bootstrapJs = fileURLToPath(new URL("./worker-bootstrap.js", import.meta.url));
 	const bootstrapTs = fileURLToPath(new URL("./worker-bootstrap.ts", import.meta.url));
 	const backendRoot = fileURLToPath(new URL("../../../", import.meta.url));
-	const useSourceBootstrap: boolean = !existsSync(bootstrapJs);
+	const launchCwd = context.workspaceRoot ?? runtimeRoot;
+	// Node 24 on Windows resolves an absolute entry-point as a filesystem path
+	// before the ESM loader gets a chance to handle it.  In the AppContainer
+	// this can trigger an EPERM realpath of `C:\\`.  Keep the bootstrap as a
+	// relative path from the sandbox cwd instead; the helper grants backendRoot
+	// read access separately, so this does not widen the workspace boundary.
+	const relativeBootstrap = (target: string): string => {
+		const value = relative(launchCwd, target).replaceAll("\\", "/");
+		return value.startsWith(".") ? value : `./${value}`;
+	};
+	let useSourceBootstrap: boolean = !existsSync(bootstrapJs);
+	if (useSourceBootstrap && !existsSync(bootstrapTs)) {
+		const workerAssetRoot = join(runtimeRoot, "worker-assets");
+		const materializedBootstrap = await materializeRuntimeAsset("plugin.workerBootstrap", { rootDir: workerAssetRoot, fileName: "worker-bootstrap.js" });
+		const materializedProtocol = await materializeRuntimeAsset("plugin.workerProtocol", { rootDir: workerAssetRoot, fileName: "worker-protocol.js" });
+		bootstrapJs = materializedBootstrap.path;
+		await copyFile(materializedProtocol.path, join(dirname(bootstrapJs), "worker-protocol.js"));
+		useSourceBootstrap = false;
+	}
 	const bootstrapArgs: string[] = useSourceBootstrap
-		? ["--import", join(backendRoot, "node_modules", "tsx", "dist", "loader.mjs"), bootstrapTs, "--plugin-worker"]
-		: [bootstrapJs, "--plugin-worker"];
+		? [
+			"--preserve-symlinks",
+			"--preserve-symlinks-main",
+			"--import",
+			pathToFileURL(join(backendRoot, "node_modules", "tsx", "dist", "loader.mjs")).href,
+			relativeBootstrap(bootstrapTs),
+			"--plugin-worker"
+		]
+		: ["--preserve-symlinks", "--preserve-symlinks-main", relativeBootstrap(bootstrapJs), "--plugin-worker"];
 	const sandbox = createSandboxInvocation({
 		command: { kind: "argv", command: process.execPath, args: bootstrapArgs },
 		cwd: context.workspaceRoot ?? runtimeRoot,
 		workspaceRoot: context.workspaceRoot ?? runtimeRoot,
-		readOnlyPaths: [record.packageRoot, ...(useSourceBootstrap ? [backendRoot] : [])],
+		readOnlyPaths: [record.packageRoot, ...(useSourceBootstrap ? [backendRoot] : [dirname(bootstrapJs)])],
 		env: { DAEDALUS_PLUGIN_ID: record.id },
 		network: false
 	});
@@ -261,7 +288,7 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
-	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, contextProviders: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], contextProviders: [] } };
+	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, contextProviders: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], contextProviders: [] } };
 	handles.set(key(record.id, context.sessionId), handle);
 	setSnapshot(record.id, { status: "starting", activeSessions: [...handles.values()].filter((item): boolean => item.pluginId === record.id).length });
 	child.stdout.setEncoding("utf8");
@@ -285,14 +312,17 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	});
 	child.stderr.setEncoding("utf8");
 	child.stderr.on("data", (chunk: string): void => {
+		handle.stderrTail = redactRuntimeText(`${handle.stderrTail}${String(chunk)}`);
 		addPluginRuntimeLog({ pluginId: record.id, sessionId: context.sessionId, event: "error", status: "failed", message: redactRuntimeText(String(chunk)) });
 	});
 	child.once("error", (error: Error): void => { rejectReady(error); rejectPending(handle, error); });
-	child.once("close", (exitCode: number | null): void => {
+	child.once("close", (exitCode: number | null, signal: NodeJS.Signals | null): void => {
 		if (handle.idleTimer !== undefined) clearInterval(handle.idleTimer);
 		if (handle.resourceTimer !== undefined) clearInterval(handle.resourceTimer);
 		clearPluginRegistrations(record.id);
-		const error = new Error("Plugin worker exited.");
+		const exit = exitCode === null ? `signal ${signal ?? "unknown"}` : `code ${exitCode}`;
+		const detail = handle.stderrTail.trim();
+		const error = new Error(`Plugin worker exited (${exit}).${detail.length > 0 ? ` ${detail}` : ""}`);
 		rejectReady(error);
 		rejectPending(handle, error);
 		const wasActive: boolean = handles.get(key(record.id, context.sessionId)) === handle;

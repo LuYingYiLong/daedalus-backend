@@ -1,4 +1,6 @@
 import { getBackendBuildMetadata } from "./runtime/build-metadata.js";
+import { lstatSync } from "node:fs";
+import { resolve } from "node:path";
 import { configureSystemCertificateTrust } from "./runtime/network-trust.js";
 import { readRuntimeConnectionAuthProtocol } from "./runtime/connection-registry.js";
 import { runBackendSelfTest } from "./runtime/self-test.js";
@@ -23,6 +25,28 @@ function readFlagValue(args: readonly string[], flag: string): string | null {
 
 function writeJson(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function configureWindowsSandboxHelper(): void {
+	if (process.platform !== "win32" || (process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER?.trim() ?? "").length > 0) {
+		return;
+	}
+	const fileName: string = "daedalus-windows-sandbox-helper.exe";
+	const candidates: readonly string[] = [
+		resolve(process.cwd(), "build", fileName),
+		resolve(process.cwd(), "dist", "sea-win32-x64", "work", "payload", fileName)
+	];
+	for (const candidate of candidates) {
+		try {
+			const info = lstatSync(candidate);
+			if (info.isFile() && !info.isSymbolicLink()) {
+				process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER = candidate;
+				return;
+			}
+		} catch {
+			// Continue through the explicitly known development/package locations.
+		}
+	}
 }
 
 function printUsage(): void {
@@ -75,6 +99,7 @@ async function runMcp(command: McpCommand): Promise<void> {
 }
 
 export async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
+	configureWindowsSandboxHelper();
 	configureSystemCertificateTrust();
 	const [command = "serve", subcommand] = args;
 	if (command === "serve") {

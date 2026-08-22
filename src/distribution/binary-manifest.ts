@@ -9,6 +9,12 @@ const executableSchema = z.object({
 	sha256: sha256Schema
 });
 
+const sandboxHelperSchema = z.object({
+	fileName: z.literal("daedalus-windows-sandbox-helper.exe"),
+	size: z.number().int().positive(),
+	sha256: sha256Schema
+});
+
 export const backendPayloadManifestV1Schema = z.object({
 	schemaVersion: z.literal(1),
 	version: semverSchema,
@@ -22,7 +28,8 @@ export const backendPayloadManifestV1Schema = z.object({
 	minStudioVersion: semverSchema,
 	publishedAt: z.string().datetime(),
 	authenticode: z.enum(["signed", "unsigned"]),
-	executable: executableSchema
+	executable: executableSchema,
+	sandboxHelper: sandboxHelperSchema
 });
 
 export const backendReleaseManifestV1Schema = backendPayloadManifestV1Schema.extend({

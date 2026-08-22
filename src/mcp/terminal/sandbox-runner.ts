@@ -49,21 +49,14 @@ function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): str
 	return null;
 }
 
-function resolveWindowsSandboxHelper(env: NodeJS.ProcessEnv): SandboxAvailability {
-	const configuredPath: string | undefined = env.DAEDALUS_WINDOWS_SANDBOX_HELPER?.trim();
-	if (configuredPath === undefined || configuredPath.length === 0) {
-		return {
-			available: false,
-			error: "sandbox_unavailable: DAEDALUS_WINDOWS_SANDBOX_HELPER is not configured."
-		};
-	}
-	if (!path.isAbsolute(configuredPath)) {
+function validateWindowsSandboxHelper(candidate: string): SandboxAvailability {
+	if (!path.isAbsolute(candidate)) {
 		return {
 			available: false,
 			error: "sandbox_unavailable: the Windows sandbox helper path must be absolute."
 		};
 	}
-	const resolvedPath: string = path.resolve(configuredPath);
+	const resolvedPath: string = path.resolve(candidate);
 	try {
 		if (!existsSync(resolvedPath) || !lstatSync(resolvedPath).isFile()) {
 			throw new Error("the configured helper is not a regular file");
@@ -81,11 +74,47 @@ function resolveWindowsSandboxHelper(env: NodeJS.ProcessEnv): SandboxAvailabilit
 	}
 }
 
+function resolveWindowsSandboxHelper(env: NodeJS.ProcessEnv, autoDiscover: boolean): SandboxAvailability {
+	const configuredPath: string | undefined = env.DAEDALUS_WINDOWS_SANDBOX_HELPER?.trim();
+	if (configuredPath !== undefined && configuredPath.length > 0) {
+		return validateWindowsSandboxHelper(configuredPath);
+	}
+	if (!autoDiscover) {
+		return {
+			available: false,
+			error: "sandbox_unavailable: DAEDALUS_WINDOWS_SANDBOX_HELPER is not configured; build or install daedalus-windows-sandbox-helper.exe and restart Backend."
+		};
+	}
+
+	// 仅自动检查受控的源码构建目录和打包程序旁边的固定文件名。
+	// 不扫描 PATH 或用户任意目录，避免误执行同名程序。
+	const fileName: string = "daedalus-windows-sandbox-helper.exe";
+	const candidates: readonly string[] = [
+		path.resolve(process.cwd(), "build", fileName),
+		path.resolve(process.cwd(), "dist", "sea-win32-x64", "work", "payload", fileName),
+		path.resolve(path.dirname(process.execPath), fileName)
+	];
+	for (const candidate of candidates) {
+		try {
+			if (lstatSync(candidate).isFile() && !lstatSync(candidate).isSymbolicLink()) {
+				const result: SandboxAvailability = validateWindowsSandboxHelper(candidate);
+				if (result.available) return result;
+			}
+		} catch {
+			// 继续检查下一个受控位置。
+		}
+	}
+	return {
+		available: false,
+		error: "sandbox_unavailable: DAEDALUS_WINDOWS_SANDBOX_HELPER is not configured and no managed Windows sandbox helper was found; build or install daedalus-windows-sandbox-helper.exe and restart Backend."
+	};
+}
+
 export function getSandboxAvailability(options: SandboxRuntimeOptions = {}): SandboxAvailability {
 	const platform: NodeJS.Platform = options.platform ?? process.platform;
 	const env: NodeJS.ProcessEnv = options.env ?? process.env;
 	if (platform === "win32") {
-		return resolveWindowsSandboxHelper(env);
+		return resolveWindowsSandboxHelper(env, options.env === undefined);
 	}
 	if (platform === "linux") {
 		const executablePath: string | null = findExecutable("bwrap", env);
@@ -112,7 +141,39 @@ export function createSandboxEnvironment(
 	const platform: NodeJS.Platform = options.platform ?? process.platform;
 	const sourceEnv: NodeJS.ProcessEnv = options.env ?? process.env;
 	const allowedKeys: string[] = platform === "win32"
-		? ["PATH", "Path", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE"]
+		? [
+			"PATH",
+			"Path",
+			"PATHEXT",
+			"SystemRoot",
+			"WINDIR",
+			"ProgramFiles",
+			"ProgramFiles(x86)",
+			"ProgramW6432",
+			"ComSpec",
+			"CommonProgramFiles",
+			"CommonProgramFiles(x86)",
+			"CommonProgramW6432",
+			"ProgramData",
+			"ALLUSERSPROFILE",
+			"PUBLIC",
+			"APPDATA",
+			"LOCALAPPDATA",
+			"HOMEDRIVE",
+			"HOMEPATH",
+			"OS",
+			"PROCESSOR_ARCHITECTURE",
+			"PROCESSOR_IDENTIFIER",
+			"NUMBER_OF_PROCESSORS",
+			"USERNAME",
+			"USERDOMAIN",
+			"USERDOMAIN_ROAMINGPROFILE",
+			"LOGONSERVER",
+			"SESSIONNAME",
+			"TEMP",
+			"TMP",
+			"USERPROFILE"
+		]
 		: ["PATH", "LANG", "LC_ALL"];
 	const env: Record<string, string> = {};
 	for (const key of allowedKeys) {

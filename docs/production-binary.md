@@ -1,6 +1,6 @@
 # Production Backend Binary
 
-Daedalus Studio production builds use a Windows x64 Node.js SEA binary. The binary contains the CommonJS application bundle, runtime text assets, Godot helper script, and the pinned `keytar.node` addon. End users do not need Node.js, npm, Visual Studio, or `node-gyp`.
+Daedalus Studio production builds use a Windows x64 Node.js SEA binary plus a separately verified Windows AppContainer sandbox helper. The SEA binary contains the CommonJS application bundle, runtime text assets, Godot helper script, and the pinned `keytar.node` addon. End users do not need Node.js, npm, Visual Studio, or `node-gyp`.
 
 ## CLI
 
@@ -23,7 +23,7 @@ A backend tag publishes:
 - `daedalus-backend-win32-x64.cdx.json`
 - `SHA256SUMS.txt`
 
-The ZIP contains only `daedalus-backend.exe` and `backend-manifest.json`. Studio pins a concrete backend version, validates both manifests and hashes, runs `self-test`, then activates the candidate through a recoverable pending-update transaction.
+The ZIP contains `daedalus-backend.exe`, the signed-by-manifest `daedalus-windows-sandbox-helper.exe`, and `backend-manifest.json`. Studio pins a concrete backend version, validates both binaries and their hashes, runs `self-test`, then activates the candidate through a recoverable pending-update transaction. Studio injects the helper path into the Backend process automatically; it never falls back to an unsandboxed process.
 
 ## Runtime Authentication
 

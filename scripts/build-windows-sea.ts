@@ -36,6 +36,8 @@ const BUNDLE_PATH: string = resolve(WORK_ROOT, "backend.cjs");
 const SEA_CONFIG_PATH: string = resolve(WORK_ROOT, "sea-config.json");
 const SEA_BLOB_PATH: string = resolve(WORK_ROOT, "sea-prep.blob");
 const EXECUTABLE_PATH: string = resolve(PAYLOAD_ROOT, "daedalus-backend.exe");
+const SANDBOX_HELPER_SOURCE_PATH: string = resolve(PROJECT_ROOT, "build", "daedalus-windows-sandbox-helper.exe");
+const SANDBOX_HELPER_PATH: string = resolve(PAYLOAD_ROOT, "daedalus-windows-sandbox-helper.exe");
 const PAYLOAD_MANIFEST_PATH: string = resolve(PAYLOAD_ROOT, "backend-manifest.json");
 const ARCHIVE_PATH: string = resolve(RELEASE_ROOT, "daedalus-backend-win32-x64.zip");
 const RELEASE_MANIFEST_PATH: string = resolve(RELEASE_ROOT, "daedalus-backend-win32-x64.json");
@@ -135,6 +137,23 @@ async function assertBuildEnvironment(): Promise<void> {
 	}
 }
 
+async function buildSandboxHelper(): Promise<void> {
+	await run("pwsh", [
+		"-NoProfile",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-File",
+		resolve(PROJECT_ROOT, "scripts", "build-windows-sandbox-helper.ps1"),
+		"-OutputPath",
+		SANDBOX_HELPER_SOURCE_PATH
+	]);
+	const helperInfo = await stat(SANDBOX_HELPER_SOURCE_PATH).catch((): null => null);
+	if (helperInfo === null || !helperInfo.isFile() || helperInfo.size <= 0) {
+		throw new Error("Windows sandbox helper build did not produce a valid executable.");
+	}
+	await copyFile(SANDBOX_HELPER_SOURCE_PATH, SANDBOX_HELPER_PATH);
+}
+
 async function buildBundle(manifest: PackageManifest, buildId: string): Promise<void> {
 	await build({
 		entryPoints: [resolve(PROJECT_ROOT, "src", "cli.ts")],
@@ -204,11 +223,12 @@ async function createArchive(): Promise<void> {
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		"Compress-Archive -LiteralPath @($env:DAEDALUS_EXE, $env:DAEDALUS_PAYLOAD_MANIFEST) -DestinationPath $env:DAEDALUS_ARCHIVE -CompressionLevel Optimal -Force"
+		"Compress-Archive -LiteralPath @($env:DAEDALUS_EXE, $env:DAEDALUS_SANDBOX_HELPER, $env:DAEDALUS_PAYLOAD_MANIFEST) -DestinationPath $env:DAEDALUS_ARCHIVE -CompressionLevel Optimal -Force"
 	], {
 		env: {
 			...process.env,
 			DAEDALUS_EXE: EXECUTABLE_PATH,
+			DAEDALUS_SANDBOX_HELPER: SANDBOX_HELPER_PATH,
 			DAEDALUS_PAYLOAD_MANIFEST: PAYLOAD_MANIFEST_PATH,
 			DAEDALUS_ARCHIVE: ARCHIVE_PATH
 		}
@@ -730,8 +750,10 @@ async function main(): Promise<void> {
 
 	await buildBundle(manifest, buildId);
 	await generateSeaExecutable();
+	await buildSandboxHelper();
 
 	const executableInfo = await stat(EXECUTABLE_PATH);
+	const sandboxHelperInfo = await stat(SANDBOX_HELPER_PATH);
 	const payloadManifest: BackendPayloadManifestV1 = backendPayloadManifestV1Schema.parse({
 		schemaVersion: 1,
 		version: manifest.version,
@@ -749,6 +771,11 @@ async function main(): Promise<void> {
 			fileName: "daedalus-backend.exe",
 			size: executableInfo.size,
 			sha256: await sha256File(EXECUTABLE_PATH)
+		},
+		sandboxHelper: {
+			fileName: "daedalus-windows-sandbox-helper.exe",
+			size: sandboxHelperInfo.size,
+			sha256: await sha256File(SANDBOX_HELPER_PATH)
 		}
 	});
 	const payloadManifestText: string = `${JSON.stringify(payloadManifest, null, 2)}\n`;

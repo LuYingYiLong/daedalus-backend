@@ -296,6 +296,7 @@ Additional scripts:
 - `npm run pack:check` — inspect the npm package whitelist without publishing.
 - `npm run smoke:automation` — exercise the Automation RPC/MCP matrix.
 - `npm run smoke:llm -- use_llm model_id=<model>` — run a real provider write-and-diff smoke.
+- `npm run build:sandbox-helper:win` — build the Windows AppContainer helper used by plugin, Hook, Harness, and language-service runtimes.
 - `npm run build:sea:win` — build and smoke-test the Windows x64 single executable.
 
 Tests are organized under `tests/unit`, `tests/contract`, and `tests/integration`. New protocol schemas, tool policies, provider behavior, persistence, paths, and approval flows should include focused tests at the corresponding boundary.

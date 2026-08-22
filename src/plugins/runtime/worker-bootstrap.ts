@@ -37,6 +37,17 @@ function send(value: unknown): void {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
+function debugWorker(message: string): void {
+	if (process.env.DAEDALUS_PLUGIN_DEBUG === "1") process.stderr.write(`[plugin-worker] ${message}\n`);
+}
+
+process.on("uncaughtException", (error: unknown): void => {
+	debugWorker(`uncaught exception: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+});
+process.on("unhandledRejection", (reason: unknown): void => {
+	debugWorker(`unhandled rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`);
+});
+
 function registerHandler(kind: string, name: string, handler: Handler): void {
 	const key: string = `${kind}:${name}`;
 	if (handlers.has(key)) throw new Error(`Duplicate plugin handler: ${key}`);
@@ -126,7 +137,10 @@ let shuttingDown: boolean = false;
 let processing: Promise<void> = Promise.resolve();
 let buffer = "";
 process.stdin.setEncoding("utf8");
+process.stdin.on("error", (error: Error): void => debugWorker(`stdin error: ${error.stack ?? error.message}`));
+process.stdout.on("error", (error: Error): void => debugWorker(`stdout error: ${error.stack ?? error.message}`));
 process.stdin.on("data", (chunk: string): void => {
+	debugWorker(`received ${Buffer.byteLength(chunk, "utf8")} bytes`);
 	buffer += chunk;
 	let newline: number;
 	while ((newline = buffer.indexOf("\n")) >= 0) {
@@ -136,6 +150,7 @@ process.stdin.on("data", (chunk: string): void => {
 		processing = processing.then(async (): Promise<void> => {
 			try {
 				const message: PluginWorkerMessage = parseWorkerMessage(line);
+				debugWorker(`handling ${message.type}`);
 				if (shuttingDown) throw new Error("Plugin worker is shutting down.");
 				if (message.type === "initialize") {
 					if (initialized) throw new Error("Plugin worker received duplicate initialize.");
@@ -146,6 +161,7 @@ process.stdin.on("data", (chunk: string): void => {
 				if (initializedContext === undefined) throw new Error("Plugin worker context is unavailable.");
 				const context: PluginRuntimeContext = initializedContext;
 				await handle(message, context);
+				debugWorker(`handled ${message.type}`);
 				if (message.type === "shutdown") shuttingDown = true;
 			} catch (error: unknown) {
 				send({ type: "error", message: error instanceof Error ? error.message : String(error) });

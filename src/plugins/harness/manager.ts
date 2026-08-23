@@ -12,6 +12,7 @@ import { clearPluginQuarantine, getPluginIsolation, recordPluginFailure } from "
 import { readChildRssBytes } from "../runtime/resource-usage.js";
 import { terminateProcess } from "../../mcp/terminal/process-runner.js";
 import { MAX_HARNESS_RSS_BYTES, PLUGIN_IDLE_TIMEOUT_MS } from "../runtime/runtime-limits.js";
+import { getRuntimeRecoveryFields } from "../runtime/runtime-snapshot.js";
 
 const handles = new Map<string, HarnessHandle>();
 const snapshots = new Map<string, PluginRuntimeSnapshot>();
@@ -32,7 +33,8 @@ function setSnapshot(pluginId: string, patch: Partial<PluginRuntimeSnapshot>): v
 		harnessStatus: "unconfigured",
 		updatedAt: new Date().toISOString()
 	};
-	snapshots.set(pluginId, { ...current, ...patch, runtimeKind: "harness", updatedAt: new Date().toISOString() });
+	const recovered = getRuntimeRecoveryFields(patch.status);
+	snapshots.set(pluginId, { ...current, ...recovered, ...patch, runtimeKind: "harness", updatedAt: new Date().toISOString() });
 }
 
 async function validateRecord(record: PluginRecord, sessionId?: string): Promise<void> {

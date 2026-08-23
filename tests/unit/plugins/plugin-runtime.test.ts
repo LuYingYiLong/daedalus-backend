@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { resolve } from "node:path";
 import { clearPluginRegistrations, getPluginTool, listPluginMcpTools, listPluginSkills, registerPluginMcp, registerPluginSkill, registerPluginTool } from "../../../src/plugins/runtime/registries.js";
 import { encodeWorkerMessage, parseWorkerEvent } from "../../../src/plugins/runtime/worker-protocol.js";
+import { getRuntimeRecoveryFields } from "../../../src/plugins/runtime/runtime-snapshot.js";
 
 const fixturePath: string = fileURLToPath(new URL("../../fixtures/native-plugin", import.meta.url));
 
@@ -56,6 +57,12 @@ test("worker protocol accepts JSON line events and rejects malformed envelopes",
 	assert.equal(encoded.endsWith("\n"), true);
 	assert.equal(parseWorkerEvent(JSON.stringify({ type: "ready", protocolVersion: 1 })).type, "ready");
 	assert.throws(() => parseWorkerEvent(JSON.stringify({ value: true })), /Invalid plugin worker event/);
+});
+
+test("a recovered plugin runtime clears stale exit errors", (): void => {
+	assert.deepEqual(getRuntimeRecoveryFields("ready"), { lastError: undefined, lastExitCode: null });
+	assert.deepEqual(getRuntimeRecoveryFields("starting"), { lastError: undefined, lastExitCode: null });
+	assert.deepEqual(getRuntimeRecoveryFields("failed"), {});
 });
 
 test("native plugin fixture registers and invokes through the worker protocol", async (): Promise<void> => {

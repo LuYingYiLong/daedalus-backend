@@ -58,6 +58,7 @@ import { addPluginRuntimeLog } from "./runtime-logs.js";
 import { installPluginDependencies } from "./dependency-installer.js";
 import { readChildRssBytes } from "./resource-usage.js";
 import { stopAllPluginLanguageServices, stopPluginLanguageServicesForPlugin } from "../p2/language-service.js";
+import { getRuntimeRecoveryFields } from "./runtime-snapshot.js";
 import {
 	encodeWorkerMessage,
 	parseWorkerEvent,
@@ -114,7 +115,8 @@ function setSnapshot(pluginId: string, patch: Partial<PluginRuntimeSnapshot>): v
 		pluginId, status: "stopped", activeSessions: 0, registeredTools: 0, registeredSkills: 0,
 		registeredHooks: 0, registeredMcpServers: 0, dependencyStatus: "not_required", updatedAt: new Date().toISOString()
 	};
-	snapshots.set(pluginId, { ...current, ...patch, updatedAt: new Date().toISOString() });
+	const recovered = getRuntimeRecoveryFields(patch.status);
+	snapshots.set(pluginId, { ...current, ...recovered, ...patch, updatedAt: new Date().toISOString() });
 }
 
 function updateResourceSnapshot(handle: WorkerHandle): void {

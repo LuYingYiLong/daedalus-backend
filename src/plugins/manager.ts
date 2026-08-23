@@ -195,6 +195,10 @@ function createFingerprint(source: PluginSource, contentHash: string, manifestHa
 	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash, harnessBundle, p2 })).digest("hex");
 }
 
+export function computePluginFingerprint(scan: Pick<PluginScanResult, "contentHash" | "manifestHash" | "compatibility" | "nativePlugin" | "dependencyLockHash" | "harnessBundle" | "p2">, source: PluginSource): string {
+	return createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle, scan.p2);
+}
+
 async function copyPreparedPackage(sourceRoot: string, packageId: string, contentHash: string): Promise<string> {
 	const packagesRoot: string = getDaedalusPath("plugins.packages");
 	await mkdir(packagesRoot, { recursive: true });

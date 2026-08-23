@@ -43,6 +43,8 @@ function diagnostic(error: unknown, path?: string): PluginDevelopmentDiagnostic 
 		code: typeof value.code === "string" ? value.code : "plugin_validation_failed",
 		message: typeof value.message === "string" ? value.message : String(error),
 		severity: "error",
+		stage: "static",
+		retryable: true,
 		...(path === undefined ? {} : { path })
 	};
 }
@@ -59,12 +61,12 @@ function validateSourceText(files: readonly PluginDevelopmentFile[]): PluginDeve
 	const diagnostics: PluginDevelopmentDiagnostic[] = [];
 	for (const required of REQUIRED_FILES) {
 		if (!files.some((file): boolean => file.path.toLowerCase() === required.toLowerCase())) {
-			diagnostics.push({ code: "plugin_required_file_missing", message: `Required plugin file is missing: ${required}.`, severity: "error", path: required });
+			diagnostics.push({ code: "plugin_required_file_missing", message: `Required plugin file is missing: ${required}.`, severity: "error", stage: "static", retryable: true, path: required });
 		}
 	}
 	for (const file of files) {
-		if (SECRET_PATTERN.test(file.content)) diagnostics.push({ code: "plugin_secret_detected", message: "Generated plugin source appears to contain a credential or token.", severity: "error", path: file.path });
-		if (/\.(?:c?js|mjs|ts)$/iu.test(file.path) && FORBIDDEN_IMPORT_PATTERN.test(file.content)) diagnostics.push({ code: "plugin_forbidden_runtime_api", message: "P0 plugins cannot use network or child-process APIs.", severity: "error", path: file.path });
+		if (SECRET_PATTERN.test(file.content)) diagnostics.push({ code: "plugin_secret_detected", message: "Generated plugin source appears to contain a credential or token.", severity: "error", stage: "static", retryable: true, path: file.path });
+		if (/\.(?:c?js|mjs|ts)$/iu.test(file.path) && FORBIDDEN_IMPORT_PATTERN.test(file.content)) diagnostics.push({ code: "plugin_forbidden_runtime_api", message: "P0 plugins cannot use network or child-process APIs.", severity: "error", stage: "static", retryable: false, path: file.path });
 	}
 	const manifestFile = files.find((file): boolean => file.path.toLowerCase() === "package.json");
 	if (manifestFile !== undefined) {
@@ -80,14 +82,14 @@ function validateSourceText(files: readonly PluginDevelopmentFile[]): PluginDeve
 
 function validateManifest(manifest: Record<string, unknown>): PluginDevelopmentDiagnostic[] {
 	const diagnostics: PluginDevelopmentDiagnostic[] = [];
-	if (manifest.type !== "module") diagnostics.push({ code: "plugin_module_type_required", message: "P0 plugins must use JavaScript ESM with package.json type=module.", severity: "error", path: "package.json" });
+	if (manifest.type !== "module") diagnostics.push({ code: "plugin_module_type_required", message: "P0 plugins must use JavaScript ESM with package.json type=module.", severity: "error", stage: "static", retryable: true, path: "package.json" });
 	for (const key of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
 		const value = manifest[key];
-		if (typeof value === "object" && value !== null && Object.keys(value).length > 0) diagnostics.push({ code: "plugin_dependencies_not_supported", message: `P0 generated plugins cannot declare ${key}.`, severity: "error", path: "package.json" });
+		if (typeof value === "object" && value !== null && Object.keys(value).length > 0) diagnostics.push({ code: "plugin_dependencies_not_supported", message: `P0 generated plugins cannot declare ${key}.`, severity: "error", stage: "static", retryable: true, path: "package.json" });
 	}
 	const scripts = typeof manifest.scripts === "object" && manifest.scripts !== null ? manifest.scripts as Record<string, unknown> : {};
 	for (const name of ["preinstall", "install", "postinstall", "prepare", "prepublish", "prepublishOnly"]) {
-		if (name in scripts) diagnostics.push({ code: "plugin_lifecycle_script_forbidden", message: `Lifecycle script is not allowed: ${name}.`, severity: "error", path: "package.json" });
+		if (name in scripts) diagnostics.push({ code: "plugin_lifecycle_script_forbidden", message: `Lifecycle script is not allowed: ${name}.`, severity: "error", stage: "static", retryable: false, path: "package.json" });
 	}
 	return diagnostics;
 }
@@ -103,8 +105,8 @@ export async function validatePluginDevelopmentDirectory(root: string): Promise<
 	let testPlan: PluginDevelopmentTestPlan | undefined;
 	try {
 		scan = await analyzePluginDirectory(root);
-		if (scan.nativePlugin === undefined || scan.nativePlugin.apiVersion !== 1) diagnostics.push({ code: "plugin_native_manifest_required", message: "A Daedalus Native API v1 declaration is required.", severity: "error", path: "package.json" });
-		if (scan.compatibility.harnessBundle || scan.compatibility.harnessClient) diagnostics.push({ code: "plugin_harness_not_supported", message: "@plugin-creator P0 does not generate Harness Bundle or Client plugins.", severity: "error", path: "package.json" });
+		if (scan.nativePlugin === undefined || scan.nativePlugin.apiVersion !== 1) diagnostics.push({ code: "plugin_native_manifest_required", message: "A Daedalus Native API v1 declaration is required.", severity: "error", stage: "static", retryable: true, path: "package.json" });
+		if (scan.compatibility.harnessBundle || scan.compatibility.harnessClient) diagnostics.push({ code: "plugin_harness_not_supported", message: "@plugin-creator P0 does not generate Harness Bundle or Client plugins.", severity: "error", stage: "static", retryable: false, path: "package.json" });
 		diagnostics.push(...validateManifest(scan.manifest as Record<string, unknown>));
 	} catch (error: unknown) {
 		diagnostics.push(diagnostic(error));
@@ -119,7 +121,7 @@ export async function validatePluginDevelopmentDirectory(root: string): Promise<
 		try {
 			const entryPath = join(root, scan.nativePlugin.entry);
 			const entrySource = await readFile(entryPath, "utf8");
-			if (!REGISTER_EXPORT_PATTERN.test(entrySource)) diagnostics.push({ code: "plugin_register_export_required", message: "The Native plugin entry must export register(api).", severity: "error", path: scan.nativePlugin.entry });
+			if (!REGISTER_EXPORT_PATTERN.test(entrySource)) diagnostics.push({ code: "plugin_register_export_required", message: "The Native plugin entry must export register(api).", severity: "error", stage: "static", retryable: true, path: scan.nativePlugin.entry });
 			await execFileAsync(process.execPath, ["--check", entryPath], { windowsHide: true, timeout: 10_000, maxBuffer: 256 * 1024 });
 		} catch (error: unknown) {
 			diagnostics.push(diagnostic(error, scan.nativePlugin.entry));

@@ -28,6 +28,10 @@ import { startSessionSearchPrebuildScheduler, stopSessionSearchPrebuildScheduler
 import { sessionSearchService } from "./session-search/service.js";
 import { initializeWorktreeOperations } from "./workspace/worktree-operations.js";
 import { recoverPluginRuntimeState } from "./plugins/runtime/manager.js";
+import { initializePluginDevelopmentStatusStore } from "./plugins/development/status-store.js";
+import { cleanupOrphanPluginSandboxTestRuns } from "./plugins/development/sandbox-test-host.js";
+import { initializePluginDevelopmentRunStore } from "./plugins/maintenance/diagnostic-history.js";
+import { initializeMaintenanceOperationStore } from "./plugins/maintenance/operation-store.js";
 
 const SHUTDOWN_TIMEOUT_MS: number = 10_000;
 const SHARED_RUNTIME_IDLE_TIMEOUT_MS: number = 60_000;
@@ -67,6 +71,10 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 	await initializeUsageMetricsStore();
 	await initializeWorktreeOperations();
 	await recoverPluginRuntimeState();
+	await initializePluginDevelopmentStatusStore();
+	await initializePluginDevelopmentRunStore();
+	await initializeMaintenanceOperationStore();
+	await cleanupOrphanPluginSandboxTestRuns();
 	try {
 		await initializeGodotDocumentationManager();
 	} catch (error: unknown) {

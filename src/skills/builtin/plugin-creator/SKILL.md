@@ -24,9 +24,10 @@ description: 根据用户明确描述的目标创建或迭代 Daedalus Native �
 4. 调用 `mcp_plugin_dev_validate`。静态验证失败时最多修复 3 轮；不得删除测试、放宽 schema 或绕过验证
 5. 验证通过后调用 `mcp_plugin_dev_install`。这是一次独立的安装审批
 6. 安装后等待用户在 Studio 的整包信任 Modal 中选择。模型不能代替用户信任插件
-7. 用户信任后调用 `mcp_plugin_dev_test`。测试必须经过真实 Native Worker 和隔离测试宿主
-8. 运行测试失败时，根据脱敏诊断生成完整新快照，再从 prepare 开始。最多修复 3 轮，每个源码 revision 都必须重新安装并重新整包审核
-9. 超过任一上限后停止，清楚列出尚未解决的问题和源码位置
+7. 用户信任后调用 `mcp_plugin_dev_test`。测试必须经过真实 Native Worker 和隔离测试宿主；沙箱不可用时立即失败，绝不回退宿主机
+8. 运行测试失败时，根据脱敏结构化诊断生成完整新快照，再从 prepare 开始。静态修复和运行修复分别最多 3 轮，每个源码 revision 都必须重新安装并重新整包审核
+9. Browser、Event Bus、Timeline Part、Panel、Settings 和 Language Service 只能使用确定性隔离测试适配器，不得连接真实浏览器、生产事件总线或用户工作区
+10. 超过任一上限后停止，清楚列出尚未解决的问题和源码位置；不得删除测试、放宽 schema、关闭沙箱或自动信任
 
 ## 边界
 

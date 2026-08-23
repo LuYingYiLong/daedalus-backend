@@ -110,7 +110,11 @@ export type CanonicalServerEventName =
 	| "skill.catalog.changed"
 	| "usage.metrics.recorded"
 	| "worktree.operation.updated"
-	| "plugin.timeline.part";
+	| "plugin.timeline.part"
+	| "plugin.development.updated"
+	| "plugin.maintenance.updated";
+
+
 
 
 export type InternalLegacyServerEventName =

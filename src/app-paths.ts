@@ -28,6 +28,8 @@ export type DaedalusPathKey =
 	| "plugins.packages"
 	| "plugins.development"
 	| "plugins.developmentRecords"
+	| "plugins.developmentStatus"
+	| "plugins.developmentTests"
 	| "plugins.records"
 	| "plugins.profiles"
 	| "plugins.trust"
@@ -39,6 +41,10 @@ export type DaedalusPathKey =
 	| "plugins.harnessConfig"
 	| "plugins.harnessRuntime"
 	| "plugins.events"
+	| "plugins.developmentRuns"
+	| "plugins.maintenance"
+	| "plugins.releaseDrafts"
+	| "plugins.releases"
 	| "sessions.activeRoot"
 	| "sessions.archivedRoot"
 	| "sessions.database"
@@ -92,6 +98,8 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"plugins.packages": join(root, "plugins", "packages"),
 		"plugins.development": join(root, "plugin-dev"),
 		"plugins.developmentRecords": join(root, "plugins", "development-records.json"),
+		"plugins.developmentStatus": join(root, "plugins", "development-status.json"),
+		"plugins.developmentTests": join(root, "plugins", "development-tests"),
 		"plugins.records": join(root, "plugins", "records.json"),
 		"plugins.profiles": join(root, "plugins", "profiles.json"),
 		"plugins.trust": join(root, "plugins", "trust.json"),
@@ -103,6 +111,10 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"plugins.harnessConfig": join(root, "plugins", "harness.json"),
 		"plugins.harnessRuntime": join(root, "plugins", "harness-runtime"),
 		"plugins.events": join(root, "plugins", "events.json"),
+		"plugins.developmentRuns": join(root, "plugins", "development-runs.json"),
+		"plugins.maintenance": join(root, "plugins", "maintenance.json"),
+		"plugins.releaseDrafts": join(root, "plugins", "release-drafts.json"),
+		"plugins.releases": join(root, "plugins", "releases"),
 		"sessions.activeRoot": join(root, "sessions"),
 		"sessions.archivedRoot": join(root, "archived_sessions"),
 		"sessions.database": join(root, "sessions.sqlite"),

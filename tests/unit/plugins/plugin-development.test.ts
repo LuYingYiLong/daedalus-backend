@@ -7,6 +7,8 @@ import type WebSocket from "ws";
 import { PluginDevelopmentReviewRuntime } from "../../../src/plugins/development/review-runtime.js";
 import { applyPluginDevelopmentSnapshot, preparePluginDevelopmentSnapshot } from "../../../src/plugins/development/snapshot.js";
 import { validatePluginDevelopmentSnapshot } from "../../../src/plugins/development/validation.js";
+import { createPluginDiagnostic } from "../../../src/plugins/development/diagnostics.js";
+import { getSandboxAvailability } from "../../../src/mcp/terminal/sandbox-runner.js";
 import type { PluginRecord } from "../../../src/plugins/types.js";
 import type { WorkspaceConfig } from "../../../src/workspace/types.js";
 
@@ -136,4 +138,13 @@ test("plugin creator whole-package review is bound to the installed fingerprint"
 	runtime.resolve(reviewId, plugin.id, plugin.fingerprint, "trusted");
 	assert.deepEqual(await pending, { reviewId, status: "trusted" });
 	assert.equal((messages[1] as { event: string }).event, "plugin.review.resolved");
+});
+
+test("plugin creator diagnostics are structured and sandbox availability never falls back", (): void => {
+	const diagnostic = createPluginDiagnostic({ code: "sandbox_unavailable", message: "Bearer abc123", stage: "sandbox", retryable: false });
+	assert.equal(diagnostic.stage, "sandbox");
+	assert.equal(diagnostic.retryable, false);
+	assert.equal(diagnostic.message.includes("[redacted]"), true);
+	const availability = getSandboxAvailability({ platform: "win32", env: {} });
+	assert.equal(availability.available, false);
 });

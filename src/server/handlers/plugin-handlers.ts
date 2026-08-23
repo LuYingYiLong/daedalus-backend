@@ -32,7 +32,7 @@ function publicScanResult(result: PluginScanResult): PluginScanResult {
 	return publicResult;
 }
 
-function publicPluginRecord(record: PluginRecord): PluginRecord {
+export function publicPluginRecord(record: PluginRecord): PluginRecord {
 	let source: PluginSource = record.source;
 	if (record.source.type === "local" || record.source.type === "tarball") {
 		source = { ...record.source, path: `[local]/${basename(record.source.path)}` };

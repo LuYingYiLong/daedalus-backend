@@ -89,3 +89,11 @@ test("Harness runtime RPC requests require revisioned configuration and package-
 	const invalid = clientRequestSchema.safeParse({ type: "request", id: "harness-update-bad", method: "plugin.harness.config.update", params: { expectedRevision: "latest", config: { enabled: true, launchMode: "installed" } } });
 	assert.equal(invalid.success, false);
 });
+
+test("plugin maintenance requests require revision-bound changelog and release confirmation", (): void => {
+	const revision = "b".repeat(64);
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "changelog", method: "plugin.changelog.apply", params: { draftId: "draft-1", expectedRevision: revision, accepted: true } }).success, true);
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "changelog-stale", method: "plugin.changelog.apply", params: { draftId: "draft-1", accepted: true } }).success, false);
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "release", method: "plugin.release.confirm", params: { draftId: "draft-1", expectedRevision: revision } }).success, true);
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "publish", method: "plugin.publish.confirm", params: { artifactPath: "[daedalus]/artifact.tgz", registry: "https://registry.npmjs.org/" } }).success, true);
+});

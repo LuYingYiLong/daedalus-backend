@@ -109,6 +109,14 @@ const handleHookRequest: RequestHandler = createLazyHandler(async (): Promise<Re
 	return (await import("./handlers/hook-handlers.js")).handleHookRequest;
 });
 
+const handlePluginDevelopmentRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/plugin-development-handlers.js")).handlePluginDevelopmentRequest;
+});
+
+const handlePluginMaintenanceRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/plugin-maintenance-handlers.js")).handlePluginMaintenanceRequest;
+});
+
 const handlePluginRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
 	return (await import("./handlers/plugin-handlers.js")).handlePluginRequest;
 });
@@ -242,6 +250,18 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"plugin.timeline.append",
 	"plugin.harness.convert.preview",
 	"plugin.harness.convert.activate",
+	"plugin.development.status.get",
+	"plugin.update.preview",
+	"plugin.update.operation.get",
+	"plugin.update.operation.cancel",
+	"plugin.development.runs.list",
+	"plugin.development.runs.get",
+	"plugin.changelog.generate",
+	"plugin.changelog.apply",
+	"plugin.release.preview",
+	"plugin.release.confirm",
+	"plugin.release.export",
+	"plugin.publish.confirm",
 	"session.reset",
 	"session.info",
 	"session.create",
@@ -430,6 +450,18 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["plugin.timeline.append", handlePluginP2Request],
 	["plugin.harness.convert.preview", handlePluginP2Request],
 	["plugin.harness.convert.activate", handlePluginP2Request],
+	["plugin.development.status.get", handlePluginDevelopmentRequest],
+	["plugin.update.preview", handlePluginMaintenanceRequest],
+	["plugin.update.operation.get", handlePluginMaintenanceRequest],
+	["plugin.update.operation.cancel", handlePluginMaintenanceRequest],
+	["plugin.development.runs.list", handlePluginMaintenanceRequest],
+	["plugin.development.runs.get", handlePluginMaintenanceRequest],
+	["plugin.changelog.generate", handlePluginMaintenanceRequest],
+	["plugin.changelog.apply", handlePluginMaintenanceRequest],
+	["plugin.release.preview", handlePluginMaintenanceRequest],
+	["plugin.release.confirm", handlePluginMaintenanceRequest],
+	["plugin.release.export", handlePluginMaintenanceRequest],
+	["plugin.publish.confirm", handlePluginMaintenanceRequest],
 	["godotDocumentation.get", handleGodotDocumentationRequest],
 	["godotDocumentation.branches.list", handleGodotDocumentationRequest],
 	["godotDocumentation.install", handleGodotDocumentationRequest],

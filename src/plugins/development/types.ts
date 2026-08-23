@@ -15,8 +15,14 @@ export type PluginDevelopmentScope = "workspace" | "personal";
 export type PluginDevelopmentDiagnostic = {
 	code: string;
 	message: string;
-	severity: "error" | "warning";
+	severity: "info" | "error" | "warning";
+	stage: "static" | "sandbox" | "registration" | "test" | "protocol" | "timeout" | "cleanup";
+	retryable: boolean;
 	path?: string | undefined;
+	caseId?: string | undefined;
+	capability?: string | undefined;
+	hint?: string | undefined;
+	details?: Record<string, string> | undefined;
 };
 
 export type PluginDevelopmentFile = {
@@ -59,16 +65,45 @@ export type PluginDevelopmentTestPlan = {
 };
 
 export type PluginDevelopmentTestResult = {
+	runId: string;
 	ok: boolean;
 	pluginId: string;
 	revision: string;
+	durationMs: number;
+	sandbox: {
+		available: boolean;
+		mode: "windows-helper" | "bubblewrap" | "sandbox-exec" | "unavailable";
+		network: "disabled";
+		workspaceDisplay: string;
+	};
 	passed: number;
 	failed: number;
 	cases: Array<{
 		id: string;
-		ok: boolean;
-		message: string;
+		capability: PluginDevelopmentTestCase["capability"];
+		target?: string;
+		status: "passed" | "failed" | "skipped";
+		durationMs: number;
+		message?: string;
+		code?: string;
+		retryable: boolean;
 	}>;
+	diagnostics: PluginDevelopmentDiagnostic[];
+};
+
+export type PluginDevelopmentPhase = "idle" | "preparing" | "validating" | "awaiting_install" | "awaiting_trust" | "testing" | "passed" | "failed" | "exhausted" | "cancelled" | "interrupted";
+
+export type PluginDevelopmentStatus = {
+	slug: string;
+	revision: string;
+	phase: PluginDevelopmentPhase;
+	staticAttempt: number;
+	runtimeAttempt: number;
+	staticAttemptsRemaining: number;
+	runtimeAttemptsRemaining: number;
+	lastDiagnostics: PluginDevelopmentDiagnostic[];
+	lastTest?: PluginDevelopmentTestResult | undefined;
+	updatedAt: string;
 };
 
 export type PluginDevelopmentRecord = {

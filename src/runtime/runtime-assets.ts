@@ -27,6 +27,7 @@ export const RUNTIME_ASSET_PATHS = {
 	"skill.fileCreator": "src/skills/builtin/file-creator/SKILL.md",
 	"skill.backendHelper": "src/skills/builtin/backend-helper/SKILL.md",
 	"skill.skillCreator": "src/skills/builtin/skill-creator/SKILL.md",
+	"skill.pluginCreator": "src/skills/builtin/plugin-creator/SKILL.md",
 	"skill.imageGen": "src/skills/builtin/image-gen/SKILL.md",
 	"godot.operationsScript": "src/mcp/godot/scripts/godot_operations.gd",
 	"native.keytar.win32-x64": "node_modules/keytar/build/Release/keytar.node",

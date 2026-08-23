@@ -44,6 +44,7 @@ import {
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_NAME_SET, type BrowserControlContext } from "./browser-tools.js";
 import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskControlContext } from "./scheduled-task-tools.js";
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
+import type { PluginDevelopmentControlContext } from "../plugins/development/types.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -75,6 +76,7 @@ export type ToolExecutionContext = {
 	} | undefined;
 	browserControl?: BrowserControlContext | undefined;
 	scheduledTaskControl?: ScheduledTaskControlContext | undefined;
+	pluginDevelopmentControl?: PluginDevelopmentControlContext | undefined;
 	scheduledMonitorRun?: boolean | undefined;
 };
 
@@ -228,6 +230,11 @@ const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_skills_load",
 	"mcp_skills_propose_create",
 	"mcp_skills_create",
+	"mcp_plugin_dev_prepare",
+	"mcp_plugin_dev_apply",
+	"mcp_plugin_dev_validate",
+	"mcp_plugin_dev_install",
+	"mcp_plugin_dev_test",
 	"mcp_image_generate",
 	"mcp_image_inspect",
 	"mcp_godot_search_documentation",

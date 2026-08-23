@@ -180,6 +180,73 @@ const SKILL_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	)
 ];
 
+const PLUGIN_DEVELOPMENT_TOOL_DEFINITIONS: ChatCompletionTool[] = [
+	createSceneToolDefinition(
+		"mcp_plugin_dev_prepare",
+		"静态校验并预览一个完整 Daedalus Native 插件快照，不写入磁盘。创建或修复插件时必须先调用。",
+		{
+			slug: { type: "string", description: "插件开发目录名，小写 kebab-case。" },
+			scope: { type: "string", enum: ["workspace", "personal"], description: "有工作区时默认 workspace，否则使用 personal。" },
+			sourceFolderId: { type: "string", description: "workspace scope 的可选 source folder ID。" },
+			expectedRevision: { type: "string", description: "修改已有受管插件时的当前 revision。" },
+			files: {
+				type: "array",
+				minItems: 5,
+				maxItems: 64,
+				items: {
+					type: "object",
+					properties: {
+						path: { type: "string", description: "插件根目录下的相对路径。" },
+						content: { type: "string", description: "完整 UTF-8 文件内容。" }
+					},
+					required: ["path", "content"]
+				}
+			}
+		},
+		["slug", "scope", "files"]
+	),
+	createSceneToolDefinition(
+		"mcp_plugin_dev_apply",
+		"将已经 prepare 的完整插件快照原子写入受管开发目录。必须携带匹配的一次性 proposalToken。",
+		{
+			proposalToken: { type: "string", description: "prepare 返回的一次性 token。" },
+			expectedRevision: { type: "string", description: "prepare 时对应的磁盘 revision。" }
+		},
+		["proposalToken"]
+	),
+	createSceneToolDefinition(
+		"mcp_plugin_dev_validate",
+		"对受管插件开发目录执行 Native API、P2 声明、入口语法、测试计划和安全静态验证。",
+		{
+			slug: { type: "string" },
+			scope: { type: "string", enum: ["workspace", "personal"] },
+			sourceFolderId: { type: "string" }
+		},
+		["slug", "scope"]
+	),
+	createSceneToolDefinition(
+		"mcp_plugin_dev_install",
+		"将静态验证通过的受管开发插件安装到 Daedalus。安装需要审批，安装后仍必须由用户单独完成整包信任审核。",
+		{
+			slug: { type: "string" },
+			scope: { type: "string", enum: ["workspace", "personal"] },
+			sourceFolderId: { type: "string" }
+		},
+		["slug", "scope"]
+	),
+	createSceneToolDefinition(
+		"mcp_plugin_dev_test",
+		"在用户整包信任后，通过真实 Native Worker 和隔离测试宿主执行插件测试计划。沙箱不可用时拒绝运行。",
+		{
+			pluginId: { type: "string", description: "install 返回的已安装插件 ID。" },
+			slug: { type: "string" },
+			scope: { type: "string", enum: ["workspace", "personal"] },
+			sourceFolderId: { type: "string" }
+		},
+		["pluginId", "slug", "scope"]
+	)
+];
+
 const IMAGE_GENERATION_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	createSceneToolDefinition(
 		"mcp_image_inspect",
@@ -828,6 +895,7 @@ const GODOT_PROJECT_SEMANTIC_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 
 const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	...SKILL_TOOL_DEFINITIONS,
+	...PLUGIN_DEVELOPMENT_TOOL_DEFINITIONS,
 	...IMAGE_GENERATION_TOOL_DEFINITIONS,
 	...WEB_SEARCH_TOOL_DEFINITIONS,
 	...WORKSPACE_TOOL_DEFINITIONS,

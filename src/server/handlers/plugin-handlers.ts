@@ -17,6 +17,7 @@ import {
 import { listPluginVersionRecords, rollbackPluginVersion, updatePluginFromSource } from "../../plugins/manager.js";
 import type { PluginCatalogResult, PluginRecord, PluginScanResult, PluginSource } from "../../plugins/types.js";
 import { getPluginRuntimeSnapshot } from "../../plugins/runtime/manager.js";
+import { pluginDevelopmentReviewRuntime } from "../../plugins/development/service.js";
 
 type PluginRequest = Extract<ClientRequest, { method: `plugin.${string}` }>;
 
@@ -71,10 +72,30 @@ export async function handlePluginRequest(socket: WebSocket, request: ClientRequ
 		result = publicCatalog(await getPluginCatalog());
 		break;
 	case "plugin.trust.update": {
-		const plugin: PluginRecord = await updatePluginTrustStatus(pluginRequest.params.pluginId, pluginRequest.params.fingerprint, pluginRequest.params.status);
+		let reviewClaimed: boolean = false;
+		if (pluginRequest.params.reviewId !== undefined && pluginRequest.params.status === "trusted") {
+			pluginDevelopmentReviewRuntime.claim(pluginRequest.params.reviewId, pluginRequest.params.pluginId, pluginRequest.params.fingerprint);
+			reviewClaimed = true;
+		}
+		let plugin: PluginRecord;
+		try {
+			plugin = await updatePluginTrustStatus(pluginRequest.params.pluginId, pluginRequest.params.fingerprint, pluginRequest.params.status);
+		} catch (error: unknown) {
+			if (reviewClaimed && pluginRequest.params.reviewId !== undefined) {
+				pluginDevelopmentReviewRuntime.rejectClaim(pluginRequest.params.reviewId, pluginRequest.params.pluginId, pluginRequest.params.fingerprint, error instanceof Error ? error : new Error(String(error)));
+			}
+			throw error;
+		}
+		if (pluginRequest.params.reviewId !== undefined && pluginRequest.params.status === "trusted") {
+			pluginDevelopmentReviewRuntime.resolve(pluginRequest.params.reviewId, plugin.id, plugin.fingerprint, "trusted");
+		}
 		result = { plugin: publicPluginRecord(plugin), fingerprint: pluginFingerprint(plugin) };
 		break;
 	}
+	case "plugin.review.resolve":
+		pluginDevelopmentReviewRuntime.resolve(pluginRequest.params.reviewId, pluginRequest.params.pluginId, pluginRequest.params.fingerprint, "deferred");
+		result = { resolved: true };
+		break;
 	case "plugin.profile.get":
 		result = publicCatalog(await getPluginCatalog());
 		break;

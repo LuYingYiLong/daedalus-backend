@@ -54,6 +54,7 @@ import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
 import { findWorkspace } from "../workspace/registry.js";
 import { BROWSER_TOOL_NAME_SET, type BrowserToolName } from "./browser-tools.js";
 import { SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskToolName } from "./scheduled-task-tools.js";
+import { PLUGIN_DEVELOPMENT_TOOL_NAME_SET, type PluginDevelopmentToolName } from "../plugins/development/types.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -127,6 +128,20 @@ async function executeScheduledTaskTool(
 ): Promise<IdempotentToolExecutionResult> {
 	if (toolContext?.scheduledTaskControl === undefined) throw new Error("scheduled_task_runtime_unavailable");
 	const result = await toolContext.scheduledTaskControl.execute(toolName, args, abortSignal);
+	const content: string = JSON.stringify(result);
+	return { content, rawContentLength: content.length, truncated: false, reused: false };
+}
+
+async function executePluginDevelopmentTool(
+	toolName: PluginDevelopmentToolName,
+	args: Record<string, unknown>,
+	toolContext: ToolExecutionContext | undefined,
+	abortSignal: AbortSignal | undefined
+): Promise<IdempotentToolExecutionResult> {
+	if (toolContext?.clientType !== "studio" || toolContext.pluginDevelopmentControl === undefined) {
+		throw new Error("plugin_development_runtime_unavailable");
+	}
+	const result = await toolContext.pluginDevelopmentControl.execute(toolName, args, abortSignal);
 	const content: string = JSON.stringify(result);
 	return { content, rawContentLength: content.length, truncated: false, reused: false };
 }
@@ -753,7 +768,9 @@ async function executeSingleToolCall(
 				args: executionArgs
 			})
 			: undefined;
-		let rawResult: IdempotentToolExecutionResult = SCHEDULED_TASK_TOOL_NAME_SET.has(functionName)
+		let rawResult: IdempotentToolExecutionResult = PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
+			? await executePluginDevelopmentTool(functionName as PluginDevelopmentToolName, executionArgs, toolContext, abortSignal)
+			: SCHEDULED_TASK_TOOL_NAME_SET.has(functionName)
 			? await executeScheduledTaskTool(functionName as ScheduledTaskToolName, executionArgs, toolContext, abortSignal)
 			: BROWSER_TOOL_NAME_SET.has(functionName)
 			? await executeBrowserTool(functionName as BrowserToolName, executionArgs, toolContext, abortSignal)

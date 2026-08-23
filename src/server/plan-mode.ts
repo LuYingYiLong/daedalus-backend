@@ -28,6 +28,7 @@ import { getClientConnection } from "./client-connections.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
 import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
+import { getStudioPluginDevelopmentControl } from "./studio-plugin-development-context.js";
 import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
 
 const PLAN_PREVIEW_MAX_CHARS: number = 1600;
@@ -619,6 +620,7 @@ async function runPlanAgentDecision(
 			clientType: getClientConnection(runtime.socket)?.clientType,
 			browserControl: getStudioBrowserControl(runtime.socket, runtime.session.sessionId),
 			scheduledTaskControl: getStudioScheduledTaskControl(runtime.socket, runtime.session.sessionId),
+			pluginDevelopmentControl: getStudioPluginDevelopmentControl(runtime.socket, runtime.session.sessionId, runtime.session.activeWorkspace),
 			scheduledMonitorRun: runtime.session.scheduledTaskOrigin?.kind === "monitor"
 		}
 	);

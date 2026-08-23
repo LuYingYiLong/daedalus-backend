@@ -16,6 +16,7 @@ const BUILTIN_SLUGS: Record<SkillId, string> = {
 	"file.creator": "file-creator",
 	"backend.helper": "backend-helper",
 	"skill.creator": "skill-creator",
+	"plugin.creator": "plugin-creator",
 	"image.gen": "image-gen"
 };
 

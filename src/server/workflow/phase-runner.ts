@@ -27,6 +27,7 @@ import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 import { getClientConnection } from "../client-connections.js";
 import { hasGodotWorkspaceCapability } from "../../workspace/capabilities.js";
 import { getStudioBrowserControl } from "../studio-browser-context.js";
+import { getStudioPluginDevelopmentControl } from "../studio-plugin-development-context.js";
 
 const SCENE_VIEW_CAPTURE_TOOL: string = "mcp_godot_editor_capture_scene_view";
 const SKILL_LOAD_TOOL: string = "mcp_skills_load";
@@ -102,8 +103,8 @@ export async function runWorkflowPhase(
 	try {
 		agentResult = await awaitWithAbort(
 			streamPhase
-				? runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace), editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType, browserControl: getStudioBrowserControl(socket, session.sessionId) })
-				: runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace), editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType, browserControl: getStudioBrowserControl(socket, session.sessionId) }),
+				? runProviderAgentStreaming(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace), editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType, browserControl: getStudioBrowserControl(socket, session.sessionId), pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace) })
+				: runProviderAgent(params, phaseOptions, history, fullSystemPrompt, mcpHost, session.approvalGateway, runtimePhase.allowedTools, onToolEvent, abortSignal, sceneViewEnricher.enricher, { workspaceId: session.activeWorkspace?.id, hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace), editorInstanceId: session.editorInstanceId, sessionId: session.sessionId, requestId: persistRequestId, clientType: getClientConnection(socket)?.clientType, browserControl: getStudioBrowserControl(socket, session.sessionId), pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace) }),
 			abortSignal
 		);
 		throwIfAborted(abortSignal);

@@ -22,6 +22,7 @@ export const skillIdSchema = z.enum([
 	"file.creator",
 	"backend.helper",
 	"skill.creator",
+	"plugin.creator",
 	"image.gen"
 ]);
 
@@ -1368,7 +1369,19 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			pluginId: z.string().min(1).max(240),
 			fingerprint: z.string().length(64),
-			status: z.enum(["trusted", "disabled"])
+			status: z.enum(["trusted", "disabled"]),
+			reviewId: z.string().min(1).max(240).optional()
+		}).strict()
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("plugin.review.resolve"),
+		params: z.object({
+			reviewId: z.string().min(1).max(240),
+			pluginId: z.string().min(1).max(240),
+			fingerprint: z.string().length(64),
+			status: z.literal("deferred")
 		}).strict()
 	}),
 	z.object({

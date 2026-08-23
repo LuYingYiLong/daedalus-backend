@@ -81,6 +81,7 @@ test("catalog discovers project, personal, and builtin skills without shadowing"
 	assert.ok(catalog.skills.some((skill): boolean => skill.ref === "project:shared-name" && skill.enabled));
 	assert.ok(catalog.skills.some((skill): boolean => skill.ref === "personal:shared-name" && !skill.enabled));
 	assert.ok(catalog.skills.some((skill): boolean => skill.ref === "builtin:skill-creator" && skill.enabled));
+	assert.ok(catalog.skills.some((skill): boolean => skill.ref === "builtin:plugin-creator" && skill.enabled));
 	await setWorkspaceSkillEnabled(workspace, "personal:shared-name", true);
 	assert.equal((await resolveCatalogSkill(workspace, "personal:shared-name", true)).name, "Personal Skill");
 });

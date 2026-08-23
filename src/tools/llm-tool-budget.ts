@@ -20,7 +20,9 @@ const SKILL_BUDGET_MAP: Record<string, number> = {
 	"builtin:file-creator": 24,
 	"builtin:scene-builder": 32,
 	"builtin:backend-helper": 16,
-	"builtin:skill-creator": 24
+	"builtin:skill-creator": 24,
+	"plugin.creator": 48,
+	"builtin:plugin-creator": 48
 };
 
 export function resolveToolBudget(

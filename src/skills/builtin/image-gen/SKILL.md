@@ -1,5 +1,5 @@
 ---
-name: Image Generator
+name: image-gen
 description: Generate images as Daedalus session attachments.
 ---
 

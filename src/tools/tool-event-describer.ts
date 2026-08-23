@@ -650,6 +650,19 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 			label: commandLine ?? label
 		});
 	}
+	if (toolName.startsWith("mcp_plugin_dev_")) {
+		const action: string = toolName.slice("mcp_plugin_dev_".length);
+		const labels: Record<string, [ToolEventCategory, string]> = {
+			prepare: ["propose", "设计插件"],
+			apply: ["write", "生成插件工程"],
+			validate: ["read", "验证插件"],
+			install: ["write", "安装插件"],
+			test: ["read", "测试插件"]
+		};
+		const [category, title] = labels[action] ?? ["unknown", "开发插件"];
+		const label: string = getStringArg(args, "slug") ?? getStringArg(args, "pluginId") ?? "plugin";
+		return createDisplay("plugin_development", "Plugin Creator", category, title, label, { kind: "unknown", label });
+	}
 
 	if (toolName === "mcp_workspace_download_file") {
 		const relativePath: string = getStringArg(args, "relativePath") ?? "workspace file";

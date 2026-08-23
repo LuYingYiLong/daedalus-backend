@@ -1,5 +1,5 @@
 ---
-name: Godot Project Init
+name: godot-project-init
 description: Inspect the current Godot project and establish its AI collaboration guide.
 ---
 

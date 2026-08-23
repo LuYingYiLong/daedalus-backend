@@ -29,6 +29,33 @@ test("plugin RPC requests reject unpinned package sources", (): void => {
 	assert.equal(result.success, false);
 });
 
+test("plugin creator whole-package review uses strict revision-bound requests", (): void => {
+	const trust = clientRequestSchema.safeParse({
+		type: "request",
+		id: "plugin-review-trust",
+		method: "plugin.trust.update",
+		params: {
+			pluginId: "plugin-generated",
+			fingerprint: "a".repeat(64),
+			status: "trusted",
+			reviewId: "plugin-review-1"
+		}
+	});
+	assert.equal(trust.success, true);
+	const deferred = clientRequestSchema.safeParse({
+		type: "request",
+		id: "plugin-review-defer",
+		method: "plugin.review.resolve",
+		params: {
+			pluginId: "plugin-generated",
+			fingerprint: "a".repeat(64),
+			reviewId: "plugin-review-1",
+			status: "deferred"
+		}
+	});
+	assert.equal(deferred.success, true);
+});
+
 test("Harness runtime RPC requests require revisioned configuration and package-relative previews", (): void => {
 	const update = clientRequestSchema.safeParse({
 		type: "request",

@@ -145,7 +145,9 @@ export type StudioDirectEventName =
 	| "browser.tool.request"
 	| "browser.tool.cancel"
 	| "scheduled-task.tool.request"
-	| "scheduled-task.tool.cancel";
+	| "scheduled-task.tool.cancel"
+	| "plugin.review.request"
+	| "plugin.review.resolved";
 
 export type ServerEvent = {
 	protocolVersion: 3;

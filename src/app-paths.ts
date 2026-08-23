@@ -26,6 +26,8 @@ export type DaedalusPathKey =
 	| "worktrees.root"
 	| "plugins.root"
 	| "plugins.packages"
+	| "plugins.development"
+	| "plugins.developmentRecords"
 	| "plugins.records"
 	| "plugins.profiles"
 	| "plugins.trust"
@@ -88,6 +90,8 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"worktrees.root": join(root, "worktrees"),
 		"plugins.root": join(root, "plugins"),
 		"plugins.packages": join(root, "plugins", "packages"),
+		"plugins.development": join(root, "plugin-dev"),
+		"plugins.developmentRecords": join(root, "plugins", "development-records.json"),
 		"plugins.records": join(root, "plugins", "records.json"),
 		"plugins.profiles": join(root, "plugins", "profiles.json"),
 		"plugins.trust": join(root, "plugins", "trust.json"),

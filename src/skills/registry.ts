@@ -10,6 +10,7 @@ export const skillIds = [
 	"file.creator",
 	"backend.helper",
 	"skill.creator",
+	"plugin.creator",
 	"image.gen"
 ] as const;
 
@@ -124,6 +125,22 @@ const IMAGE_GENERATION_TOOLS: string[] = [
 	"mcp_image_replace_workspace_asset"
 ];
 
+const PLUGIN_DEVELOPMENT_TOOLS: string[] = [
+	"mcp_plugin_dev_prepare",
+	"mcp_plugin_dev_apply",
+	"mcp_plugin_dev_validate",
+	"mcp_plugin_dev_install",
+	"mcp_plugin_dev_test"
+];
+
+const PLUGIN_DEVELOPMENT_READ_TOOLS: string[] = [
+	"mcp_workspace_list_files",
+	"mcp_workspace_list_source_folders",
+	"mcp_workspace_get_source_context",
+	"mcp_workspace_read_text_file",
+	"mcp_workspace_search_text"
+];
+
 const skills: Record<SkillId, Skill> = {
 	"godot.project_init": {
 		id: "godot.project_init",
@@ -172,6 +189,14 @@ const skills: Record<SkillId, Skill> = {
 		promptPath: "src/skills/builtin/skill-creator/SKILL.md",
 		defaultPromptId: "godot.assistant",
 		allowedTools: [...READ_TOOLS, "mcp_skills_load", "mcp_skills_propose_create", "mcp_skills_create"]
+	},
+	"plugin.creator": {
+		id: "plugin.creator",
+		name: "Plugin Creator",
+		description: "Design, generate, validate, install, review, and test a Daedalus Native plugin.",
+		promptPath: "src/skills/builtin/plugin-creator/SKILL.md",
+		defaultPromptId: "backend.helper",
+		allowedTools: [...READ_TOOLS, ...PLUGIN_DEVELOPMENT_READ_TOOLS, ...PLUGIN_DEVELOPMENT_TOOLS]
 	},
 	"image.gen": {
 		id: "image.gen",

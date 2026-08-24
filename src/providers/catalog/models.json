@@ -34,6 +34,24 @@
     "ownedBy": "deepseek"
   },
   {
+    "id": "deepseek-v4-flash-vision-exp",
+    "displayName": "DeepSeek V4 Flash Vision Exp",
+    "provider": "deepseek",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 384000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "high", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
+      "tools": true
+    },
+    "ownedBy": "deepseek"
+  },
+  {
     "id": "kimi-k3",
     "displayName": "Kimi K3",
     "provider": "moonshot",

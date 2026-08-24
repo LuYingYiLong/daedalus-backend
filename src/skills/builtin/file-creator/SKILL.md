@@ -1,5 +1,5 @@
 ---
-name: File Creator
+name: file-creator
 description: Create and update project files through approval-gated tools.
 ---
 

@@ -39,6 +39,14 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.maxOutputTokens, 384_000);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.reasoning, true);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.tools, true);
+	const deepseekVisionModel = deepseekModels.find((model) => model.id === "deepseek-v4-flash-vision-exp");
+	assert.equal(deepseekVisionModel?.displayName, "DeepSeek V4 Flash Vision Exp");
+	assert.equal(deepseekVisionModel?.contextWindowTokens, 1_000_000);
+	assert.equal(deepseekVisionModel?.maxOutputTokens, 384_000);
+	assert.equal(deepseekVisionModel?.capabilities.imageInput, true);
+	assert.equal(deepseekVisionModel?.capabilities.vision, true);
+	assert.equal(deepseekVisionModel?.capabilities.reasoning, true);
+	assert.equal(deepseekVisionModel?.capabilities.tools, true);
 	assert.equal(getProviderDefaultEndpointType("openai"), "openai-responses");
 	assert.equal(getProviderAdapterFamily("openai"), "openai-responses");
 	assert.equal(getProviderDefinition("openai").modelListMode, "catalog-recommended");

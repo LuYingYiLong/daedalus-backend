@@ -1,5 +1,5 @@
 ---
-name: GDScript Review
+name: gdscript-review
 description: Review GDScript for type safety, lifecycle issues, signals, and Godot style.
 ---
 

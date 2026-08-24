@@ -147,6 +147,23 @@ test("image preprocessing keeps direct multimodal input when current model suppo
 	assert.equal(result.params.additionalContext?.[0]?.kind, "image");
 });
 
+test("DeepSeek V4 Flash Vision Exp keeps direct image input", async (): Promise<void> => {
+	const result = await preprocessImageAttachmentsForTextModel(
+		{
+			message: "描述这张图",
+			additionalContext: [VALID_IMAGE_CONTEXT]
+		},
+		{
+			provider: "deepseek",
+			apiKey: "test-key",
+			model: "deepseek-v4-flash-vision-exp"
+		}
+	);
+
+	assert.equal(result.recognized, false);
+	assert.equal(result.params.additionalContext?.[0]?.kind, "image");
+});
+
 test("image preprocessing requires recognition model when current model lacks image support", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		await assert.rejects(

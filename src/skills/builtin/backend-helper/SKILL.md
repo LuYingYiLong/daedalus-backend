@@ -1,5 +1,5 @@
 ---
-name: Backend Helper
+name: backend-helper
 description: Work on the TypeScript WebSocket, provider, workflow, and MCP backend.
 ---
 

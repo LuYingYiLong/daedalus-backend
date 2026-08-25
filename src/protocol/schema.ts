@@ -1148,6 +1148,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("generalSettings.update"),
 		params: z.object({
 			nextStepHintsEnabled: z.boolean().optional(),
+			autoCompactActivityDetails: z.boolean().optional(),
 			godotExecutablePath: z.string().min(1).nullable().optional(),
 		}),
 	}),

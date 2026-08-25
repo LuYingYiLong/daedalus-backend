@@ -605,13 +605,14 @@ test("session.overview.get accepts session overview limits", (): void => {
 	}).success, true);
 });
 
-test("general settings update accepts next-step hint preference", (): void => {
+test("general settings update accepts activity compaction preference", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
 		id: "general-settings-update",
 		method: "generalSettings.update",
 		params: {
-			nextStepHintsEnabled: false
+			nextStepHintsEnabled: false,
+			autoCompactActivityDetails: true
 		}
 	}).success, true);
 });

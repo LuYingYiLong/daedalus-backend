@@ -3,8 +3,9 @@ import { readJsonFile, writeJsonFileAtomic } from "./json-file-store.js";
 import { inspectGodotExecutable, type GodotExecutableAvailability } from "./godot-executable.js";
 
 export type GeneralSettings = {
-	schemaVersion: 3;
+	schemaVersion: 4;
 	nextStepHintsEnabled: boolean;
+	autoCompactActivityDetails: boolean;
 	godotExecutablePath: string | null;
 	godotExecutableVersion: string | null;
 	godotExecutableStatus: "unconfigured" | "ready" | "unavailable";
@@ -14,12 +15,14 @@ export type GeneralSettings = {
 
 export type GeneralSettingsPatch = {
 	nextStepHintsEnabled?: boolean | undefined;
+	autoCompactActivityDetails?: boolean | undefined;
 	godotExecutablePath?: string | null | undefined;
 };
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
-	schemaVersion: 3,
+	schemaVersion: 4,
 	nextStepHintsEnabled: false,
+	autoCompactActivityDetails: true,
 	godotExecutablePath: null,
 	godotExecutableVersion: null,
 	godotExecutableStatus: "unconfigured",
@@ -31,8 +34,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function getPersistedSettings(settings: GeneralSettings): Record<string, unknown> {
+	return {
+		schemaVersion: settings.schemaVersion,
+		nextStepHintsEnabled: settings.nextStepHintsEnabled,
+		autoCompactActivityDetails: settings.autoCompactActivityDetails,
+		godotExecutablePath: settings.godotExecutablePath,
+		godotExecutableVersion: settings.godotExecutableVersion,
+		updatedAt: settings.updatedAt
+	};
+}
+
 export function normalizeGeneralSettings(value: unknown): GeneralSettings {
-	if (!isRecord(value) || value.schemaVersion !== 3) {
+	if (!isRecord(value) || (value.schemaVersion !== 3 && value.schemaVersion !== 4)) {
 		return { ...DEFAULT_GENERAL_SETTINGS };
 	}
 
@@ -40,10 +54,13 @@ export function normalizeGeneralSettings(value: unknown): GeneralSettings {
 		? value.godotExecutablePath.trim() || null
 		: null;
 	return {
-		schemaVersion: 3,
+		schemaVersion: 4,
 		nextStepHintsEnabled: typeof value.nextStepHintsEnabled === "boolean"
 			? value.nextStepHintsEnabled
 			: DEFAULT_GENERAL_SETTINGS.nextStepHintsEnabled,
+		autoCompactActivityDetails: typeof value.autoCompactActivityDetails === "boolean"
+			? value.autoCompactActivityDetails
+			: DEFAULT_GENERAL_SETTINGS.autoCompactActivityDetails,
 		godotExecutablePath,
 		godotExecutableVersion: typeof value.godotExecutableVersion === "string"
 			? value.godotExecutableVersion
@@ -55,7 +72,11 @@ export function normalizeGeneralSettings(value: unknown): GeneralSettings {
 }
 
 export async function getGeneralSettings(): Promise<GeneralSettings> {
-	const settings: GeneralSettings = normalizeGeneralSettings(await readJsonFile<unknown>(getGeneralSettingsConfigPath()));
+	const rawSettings: unknown = await readJsonFile<unknown>(getGeneralSettingsConfigPath());
+	const settings: GeneralSettings = normalizeGeneralSettings(rawSettings);
+	if (isRecord(rawSettings) && rawSettings.schemaVersion === 3) {
+		await writeJsonFileAtomic(getGeneralSettingsConfigPath(), getPersistedSettings(settings));
+	}
 	if (settings.godotExecutablePath === null) {
 		return settings;
 	}
@@ -88,21 +109,16 @@ export async function updateGeneralSettings(patch: GeneralSettingsPatch): Promis
 		}
 	}
 	const settings: GeneralSettings = {
-		schemaVersion: 3,
+		schemaVersion: 4,
 		nextStepHintsEnabled: patch.nextStepHintsEnabled ?? current.nextStepHintsEnabled,
+		autoCompactActivityDetails: patch.autoCompactActivityDetails ?? current.autoCompactActivityDetails,
 		godotExecutablePath,
 		godotExecutableVersion,
 		godotExecutableStatus: godotExecutablePath === null ? "unconfigured" : "ready",
 		godotExecutableError: null,
 		updatedAt: new Date().toISOString()
 	};
-	await writeJsonFileAtomic(getGeneralSettingsConfigPath(), {
-		schemaVersion: settings.schemaVersion,
-		nextStepHintsEnabled: settings.nextStepHintsEnabled,
-		godotExecutablePath: settings.godotExecutablePath,
-		godotExecutableVersion: settings.godotExecutableVersion,
-		updatedAt: settings.updatedAt
-	});
+	await writeJsonFileAtomic(getGeneralSettingsConfigPath(), getPersistedSettings(settings));
 	return settings;
 }
 

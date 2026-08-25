@@ -25,6 +25,7 @@ import {
 	type AgentRunState
 } from "../workflow/agent-run-state.js";
 import { annotateActivityEvent, createActivityGroupAccumulator } from "../session/activity-groups.js";
+import { scheduleSessionActivityCompaction } from "../session/activity-compaction.js";
 
 const PERSISTED_DELTA_FLUSH_CHARS = 8192;
 const LIVE_DELTA_FLUSH_MS = 32;
@@ -108,6 +109,21 @@ function getRecordString(data: unknown, key: string): string {
 
 	const value: unknown = (data as Record<string, unknown>)[key];
 	return typeof value === "string" ? value.trim() : "";
+}
+
+function shouldScheduleActivityCompaction(eventName: CanonicalServerEventName, data: unknown): boolean {
+	if (
+		eventName === "agent.message.done"
+		|| eventName === "agent.run.done"
+		|| eventName === "agent.run.error"
+		|| eventName === "agent.run.cancelled"
+	) {
+		return true;
+	}
+	if (eventName !== "agent.run.state") {
+		return false;
+	}
+	return ["completed", "failed", "cancelled"].includes(getRecordString(data, "stage"));
 }
 
 function annotateSessionActivity(
@@ -330,6 +346,9 @@ export function persistSessionEvent(
 	if (identity !== undefined) {
 		enqueueSessionEventWrite(session, async (): Promise<void> => {
 			await appendSessionEvent(sessionId, persistRequestId, canonicalEventName, data, identity);
+			if (shouldScheduleActivityCompaction(canonicalEventName, data)) {
+				scheduleSessionActivityCompaction(sessionId);
+			}
 		});
 		return;
 	}
@@ -399,6 +418,9 @@ export function persistSessionEvent(
 			if (runId !== null) {
 				await appendAgentEvent(sessionId, runId, persistRequestId, canonicalEventName, data);
 			}
+		}
+		if (shouldScheduleActivityCompaction(canonicalEventName, data)) {
+			scheduleSessionActivityCompaction(sessionId);
 		}
 	});
 }

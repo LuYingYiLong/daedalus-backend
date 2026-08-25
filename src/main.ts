@@ -25,6 +25,7 @@ import { closeUsageMetricsStore, initializeUsageMetricsStore } from "./usage/met
 import { initializeGodotDocumentationManager } from "./godot-documentation/manager.js";
 import { cleanupAgentGoalCheckpoints } from "./server/goal-checkpoints.js";
 import { startSessionSearchPrebuildScheduler, stopSessionSearchPrebuildScheduler } from "./session-search/scheduler.js";
+import { startSessionActivityCompactionScheduler, stopSessionActivityCompactionScheduler } from "./session/activity-compaction.js";
 import { sessionSearchService } from "./session-search/service.js";
 import { initializeWorktreeOperations } from "./workspace/worktree-operations.js";
 import { recoverPluginRuntimeState } from "./plugins/runtime/manager.js";
@@ -161,6 +162,11 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		}, "Server started without all MCP services available");
 	});
 	startSessionSearchPrebuildScheduler();
+	void startSessionActivityCompactionScheduler().catch((error: unknown): void => {
+		logger.warn("session", "activity_compaction_start_failed", {
+			error: error instanceof Error ? error.message : String(error)
+		});
+	});
 	let memoryDiagnosticsTimer: ReturnType<typeof setInterval> | null = null;
 	if (process.env.DAEDALUS_MEMORY_DIAGNOSTICS === "1") {
 		memoryDiagnosticsTimer = setInterval((): void => {
@@ -175,6 +181,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 	const close = async (reason: string = "requested"): Promise<void> => {
 		closePromise ??= (async (): Promise<void> => {
 			stopSessionSearchPrebuildScheduler();
+			stopSessionActivityCompactionScheduler();
 			if (memoryDiagnosticsTimer !== null) {
 				clearInterval(memoryDiagnosticsTimer);
 				memoryDiagnosticsTimer = null;

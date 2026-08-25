@@ -61,6 +61,8 @@ export type TimelineThinkingPart = {
 	type: "thinking";
 	text: string;
 	done: boolean;
+	detailLevel?: "full" | "compacted";
+	compactedSummary?: string;
 	activityGroupId?: string;
 	activityPartId?: string;
 	activityPartKind?: "thinking" | "tool";
@@ -86,6 +88,8 @@ export type TimelineToolPart = {
 	type: "tool";
 	tool_call_id: string;
 	events: Record<string, unknown>[];
+	detailLevel?: "full" | "compacted";
+	compactedSummary?: string;
 	activityGroupId?: string;
 	activityPartId?: string;
 	activityPartKind?: "thinking" | "tool";
@@ -168,6 +172,8 @@ export type TimelineImageGenerationPart = {
 	type: "image_generation";
 	status: "running" | "completed" | "failed";
 	prompt: string;
+	detailLevel?: "full" | "compacted";
+	compactedSummary?: string;
 	toolCallId?: string | undefined;
 	artifacts?: Record<string, unknown>[] | undefined;
 	provider?: string | undefined;
@@ -449,6 +455,8 @@ function shouldReplaceMarkdownWithFinalText(existingText: string, finalText: str
 }
 
 function getActivityMetadata(data: Record<string, unknown>): {
+	detailLevel?: "full" | "compacted";
+	compactedSummary?: string;
 	activityGroupId?: string;
 	activityPartId?: string;
 	activityPartKind?: "thinking" | "tool";
@@ -457,6 +465,8 @@ function getActivityMetadata(data: Record<string, unknown>): {
 	const activityGroupId: string = asString(data.activityGroupId);
 	const activityPartId: string = asString(data.activityPartId);
 	const activityPartKind: string = asString(data.activityPartKind);
+	const detailLevel: string = asString(data.detailLevel);
+	const compactedSummary: string = asString(data.compactedSummary);
 	const stats: Record<string, unknown> = isRecord(data.activityGroupStats) ? data.activityGroupStats : {};
 	const activityGroupStats: TimelineActivityStats | undefined = activityGroupId.length === 0 || activityPartId.length === 0
 		? undefined
@@ -466,6 +476,8 @@ function getActivityMetadata(data: Record<string, unknown>): {
 			thoughts: asNumber(stats.thoughts)
 		};
 	return {
+		...(detailLevel === "compacted" ? { detailLevel: "compacted" as const } : {}),
+		...(compactedSummary.length === 0 ? {} : { compactedSummary }),
 		...(activityGroupId.length === 0 ? {} : { activityGroupId }),
 		...(activityPartId.length === 0 ? {} : { activityPartId }),
 		...(activityPartKind === "thinking" || activityPartKind === "tool" ? { activityPartKind } : {}),
@@ -608,6 +620,12 @@ function toolPartMatchesEvent(part: TimelineToolPart, toolCallKey: string, event
 }
 
 function mergeToolActivityMetadata(part: TimelineToolPart, metadata: ReturnType<typeof getActivityMetadata>): void {
+	if (metadata.detailLevel === "compacted") {
+		part.detailLevel = "compacted";
+		if (metadata.compactedSummary !== undefined) {
+			part.compactedSummary = metadata.compactedSummary;
+		}
+	}
 	if (part.activityGroupId === undefined || part.activityPartId === undefined) {
 		Object.assign(part, metadata);
 		return;
@@ -684,20 +702,33 @@ function appendImageGenerationPart(parts: TimelineBodyPart[], eventData: Record<
 	} else if (eventType === "tool.result" || eventType === "agent.tool.result") {
 		const imageGeneration: unknown = eventData.imageGeneration;
 		if (!isRecord(imageGeneration)) {
-			return;
+			if (eventData.compacted === true && eventData.detailLevel === "compacted") {
+				nextPart = {
+					type: "image_generation",
+					status: "completed",
+					toolCallId,
+					prompt: "",
+					detailLevel: "compacted",
+					compactedSummary: asString(eventData.compactedSummary) || "Image details compacted."
+				};
+			}
+			if (nextPart === null) {
+				return;
+			}
+		} else {
+			const artifactsValue: unknown = imageGeneration.artifacts;
+			nextPart = {
+				type: "image_generation",
+				status: "completed",
+				toolCallId,
+				prompt: asString(imageGeneration.prompt) || extractImageGenerationPrompt(eventData),
+				provider: asString(imageGeneration.provider),
+				model: asString(imageGeneration.model),
+				artifacts: Array.isArray(artifactsValue)
+					? artifactsValue.filter(isRecord).map(cloneRecord)
+					: []
+			};
 		}
-		const artifactsValue: unknown = imageGeneration.artifacts;
-		nextPart = {
-			type: "image_generation",
-			status: "completed",
-			toolCallId,
-			prompt: asString(imageGeneration.prompt) || extractImageGenerationPrompt(eventData),
-			provider: asString(imageGeneration.provider),
-			model: asString(imageGeneration.model),
-			artifacts: Array.isArray(artifactsValue)
-				? artifactsValue.filter(isRecord).map(cloneRecord)
-				: []
-		};
 	} else if (eventType === "tool.error" || eventType === "agent.tool.error") {
 		nextPart = {
 			type: "image_generation",

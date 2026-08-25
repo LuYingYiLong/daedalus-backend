@@ -251,6 +251,10 @@ function invalidateTimelineCache(sessionId: string): void {
 	timelineCacheBySessionId.delete(assertSafeSessionId(sessionId));
 }
 
+export function invalidateSessionTimelineCache(sessionId: string): void {
+	invalidateTimelineCache(sessionId);
+}
+
 export function getTimelineCacheStats(): TimelineCacheStats {
 	return timelineCacheBySessionId.stats();
 }

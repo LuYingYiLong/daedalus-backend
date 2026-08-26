@@ -66,6 +66,7 @@ import {
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
 import { listSelectionAskThreads } from "../session/selection-ask-store.js";
+import { getTraceDetail, getTracePage, getTraceSummary } from "../trace/trace-store.js";
 import { exportSessionToSqlite } from "../session/session-export.js";
 import { importSessionFromSqlite } from "../session/session-import.js";
 import {
@@ -1869,6 +1870,59 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result: metadata
 			});
+			break;
+		}
+
+		case "session.trace.summary":
+		case "session.trace.page":
+		case "session.trace.detail": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "studio_only", message: `${request.method} is only available to Daedalus Studio.` }
+				});
+				break;
+			}
+			try {
+				const sessionId: string = request.params.sessionId;
+				if (await getStoredSessionMetadata(sessionId) === null) {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: { code: "no_session", message: "Session does not exist." }
+					});
+					break;
+				}
+				if (request.method === "session.trace.summary") {
+					sendJson(socket, { type: "response", id: request.id, ok: true, result: await getTraceSummary(sessionId) });
+					break;
+				}
+				if (request.method === "session.trace.page") {
+					sendJson(socket, { type: "response", id: request.id, ok: true, result: await getTracePage(request.params) });
+					break;
+				}
+				const detail = await getTraceDetail(sessionId, request.params.recordId);
+				if (detail === null) {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: { code: "trace_not_found", message: "Trace record does not exist." }
+					});
+					break;
+				}
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: detail });
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_trace_error", "Failed to load session trace")
+				});
+			}
 			break;
 		}
 

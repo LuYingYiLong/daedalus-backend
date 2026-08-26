@@ -9,6 +9,7 @@ import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson, toSql
 import { buildCanonicalTimelineBlocks, getVisibleAssistantMarkdownSegments, type TimelineBlock, type TimelinePlanApproval, type TimelinePlanClarification } from "./timeline-blocks.js";
 import { estimateTimelineValueBytes, TimelineCache, type TimelineCacheStats } from "./timeline-cache.js";
 import { notifySessionDeleted } from "../session-search/lifecycle.js";
+import { recordTraceFromSessionEvent } from "../trace/trace-recorder.js";
 
 const SESSIONS_DIR: string = getDefaultSessionsDir();
 const ARCHIVED_SESSIONS_DIR: string = getDefaultArchivedSessionsDir();
@@ -1245,7 +1246,7 @@ export async function appendSessionEvent(
 		createdAt: string;
 	} | undefined
 ): Promise<StoredSessionEvent> {
-	return appendEventRecord({
+	const stored: StoredSessionEvent = await appendEventRecord({
 		sessionId,
 		requestId,
 		event,
@@ -1254,6 +1255,8 @@ export async function appendSessionEvent(
 		idPrefix: "event",
 		...identity
 	});
+	await recordTraceFromSessionEvent(sessionId, stored);
+	return stored;
 }
 
 export async function appendApprovalEvent(sessionId: string, approvalId: string, requestId: string, event: string, data: unknown): Promise<void> {

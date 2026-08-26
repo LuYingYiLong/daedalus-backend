@@ -145,6 +145,7 @@ import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
 
 import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
+import { recordPromptSnapshot } from "../trace/trace-recorder.js";
 import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage, throwIfAborted } from "./request-lifecycle.js";
 import {
 	findCancellableAgentRun,
@@ -839,7 +840,9 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		runId,
 		stepRunId,
 		params.requestId,
-		params.mcpHost
+		params.mcpHost,
+		{},
+		{ traceRequestId: params.options.traceRequestId }
 	);
 	const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
 		if (event.type === "tool.call" && params.routeDecision.lane === "tool_assisted") {
@@ -2074,7 +2077,9 @@ async function runToolBudgetDecisionContinuation(params: {
 			runId,
 			stepRunId,
 			pending.requestId,
-			mcpHost
+			mcpHost,
+			{},
+			{ traceRequestId: pendingContinuation.options.traceRequestId }
 		);
 		const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
 			if (pendingContinuation.lightweightActionState !== undefined) {
@@ -2752,6 +2757,10 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			const runStartedAtMs: number = Date.now();
 			const turnStartedAt: string = new Date().toISOString();
 			const goalBinding = getGoalRunBinding(request.id);
+			const retrySourceRun: AgentRunState | undefined = params.retryOfRunId === undefined
+				? undefined
+				: getAgentRun(session, params.retryOfRunId);
+			const traceRequestId: string = goalBinding?.rootRequestId ?? retrySourceRun?.rootRequestId ?? request.id;
 			let persistedParams: AiChatParams = params;
 			let queuedRunForcedStatus: "failed" | "cancelled" | undefined;
 			await setQueueStatusForRun(socket, request.id, session, queueItemId, "sending");
@@ -2762,9 +2771,6 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				queueItemId
 			});
 			if (runSessionId !== undefined) {
-				const retrySourceRun: AgentRunState | undefined = params.retryOfRunId === undefined
-					? undefined
-					: getAgentRun(session, params.retryOfRunId);
 				const startedRun = beginAgentRun({
 					socket,
 					session,
@@ -2788,13 +2794,16 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			emitWorkbenchUpdated(socket, request.id, session);
 
 			try {
-				const options: ProviderChatOptions = withProviderUsageContext(createProviderChatOptions(session, apiKey), {
-					requestId: request.id,
-					runId: request.id,
-					sessionId: session.sessionId,
-					workspaceId: session.activeWorkspace?.id,
-					operation: "chat"
-				});
+				const options: ProviderChatOptions = {
+					...withProviderUsageContext(createProviderChatOptions(session, apiKey), {
+						requestId: request.id,
+						runId: request.id,
+						sessionId: session.sessionId,
+						workspaceId: session.activeWorkspace?.id,
+						operation: "chat"
+					}),
+					traceRequestId
+				};
 				const isFirstUserTurn: boolean = isFirstSessionUserTurn(session.messages, request.id);
 				maybeScheduleSessionTitleGeneration(socket, request.id, session, params, options, isFirstUserTurn);
 				const hydratedParams: AiChatParams = await awaitWithAbort(hydrateImageAttachmentContexts(session.sessionId, params), abortController.signal);
@@ -3038,6 +3047,53 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				const history: ChatMessage[] = (goalBinding?.cycle ?? 1) > 1
 					? []
 					: await selectHistoryForModel(session, historyBudgetTokens, request.id);
+				if (session.sessionId !== undefined) {
+					try {
+						await recordPromptSnapshot({
+							sessionId: session.sessionId,
+							requestId: traceRequestId,
+							runId: request.id,
+							provider: options.provider,
+							model: resolveChatModel(options),
+							sections: [
+								{ kind: "system", label: "System Prompt", content: fullSystemPrompt },
+								{ kind: "developer", label: "Custom Instructions", content: effectiveParams.systemPrompt ?? "" },
+								{ kind: "history", label: "Selected History", content: history },
+								{ kind: "user", label: "Current User Message", content: effectiveParams.message },
+								{ kind: "tools", label: "Available Tools", content: allowedToolNames ?? [] },
+								{ kind: "workspace", label: "Workspace", content: session.activeWorkspace === undefined ? null : {
+									workspaceId: session.activeWorkspace.id,
+									primarySourceFolderId: session.activeWorkspace.primarySourceFolderId,
+									sourceFolders: session.activeWorkspace.sourceFolders.map((source): { id: string; path: string } => ({ id: source.id, path: source.path }))
+								} },
+								{ kind: "provider", label: "Provider", content: {
+									provider: options.provider,
+									model: resolveChatModel(options),
+									endpointType: options.endpointType,
+									reasoningMode: options.reasoningMode
+								} },
+								{ kind: "context", label: "Runtime Context", content: {
+									skillPrompt,
+									skillCatalogPrompt,
+									mcpSystemContext,
+									additionalContextSection,
+									guidePromptSection,
+									safeRetryPromptSection
+								} }
+							],
+							providerParameters: {
+								provider: options.provider,
+								model: resolveChatModel(options),
+								baseUrl: options.baseUrl,
+								endpointType: options.endpointType,
+								reasoningMode: options.reasoningMode,
+								requestOverrides: options.requestOverrides
+							}
+						});
+					} catch (error: unknown) {
+						logger.warn("trace", "prompt_snapshot_failed", { sessionId: session.sessionId, requestId: request.id, error });
+					}
+				}
 				const planningContext: string = [
 					skillPrompt,
 					skillCatalogPrompt,

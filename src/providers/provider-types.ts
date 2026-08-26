@@ -109,6 +109,8 @@ export type ProviderChatOptions = {
 	 */
 	reasoningMode?: "auto" | "disabled" | undefined;
 	usageContext?: ProviderUsageContext | undefined;
+	/** Canonical user request used only to correlate developer trajectory records. */
+	traceRequestId?: string | undefined;
 	requestOverrides?: ProviderRequestOverrides | undefined;
 };
 

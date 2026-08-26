@@ -13,6 +13,7 @@ import { persistFileEditBatch } from "../file-edit-batches.js";
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../tools/execution-control.js";
 import { TODO_UPDATE_TOOL_NAME } from "../../tools/todo-control.js";
 import { SUMMARY_PREPARATION_TOOL_NAME } from "../../tools/summary-control.js";
+import { attachToolTraceOutput } from "../../trace/trace-recorder.js";
 
 const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_skills_load",
@@ -24,6 +25,8 @@ const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
 export type AgentToolEventForwarderOptions = {
 	/** Internal planners must not persist or expose file edit batches. */
 	persistFileEditBatches?: boolean | undefined;
+	/** Canonical user request used only for developer trajectory correlation. */
+	traceRequestId?: string | undefined;
 };
 
 function isInternalToolEvent(toolName: string): boolean {
@@ -149,7 +152,18 @@ export function createAgentToolEventForwarder(
 				sendSessionEvent(socket, requestId, session, "skill.catalog.changed", { ref: createdSkillRef }, persistRequestId);
 				createdSkillRefsByToolCallId.delete(event.toolCallId);
 			}
-			const { fileEditDraft, ...publicEvent } = event;
+			const { fileEditDraft, traceContent, ...publicEvent } = event;
+			if (traceContent !== undefined) {
+				void attachToolTraceOutput({
+					sessionId: session.sessionId,
+					requestId: options.traceRequestId ?? persistRequestId,
+					runId,
+					stepId: stepRunId,
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					output: traceContent
+				}).catch((): void => undefined);
+			}
 			const fileEditBatch = options.persistFileEditBatches === false
 				? undefined
 				: persistFileEditBatch(

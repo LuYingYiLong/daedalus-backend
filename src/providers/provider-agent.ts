@@ -11,11 +11,60 @@ import { resolveImageGenerationAvailability, type ImageGenerationAvailability } 
 import { resolveChatModel } from "./deepseek-client.js";
 import { modelSupportsImageInput } from "./provider-image-content.js";
 import { resolveProviderTaskModelOptions } from "./task-model-routing.js";
+import { beginProviderTrace, completeProviderTrace, runWithProviderTraceContext } from "../trace/trace-recorder.js";
 
 const IMAGE_GENERATION_TOOL_NAME: string = "mcp_image_generate";
 const IMAGE_INSPECTION_TOOL_NAME: string = "mcp_image_inspect";
 const IMAGE_AVAILABILITY_CACHE_TTL_MS: number = 5 * 60 * 1000;
 const imageAvailabilityByRequestId: Map<string, { value: ImageGenerationAvailability; expiresAt: number }> = new Map();
+
+async function runWithProviderTrace(
+	params: AiChatParams,
+	options: ProviderChatOptions,
+	toolContext: ToolExecutionContext | undefined,
+	request: unknown,
+	execute: () => Promise<ProviderAgentResult>
+): Promise<ProviderAgentResult> {
+	let callId: string | null = null;
+	try {
+		callId = await beginProviderTrace({
+			sessionId: toolContext?.sessionId,
+			requestId: options.traceRequestId ?? toolContext?.requestId,
+			runId: options.usageContext?.runId,
+			provider: options.provider,
+			model: resolveChatModel(options),
+			request
+		});
+	} catch {
+		// Tracing is observational and must never block provider execution.
+	}
+	try {
+		const result: ProviderAgentResult = await runWithProviderTraceContext(callId, execute);
+		try {
+			await completeProviderTrace(callId, {
+				status: "success",
+				provider: options.provider,
+				model: resolveChatModel(options),
+				response: result
+			});
+		} catch {
+			// The model result remains authoritative when trace persistence fails.
+		}
+		return result;
+	} catch (error: unknown) {
+		try {
+			await completeProviderTrace(callId, {
+				status: error instanceof Error && error.name === "AbortError" ? "cancelled" : "error",
+				provider: options.provider,
+				model: resolveChatModel(options),
+				error
+			});
+		} catch {
+			// Preserve the original provider failure.
+		}
+		throw error;
+	}
+}
 
 async function getImageGenerationAvailability(toolContext?: ToolExecutionContext | undefined): Promise<ImageGenerationAvailability> {
 	const requestId: string | undefined = toolContext?.requestId;
@@ -135,7 +184,13 @@ export async function runProviderAgent(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
-	return resolveProviderAdapter(options).runAgent(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message));
+	return runWithProviderTrace(params, options, toolContext, {
+		params,
+		history,
+		systemPrompt: prepared.systemPrompt,
+		allowedToolNames: prepared.allowedToolNames,
+		provider: { provider: options.provider, model: resolveChatModel(options), baseUrl: options.baseUrl, endpointType: options.endpointType, requestOverrides: options.requestOverrides }
+	}, (): Promise<ProviderAgentResult> => resolveProviderAdapter(options).runAgent(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function runProviderAgentStreaming(
@@ -152,7 +207,13 @@ export async function runProviderAgentStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
-	return resolveProviderAdapter(options).runAgentStreaming(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message));
+	return runWithProviderTrace(params, options, toolContext, {
+		params,
+		history,
+		systemPrompt: prepared.systemPrompt,
+		allowedToolNames: prepared.allowedToolNames,
+		provider: { provider: options.provider, model: resolveChatModel(options), baseUrl: options.baseUrl, endpointType: options.endpointType, requestOverrides: options.requestOverrides }
+	}, (): Promise<ProviderAgentResult> => resolveProviderAdapter(options).runAgentStreaming(params, options, history, prepared.systemPrompt, mcpHost, gateway, prepared.allowedToolNames, onEvent, abortSignal, toolResultEnricher, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function continueProviderAgent(
@@ -168,7 +229,9 @@ export async function continueProviderAgent(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgent(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
+	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, approvedToolResult, allowedToolNames: effectiveTools },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgent(params, options, continuation, approvedToolResult, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function continueProviderAgentStreaming(
@@ -184,7 +247,9 @@ export async function continueProviderAgentStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentStreaming(params, options, continuation, approvedToolResult, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
+	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, approvedToolResult, allowedToolNames: effectiveTools },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentStreaming(params, options, continuation, approvedToolResult, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function continueProviderAgentAfterToolBudget(
@@ -199,7 +264,9 @@ export async function continueProviderAgentAfterToolBudget(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentAfterToolBudget(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
+	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames: effectiveTools, reason: "tool_budget_resumed" },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentAfterToolBudget(params, options, continuation, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function continueProviderAgentAfterToolBudgetStreaming(
@@ -214,7 +281,9 @@ export async function continueProviderAgentAfterToolBudgetStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).continueAgentAfterToolBudgetStreaming(params, options, continuation, mcpHost, gateway, await filterContinuationTools(allowedToolNames, toolContext, options), onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message));
+	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames: effectiveTools, reason: "tool_budget_resumed" },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentAfterToolBudgetStreaming(params, options, continuation, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
 }
 
 export async function finalizeProviderAgentAfterToolBudget(
@@ -228,7 +297,8 @@ export async function finalizeProviderAgentAfterToolBudget(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).finalizeAgentAfterToolBudget(params, options, continuation, allowedToolNames, reason, onEvent, abortSignal, toolContext);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames, reason },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).finalizeAgentAfterToolBudget(params, options, continuation, allowedToolNames, reason, onEvent, abortSignal, toolContext));
 }
 
 export async function finalizeProviderAgentAfterToolBudgetStreaming(
@@ -242,5 +312,6 @@ export async function finalizeProviderAgentAfterToolBudgetStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
-	return resolveProviderAdapter(options).finalizeAgentAfterToolBudgetStreaming(params, options, continuation, allowedToolNames, reason, onEvent, abortSignal, toolContext);
+	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames, reason },
+		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).finalizeAgentAfterToolBudgetStreaming(params, options, continuation, allowedToolNames, reason, onEvent, abortSignal, toolContext));
 }

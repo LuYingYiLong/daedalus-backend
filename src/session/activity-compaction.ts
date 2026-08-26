@@ -11,6 +11,8 @@ import {
 } from "./session-store.js";
 import type { StoredMessage, StoredSessionEvent } from "./session-store.js";
 import type { DatabaseSync } from "node:sqlite";
+import { publishTraceRecordUpdate } from "../trace/trace-recorder.js";
+import { compactTracePayloadsInTransaction, getTraceRecordsByIds } from "../trace/trace-store.js";
 
 export const ACTIVITY_DETAIL_RETENTION_TURNS: number = 10;
 export const ACTIVITY_COMPACTION_SCHEMA_VERSION: number = 1;
@@ -65,6 +67,7 @@ export type ActivityCompactionResult = {
 	retainedTurns: number;
 	compactedRequestIds: string[];
 	compactedEvents: number;
+	compactedTraceRecords?: number | undefined;
 	removedBytes: number;
 	skipped: "disabled" | "active_run" | "nothing_to_compact" | null;
 };
@@ -74,6 +77,10 @@ type EventRow = {
 	requestId: string;
 	event: string;
 	data: unknown;
+};
+
+type ActivityCompactionRowsResult = Omit<ActivityCompactionResult, "sessionId" | "skipped"> & {
+	compactedTraceRecordIds: string[];
 };
 
 export type CompactedEvent = {
@@ -378,7 +385,7 @@ function hasActiveRun(db: DatabaseSync, sessionId: string): boolean {
 	return rows.some((row: Record<string, unknown>): boolean => ACTIVE_RUN_STAGES.has(String(row.stage)));
 }
 
-function compactSessionRows(db: DatabaseSync, sessionId: string): Omit<ActivityCompactionResult, "sessionId" | "skipped"> {
+function compactSessionRows(db: DatabaseSync, sessionId: string): ActivityCompactionRowsResult {
 	const messages: StoredMessage[] = readMessagesForCompaction(db, sessionId);
 	const events: StoredSessionEvent[] = readTimelineEventsForCompaction(db, sessionId);
 	const requestSelection = getCompactionRequestIds(messages, events);
@@ -388,6 +395,7 @@ function compactSessionRows(db: DatabaseSync, sessionId: string): Omit<ActivityC
 			retainedTurns: requestSelection.retainedRequestIds.length,
 			compactedRequestIds: [],
 			compactedEvents: 0,
+			compactedTraceRecordIds: [],
 			removedBytes: 0,
 		};
 	}
@@ -424,11 +432,15 @@ function compactSessionRows(db: DatabaseSync, sessionId: string): Omit<ActivityC
 		compactedEvents += 1;
 		removedBytes += compacted.removedBytes;
 	}
+	const compactedTrace = compactTracePayloadsInTransaction(db, sessionId, requestSelection.compactedRequestIds);
+	removedBytes += compactedTrace.removedChars;
 	return {
 		completedTurns: requestSelection.completedRequestIds.length,
 		retainedTurns: requestSelection.retainedRequestIds.length,
 		compactedRequestIds: requestSelection.compactedRequestIds,
 		compactedEvents,
+		compactedTraceRecords: compactedTrace.records,
+		compactedTraceRecordIds: compactedTrace.recordIds,
 		removedBytes,
 	};
 }
@@ -457,14 +469,20 @@ export async function compactSessionActivity(sessionId: string, enabled: boolean
 			skipped: "active_run",
 		};
 	}
-	const result: Omit<ActivityCompactionResult, "sessionId" | "skipped"> = runSessionTransaction(db, (): Omit<ActivityCompactionResult, "sessionId" | "skipped"> => compactSessionRows(db, sessionId));
+	const result: ActivityCompactionRowsResult = runSessionTransaction(db, (): ActivityCompactionRowsResult => compactSessionRows(db, sessionId));
 	if (result.compactedEvents > 0) {
 		invalidateSessionTimelineCache(sessionId);
 	}
+	if (result.compactedTraceRecordIds.length > 0) {
+		for (const record of await getTraceRecordsByIds(sessionId, result.compactedTraceRecordIds)) {
+			publishTraceRecordUpdate(record, "updated");
+		}
+	}
+	const { compactedTraceRecordIds: _compactedTraceRecordIds, ...publicResult } = result;
 	return {
 		sessionId,
-		...result,
-		skipped: result.compactedEvents === 0 ? "nothing_to_compact" : null,
+		...publicResult,
+		skipped: result.compactedEvents === 0 && (result.compactedTraceRecords ?? 0) === 0 ? "nothing_to_compact" : null,
 	};
 }
 
@@ -558,11 +576,11 @@ async function processNextCompaction(): Promise<void> {
 			retryTimer.unref();
 			scheduler.retryTimers.set(sessionId, retryTimer);
 		}
-		if (result.compactedEvents > 0) {
+		if (result.compactedEvents > 0 || (result.compactedTraceRecords ?? 0) > 0) {
 			scheduler.reclaimableBytes += result.removedBytes;
 			logger.info("session", "activity_compaction_completed", result);
 		}
-		if (result.compactedEvents > 0) {
+		if (result.compactedEvents > 0 || (result.compactedTraceRecords ?? 0) > 0) {
 			const db: DatabaseSync = await getSessionDatabase();
 			checkpointWal(db);
 			if (scheduler.reclaimableBytes >= VACUUM_RECLAIM_THRESHOLD_BYTES && !hasAnyActiveRun(db)) {

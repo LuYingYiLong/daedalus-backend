@@ -18,9 +18,10 @@ test("general settings default next-step hints to disabled and persist updates",
 		const saved = await store.updateGeneralSettings({
 			nextStepHintsEnabled: false
 		});
-	assert.equal(saved.schemaVersion, 4);
+		assert.equal(saved.schemaVersion, 5);
 		assert.equal(saved.nextStepHintsEnabled, false);
 		assert.equal(saved.autoCompactActivityDetails, true);
+		assert.equal(saved.developerMode, false);
 		assert.equal(saved.godotExecutablePath, null);
 		assert.equal(saved.godotExecutableStatus, "unconfigured");
 		assert.notEqual(saved.updatedAt, "");
@@ -57,9 +58,10 @@ test("general settings fallback to defaults for invalid config without compatibi
 		}), "utf8");
 
 		assert.deepEqual(await store.getGeneralSettings(), {
-			schemaVersion: 4,
+			schemaVersion: 5,
 			nextStepHintsEnabled: false,
 			autoCompactActivityDetails: true,
+			developerMode: false,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -92,9 +94,10 @@ test("general settings ignores v1 config and rejects an invalid Godot executable
 		}), "utf8");
 
 		assert.deepEqual(await store.getGeneralSettings(), {
-			schemaVersion: 4,
+			schemaVersion: 5,
 			nextStepHintsEnabled: false,
 			autoCompactActivityDetails: true,
+			developerMode: false,
 			godotExecutablePath: null,
 			godotExecutableVersion: null,
 			godotExecutableStatus: "unconfigured",
@@ -142,19 +145,55 @@ test("general settings migrate schema 3 without resetting existing preferences",
 		}), "utf8");
 
 		const settings = await store.getGeneralSettings();
-		assert.equal(settings.schemaVersion, 4);
+		assert.equal(settings.schemaVersion, 5);
 		assert.equal(settings.nextStepHintsEnabled, true);
 		assert.equal(settings.autoCompactActivityDetails, true);
+		assert.equal(settings.developerMode, false);
 		const migrated = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-		assert.equal(migrated.schemaVersion, 4);
+		assert.equal(migrated.schemaVersion, 5);
 		assert.equal(migrated.nextStepHintsEnabled, true);
 		assert.equal(migrated.autoCompactActivityDetails, true);
+		assert.equal(migrated.developerMode, false);
 	} finally {
 		if (previousUserProfile === undefined) {
 			delete process.env.USERPROFILE;
 		} else {
 			process.env.USERPROFILE = previousUserProfile;
 		}
+		await rm(appDataDir, { recursive: true, force: true });
+	}
+});
+
+test("general settings migrate schema 4 to developer mode without resetting preferences", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const appDataDir: string = await mkdtemp(join(tmpdir(), "daedalus-general-settings-v5-migration-"));
+	process.env.USERPROFILE = appDataDir;
+	try {
+		const store = await import(`../../../src/general-settings-store.js?case=${Date.now()}-${Math.random()}`);
+		const appPaths = await import(`../../../src/app-paths.js?case=${Date.now()}-${Math.random()}`);
+		const configPath: string = appPaths.getGeneralSettingsConfigPath();
+		await mkdir(dirname(configPath), { recursive: true });
+		await writeFile(configPath, JSON.stringify({
+			schemaVersion: 4,
+			nextStepHintsEnabled: true,
+			autoCompactActivityDetails: false,
+			godotExecutablePath: null,
+			godotExecutableVersion: null,
+			updatedAt: "2026-08-26T00:00:00.000Z"
+		}), "utf8");
+
+		const settings = await store.getGeneralSettings();
+		assert.equal(settings.schemaVersion, 5);
+		assert.equal(settings.nextStepHintsEnabled, true);
+		assert.equal(settings.autoCompactActivityDetails, false);
+		assert.equal(settings.developerMode, false);
+		const migrated = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+		assert.equal(migrated.schemaVersion, 5);
+		assert.equal(migrated.autoCompactActivityDetails, false);
+		assert.equal(migrated.developerMode, false);
+	} finally {
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
 		await rm(appDataDir, { recursive: true, force: true });
 	}
 });

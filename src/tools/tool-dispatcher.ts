@@ -65,7 +65,7 @@ export type ToolEvent =
 	| ({ type: "tool.preparing"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.call"; step: number; toolCallId: string; toolName: string; args: Record<string, unknown> } & ToolEventDisplay)
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
-	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined; recovery?: AgentLoopRecoveryStatus | undefined } & ParsedToolResultSummary)
+	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined; recovery?: AgentLoopRecoveryStatus | undefined; traceContent?: string | undefined } & ParsedToolResultSummary)
 	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined; recovery?: AgentLoopRecoveryStatus | undefined }
 	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"]; provider?: string | undefined; model?: string | undefined }
 	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined; approvalKind?: "network_download" | undefined; downloadAuthorization?: DownloadAuthorizationScope | undefined; networkAccessRequired?: NetworkAccessRequired | undefined } & ToolEventDisplay);
@@ -966,7 +966,7 @@ async function executeSingleToolCall(
 		});
 
 		if (onEvent) {
-				onEvent({
+			onEvent({
 				type: "tool.result",
 				step,
 				toolCallId: toolCall.id,
@@ -976,6 +976,7 @@ async function executeSingleToolCall(
 				cached: result.reused,
 				fileEditDraft: result.fileEditDraft,
 				imageGeneration: result.imageGeneration,
+				traceContent: modelResultContent,
 				...parsedSummary,
 				recovery: successRecovery ?? (parsedSummary.failure === undefined ? undefined : getRecoveryStatus(parsedSummary.failure))
 			});

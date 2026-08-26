@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 8;
+const DB_SCHEMA_VERSION: number = 9;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -77,6 +77,47 @@ function migrateSchema(db: DatabaseSync): void {
 		CREATE INDEX IF NOT EXISTS idx_events_workflow ON session_events (session_id, workflow_id);
 		CREATE INDEX IF NOT EXISTS idx_events_run ON session_events (session_id, run_id);
 		CREATE INDEX IF NOT EXISTS idx_events_name ON session_events (session_id, event_name, sequence DESC);
+		CREATE TABLE IF NOT EXISTS trace_records (
+			record_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			parent_id TEXT REFERENCES trace_records(record_id) ON DELETE CASCADE,
+			sequence INTEGER NOT NULL,
+			turn_index INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			status TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			run_id TEXT,
+			step_id TEXT,
+			tool_call_id TEXT,
+			provider TEXT,
+			model TEXT,
+			started_at TEXT NOT NULL,
+			finished_at TEXT,
+			duration_ms INTEGER,
+			input_tokens INTEGER,
+			output_tokens INTEGER,
+			detail_level TEXT NOT NULL DEFAULT 'full',
+			summary_json TEXT NOT NULL,
+			content_hash TEXT,
+			truncated INTEGER NOT NULL DEFAULT 0,
+			revision INTEGER NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(session_id, sequence)
+		);
+		CREATE INDEX IF NOT EXISTS idx_trace_session_sequence ON trace_records (session_id, sequence DESC);
+		CREATE INDEX IF NOT EXISTS idx_trace_session_turn ON trace_records (session_id, turn_index, sequence);
+		CREATE INDEX IF NOT EXISTS idx_trace_request ON trace_records (session_id, request_id, sequence);
+		CREATE INDEX IF NOT EXISTS idx_trace_run ON trace_records (session_id, run_id, sequence);
+		CREATE INDEX IF NOT EXISTS idx_trace_tool_call ON trace_records (session_id, tool_call_id);
+		CREATE TABLE IF NOT EXISTS trace_payloads (
+			record_id TEXT PRIMARY KEY REFERENCES trace_records(record_id) ON DELETE CASCADE,
+			payload_json TEXT NOT NULL,
+			redacted_fields_json TEXT NOT NULL,
+			char_count INTEGER NOT NULL,
+			content_hash TEXT,
+			truncated INTEGER NOT NULL DEFAULT 0,
+			updated_at TEXT NOT NULL
+		);
 		CREATE TABLE IF NOT EXISTS summaries (
 			session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
 			content TEXT NOT NULL,

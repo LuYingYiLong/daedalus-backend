@@ -68,6 +68,9 @@ const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"session.timeline.search.page",
 	"session.timeline.search.cancel",
 	"session.timeline.index",
+	"session.trace.summary",
+	"session.trace.page",
+	"session.trace.detail",
 	"session.guide.reorder",
 	"session.integrity.check",
 	"session.model.set",
@@ -170,6 +173,22 @@ test("session.timeline accepts afterOffset page request", (): void => {
 			limit: 20
 		}
 	}).success, true);
+});
+
+test("session trace RPCs validate strict developer paging requests", (): void => {
+	for (const request of [
+		{ type: "request", id: "trace-summary", method: "session.trace.summary", params: { sessionId: "session-test" } },
+		{ type: "request", id: "trace-page", method: "session.trace.page", params: { sessionId: "session-test", cursor: "42", limit: 100, turn: 11, kind: "tool_call" } },
+		{ type: "request", id: "trace-detail", method: "session.trace.detail", params: { sessionId: "session-test", recordId: "trace-record" } }
+	]) {
+		assert.equal(clientRequestSchema.safeParse(request).success, true);
+	}
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "trace-page-invalid",
+		method: "session.trace.page",
+		params: { sessionId: "session-test", limit: 201, unknown: true }
+	}).success, false);
 });
 
 test("session.integrity.check accepts session id", (): void => {
@@ -612,7 +631,8 @@ test("general settings update accepts activity compaction preference", (): void 
 		method: "generalSettings.update",
 		params: {
 			nextStepHintsEnabled: false,
-			autoCompactActivityDetails: true
+			autoCompactActivityDetails: true,
+			developerMode: true
 		}
 	}).success, true);
 });

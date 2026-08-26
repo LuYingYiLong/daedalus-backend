@@ -1149,8 +1149,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			nextStepHintsEnabled: z.boolean().optional(),
 			autoCompactActivityDetails: z.boolean().optional(),
+			developerMode: z.boolean().optional(),
 			godotExecutablePath: z.string().min(1).nullable().optional(),
-		}),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -1806,6 +1807,35 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			sessionId: z.string().min(1),
 			title: z.string().min(1),
 		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.trace.summary"),
+		params: z.object({
+			sessionId: z.string().min(1),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.trace.page"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			cursor: z.string().min(1).optional(),
+			limit: z.number().int().positive().max(200).optional(),
+			turn: z.number().int().positive().optional(),
+			kind: z.enum(["turn", "prompt", "model_call", "thinking", "tool_call", "approval", "retry", "step", "provider_reconnect", "final_response", "error"]).optional(),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.trace.detail"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			recordId: z.string().min(1),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

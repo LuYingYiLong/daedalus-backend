@@ -268,6 +268,16 @@ export function broadcastStudioSessionEvent(
 	}
 }
 
+export function broadcastToStudioSessionSubscribers(sessionId: string, envelope: ServerEvent): void {
+	const subscribers: Set<WebSocket> | undefined = sessionSubscribers.get(sessionId);
+	if (subscribers === undefined) return;
+	for (const socket of subscribers) {
+		if (socket.readyState !== WebSocket.OPEN) continue;
+		if (socketConnections.get(socket)?.clientType !== "studio") continue;
+		sendJson(socket, envelope);
+	}
+}
+
 export function broadcastGlobalEvent(requestId: string, eventName: ServerEvent["event"], data: unknown): void {
 	for (const record of socketConnections.values()) {
 		if (record.socket.readyState !== WebSocket.OPEN) {

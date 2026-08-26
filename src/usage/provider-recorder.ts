@@ -6,6 +6,7 @@ import { logger } from "../logger.js";
 import type { NormalizedLlmUsage, ProviderUsageContext, UsageMetricsStatus } from "./metrics-types.js";
 import { createEstimatedUsage, createMissingUsage } from "./usage-parser.js";
 import { recordUsageMetrics } from "./metrics-store.js";
+import { recordActiveProviderTraceUsage } from "../trace/trace-recorder.js";
 
 type ProviderUsageRecordParams = {
 	options: ProviderChatOptions;
@@ -130,6 +131,21 @@ export async function recordProviderUsage(params: ProviderUsageRecordParams): Pr
 			streaming: params.streaming,
 			usage
 		});
+		try {
+			await recordActiveProviderTraceUsage({
+				usage,
+				request: params.requestBody,
+				response: params.responseBody,
+				outputText: params.outputText
+			});
+		} catch (error: unknown) {
+			logger.warn("trace", "provider_usage_record_failed", {
+				requestId: context.requestId,
+				provider: params.options.provider,
+				model: params.options.model,
+				message: error instanceof Error ? error.message : String(error)
+			});
+		}
 	} catch (error: unknown) {
 		logger.warn("usage_metrics", "record_failed", {
 			requestId: context.requestId,

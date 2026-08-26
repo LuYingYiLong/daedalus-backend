@@ -278,7 +278,9 @@ async function continueAfterRejectedApproval(params: {
 			runId,
 			stepRunId,
 			pendingContinuation.requestId,
-			mcpHost
+			mcpHost,
+			{},
+			{ traceRequestId: pendingContinuation.options.traceRequestId }
 		);
 		if (pendingContinuation.lightweightActionState !== undefined) {
 			applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, failureEvent);
@@ -560,7 +562,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				approvalRunId,
 				approvalStepRunId,
 				approvalPersistRequestId,
-				mcpHost
+				mcpHost,
+				{},
+				{ traceRequestId: pendingContinuation?.options.traceRequestId }
 			);
 			const result = await awaitWithAbort(
 				session.approvalGateway.approve(request.params.approvalId, mcpHost, {
@@ -710,7 +714,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				continuationRunId,
 				continuationStepRunId,
 				pendingContinuation.requestId,
-				mcpHost
+				mcpHost,
+				{},
+				{ traceRequestId: pendingContinuation.options.traceRequestId }
 			);
 			const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
 				if (pendingContinuation.lightweightActionState !== undefined) {

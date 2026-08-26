@@ -108,7 +108,7 @@ test("fake Harness Sidecar performs the versioned handshake and publishes isolat
 		command: process.execPath,
 		args: [join(fakeHarnessRoot, "apps", "cli", "lib", "bin.js")],
 		readOnlyPaths: [fakeHarnessRoot],
-		bridgeProtocolVersion: 1,
+		bridgeProtocolVersion: 2,
 		bridgeCompatible: true,
 		dependenciesReady: true
 	};

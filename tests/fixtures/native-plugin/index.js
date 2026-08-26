@@ -3,10 +3,6 @@ export function register(api) {
 		{ id: "hello", command: "/fixture-hello", description: "Insert a fixture greeting.", handlerName: "fixture.command.hello" },
 		() => ({ prompt: "Hello from the fixture plugin." }),
 	);
-	api.contextProviders.register(
-		{ id: "context", title: "Fixture context", description: "Provides a safe fixture context item.", scopes: ["plugin"], handlerName: "fixture.context" },
-		() => ({ title: "Fixture context", content: "Safe fixture context." }),
-	);
 	api.tools.register(
 		{
 			name: "fixture_echo",

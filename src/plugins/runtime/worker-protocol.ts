@@ -1,6 +1,6 @@
 import type { PluginCapability } from "../types.js";
 
-export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 2 as const;
 
 export type PluginToolRisk = "read" | "verify" | "propose" | "write" | "destructive";
 
@@ -56,14 +56,6 @@ export type PluginCommandRegistration = {
 	arguments?: Array<{ name: string; required: boolean; description?: string | undefined }> | undefined;
 };
 
-export type PluginContextProviderRegistration = {
-	id: string;
-	title: string;
-	description: string;
-	scopes: Array<"workspace" | "browser" | "plugin">;
-	handlerName: string;
-};
-
 export type PluginRuntimeContext = {
 	pluginId: string;
 	sessionId: string;
@@ -74,18 +66,17 @@ export type PluginRuntimeContext = {
 };
 
 export type PluginWorkerMessage =
-	| { type: "initialize"; protocolVersion: 1; entry: string; context: PluginRuntimeContext }
-	| { type: "invoke"; id: string; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider"; name: string; args: Record<string, unknown> }
+	| { type: "initialize"; protocolVersion: 2; entry: string; context: PluginRuntimeContext }
+	| { type: "invoke"; id: string; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command"; name: string; args: Record<string, unknown> }
 	| { type: "shutdown" };
 
 export type PluginWorkerEvent =
-	| { type: "ready"; protocolVersion: 1 }
+	| { type: "ready"; protocolVersion: 2 }
 	| { type: "register.tool"; registration: PluginToolRegistration }
 	| { type: "register.skill"; registration: PluginSkillRegistration }
 	| { type: "register.hook"; registration: PluginHookRegistration }
 	| { type: "register.mcp"; registration: PluginMcpRegistration }
 	| { type: "register.command"; registration: PluginCommandRegistration }
-	| { type: "register.context-provider"; registration: PluginContextProviderRegistration }
 	| { type: "result"; id: string; ok: boolean; value?: unknown; error?: string }
 	| { type: "error"; message: string };
 
@@ -130,7 +121,7 @@ export function parseWorkerMessage(line: string): PluginWorkerMessage {
 		assertKeys(value, ["type", "id", "kind", "name", "args"]);
 		assertString(value.id, "call ID", 128);
 		assertString(value.name, "handler name", 256);
-		if (!["tool", "hook", "mcp_tool", "mcp_resource", "command", "context_provider"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
+		if (!["tool", "hook", "mcp_tool", "mcp_resource", "command"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
 		if (Buffer.byteLength(JSON.stringify(value.args), "utf8") > 200_000) throw new Error("Plugin worker invocation arguments exceed the size limit.");
 		return value as PluginWorkerMessage;
 	case "shutdown":
@@ -141,7 +132,7 @@ export function parseWorkerMessage(line: string): PluginWorkerMessage {
 	}
 }
 
-function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skill" | "hook" | "mcp" | "command" | "context-provider"): void {
+function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skill" | "hook" | "mcp" | "command"): void {
 	if (kind === "command") {
 		assertKeys(value, ["id", "command", "description", "usage", "handlerName", "arguments"]);
 		assertString(value.id, "command ID", 128);
@@ -150,15 +141,6 @@ function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skil
 		assertString(value.handlerName, "command handler", 160);
 		if (value.usage !== undefined && (typeof value.usage !== "string" || value.usage.length > 300)) throw new Error("Invalid plugin command usage.");
 		if (value.arguments !== undefined && (!Array.isArray(value.arguments) || value.arguments.length > 16)) throw new Error("Invalid plugin command arguments.");
-		return;
-	}
-	if (kind === "context-provider") {
-		assertKeys(value, ["id", "title", "description", "scopes", "handlerName"]);
-		assertString(value.id, "context provider ID", 128);
-		assertString(value.title, "context provider title", 256);
-		assertString(value.description, "context provider description", 4096);
-		assertString(value.handlerName, "context provider handler", 160);
-		if (!Array.isArray(value.scopes) || value.scopes.length === 0 || value.scopes.length > 3 || !value.scopes.every((scope): boolean => ["workspace", "browser", "plugin"].includes(String(scope)))) throw new Error("Invalid plugin context provider scopes.");
 		return;
 	}
 	if (kind === "tool") {
@@ -232,10 +214,9 @@ export function parseWorkerEvent(line: string): PluginWorkerEvent {
 	case "register.hook":
 	case "register.mcp":
 	case "register.command":
-	case "register.context-provider":
 		assertKeys(value, ["type", "registration"]);
 		if (!isRecord(value.registration)) throw new Error("Invalid plugin worker registration payload.");
-		assertRegistration(value.registration, value.type === "register.context-provider" ? "context-provider" : value.type.slice("register.".length) as "tool" | "skill" | "hook" | "mcp" | "command");
+		assertRegistration(value.registration, value.type.slice("register.".length) as "tool" | "skill" | "hook" | "mcp" | "command");
 		break;
 	default:
 		throw new Error(`Unknown plugin worker event type: ${value.type}.`);

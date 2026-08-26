@@ -6,7 +6,7 @@ import { terminateProcess } from "../../mcp/terminal/process-runner.js";
 import {
 	clearPluginRegistrations
 } from "../runtime/registries.js";
-import { registerPluginCommand, registerPluginContextProvider } from "../runtime/registries.js";
+import { registerPluginCommand } from "../runtime/registries.js";
 import {
 	MAX_PLUGIN_HOOKS,
 	MAX_PLUGIN_MCP_SERVERS,
@@ -95,8 +95,7 @@ function validateRegistrySnapshot(registry: HarnessRegistrySnapshot): void {
 	if (!Array.isArray(registry.tools) || !Array.isArray(registry.skills) || !Array.isArray(registry.hooks) || !Array.isArray(registry.mcpServers)) throw new Error("Harness registry snapshot is malformed.");
 	if (registry.tools.length > MAX_PLUGIN_TOOLS || registry.skills.length > MAX_PLUGIN_SKILLS || registry.hooks.length > MAX_PLUGIN_HOOKS || registry.mcpServers.length > MAX_PLUGIN_MCP_SERVERS) throw new Error("Harness registry snapshot exceeds plugin registration limits.");
 	const commands = registry.commands ?? [];
-	const contextProviders = registry.contextProviders ?? [];
-	if (commands.length > 128 || contextProviders.length > 64) throw new Error("Harness P2 registry snapshot exceeds the registration limits.");
+	if (commands.length > 128) throw new Error("Harness P2 registry snapshot exceeds the registration limits.");
 	for (const tool of registry.tools) {
 		if (typeof tool.name !== "string" || typeof tool.title !== "string" || typeof tool.description !== "string" || tool.inputSchema === null || typeof tool.inputSchema !== "object") throw new Error("Harness tool registration is malformed.");
 	}
@@ -111,9 +110,6 @@ function validateRegistrySnapshot(registry: HarnessRegistrySnapshot): void {
 	}
 	for (const command of commands) {
 		if (typeof command.id !== "string" || typeof command.command !== "string" || typeof command.description !== "string" || typeof command.handlerName !== "string" || command.command.length > 128 || command.description.length > 4096 || command.handlerName.length > 160) throw new Error("Harness command registration is malformed or too large.");
-	}
-	for (const provider of contextProviders) {
-		if (typeof provider.id !== "string" || typeof provider.title !== "string" || typeof provider.description !== "string" || typeof provider.handlerName !== "string" || !Array.isArray(provider.scopes) || provider.scopes.length === 0 || provider.scopes.length > 3 || provider.handlerName.length > 160) throw new Error("Harness context provider registration is malformed or too large.");
 	}
 }
 
@@ -164,7 +160,6 @@ function applyRegistrySnapshot(pluginId: string, registry: HarnessRegistrySnapsh
 	registerHarnessHooks(pluginId, registry.hooks);
 	registerHarnessMcpServers(pluginId, registry.mcpServers);
 	for (const command of registry.commands ?? []) registerPluginCommand(pluginId, command, "harness");
-	for (const provider of registry.contextProviders ?? []) registerPluginContextProvider(pluginId, provider, "harness");
 }
 
 function handleEvent(handle: HarnessHandle, event: HarnessBridgeEvent, callbacks: HarnessRunnerCallbacks): void {
@@ -235,7 +230,7 @@ function request(handle: HarnessHandle, method: HarnessBridgeRequest["method"], 
 	});
 }
 
-function queuedInvoke(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider", name: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+function queuedInvoke(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
 	const id: string = randomUUID();
 	const message = { jsonrpc: "2.0", id, method: "invoke", params: { kind, name, args } } as HarnessBridgeRequest;
 	return new Promise((resolve, reject): void => {
@@ -336,7 +331,7 @@ export async function startHarnessSidecar(
 	return handle;
 }
 
-export async function invokeHarness(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+export async function invokeHarness(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
 	if (handle.pending.size >= 16) throw Object.assign(new Error("Harness runtime call queue is full."), { code: "plugin_runtime_queue_full" });
 	handle.lastUsedAt = Date.now();
 	return await queuedInvoke(handle, kind, name, args, Math.min(timeoutMs ?? HARNESS_CALL_TIMEOUT_MS, HARNESS_CALL_TIMEOUT_MS));

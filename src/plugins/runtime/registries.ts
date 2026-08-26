@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ToolMapping } from "../../tools/tool-mapping.js";
-import type { PluginCommandRegistration, PluginContextProviderRegistration, PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
+import type { PluginCommandRegistration, PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
 
 export type PluginRegistryNamespace = "plugin" | "harness";
 export type RegisteredPluginTool = PluginToolRegistration & { llmToolName: string; pluginId: string; namespace: PluginRegistryNamespace; mapping: ToolMapping };
@@ -17,7 +17,6 @@ export type RegisteredPluginMcpTool = {
 	risk: PluginToolRisk;
 };
 export type RegisteredPluginCommand = PluginCommandRegistration & { pluginId: string; namespace: PluginRegistryNamespace; commandId: string };
-export type RegisteredPluginContextProvider = PluginContextProviderRegistration & { pluginId: string; namespace: PluginRegistryNamespace; providerId: string };
 
 const tools = new Map<string, RegisteredPluginTool>();
 const definitions = new Map<string, ChatCompletionTool>();
@@ -25,7 +24,6 @@ const skills = new Map<string, RegisteredPluginSkill>();
 const hooks = new Map<string, RegisteredPluginHook[]>();
 const mcps = new Map<string, RegisteredPluginMcp>();
 const commands = new Map<string, RegisteredPluginCommand>();
-const contextProviders = new Map<string, RegisteredPluginContextProvider>();
 
 function toolName(pluginId: string, name: string, namespace: PluginRegistryNamespace = "plugin"): string {
 	return `mcp_${namespace}_${pluginId.replace(/[^a-z0-9]+/giu, "_").slice(0, 24)}_${name.replace(/[^a-z0-9]+/giu, "_").slice(0, 32)}`;
@@ -40,7 +38,6 @@ export function clearPluginRegistrations(pluginId: string): void {
 	}
 	for (const [serverId, entry] of mcps) if (entry.pluginId === pluginId) mcps.delete(serverId);
 	for (const [id, entry] of commands) if (entry.pluginId === pluginId) commands.delete(id);
-	for (const [id, entry] of contextProviders) if (entry.pluginId === pluginId) contextProviders.delete(id);
 }
 
 export function registerPluginCommand(pluginId: string, registration: PluginCommandRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginCommand {
@@ -48,14 +45,6 @@ export function registerPluginCommand(pluginId: string, registration: PluginComm
 	if (commands.has(commandId) || [...commands.values()].some((entry): boolean => entry.command === registration.command)) throw Object.assign(new Error(`Plugin command is already registered: ${commandId}.`), { code: "plugin_registry_conflict" });
 	const entry: RegisteredPluginCommand = { ...registration, pluginId, namespace, commandId };
 	commands.set(commandId, entry);
-	return entry;
-}
-
-export function registerPluginContextProvider(pluginId: string, registration: PluginContextProviderRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginContextProvider {
-	const providerId = `${namespace}:${pluginId}:${registration.id}`;
-	if (contextProviders.has(providerId)) throw Object.assign(new Error(`Plugin context provider is already registered: ${providerId}.`), { code: "plugin_registry_conflict" });
-	const entry: RegisteredPluginContextProvider = { ...registration, pluginId, namespace, providerId };
-	contextProviders.set(providerId, entry);
 	return entry;
 }
 
@@ -119,5 +108,3 @@ export function getPluginMcp(serverId: string): RegisteredPluginMcp | undefined 
 export function listPluginMcps(): RegisteredPluginMcp[] { return [...mcps.values()]; }
 export function listPluginCommands(): RegisteredPluginCommand[] { return [...commands.values()]; }
 export function getPluginCommandById(id: string): RegisteredPluginCommand | undefined { return commands.get(id); }
-export function listPluginContextProviders(): RegisteredPluginContextProvider[] { return [...contextProviders.values()]; }
-export function getPluginContextProviderById(id: string): RegisteredPluginContextProvider | undefined { return contextProviders.get(id); }

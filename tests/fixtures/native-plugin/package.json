@@ -9,10 +9,9 @@
       "entry": "./index.js",
       "capabilities": ["tools", "skills", "hooks", "mcp"],
       "p2": {
-        "apiVersion": 1,
+        "apiVersion": 2,
         "capabilities": {
           "commands": 1,
-          "contextProviders": 1,
           "panels": 1,
           "settings": 1,
           "timelineParts": 1,
@@ -22,7 +21,6 @@
         },
         "declarations": {
           "commands": [{ "id": "hello", "command": "/fixture-hello", "description": "Insert a fixture greeting.", "handler": "fixture.command.hello" }],
-          "contextProviders": [{ "id": "context", "title": "Fixture context", "description": "Provides a safe fixture context item.", "scopes": ["plugin"], "handler": "fixture.context" }],
           "panels": [{ "panelId": "panel", "title": "Fixture panel", "locations": ["side"], "view": [{ "type": "Text", "text": "Native fixture panel" }] }],
           "settings": [{ "settingsId": "settings", "title": "Fixture settings", "view": [{ "type": "Switch", "id": "enabled", "label": "Enabled" }] }],
           "timelineParts": [{ "partType": "status", "title": "Fixture status" }],

@@ -1,10 +1,10 @@
-import type { PluginCommandRegistration, PluginContextProviderRegistration, PluginHookRegistration, PluginMcpRegistration, PluginRuntimeContext, PluginSkillRegistration, PluginToolRegistration } from "../runtime/worker-protocol.js";
+import type { PluginCommandRegistration, PluginHookRegistration, PluginMcpRegistration, PluginRuntimeContext, PluginSkillRegistration, PluginToolRegistration } from "../runtime/worker-protocol.js";
 import { HARNESS_BRIDGE_PROTOCOL_VERSION, MAX_HARNESS_FRAME_BYTES } from "./limits.js";
 
 export type HarnessBridgeRequest =
 	| { jsonrpc: "2.0"; id: string; method: "initialize"; params: { protocolVersion: number; bundleFingerprint: string; context: PluginRuntimeContext } }
 	| { jsonrpc: "2.0"; id: string; method: "health"; params: Record<string, never> }
-	| { jsonrpc: "2.0"; id: string; method: "invoke"; params: { kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider"; name: string; args: Record<string, unknown> } }
+	| { jsonrpc: "2.0"; id: string; method: "invoke"; params: { kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command"; name: string; args: Record<string, unknown> } }
 	| { jsonrpc: "2.0"; id: string; method: "shutdown"; params: Record<string, never> };
 
 export type HarnessRegistrySnapshot = {
@@ -13,7 +13,6 @@ export type HarnessRegistrySnapshot = {
 	hooks: Array<PluginHookRegistration & { handlerName: string }>;
 	mcpServers: PluginMcpRegistration[];
 	commands?: PluginCommandRegistration[];
-	contextProviders?: PluginContextProviderRegistration[];
 };
 
 export type HarnessBridgeEvent =
@@ -45,9 +44,9 @@ export function parseHarnessEvent(line: string): HarnessBridgeEvent {
 	};
 	const registry = (candidate: unknown): void => {
 		const item = record(candidate, "registry snapshot");
-		for (const key of Object.keys(item)) if (!["tools", "skills", "hooks", "mcpServers", "commands", "contextProviders"].includes(key)) throw new Error(`Unknown Harness registry field: ${key}.`);
+		for (const key of Object.keys(item)) if (!["tools", "skills", "hooks", "mcpServers", "commands"].includes(key)) throw new Error(`Unknown Harness registry field: ${key}.`);
 		for (const key of ["tools", "skills", "hooks", "mcpServers"] as const) if (!Array.isArray(item[key])) throw new Error(`Harness registry field ${key} must be an array.`);
-		for (const key of ["commands", "contextProviders"] as const) if (item[key] !== undefined && !Array.isArray(item[key])) throw new Error(`Harness registry field ${key} must be an array.`);
+		if (item.commands !== undefined && !Array.isArray(item.commands)) throw new Error("Harness registry field commands must be an array.");
 	};
 	if (typeof frame.method === "string") {
 		switch (frame.method) {

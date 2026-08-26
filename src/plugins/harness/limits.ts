@@ -1,4 +1,4 @@
-export const HARNESS_BRIDGE_PROTOCOL_VERSION = 1 as const;
+export const HARNESS_BRIDGE_PROTOCOL_VERSION = 2 as const;
 export const MAX_HARNESS_PATCH_BYTES = 512 * 1024;
 export const MAX_HARNESS_PATCH_LINES = 4_000;
 export const MAX_HARNESS_PATCH_LINE_CHARS = 16_384;

@@ -5,7 +5,7 @@ import type { ClientSession } from "../client-session.js";
 import { getClientConnection } from "../client-connections.js";
 import { sendJson } from "../send-json.js";
 import { ensurePluginRuntime, invokePlugin } from "../../plugins/runtime/manager.js";
-import { getPluginCommand, getPluginContextProvider, getPluginP2Snapshot } from "../../plugins/p2/registry.js";
+import { getPluginCommand, getPluginP2Snapshot } from "../../plugins/p2/registry.js";
 import { additionalContextItemSchema } from "../../protocol/schema.js";
 import { acknowledgePluginEvent, publishPluginEvent, subscribePluginEvents } from "../../plugins/p2/event-bus.js";
 import { sendStudioPersistentSessionEvent } from "../session-events.js";
@@ -61,23 +61,6 @@ export async function handlePluginP2Request(socket: WebSocket, request: ClientRe
 			prompt: clip(record.prompt, 32_000),
 			additionalContext: Array.isArray(record.additionalContext) ? record.additionalContext.filter((item): boolean => additionalContextItemSchema.safeParse(item).success).slice(0, 16) : [],
 			model: record.model && typeof record.model === "object" ? record.model : undefined
-		};
-	} else if (p2Request.method === "plugin.context-provider.list") {
-		result = { providers: (await getPluginP2Snapshot()).contextProviders };
-	} else if (p2Request.method === "plugin.context-provider.resolve") {
-		const provider = await getPluginContextProvider(p2Request.params.providerId);
-		if (provider === undefined) throw Object.assign(new Error("Plugin context provider was not found or is disabled."), { code: "plugin_context_provider_not_found" });
-		const requestedScopes = p2Request.params.scopes ?? provider.scopes;
-		if (requestedScopes.some((scope): boolean => !provider.scopes.includes(scope))) throw Object.assign(new Error("Plugin context provider requested an undeclared scope."), { code: "plugin_context_scope_denied" });
-		await ensurePluginRuntime(provider.pluginId, runtimeContext(session));
-		const value = await invokePlugin(provider.pluginId, runtimeContext(session).sessionId, "context_provider", provider.handlerName, { ...(p2Request.params.args ?? {}), scopes: requestedScopes });
-		const record = value !== null && typeof value === "object" ? value as Record<string, unknown> : {};
-		result = {
-			providerId: provider.providerId,
-			title: clip(record.title, 200) || provider.title,
-			content: clip(record.content, 32_000),
-			source: clip(record.source, 1000),
-			metadata: record.metadata && typeof record.metadata === "object" ? record.metadata : undefined
 		};
 	} else if (p2Request.method === "plugin.ui.panel.create") {
 		const panel = findPanel(await getPluginP2Snapshot(), p2Request.params.panelId);

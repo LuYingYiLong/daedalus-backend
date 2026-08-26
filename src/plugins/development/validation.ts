@@ -27,7 +27,6 @@ function summarizeCapabilities(scan: PluginScanResult): Record<string, number> {
 		hooks: scan.nativePlugin?.capabilities.includes("hooks") === true ? 1 : 0,
 		mcp: scan.nativePlugin?.capabilities.includes("mcp") === true ? 1 : 0,
 		commands: declarations?.commands?.length ?? 0,
-		contextProviders: declarations?.contextProviders?.length ?? 0,
 		panels: declarations?.panels?.length ?? 0,
 		settings: declarations?.settings?.length ?? 0,
 		timelineParts: declarations?.timelineParts?.length ?? 0,

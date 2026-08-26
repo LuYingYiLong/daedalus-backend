@@ -28,7 +28,7 @@ export function createNativeConversionReport(record: PluginRecord): NativeConver
 		activationReady,
 		runtime: converted ? "native" : "harness",
 		tools: record.p2?.declarations.commands?.length ?? 0,
-		skills: record.p2?.declarations.contextProviders?.length ?? 0,
+		skills: 0,
 		hooks: 0,
 		mcp: 0,
 		warnings,

@@ -49,7 +49,7 @@ export type PluginDevelopmentProposal = {
 
 export type PluginDevelopmentTestCase = {
 	id: string;
-	capability: "registry" | "tool" | "skill" | "hook" | "mcp" | "command" | "context_provider" | "panel" | "settings" | "timeline_part" | "browser" | "language_service" | "event";
+	capability: "registry" | "tool" | "skill" | "hook" | "mcp" | "command" | "panel" | "settings" | "timeline_part" | "browser" | "language_service" | "event";
 	target: string;
 	input?: Record<string, unknown> | undefined;
 	expect?: {
@@ -138,7 +138,7 @@ export const pluginDevelopmentTestPlanSchema = z.object({
 	version: z.literal(1),
 	cases: z.array(z.object({
 		id: z.string().min(1).max(64),
-		capability: z.enum(["registry", "tool", "skill", "hook", "mcp", "command", "context_provider", "panel", "settings", "timeline_part", "browser", "language_service", "event"]),
+		capability: z.enum(["registry", "tool", "skill", "hook", "mcp", "command", "panel", "settings", "timeline_part", "browser", "language_service", "event"]),
 		target: z.string().min(1).max(240),
 		input: z.record(z.string(), z.unknown()).optional(),
 		expect: z.object({

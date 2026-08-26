@@ -16,14 +16,14 @@ function write(value) {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-write({ jsonrpc: "2.0", method: "bridge.loaded", params: { protocolVersion: 1 } });
+write({ jsonrpc: "2.0", method: "bridge.loaded", params: { protocolVersion: 2 } });
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line) => {
 	if (line.trim().length === 0) return;
 	const request = JSON.parse(line);
 	if (request.method === "initialize") {
-		write({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 1 } });
-		write({ jsonrpc: "2.0", method: "ready", params: { protocolVersion: 1, harnessVersion: "0.0.1", registry } });
+    write({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: 2 } });
+    write({ jsonrpc: "2.0", method: "ready", params: { protocolVersion: 2, harnessVersion: "0.0.1", registry } });
 		return;
 	}
 	if (request.method === "invoke") {

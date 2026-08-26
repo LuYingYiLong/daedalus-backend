@@ -27,7 +27,6 @@ import type { HarnessHandle } from "../harness/runner.js";
 import {
 	clearPluginRegistrations,
 	registerPluginCommand,
-	registerPluginContextProvider,
 	registerPluginHook,
 	registerPluginMcp,
 	registerPluginSkill,
@@ -70,12 +69,11 @@ import {
 	type PluginSkillRegistration,
 	type PluginHookRegistration,
 	type PluginMcpRegistration,
-	type PluginCommandRegistration,
-	type PluginContextProviderRegistration
+	type PluginCommandRegistration
 } from "./worker-protocol.js";
 
-type PendingCall = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; started: boolean; startedAt: number; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider"; name: string; args: Record<string, unknown> };
-type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[]; contextProviders: PluginContextProviderRegistration[] };
+type PendingCall = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; started: boolean; startedAt: number; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command"; name: string; args: Record<string, unknown> };
+type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[] };
 
 export type WorkerHandle = {
 	pluginId: string;
@@ -87,7 +85,7 @@ export type WorkerHandle = {
 	rejectReady: (error: Error) => void;
 	buffer: string;
 	stderrTail: string;
-	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number; contextProviders: number };
+	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number };
 	context: PluginRuntimeContext;
 	activeCalls: number;
 	lastUsedAt: number;
@@ -131,7 +129,6 @@ function commitWorkerRegistrations(handle: WorkerHandle): void {
 		for (const { registration, handlerName } of handle.stagedRegistrations.hooks) registerPluginHook(handle.pluginId, registration, handlerName);
 		for (const registration of handle.stagedRegistrations.mcps) registerPluginMcp(handle.pluginId, registration);
 		for (const registration of handle.stagedRegistrations.commands) registerPluginCommand(handle.pluginId, registration);
-		for (const registration of handle.stagedRegistrations.contextProviders) registerPluginContextProvider(handle.pluginId, registration);
 	} catch (error: unknown) {
 		clearPluginRegistrations(handle.pluginId);
 		throw error;
@@ -234,11 +231,6 @@ function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 		handle.stagedRegistrations.commands.push(event.registration);
 		return;
 	}
-	if (event.type === "register.context-provider") {
-		if (!(handle.context.p2Capabilities ?? []).includes("contextProviders")) throw new Error("Plugin registered an undeclared context provider capability.");
-		if (++handle.registrationCounts.contextProviders > 64) throw new Error("Plugin context provider registration limit exceeded.");
-		handle.stagedRegistrations.contextProviders.push(event.registration);
-	}
 }
 
 async function startWorker(record: PluginRecord, context: PluginRuntimeContext): Promise<WorkerHandle> {
@@ -290,7 +282,7 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
-	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, contextProviders: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], contextProviders: [] } };
+	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [] } };
 	handles.set(key(record.id, context.sessionId), handle);
 	setSnapshot(record.id, { status: "starting", activeSessions: [...handles.values()].filter((item): boolean => item.pluginId === record.id).length });
 	child.stdout.setEncoding("utf8");
@@ -412,7 +404,7 @@ export async function installPluginRuntimeDependencies(pluginId: string, allowNe
 	return getPluginRuntimeSnapshot(pluginId)!;
 }
 
-export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
+export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
 	if (hasHarnessHandle(pluginId, sessionId)) {
 		return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
 	}

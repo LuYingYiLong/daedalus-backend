@@ -1,9 +1,8 @@
 import { z } from "zod";
 
-export const PLUGIN_P2_API_VERSION = 1 as const;
+export const PLUGIN_P2_API_VERSION = 2 as const;
 export const PLUGIN_P2_CAPABILITIES = [
 	"commands",
-	"contextProviders",
 	"panels",
 	"settings",
 	"timelineParts",
@@ -40,14 +39,6 @@ export const pluginP2CommandSchema = z.object({
 		required: z.boolean(),
 		description: z.string().max(500).optional()
 	}).strict()).max(16).optional()
-}).strict();
-
-export const pluginP2ContextProviderSchema = z.object({
-	id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/iu),
-	title: z.string().min(1).max(200),
-	description: z.string().max(1000),
-	scopes: z.array(z.enum(["workspace", "browser", "plugin"])).min(1).max(3),
-	handler: z.string().regex(/^[a-zA-Z0-9._:-]{1,160}$/u)
 }).strict();
 
 export const pluginP2PanelSchema = z.object({
@@ -105,7 +96,6 @@ export const pluginP2ManifestSchema = z.object({
 	capabilities: z.object(Object.fromEntries(PLUGIN_P2_CAPABILITIES.map((key) => [key, z.number().int().positive().max(32).optional()])) as Record<PluginP2Capability, z.ZodOptional<z.ZodNumber>>).strict(),
 	declarations: z.object({
 		commands: z.array(pluginP2CommandSchema).max(128).optional(),
-		contextProviders: z.array(pluginP2ContextProviderSchema).max(64).optional(),
 		panels: z.array(pluginP2PanelSchema).max(32).optional(),
 		settings: z.array(pluginP2SettingsSchema).max(32).optional(),
 		timelineParts: z.array(pluginP2TimelinePartSchema).max(64).optional(),
@@ -117,7 +107,6 @@ export const pluginP2ManifestSchema = z.object({
 
 export type PluginP2Manifest = z.infer<typeof pluginP2ManifestSchema>;
 export type PluginCommandDefinition = z.infer<typeof pluginP2CommandSchema>;
-export type PluginContextProviderDefinition = z.infer<typeof pluginP2ContextProviderSchema>;
 export type PluginPanelDefinition = z.infer<typeof pluginP2PanelSchema>;
 export type PluginSettingsDefinition = z.infer<typeof pluginP2SettingsSchema>;
 export type PluginTimelinePartDefinition = z.infer<typeof pluginP2TimelinePartSchema>;
@@ -130,7 +119,6 @@ export type PluginP2DeclarationSummary = {
 	compatible: boolean;
 	unsupportedCapabilities: string[];
 	commands: number;
-	contextProviders: number;
 	panels: number;
 	settings: number;
 	timelineParts: number;
@@ -149,7 +137,6 @@ export function summarizePluginP2Manifest(manifest: PluginP2Manifest | undefined
 		compatible: unsupportedCapabilities.length === 0,
 		unsupportedCapabilities,
 		commands: manifest.declarations.commands?.length ?? 0,
-		contextProviders: manifest.declarations.contextProviders?.length ?? 0,
 		panels: manifest.declarations.panels?.length ?? 0,
 		settings: manifest.declarations.settings?.length ?? 0,
 		timelineParts: manifest.declarations.timelineParts?.length ?? 0,

@@ -128,7 +128,7 @@ export async function ensureHarnessRuntime(pluginId: string, context: Omit<Plugi
 	return handle;
 }
 
-export async function invokeHarnessPlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "context_provider", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+export async function invokeHarnessPlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
 	const handle = handles.get(key(pluginId, sessionId));
 	if (handle === undefined) throw new Error("Harness runtime is not running.");
 	return await invokeHarness(handle, kind, name, args, timeoutMs);

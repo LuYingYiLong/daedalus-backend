@@ -25,7 +25,7 @@
 
 工具风险按 `read`、`verify`、`propose`、`write`、`destructive` 分类。写入、删除、命令执行、网络下载、custom MCP 和编辑器 mutation 必须进入统一审批。Hook 可以阻止或提供受限 additional context，但不能批准硬性 consent、跨工作区、联网下载或无沙箱执行。
 
-插件 Skill、Context Provider、Timeline Part、MCP Resource 和网页内容都标记为外部不可信数据；进入模型前执行大小限制、敏感字段脱敏和提示注入隔离。
+插件 Skill、Timeline Part、MCP Resource 和网页内容都标记为外部不可信数据；进入模型前执行大小限制、敏感字段脱敏和提示注入隔离。
 
 Browser 固定 API 禁止任意 CDP、`eval`、Cookie/password/localStorage/剪贴板读取和 Provider 凭据读取。网页中的指令只能作为引用内容，不能改变系统或用户意图。
 

@@ -32,11 +32,11 @@ P0 支持本地目录、`.tgz`、精确 npm 版本和固定 Git commit。安装�
 
 ## P2 manifest 与能力
 
-P2 能力包括 Slash Commands、Context Providers、声明式 Panel/Settings、Timeline Part、Browser、Monaco Language Service 和 Event Bus。每种能力拥有独立 API version；某个能力不兼容时只禁用该能力，不把不兼容声明伪装成可用能力。
+当前 P2 manifest API version 为 2。P2 能力包括 Slash Commands、声明式 Panel/Settings、Timeline Part、Browser、Monaco Language Service 和 Event Bus。每种能力拥有独立 API version；某个能力不兼容时只禁用该能力，不把不兼容声明伪装成可用能力。P2 v1 不再被接受。
 
 Renderer 只渲染白名单 JSON UI：`Text`、`Icon`、`Tag`、`Alert`、`Descriptions`、`Input`、`Select`、`Switch`、`Button`、`List`。插件 UI 不得访问 Electron、原始 RPC client、WebContents、文件系统或 Backend 内部对象。
 
-Context Provider 必须由用户显式触发；Browser 只能调用固定导航、观察、滚动、输入、点击、下载和标签页接口；Language Service 使用受限子进程和 LSP Proxy。插件 Timeline Part 不能伪造用户、助手、系统或审批事件。
+Browser 只能调用固定导航、观察、滚动、输入、点击、下载和标签页接口；Language Service 使用受限子进程和 LSP Proxy。插件 Timeline Part 不能伪造用户、助手、系统或审批事件。
 
 ## Harness Bundle
 

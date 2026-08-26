@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { ensurePluginRuntime, invokePlugin, stopPlugin } from "../runtime/manager.js";
 import {
-	getPluginContextProviderById,
 	getPluginSkill,
 	getPluginToolEntries,
 	listPluginCommands,
-	listPluginContextProviders,
 	listPluginHooks,
 	listPluginMcps,
 	listPluginSkills
@@ -36,8 +34,7 @@ async function runCase(plugin: PluginRecord, sessionId: string, test: PluginDeve
 			...getPluginToolEntries().filter((entry): boolean => entry.pluginId === plugin.id).map((entry): string => entry.name),
 			...coreSkills.map((entry): string => entry.slug),
 			...listPluginMcps().filter((entry): boolean => entry.pluginId === plugin.id).map((entry): string => entry.localServerId),
-			...p2.commands.filter((entry): boolean => entry.pluginId === plugin.id).map((entry): string => entry.command),
-			...p2.contextProviders.filter((entry): boolean => entry.pluginId === plugin.id).map((entry): string => entry.id)
+			...p2.commands.filter((entry): boolean => entry.pluginId === plugin.id).map((entry): string => entry.command)
 		];
 		if (test.expect?.registered !== false && !registered.some((name): boolean => name === test.target || name.endsWith(`:${test.target}`))) throw new Error(`Registration was not found: ${test.target}.`);
 		return { registered };
@@ -68,11 +65,6 @@ async function runCase(plugin: PluginRecord, sessionId: string, test: PluginDeve
 		const entry = listPluginCommands().find((candidate): boolean => candidate.pluginId === plugin.id && (candidate.command === test.target || candidate.id === test.target));
 		if (entry === undefined) throw new Error(`Plugin command was not registered: ${test.target}.`);
 		return await invokePlugin(plugin.id, sessionId, "command", entry.handlerName, test.input ?? {});
-	}
-	case "context_provider": {
-		const entry = listPluginContextProviders().find((candidate): boolean => candidate.pluginId === plugin.id && (candidate.id === test.target || candidate.providerId === test.target)) ?? getPluginContextProviderById(test.target);
-		if (entry === undefined || entry.pluginId !== plugin.id) throw new Error(`Plugin context provider was not registered: ${test.target}.`);
-		return await invokePlugin(plugin.id, sessionId, "context_provider", entry.handlerName, test.input ?? {});
 	}
 	case "panel":
 		return p2.panels.find((entry): boolean => entry.pluginId === plugin.id && (entry.panelId === test.target || entry.panelId.endsWith(`:${test.target}`))) === undefined ? Promise.reject(new Error(`Plugin panel was not registered: ${test.target}.`)) : runDeterministicAdapter(test);

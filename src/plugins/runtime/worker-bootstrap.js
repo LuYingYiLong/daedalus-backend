@@ -36,13 +36,6 @@ function createApi(context) {
                 send({ type: "register.command", registration: { ...registration, handlerName } });
             }
         },
-        contextProviders: {
-            register(registration, handler) {
-                const handlerName = registration.handlerName ?? `context-provider:${registration.id}:${sequence++}`;
-                registerHandler("context_provider", handlerName, handler);
-                send({ type: "register.context-provider", registration: { ...registration, handlerName } });
-            }
-        },
         tools: {
             register(registration, handler) {
                 const normalized = {

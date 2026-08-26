@@ -1,4 +1,4 @@
-export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 1;
+export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 2;
 export function encodeWorkerMessage(message) {
     return `${JSON.stringify(message)}\n`;
 }
@@ -38,7 +38,7 @@ export function parseWorkerMessage(line) {
             assertKeys(value, ["type", "id", "kind", "name", "args"]);
             assertString(value.id, "call ID", 128);
             assertString(value.name, "handler name", 256);
-            if (!["tool", "hook", "mcp_tool", "mcp_resource", "command", "context_provider"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
+            if (!["tool", "hook", "mcp_tool", "mcp_resource", "command"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
             if (Buffer.byteLength(JSON.stringify(value.args), "utf8") > 200_000) throw new Error("Plugin worker invocation arguments exceed the size limit.");
             return value;
         case "shutdown":
@@ -57,15 +57,6 @@ function assertRegistration(value, kind) {
         assertString(value.handlerName, "command handler", 160);
         if (value.usage !== undefined && (typeof value.usage !== "string" || value.usage.length > 300)) throw new Error("Invalid plugin command usage.");
         if (value.arguments !== undefined && (!Array.isArray(value.arguments) || value.arguments.length > 16)) throw new Error("Invalid plugin command arguments.");
-        return;
-    }
-    if (kind === "context-provider") {
-        assertKeys(value, ["id", "title", "description", "scopes", "handlerName"]);
-        assertString(value.id, "context provider ID", 128);
-        assertString(value.title, "context provider title", 256);
-        assertString(value.description, "context provider description", 4096);
-        assertString(value.handlerName, "context provider handler", 160);
-        if (!Array.isArray(value.scopes) || value.scopes.length === 0 || value.scopes.length > 3 || !value.scopes.every((scope) => ["workspace", "browser", "plugin"].includes(String(scope)))) throw new Error("Invalid plugin context provider scopes.");
         return;
     }
     if (kind === "tool") {
@@ -136,10 +127,9 @@ export function parseWorkerEvent(line) {
         case "register.hook":
         case "register.mcp":
         case "register.command":
-        case "register.context-provider":
             assertKeys(value, ["type", "registration"]);
             if (!isRecord(value.registration)) throw new Error("Invalid plugin worker registration payload.");
-            assertRegistration(value.registration, value.type === "register.context-provider" ? "context-provider" : value.type.slice("register.".length));
+            assertRegistration(value.registration, value.type.slice("register.".length));
             break;
         default:
             throw new Error(`Unknown plugin worker event type: ${value.type}.`);

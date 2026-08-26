@@ -97,10 +97,10 @@ async function handle(message) {
     if (shuttingDown) throw new Error('Harness bridge is shutting down.');
     if (message.method === 'initialize') {
       if (initialized) throw new Error('Harness bridge received duplicate initialize.');
-      if (message.params?.protocolVersion !== 1) throw new Error('Unsupported Daedalus Harness bridge version.');
+      if (message.params?.protocolVersion !== 2) throw new Error('Unsupported Daedalus Harness bridge version.');
       initialized = true;
-      write({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1 } });
-      notify('ready', { protocolVersion: 1, registry: snapshot() });
+      write({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 2 } });
+      notify('ready', { protocolVersion: 2, registry: snapshot() });
       return;
     }
     if (!initialized) throw new Error('Harness bridge must be initialized before use.');
@@ -150,6 +150,6 @@ export function apply(ctx) {
       try { processing = processing.then(() => handle(JSON.parse(line))).catch((error) => notify('log', { level: 'error', message: error instanceof Error ? error.message : String(error) })); } catch (error) { notify('log', { level: 'error', message: error instanceof Error ? error.message : String(error) }); }
     }
   });
-  notify('bridge.loaded', { protocolVersion: 1 });
+  notify('bridge.loaded', { protocolVersion: 2 });
 }
 `;

@@ -3,7 +3,6 @@ import {
 	PLUGIN_RUNTIME_PROTOCOL_VERSION,
 	parseWorkerMessage,
 	type PluginCommandRegistration,
-	type PluginContextProviderRegistration,
 	type PluginHookRegistration,
 	type PluginMcpRegistration,
 	type PluginRuntimeContext,
@@ -16,7 +15,6 @@ type Handler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
 
 type PluginApi = {
 	commands: { register(registration: Omit<PluginCommandRegistration, "handlerName"> & { handlerName?: string }, handler: Handler): void };
-	contextProviders: { register(registration: Omit<PluginContextProviderRegistration, "handlerName"> & { handlerName?: string }, handler: Handler): void };
 	tools: { register(registration: Omit<PluginToolRegistration, "workflow" | "global"> & Partial<Pick<PluginToolRegistration, "workflow" | "global">>, handler: Handler): void };
 	skills: { register(registration: PluginSkillRegistration): void };
 	hooks: { register(registration: PluginHookRegistration, handler: Handler): void };
@@ -62,13 +60,6 @@ function createApi(context: PluginRuntimeContext): PluginApi {
 				const handlerName = registration.handlerName ?? `command:${registration.id}:${sequence++}`;
 				registerHandler("command", handlerName, handler);
 				send({ type: "register.command", registration: { ...registration, handlerName } });
-			}
-		},
-		contextProviders: {
-			register(registration, handler): void {
-				const handlerName = registration.handlerName ?? `context-provider:${registration.id}:${sequence++}`;
-				registerHandler("context_provider", handlerName, handler);
-				send({ type: "register.context-provider", registration: { ...registration, handlerName } });
 			}
 		},
 		tools: {

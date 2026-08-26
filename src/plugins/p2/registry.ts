@@ -3,7 +3,6 @@ import type { PluginRecord } from "../types.js";
 import type {
 	PluginCommandDefinition,
 	PluginBrowserDefinition,
-	PluginContextProviderDefinition,
 	PluginEventDeclaration,
 	PluginLanguageServiceDefinition,
 	PluginPanelDefinition,
@@ -11,18 +10,17 @@ import type {
 	PluginSettingsDefinition,
 	PluginTimelinePartDefinition
 } from "./protocol.js";
+import { PLUGIN_P2_API_VERSION } from "./protocol.js";
 
 export type RegisteredPluginCommand = PluginCommandDefinition & { pluginId: string; runtime: "native" | "harness" };
-export type RegisteredPluginContextProvider = PluginContextProviderDefinition & { pluginId: string; runtime: "native" | "harness"; providerId: string; handlerName: string };
 export type RegisteredPluginPanel = PluginPanelDefinition & { pluginId: string; runtime: "native" | "harness" };
 export type RegisteredPluginSettings = PluginSettingsDefinition & { pluginId: string; runtime: "native" | "harness" };
 export type RegisteredPluginTimelinePart = PluginTimelinePartDefinition & { pluginId: string; runtime: "native" | "harness" };
 export type RegisteredPluginBrowser = PluginBrowserDefinition & { pluginId: string; runtime: "native" | "harness" };
 
 export type PluginP2RegistrySnapshot = {
-	apiVersion: 1;
+	apiVersion: typeof PLUGIN_P2_API_VERSION;
 	commands: RegisteredPluginCommand[];
-	contextProviders: RegisteredPluginContextProvider[];
 	panels: RegisteredPluginPanel[];
 	settings: RegisteredPluginSettings[];
 	timelineParts: RegisteredPluginTimelinePart[];
@@ -55,9 +53,8 @@ function supports(manifest: PluginP2Manifest, capability: string): boolean {
 
 export async function buildPluginP2Registry(): Promise<PluginP2RegistrySnapshot> {
 	const snapshot: PluginP2RegistrySnapshot = {
-		apiVersion: 1,
+		apiVersion: PLUGIN_P2_API_VERSION,
 		commands: [],
-		contextProviders: [],
 		panels: [],
 		settings: [],
 		timelineParts: [],
@@ -67,7 +64,6 @@ export async function buildPluginP2Registry(): Promise<PluginP2RegistrySnapshot>
 		warnings: []
 	};
 	const seenCommands = new Set<string>();
-	const seenProviders = new Set<string>();
 	const seenPanels = new Set<string>();
 	const seenSettings = new Set<string>();
 	const seenTimeline = new Set<string>();
@@ -88,12 +84,6 @@ export async function buildPluginP2Registry(): Promise<PluginP2RegistrySnapshot>
 			}
 			seenCommands.add(id);
 			snapshot.commands.push({ ...command, id, command: command.command, pluginId: record.id, runtime });
-		}
-		for (const provider of supports(manifest, "contextProviders") ? (manifest.declarations.contextProviders ?? []) : []) {
-			const id = `plugin:${record.id}:${provider.id}`;
-			if (seenProviders.has(id)) { snapshot.warnings.push(`Plugin context provider conflict: ${id}`); continue; }
-			seenProviders.add(id);
-			snapshot.contextProviders.push({ ...provider, id, providerId: id, handlerName: provider.handler, pluginId: record.id, runtime });
 		}
 		for (const panel of supports(manifest, "panels") ? (manifest.declarations.panels ?? []) : []) {
 			const id = `plugin:${record.id}:${panel.panelId}`;
@@ -136,8 +126,4 @@ export async function getPluginP2Snapshot(): Promise<PluginP2RegistrySnapshot> {
 
 export async function getPluginCommand(command: string): Promise<RegisteredPluginCommand | undefined> {
 	return (await buildPluginP2Registry()).commands.find((candidate) => candidate.command === command || candidate.id === command);
-}
-
-export async function getPluginContextProvider(providerId: string): Promise<RegisteredPluginContextProvider | undefined> {
-	return (await buildPluginP2Registry()).contextProviders.find((candidate) => candidate.id === providerId);
 }

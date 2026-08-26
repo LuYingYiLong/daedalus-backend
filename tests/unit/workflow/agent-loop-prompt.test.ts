@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type WebSocket from "ws";
 import {
 	createHiddenAnswerChatParams,
-	createHiddenAnswerSystemPrompt
+	createHiddenAnswerSystemPrompt,
+	getAllRuntimeToolNames
 } from "../../../src/server/chat-orchestrator.js";
+import { createClientSession } from "../../../src/server/client-session.js";
+import { registerClientConnection, unregisterClientConnection, updateClientConnection } from "../../../src/server/client-connections.js";
+import type { WorkspaceConfig } from "../../../src/workspace/types.js";
 import type { WorkflowRouteDecision } from "../../../src/workflow/router.js";
 
 const workspaceAgentLoop: WorkflowRouteDecision = {
@@ -13,6 +18,21 @@ const workspaceAgentLoop: WorkflowRouteDecision = {
 	outputTarget: "workspace",
 	reason: "test",
 	planningHint: ""
+};
+
+const browserWorkspace: WorkspaceConfig = {
+	id: "runtime-browser-test",
+	name: "Browser test",
+	kind: "godot",
+	rootPath: "D:/DaedalusBrowserTest",
+	icon: 0,
+	color: 0,
+	sourceFolders: [{
+		id: "source-browser-test",
+		path: "D:/DaedalusBrowserTest",
+		capabilities: { git: false, godot: false }
+	}],
+	primarySourceFolderId: "source-browser-test"
 };
 
 test("agent loop defaults workspace edits to the project-edit budget", (): void => {
@@ -52,4 +72,28 @@ test("verification policy changes quality guidance without creating a repair pha
 	assert.match(skipPrompt, /Do not run validation solely to satisfy a framework rule/u);
 	assert.match(requiredPrompt, /Run proportionate available validation/u);
 	assert.match(requiredPrompt, /do not create an automatic repair phase/u);
+});
+
+test("agent loop runtime tool names retain Studio browser tools when enabled", (): void => {
+	const socket: WebSocket = {} as WebSocket;
+	const session = createClientSession(browserWorkspace);
+	session.sessionId = "session-browser-test";
+	registerClientConnection(socket, session);
+
+	try {
+		updateClientConnection(socket, {
+			clientType: "studio",
+			capabilities: { browserTools: true }
+		});
+		const enabledNames = getAllRuntimeToolNames(session, socket);
+		assert.equal(enabledNames.includes("mcp_browser_navigate"), true);
+		assert.equal(enabledNames.includes("mcp_browser_observe"), true);
+
+		updateClientConnection(socket, { capabilities: { browserTools: false } });
+		const disabledNames = getAllRuntimeToolNames(session, socket);
+		assert.equal(disabledNames.includes("mcp_browser_navigate"), false);
+		assert.equal(disabledNames.includes("mcp_browser_observe"), false);
+	} finally {
+		unregisterClientConnection(socket);
+	}
 });

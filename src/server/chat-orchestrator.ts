@@ -529,17 +529,22 @@ function createExecutionDecisionCompletionContract(
 	return targets.length === 0 ? undefined : { targets, requireAll: true };
 }
 
-function getAllRuntimeToolNames(session: ClientSession): readonly string[] {
-	if (session.activeWorkspace === undefined) {
-		return getNoWorkspaceToolNames();
-	}
-
-	return createWorkspaceToolCatalog({
-		workspaceId: session.activeWorkspace.id,
+export function getAllRuntimeToolNames(session: ClientSession, socket: WebSocket): readonly string[] {
+	const availableNames: string[] = createWorkspaceToolCatalog({
+		workspaceId: session.activeWorkspace?.id,
 		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 		editorInstanceId: session.editorInstanceId,
-		sessionId: session.sessionId
+		sessionId: session.sessionId,
+		clientType: getClientConnection(socket)?.clientType,
+		browserControl: getStudioBrowserControl(socket, session.sessionId)
 	}).getEntries().map((entry): string => entry.id);
+
+	if (session.activeWorkspace === undefined) {
+		const availableNameSet: Set<string> = new Set(availableNames);
+		return getNoWorkspaceToolNames().filter((toolName: string): boolean => availableNameSet.has(toolName));
+	}
+
+	return availableNames;
 }
 
 function filterReadOnlyAnswerToolNames(toolNames: readonly string[], workspaceId?: string | undefined): readonly string[] {
@@ -557,13 +562,14 @@ function resolveHiddenAnswerToolNames(
 	routeDecision: WorkflowRouteDecision,
 	params: AiChatParams,
 	allowedToolNames: readonly string[] | undefined,
-	session: ClientSession
+	session: ClientSession,
+	socket: WebSocket
 ): readonly string[] {
 	if (routeDecision.lane === "direct") {
 		return [];
 	}
 
-	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
+	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket);
 	if (routeDecision.lane === "lightweight") {
 		return sourceToolNames;
 	}
@@ -3074,8 +3080,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					);
 				}
 
-				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, effectiveParams, allowedToolNames, session);
-				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session);
+				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, effectiveParams, allowedToolNames, session, socket);
+				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket);
 				const hiddenAnswerApprovalGateway: ApprovalGateway = (
 					routeDecision.lane !== "lightweight"
 					&& routeDecision.lane !== "tool_assisted"

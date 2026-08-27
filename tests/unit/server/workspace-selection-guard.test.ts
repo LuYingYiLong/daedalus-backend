@@ -74,6 +74,19 @@ test("Studio draft workspace selection does not bind to the existing session run
 	}), { allowed: true, bindToSession: false });
 });
 
+test("Studio Remote uses the same session workspace lock as Studio", (): void => {
+	const decision = evaluateWorkspaceSelectionForSession({
+		clientType: "studio_remote",
+		session: {
+			sessionId: "session-a",
+			activeWorkspace: workspaceA
+		},
+		workspace: workspaceB
+	});
+
+	assert.equal(decision.allowed, false);
+});
+
 test("non-Studio clients can still select runtime workspaces for existing sessions", (): void => {
 	assert.deepEqual(evaluateWorkspaceSelectionForSession({
 		clientType: "godot_plugin",

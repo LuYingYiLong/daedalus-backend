@@ -25,6 +25,7 @@ import { handleChatRequest } from "../chat-orchestrator.js";
 import {
 	beginSessionRun,
 	finishSessionRun,
+	getClientActorSummary,
 	getActiveSessionRunRequestId,
 	registerSessionRunController
 } from "../client-connections.js";
@@ -77,9 +78,11 @@ function sendPlanResponse(socket: WebSocket, requestId: string, plan: StoredPlan
 }
 
 async function emitPlanUpdate(socket: WebSocket, requestId: string, session: ClientSession, plan: StoredPlan, revised: boolean): Promise<void> {
+	const actor = getClientActorSummary(socket);
 	const payload: Record<string, unknown> = {
 		...createPlanEventPayload(plan),
-		operationRequestId: requestId
+		operationRequestId: requestId,
+		...(actor === undefined ? {} : { actor })
 	};
 	if (plan.metadata.status === "clarification_required") {
 		sendSessionEvent(socket, plan.metadata.requestId, session, "plan.clarification.required", payload);
@@ -360,10 +363,12 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 					},
 					markdown: current.markdown
 				}));
+				const decisionActor = getClientActorSummary(socket);
 				sendSessionEvent(socket, executionRequestId, session, "plan.execution.started", {
 					...createPlanEventPayload(executingPlan),
 					executionRequestId,
-					originalRequestId: plan.metadata.requestId
+					originalRequestId: plan.metadata.requestId,
+					...(decisionActor === undefined ? {} : { actor: decisionActor })
 				});
 				sendJson(socket, {
 					type: "response",

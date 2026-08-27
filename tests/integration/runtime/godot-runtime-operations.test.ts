@@ -132,6 +132,6 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 		} else {
 			process.env.USERPROFILE = previousUserProfile;
 		}
-		await rm(root, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });

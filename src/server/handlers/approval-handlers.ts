@@ -150,7 +150,7 @@ import {
 import { createAgentToolEventForwarder } from "../workflow/tool-events.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
 import { ensureProviderConfigured } from "../../application/provider-session-service.js";
-import { findSessionWithPendingApproval } from "../client-connections.js";
+import { findSessionWithPendingApproval, getClientActorSummary } from "../client-connections.js";
 import { withMcpRequestContext } from "../../mcp/request-context.js";
 import {
 	getAgentRun,
@@ -528,8 +528,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			approvalRunId = pendingContinuation?.workflowState?.plan.id ?? pendingContinuation?.requestId ?? request.id;
 			approvalStepRunId = pendingContinuation?.workflowState?.activePhaseRunId ?? pendingContinuation?.requestId ?? request.id;
 			if (session.sessionId !== undefined) {
+				const actor = getClientActorSummary(socket);
 				await appendApprovalEvent(session.sessionId, pending.approvalId, approvalPersistRequestId, "approved", {
 					approvedAt: new Date().toISOString(),
+					...(actor === undefined ? {} : { actor }),
 					...(request.params.consentText === undefined ? {} : { consentText: request.params.consentText }),
 					...(pending.approvalKind === undefined ? {} : { approvalKind: pending.approvalKind }),
 					...(pending.downloadAuthorization === undefined ? {} : { downloadAuthorization: pending.downloadAuthorization })
@@ -941,8 +943,10 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const queueItemId: number | undefined = pendingContinuation?.params.options?.queueItemId;
 			const rejected = session.approvalGateway.reject(request.params.approvalId);
 			if (session.sessionId !== undefined) {
+				const actor = getClientActorSummary(socket);
 				await appendApprovalEvent(session.sessionId, request.params.approvalId, pendingState?.requestId ?? request.id, "rejected", {
 					rejectedAt: new Date().toISOString(),
+					...(actor === undefined ? {} : { actor }),
 					...(rejected.approvalKind === undefined ? {} : { approvalKind: rejected.approvalKind }),
 					failureCode: rejected.approvalKind === "network_download" ? "network_download_declined" : "approval_rejected"
 				});

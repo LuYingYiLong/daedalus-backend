@@ -127,7 +127,7 @@ test("fake Harness Sidecar performs the versioned handshake and publishes isolat
 	} finally {
 		if (originalProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = originalProfile;
-		await rm(profileRoot, { recursive: true, force: true });
-		await rm(packageRoot, { recursive: true, force: true });
+		await rm(profileRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+		await rm(packageRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 });

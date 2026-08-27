@@ -1,6 +1,6 @@
 import type { WorkspaceConfig } from "../workspace/types.js";
 import type { ClientSession } from "./client-session.js";
-import type { ClientType } from "./client-connections.js";
+import { isStudioSessionClientType, type ClientType } from "./client-connections.js";
 
 export type WorkspaceSelectionDecision = {
 	allowed: true;
@@ -19,7 +19,7 @@ export function evaluateWorkspaceSelectionForSession(params: {
 	workspace: Pick<WorkspaceConfig, "id" | "name" | "rootPath">;
 	requestedSessionId?: string | null | undefined;
 }): WorkspaceSelectionDecision {
-	if (params.clientType !== "studio" || params.session.sessionId === undefined) {
+	if (!isStudioSessionClientType(params.clientType) || params.session.sessionId === undefined) {
 		return { allowed: true, bindToSession: true };
 	}
 

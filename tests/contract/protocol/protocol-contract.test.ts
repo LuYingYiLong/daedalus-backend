@@ -175,6 +175,24 @@ test("session.timeline accepts afterOffset page request", (): void => {
 	}).success, true);
 });
 
+test("client.hello accepts Studio Remote without changing protocol v3", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "remote-hello",
+		method: "client.hello",
+		params: {
+			protocolVersion: 3,
+			clientType: "studio_remote",
+			clientName: "Pixel",
+			capabilities: {
+				remoteControl: true,
+				sessionSubscribe: true,
+				approval: true
+			}
+		}
+	}).success, true);
+});
+
 test("session trace RPCs validate strict developer paging requests", (): void => {
 	for (const request of [
 		{ type: "request", id: "trace-summary", method: "session.trace.summary", params: { sessionId: "session-test" } },

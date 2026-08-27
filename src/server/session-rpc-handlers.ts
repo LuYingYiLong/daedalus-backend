@@ -197,7 +197,7 @@ import {
 	serializeAgentRunRuntime
 } from "./agent-run-recovery.js";
 import { getLatestAgentGoal } from "./goal-controller.js";
-import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection, updateClientConnectionsForSession } from "./client-connections.js";
+import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, isStudioSessionClientType, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection, updateClientConnectionsForSession } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
 import { logger } from "../logger.js";
 import { resolveSessionCreateWorkspaceId } from "./session-create-workspace.js";
@@ -1876,7 +1876,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		case "session.trace.summary":
 		case "session.trace.page":
 		case "session.trace.detail": {
-			if (getClientConnection(socket)?.clientType !== "studio") {
+			if (!isStudioSessionClientType(getClientConnection(socket)?.clientType)) {
 				sendJson(socket, {
 					type: "response",
 					id: request.id,

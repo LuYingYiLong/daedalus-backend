@@ -780,7 +780,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.hello"),
 		params: z.object({
 			protocolVersion: z.literal(3),
-			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
+			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "studio_remote", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
 			workspaceId: z.string().min(1).optional(),

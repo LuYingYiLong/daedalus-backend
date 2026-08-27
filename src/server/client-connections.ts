@@ -5,12 +5,16 @@ import type { ClientSession } from "./client-session.js";
 import { sendJson } from "./send-json.js";
 import { sessionSearchService } from "../session-search/service.js";
 
-export type ClientType = "godot_editor_bridge" | "godot_plugin" | "studio" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
+export type ClientType = "godot_editor_bridge" | "godot_plugin" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
 
 export type ClientCapabilities = Partial<Record<
-	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "scheduledTasks" | "scheduledTaskReport",
+	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",
 	boolean
 >>;
+
+export function isStudioSessionClientType(clientType: ClientType | undefined): boolean {
+	return clientType === "studio" || clientType === "studio_remote";
+}
 
 export type ClientConnectionInfo = {
 	connectionId: string;
@@ -23,6 +27,12 @@ export type ClientConnectionInfo = {
 	bridgeProtocolVersion?: number | undefined;
 	bridgeHandshakeAccepted: boolean;
 	capabilities: ClientCapabilities;
+};
+
+export type ClientActorSummary = {
+	clientType: ClientType;
+	clientName: string;
+	connectionId: string;
 };
 
 type ConnectionRecord = ClientConnectionInfo & {
@@ -263,9 +273,18 @@ export function broadcastStudioSessionEvent(
 	if (subscribers === undefined) return;
 	for (const socket of subscribers) {
 		if (socket === originSocket || socket.readyState !== WebSocket.OPEN) continue;
-		if (socketConnections.get(socket)?.clientType !== "studio") continue;
+		if (!isStudioSessionClientType(socketConnections.get(socket)?.clientType)) continue;
 		sendJson(socket, envelope);
 	}
+}
+
+export function getClientActorSummary(socket: WebSocket): ClientActorSummary | undefined {
+	const connection: ClientConnectionInfo | null = getClientConnection(socket);
+	return connection === null ? undefined : {
+		clientType: connection.clientType,
+		clientName: connection.clientName,
+		connectionId: connection.connectionId,
+	};
 }
 
 export function broadcastToStudioSessionSubscribers(sessionId: string, envelope: ServerEvent): void {
@@ -273,7 +292,7 @@ export function broadcastToStudioSessionSubscribers(sessionId: string, envelope:
 	if (subscribers === undefined) return;
 	for (const socket of subscribers) {
 		if (socket.readyState !== WebSocket.OPEN) continue;
-		if (socketConnections.get(socket)?.clientType !== "studio") continue;
+		if (!isStudioSessionClientType(socketConnections.get(socket)?.clientType)) continue;
 		sendJson(socket, envelope);
 	}
 }

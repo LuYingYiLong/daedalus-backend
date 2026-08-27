@@ -26,9 +26,15 @@ import { studioBrowserRuntime } from "../studio-browser-runtime.js";
 import { studioScheduledTaskRuntime } from "../studio-scheduled-task-runtime.js";
 
 function readClientType(value: unknown): ClientType {
-	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
+	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "studio_remote" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
 		? value
 		: "legacy";
+}
+
+function getDefaultClientName(clientType: ClientType): string {
+	if (clientType === "studio") return "Daedalus Studio";
+	if (clientType === "studio_remote") return "Daedalus Remote";
+	return "Daedalus Editor Bridge";
 }
 
 function rejectBridgeHandshake(socket: WebSocket, requestId: string, receivedVersion: number | undefined): void {
@@ -126,7 +132,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 
 			const info = updateClientConnection(socket, {
 				clientType,
-				clientName: params.clientName ?? (params.clientType === "studio" ? "Daedalus Studio" : "Daedalus Editor Bridge"),
+				clientName: params.clientName ?? getDefaultClientName(clientType),
 				workspaceId: workspace?.id ?? params.workspaceId,
 				workspaceRoot: workspace?.rootPath ?? params.workspaceRoot,
 				editorInstanceId: params.editorInstanceId,

@@ -365,6 +365,44 @@
     "ownedBy": "zhipu"
   },
   {
+    "id": "glm-5.3",
+    "displayName": "GLM-5.3",
+    "provider": "zhipu",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "reasoning": true,
+      "reasoningEfforts": [
+        { "id": "low", "fallback": "low" },
+        { "id": "high", "fallback": "high" },
+        { "id": "max", "fallback": "max", "default": true }
+      ],
+      "tools": true
+    },
+    "ownedBy": "zhipu"
+  },
+  {
+    "id": "glm-5.3-flash",
+    "displayName": "GLM-5.3 Flash",
+    "provider": "zhipu",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "reasoningEfforts": [
+        { "id": "low", "fallback": "low" },
+        { "id": "high", "fallback": "high" },
+        { "id": "max", "fallback": "max", "default": true }
+      ],
+      "tools": true
+    },
+    "ownedBy": "zhipu"
+  },
+  {
     "id": "glm-image",
     "displayName": "GLM-Image",
     "provider": "zhipu",

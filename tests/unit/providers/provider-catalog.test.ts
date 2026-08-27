@@ -88,6 +88,23 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(zhipuModels.find((model) => model.id === "glm-5.2")?.capabilities.tools, true);
 	assert.equal(zhipuModels.find((model) => model.id === "glm-5.2")?.capabilities.webSearch, true);
 	assert.equal(zhipuModels.find((model) => model.id === "glm-5.2")?.contextWindowTokens, 1_000_000);
+	const zhipuGlm53 = zhipuModels.find((model) => model.id === "glm-5.3");
+	assert.equal(zhipuGlm53?.contextWindowTokens, 1_000_000);
+	assert.equal(zhipuGlm53?.maxOutputTokens, 128_000);
+	assert.equal(zhipuGlm53?.capabilities.reasoning, true);
+	assert.equal(zhipuGlm53?.capabilities.tools, true);
+	assert.deepEqual(zhipuGlm53?.capabilities.reasoningEfforts, [
+		{ id: "low", fallback: "low" },
+		{ id: "high", fallback: "high" },
+		{ id: "max", fallback: "max", default: true }
+	]);
+	const zhipuGlm53Flash = zhipuModels.find((model) => model.id === "glm-5.3-flash");
+	assert.equal(zhipuGlm53Flash?.contextWindowTokens, 1_000_000);
+	assert.equal(zhipuGlm53Flash?.maxOutputTokens, 128_000);
+	assert.equal(zhipuGlm53Flash?.capabilities.imageInput, true);
+	assert.equal(zhipuGlm53Flash?.capabilities.videoInput, true);
+	assert.equal(zhipuGlm53Flash?.capabilities.reasoning, true);
+	assert.equal(zhipuGlm53Flash?.capabilities.tools, true);
 	assert.equal(getProviderDefaultModel("dashscope"), "qwen3.7-plus");
 	assert.equal(getProviderDefinition("dashscope").modelListMode, "catalog-recommended");
 	assert.equal(getProviderDefaultEndpointType("dashscope"), "openai-chat-completions");

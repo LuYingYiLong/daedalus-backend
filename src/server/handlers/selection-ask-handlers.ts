@@ -153,7 +153,8 @@ async function runSelectionAskResponse(params: {
 		undefined,
 		extraPrompt,
 		`provider: ${params.thread.provider}\nmodel: ${params.thread.model}`,
-		"ask"
+		"ask",
+		false
 	);
 	const chatParams: AiChatParams = {
 		message: params.userMessage,

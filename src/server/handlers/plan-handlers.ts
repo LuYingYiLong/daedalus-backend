@@ -35,6 +35,7 @@ import { createRuntimeSessionUiMetadata } from "../session-ui-metadata.js";
 import { isCancellationError, sendAgentCancelled } from "../request-lifecycle.js";
 import { bumpWorkbenchRevision, emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun } from "../workbench.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
+import { hasGodotWorkspaceCapability } from "../../workspace/capabilities.js";
 
 const PLAN_EXECUTION_SLOT_WAIT_TIMEOUT_MS: number = 2000;
 const PLAN_EXECUTION_SLOT_WAIT_INTERVAL_MS: number = 25;
@@ -386,7 +387,8 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 				const executionParams: AiChatParams = createApprovedPlanExecutionParams(
 					plan,
 					session.activeProvider,
-					session.providerModel ?? session.modelProfile.model
+					session.providerModel ?? session.modelProfile.model,
+					session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
 				);
 				const executionRequest: ClientRequest = {
 					type: "request",

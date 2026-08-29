@@ -10,6 +10,21 @@ export type PromptTemplate = {
 
 export const DEFAULT_PROMPT_ID: PromptId = "godot.assistant";
 
+/**
+ * An active workspace with no Godot-capable source folder must use the
+ * general workspace prompt. `undefined` keeps the legacy no-workspace default
+ * so sessions backed by the standalone Godot runtime remain compatible.
+ */
+export function resolvePromptIdForWorkspace(
+	promptId: PromptId | undefined,
+	workspaceHasGodotCapability: boolean | undefined
+): PromptId {
+	if (promptId !== undefined) {
+		return promptId;
+	}
+	return workspaceHasGodotCapability === false ? "workspace.assistant" : DEFAULT_PROMPT_ID;
+}
+
 export const promptTemplates: Record<PromptId, PromptTemplate> = {
 	"godot.assistant": {
 		id: "godot.assistant",
@@ -132,9 +147,11 @@ export async function composeSystemPrompt(
 	promptId: PromptId | undefined,
 	extraSystemPrompt: string | undefined,
 	runtimeContext: string = "",
-	chatMode: "agent" | "ask" | "plan" | "goal" | undefined = undefined
+	chatMode: "agent" | "ask" | "plan" | "goal" | undefined = undefined,
+	workspaceHasGodotCapability: boolean | undefined = undefined
 ): Promise<string> {
-	const templateContent: string = await loadPromptTemplate(promptId ?? DEFAULT_PROMPT_ID);
+	const effectivePromptId: PromptId = resolvePromptIdForWorkspace(promptId, workspaceHasGodotCapability);
+	const templateContent: string = await loadPromptTemplate(effectivePromptId);
 	const trimmedExtraPrompt: string = extraSystemPrompt?.trim() ?? "";
 	const trimmedRuntimeContext: string = runtimeContext.trim();
 	const runtimeContextSection: string = trimmedRuntimeContext.length > 0

@@ -494,8 +494,23 @@ export async function createContextEstimateResult(session: ClientSession, mcpHos
 	const rawChatParams: AiChatParams = { message, mode, additionalContext };
 	const chatParams: AiChatParams = activeSession ? await hydrateImageAttachmentContexts(session.sessionId, rawChatParams) : rawChatParams;
 	const storedUserPrompt: string = await getUserPrompt();
-	const baseSystemPrompt: string = await composeSystemPrompt(undefined, undefined, createProviderRuntimeContextText(provider, model), mode);
-	const systemPrompt: string = await composeSystemPrompt(undefined, storedUserPrompt.length > 0 ? storedUserPrompt : undefined, createProviderRuntimeContextText(provider, model), mode);
+	const workspaceHasGodotCapability: boolean | undefined = session.activeWorkspace === undefined
+		? undefined
+		: hasGodotWorkspaceCapability(session.activeWorkspace);
+	const baseSystemPrompt: string = await composeSystemPrompt(
+		undefined,
+		undefined,
+		createProviderRuntimeContextText(provider, model),
+		mode,
+		workspaceHasGodotCapability
+	);
+	const systemPrompt: string = await composeSystemPrompt(
+		undefined,
+		storedUserPrompt.length > 0 ? storedUserPrompt : undefined,
+		createProviderRuntimeContextText(provider, model),
+		mode,
+		workspaceHasGodotCapability
+	);
 	const additionalContextSection: string = createAdditionalContextPromptSection(chatParams.additionalContext);
 	const baseSystemPart = await estimateTextPart(providerOptions, baseSystemPrompt);
 	const fullSystemPart = await estimateTextPart(providerOptions, systemPrompt);

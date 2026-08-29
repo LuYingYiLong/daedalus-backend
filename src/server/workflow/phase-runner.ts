@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { composeSystemPrompt } from "../../prompts/registry.js";
+import { composeSystemPrompt, resolvePromptIdForWorkspace } from "../../prompts/registry.js";
 import type { AiChatParams, ChatMessage } from "../../protocol/types.js";
 import type { ProviderAgentResult } from "../../providers/agent-types.js";
 import { runProviderAgent, runProviderAgentStreaming } from "../../providers/provider-agent.js";
@@ -135,7 +135,12 @@ export async function createWorkflowPhasePrompt(
 	requestId: string,
 	guidePromptSection: string = ""
 ): Promise<string> {
-	const systemPrompt: string = await composeSystemPrompt(phase.promptId ?? params.promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode);
+	const requestedPromptId = phase.promptId ?? params.promptId;
+	const promptId = resolvePromptIdForWorkspace(
+		requestedPromptId,
+		session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
+	);
+	const systemPrompt: string = await composeSystemPrompt(promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode);
 	const runtimePhase: WorkflowPhase = await createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session);
 	const phaseSkillPrompt: string = await composeSkillPrompt(phase.skillId);
 	const skillWorkspace: SkillWorkspace = session.activeWorkspace !== undefined
@@ -157,7 +162,7 @@ export async function createWorkflowPhasePrompt(
 	logPromptTrace({
 		requestId,
 		phaseId: phase.id,
-		promptId: phase.promptId ?? params.promptId,
+		promptId,
 		skillId: phase.skillId,
 		customInstructions: params.systemPrompt,
 		systemPrompt,

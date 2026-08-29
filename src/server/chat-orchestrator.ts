@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { composeSystemPrompt, listPromptTemplates } from "../prompts/registry.js";
+import { composeSystemPrompt, listPromptTemplates, resolvePromptIdForWorkspace } from "../prompts/registry.js";
 import { getGeneralSettings } from "../general-settings-store.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
 import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
@@ -2953,7 +2953,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					? budgetToolCatalog.getDefinitions()
 					: budgetToolCatalog.getDefinitionsForNames(allowedToolNames);
 				const budgetToolDefinitionsSection: string = JSON.stringify(budgetToolDefinitions);
-				const promptId = effectiveParams.promptId ?? explicitSkills.find((skill): boolean => skill.defaultPromptId !== undefined)?.defaultPromptId;
+				const requestedPromptId = effectiveParams.promptId ?? explicitSkills.find((skill): boolean => skill.defaultPromptId !== undefined)?.defaultPromptId;
+				const promptId = resolvePromptIdForWorkspace(
+					requestedPromptId,
+					session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
+				);
 				const systemPrompt: string = await composeSystemPrompt(
 					promptId,
 					effectiveParams.systemPrompt,

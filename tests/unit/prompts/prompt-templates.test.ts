@@ -10,7 +10,8 @@ import {
 	listPromptTemplates,
 	loadCorePrompt,
 	promptFragmentPaths,
-	promptTemplatePaths
+	promptTemplatePaths,
+	resolvePromptIdForWorkspace
 } from "../../../src/prompts/registry.js";
 
 const templatesRoot: string = path.resolve(process.cwd(), "src/prompts/templates");
@@ -173,6 +174,17 @@ test("system prompts include the backend local calendar date as a runtime fact",
 	const prompt: string = await composeSystemPrompt("godot.assistant", undefined, "", "agent");
 	assert.match(prompt, /## Runtime current date\n\nToday's \d{4}-\d{1,2}-\d{1,2}\./);
 	assert.ok(prompt.indexOf("# CORE") < prompt.indexOf("## Runtime current date"));
+});
+
+test("an active non-Godot workspace uses the general workspace prompt by default", async (): Promise<void> => {
+	assert.equal(resolvePromptIdForWorkspace(undefined, false), "workspace.assistant");
+	assert.equal(resolvePromptIdForWorkspace(undefined, true), "godot.assistant");
+	assert.equal(resolvePromptIdForWorkspace("backend.helper", false), "backend.helper");
+
+	const prompt: string = await composeSystemPrompt(undefined, undefined, "", "agent", false);
+	assert.match(prompt, /Daedalus 通用工作区执行助手/);
+	assert.match(prompt, /不得假设项目使用 Godot/);
+	assert.doesNotMatch(prompt, /## 2\. Godot 工程底线/);
 });
 
 test("core prompt keeps context use natural while preserving truthful provenance", async (): Promise<void> => {

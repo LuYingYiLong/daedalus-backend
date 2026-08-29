@@ -131,6 +131,13 @@ test("planner prompt anchors backend plans to actual repository conventions", as
 	assert.match(prompt, /不要.*gRPC/);
 });
 
+test("non-Godot plan prompts do not identify the planner as Godot-specific", async (): Promise<void> => {
+	const prompt = await createPlannerSystemPrompt(false);
+
+	assert.match(prompt, /你是 Daedalus 的通用 Plan 模式规划器/);
+	assert.doesNotMatch(prompt, /你是 Godot Daedalus 的 Plan 模式规划器/);
+});
+
 test("plan mode keeps internal planner deltas out of the user timeline", async (): Promise<void> => {
 	const planModeSource: string = await readFile(new URL("../../../src/server/plan-mode.ts", import.meta.url), "utf8");
 
@@ -213,6 +220,9 @@ test("approved plan execution uses the free Agent Loop without a legacy workflow
 	assert.equal(params.model, "kimi-k3");
 	assert.match(params.systemPrompt ?? "", /执行阶段必须以该计划为主要约束/);
 	assert.match(params.systemPrompt ?? "", /原始用户请求：\n审批/);
+
+	const workspaceParams = createApprovedPlanExecutionParams(plan, "moonshot", "kimi-k3", false);
+	assert.equal(workspaceParams.promptId, "workspace.assistant");
 });
 
 test("plan approval persists agent mode without phase execution modules", async (): Promise<void> => {

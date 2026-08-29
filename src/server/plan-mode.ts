@@ -23,7 +23,7 @@ import { ReadOnlyToolApprovalGateway } from "../tools/approval-gateway.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { resolveAllowedToolsForChatParams } from "./chat-mode.js";
 import { createAgentToolEventForwarder } from "./workflow/tool-events.js";
-import { loadCorePrompt } from "../prompts/registry.js";
+import { loadCorePrompt, resolvePromptIdForWorkspace } from "../prompts/registry.js";
 import { getClientConnection } from "./client-connections.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
@@ -276,13 +276,16 @@ function createPlanPreview(markdown: string): string {
 	return clipTextByChars(markdown.trim(), PLAN_PREVIEW_MAX_CHARS);
 }
 
-export async function createPlannerSystemPrompt(): Promise<string> {
+export async function createPlannerSystemPrompt(workspaceHasGodotCapability?: boolean): Promise<string> {
 	const corePrompt: string = await loadCorePrompt();
+	const plannerIdentity: string = workspaceHasGodotCapability === false
+		? "你是 Daedalus 的通用 Plan 模式规划器。此阶段只能澄清和生成计划，不能执行、不能写文件、不能假装已经修改项目。"
+		: "你是 Godot Daedalus 的 Plan 模式规划器。此阶段只能澄清和生成计划，不能执行、不能写文件、不能假装已经修改项目。";
 	return [
 		corePrompt,
 		"",
 		"## Plan 模式规划器",
-		"你是 Godot Daedalus 的 Plan 模式规划器。此阶段只能澄清和生成计划，不能执行、不能写文件、不能假装已经修改项目。",
+		plannerIdentity,
 		"你必须遵循 CORE；尤其是调用工具前要先用用户可见正文给出一句简短预告，要求用户澄清前也要先说明为什么必须澄清。",
 		"最终决策必须是 JSON object。工具前预告和澄清前预告可以是普通正文，但最终 JSON 不要包在 markdown fence 中。",
 		"先判断用户目标是否足够明确；如果直接做容易偏离真实需求，必须要求澄清。",
@@ -604,7 +607,7 @@ async function runPlanAgentDecision(
 		plannerParams,
 		options,
 		[] satisfies ChatMessage[],
-		await createPlannerSystemPrompt(),
+		await createPlannerSystemPrompt(hasGodotWorkspaceCapability(runtime.session.activeWorkspace)),
 		runtime.mcpHost,
 		gateway,
 		allowedToolNames,
@@ -852,14 +855,15 @@ export function createApprovedPlanSystemPrompt(markdown: string, originalMessage
 export function createApprovedPlanExecutionParams(
 	plan: StoredPlan,
 	provider?: ProviderId | undefined,
-	model?: string | undefined
+	model?: string | undefined,
+	workspaceHasGodotCapability?: boolean | undefined
 ): AiChatParams {
 	return {
 		message: "执行计划。",
 		mode: "agent",
 		provider,
 		model,
-		promptId: "godot.assistant",
+		promptId: resolvePromptIdForWorkspace(undefined, workspaceHasGodotCapability),
 		systemPrompt: createApprovedPlanSystemPrompt(plan.markdown, plan.metadata.originalMessage),
 		options: {
 			stream: true,

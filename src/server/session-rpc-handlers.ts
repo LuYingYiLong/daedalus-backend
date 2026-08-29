@@ -73,7 +73,7 @@ import {
 	createSessionFork,
 	readSessionForkDraft,
 } from "../session/session-fork.js";
-import { hasSessionUserTurn, recordPendingSessionModelTransition } from "../session/session-model-transition.js";
+import { hasSessionUserTurn, readLatestSessionModelRef, recordPendingSessionModelTransition } from "../session/session-model-transition.js";
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
@@ -1778,9 +1778,12 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				break;
 			}
 
-			const providerChanged: boolean = provider !== session.activeProvider;
-			const previousProvider: ProviderId = session.activeProvider;
-			const previousModel: string = session.providerModel ?? session.modelProfile.model;
+			const runtimeProviderChanged: boolean = provider !== session.activeProvider;
+			const persistedPreviousModel = await readLatestSessionModelRef(session.sessionId);
+			const previousProvider: ProviderId = persistedPreviousModel !== null && isProviderId(persistedPreviousModel.provider)
+				? persistedPreviousModel.provider
+				: session.activeProvider;
+			const previousModel: string = persistedPreviousModel?.model ?? session.providerModel ?? session.modelProfile.model;
 			const reasoningEffort: string | undefined = resolveReasoningEffortForModelChange(
 				previousProvider,
 				previousModel,
@@ -1795,7 +1798,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			session.workbenchComposer.model = undefined;
 			session.workbenchComposer.reasoningEffort = reasoningEffort;
 			session.workbenchComposer.updatedAt = new Date().toISOString();
-			if (providerChanged) {
+			if (runtimeProviderChanged) {
 				session.providerApiKey = undefined;
 				session.providerBaseUrl = undefined;
 				session.providerRequestOverrides = undefined;

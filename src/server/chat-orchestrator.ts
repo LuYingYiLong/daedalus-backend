@@ -79,6 +79,7 @@ import { clearSessionForkDraft } from "../session/session-fork.js";
 import {
 	clearPendingSessionModelTransition,
 	hasSessionUserTurn,
+	readLatestSessionModelRef,
 	readPendingSessionModelTransition,
 	recordPendingSessionModelTransition,
 	type SessionModelRef,
@@ -255,7 +256,11 @@ type ChatModelSnapshotChange = {
 	} | undefined;
 };
 
-function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatParams): ChatModelSnapshotChange | null {
+function applyChatRequestModelSnapshot(
+	session: ClientSession,
+	params: AiChatParams,
+	persistedPreviousModel?: SessionModelRef | null
+): ChatModelSnapshotChange | null {
 	if (params.provider === undefined && params.model === undefined && params.options?.reasoningEffort === undefined) {
 		return null;
 	}
@@ -268,6 +273,7 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 	const providerChanged: boolean = nextProvider !== session.activeProvider;
 	const previousProvider: ProviderId = session.activeProvider;
 	const currentModel: string = session.providerModel ?? session.modelProfile.model ?? getProviderDefaultModel(session.activeProvider);
+	const previousModelRef: SessionModelRef = persistedPreviousModel ?? { provider: previousProvider, model: currentModel };
 	const requestedModel: string | undefined = params.model?.trim();
 	const nextModel: string = requestedModel !== undefined && requestedModel.length > 0
 		? requestedModel
@@ -282,7 +288,7 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 	session.providerModel = nextModel;
 	session.modelProfile = resolveModelProfile(nextProvider, nextModel);
 	session.workbenchComposer.reasoningEffort = params.options?.reasoningEffort === undefined
-		? resolveReasoningEffortForModelChange(previousProvider, currentModel, session.workbenchComposer.reasoningEffort, nextProvider, nextModel)
+		? resolveReasoningEffortForModelChange(previousModelRef.provider, previousModelRef.model, session.workbenchComposer.reasoningEffort, nextProvider, nextModel)
 		: resolveReasoningEffort(nextProvider, nextModel, params.options.reasoningEffort);
 	if (providerChanged) {
 		session.providerApiKey = undefined;
@@ -290,10 +296,10 @@ function applyChatRequestModelSnapshot(session: ClientSession, params: AiChatPar
 		session.providerRequestOverrides = undefined;
 	}
 	return {
-		...(providerChanged || nextModel !== currentModel
+		...(previousModelRef.provider !== nextProvider || previousModelRef.model !== nextModel
 			? {
 				modelTransition: {
-					from: { provider: previousProvider, model: currentModel },
+					from: previousModelRef,
 					to: { provider: nextProvider, model: nextModel },
 				},
 			}
@@ -1400,7 +1406,11 @@ async function completeHiddenAnswerExecution(
 		context: {
 			historyMessagesStored: params.session.messages.length,
 			historyBudgetTokens: params.historyBudgetTokens,
-			mcpServers: params.mcpHost.getConnectedServerIds()
+			mcpServers: params.mcpHost.getConnectedServerIds(),
+			modelRef: {
+				provider: params.options.provider,
+				model: resolveChatModel(params.options)
+			}
 		}
 	});
 	if (getAgentRun(params.session, runId) !== undefined) {
@@ -2615,7 +2625,12 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				await deleteSummary(session.sessionId);
 			}
 			const hadPriorUserTurn: boolean = hasSessionUserTurn(session.messages);
-			const modelSnapshotChange: ChatModelSnapshotChange | null = applyChatRequestModelSnapshot(session, params);
+			const requestsModelSelection: boolean = params.provider !== undefined
+				|| params.model !== undefined
+			const persistedPreviousModel: SessionModelRef | null = !requestsModelSelection || session.sessionId === undefined
+				? null
+				: await readLatestSessionModelRef(session.sessionId);
+			const modelSnapshotChange: ChatModelSnapshotChange | null = applyChatRequestModelSnapshot(session, params, persistedPreviousModel);
 			if (modelSnapshotChange !== null && session.sessionId !== undefined) {
 				await updateSessionMetadata(session.sessionId, createRuntimeSessionUiMetadata(session));
 				if (hadPriorUserTurn && modelSnapshotChange.modelTransition !== undefined) {

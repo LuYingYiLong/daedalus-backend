@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import type { AiChatParams } from "../protocol/types.js";
 import type { AgentContinuation, ProviderAgentResult } from "../providers/agent-types.js";
+import { resolveChatModel } from "../providers/provider-chat-completions-client.js";
 import type { ProviderChatOptions } from "../providers/deepseek-client.js";
 import { appendApprovalEvent, readApprovalEvents } from "../session/session-store.js";
 import {
@@ -630,7 +631,11 @@ export async function sendContinuedAgentResult(
 		context: {
 			historyMessagesStored: session.messages.length,
 			historyBudgetTokens,
-			mcpServers: mcpHost.getConnectedServerIds()
+			mcpServers: mcpHost.getConnectedServerIds(),
+			modelRef: {
+				provider: pendingContinuation.options.provider,
+				model: resolveChatModel(pendingContinuation.options)
+			}
 		}
 	}, pendingContinuation.requestId);
 	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {

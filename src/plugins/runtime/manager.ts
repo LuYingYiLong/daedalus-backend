@@ -56,7 +56,7 @@ import {
 import { addPluginRuntimeLog } from "./runtime-logs.js";
 import { installPluginDependencies } from "./dependency-installer.js";
 import { readChildRssBytes } from "./resource-usage.js";
-import { stopAllPluginLanguageServices, stopPluginLanguageServicesForPlugin } from "../p2/language-service.js";
+import { stopAllPluginLanguageServices, stopPluginLanguageServicesForPlugin } from "../extensions/language-service.js";
 import { getRuntimeRecoveryFields } from "./runtime-snapshot.js";
 import {
 	encodeWorkerMessage,

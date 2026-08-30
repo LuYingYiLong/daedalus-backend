@@ -73,41 +73,41 @@ function createDisplay(
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
 	if (toolName.startsWith("mcp_computer_")) {
-		const title = toolName === "mcp_computer_action" ? "操作授权窗口" : toolName === "mcp_computer_request_access" ? (args.mode === "control" ? "请求操作窗口" : "请求观察窗口") : toolName === "mcp_computer_observe" ? "读取窗口结构与文字" : "查看观察截图";
-		return createDisplay("studio_computer", "Daedalus Computer Use", toolName === "mcp_computer_action" ? "write" : "read", title, "仅限本轮用户授权的窗口", { kind: "unknown", label: "Authorized window" });
+		const title = toolName === "mcp_computer_action" ? "Control authorized window" : toolName === "mcp_computer_request_access" ? (args.mode === "control" ? "Request control window" : "Request observation window") : toolName === "mcp_computer_observe" ? "Read window structure and text" : "View observation screenshot";
+		return createDisplay("studio_computer", "Daedalus Computer Use", toolName === "mcp_computer_action" ? "write" : "read", title, "Limited to the window authorized for this turn", { kind: "unknown", label: "Authorized window" });
 	}
 	if (toolName.startsWith("mcp_scheduled_task")) {
 		const labels: Record<string, [ToolEventCategory, string]> = {
-			mcp_scheduled_tasks_list: ["read", "查看定时任务"],
-			mcp_scheduled_task_create: ["write", "创建定时任务"],
-			mcp_scheduled_task_update: ["write", "修改定时任务"],
-			mcp_scheduled_task_pause: ["write", "暂停定时任务"],
-			mcp_scheduled_task_resume: ["write", "恢复定时任务"],
-			mcp_scheduled_task_delete: ["write", "删除定时任务"],
-			mcp_scheduled_task_report: ["read", "报告监测结果"],
+			mcp_scheduled_tasks_list: ["read", "List scheduled tasks"],
+			mcp_scheduled_task_create: ["write", "Create scheduled task"],
+			mcp_scheduled_task_update: ["write", "Update scheduled task"],
+			mcp_scheduled_task_pause: ["write", "Pause scheduled task"],
+			mcp_scheduled_task_resume: ["write", "Resume scheduled task"],
+			mcp_scheduled_task_delete: ["write", "Delete scheduled task"],
+			mcp_scheduled_task_report: ["read", "Report monitoring result"],
 		};
-		const [category, title] = labels[toolName] ?? ["unknown", "操作定时任务"];
+		const [category, title] = labels[toolName] ?? ["unknown", "Manage scheduled task"];
 		const label = getStringArg(args, "title") ?? getStringArg(args, "taskId") ?? "scheduled task";
 		return createDisplay("studio_scheduled_tasks", "Daedalus Scheduler", category, title, label, { kind: "unknown", label });
 	}
 	if (toolName.startsWith("mcp_browser_")) {
 		const action = toolName.slice("mcp_browser_".length);
 		const labels: Record<string, [ToolEventCategory, string, string]> = {
-			observe: ["read", "观察网页", "读取当前网页的可见内容与交互元素"],
-			navigate: ["read", "打开网页", getStringArg(args, "url") ?? "导航到网页"],
-			navigation: ["read", "网页导航", getStringArg(args, "action") ?? "导航网页"],
-			scroll: ["read", "滚动网页", getStringArg(args, "direction") ?? "滚动当前网页"],
-			wait: ["read", "等待网页", getStringArg(args, "condition") ?? "等待页面状态"],
-			screenshot: ["image", "截取网页", "捕获当前浏览器视口"],
-			click: ["write", "点击网页元素", `元素 ${String(args.elementId ?? "")}`],
-			type: ["write", "输入网页内容", `元素 ${String(args.elementId ?? "")}`],
-			select: ["write", "选择网页选项", `元素 ${String(args.elementId ?? "")}`]
+			observe: ["read", "Observe webpage", "Read visible page content and interactive elements"],
+			navigate: ["read", "Open webpage", getStringArg(args, "url") ?? "Navigate to webpage"],
+			navigation: ["read", "Navigate webpage", getStringArg(args, "action") ?? "Navigate current webpage"],
+			scroll: ["read", "Scroll webpage", getStringArg(args, "direction") ?? "Scroll current webpage"],
+			wait: ["read", "Wait for webpage", getStringArg(args, "condition") ?? "Wait for page state"],
+			screenshot: ["image", "Capture webpage", "Capture the current browser viewport"],
+			click: ["write", "Click webpage element", `Element ${String(args.elementId ?? "")}`],
+			type: ["write", "Type webpage content", `Element ${String(args.elementId ?? "")}`],
+			select: ["write", "Select webpage option", `Element ${String(args.elementId ?? "")}`]
 		};
-		const [category, title, summary] = labels[action] ?? ["unknown", "操作网页", action];
+		const [category, title, summary] = labels[action] ?? ["unknown", "Operate webpage", action];
 		return createDisplay("studio_browser", "Daedalus Browser", category, title, summary, { kind: "unknown", label: action });
 	}
 	if (toolName === "daedalus_prepare_summary") {
-		return createDisplay("workflow", "Daedalus Workflow", "read", "准备总结", "检查 Agent Loop 是否可以开始总结", {
+			return createDisplay("workflow", "Daedalus Workflow", "read", "Prepare summary", "Check whether the Agent Loop can start summarizing", {
 			kind: "unknown",
 			label: "summary checkpoint"
 		});
@@ -118,17 +118,17 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const slug: string | undefined = getStringArg(args, "slug");
 		const label: string = ref ?? slug ?? "skill";
 		if (toolName === "mcp_skills_load") {
-			return createDisplay("skills", "Skills", "read", "加载 Skill", `读取 ${label} 的指令`, { kind: "unknown", label });
+			return createDisplay("skills", "Skills", "read", "Load skill", `Read instructions for ${label}`, { kind: "unknown", label });
 		}
 		if (toolName === "mcp_skills_propose_create") {
-			return createDisplay("skills", "Skills", "propose", "预览 Skill", `校验 ${label}`, { kind: "unknown", label });
+			return createDisplay("skills", "Skills", "propose", "Preview skill", `Validate ${label}`, { kind: "unknown", label });
 		}
-		return createDisplay("skills", "Skills", "write", "创建 Skill", `创建 ${label}`, { kind: "unknown", label });
+		return createDisplay("skills", "Skills", "write", "Create skill", `Create ${label}`, { kind: "unknown", label });
 	}
 	if (toolName === "mcp_image_generate") {
 		const prompt: string = getStringArg(args, "prompt") ?? "image";
 		const count: string = String(args.count ?? 1);
-		return createDisplay("image", "Image Generation", "image", "生成图片", `生成 ${count} 张图片：${prompt.slice(0, 80)}`, {
+		return createDisplay("image", "Image Generation", "image", "Generate image", `Generate ${count} image(s): ${prompt.slice(0, 80)}`, {
 			kind: "unknown",
 			label: "generated image"
 		});
@@ -154,7 +154,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 	}
 	if (toolName === "mcp_web_search") {
 		const query: string = getStringArg(args, "query") ?? "search";
-		return createDisplay("web_search", "Web Search", "read", "联网搜索", `搜索：${query.slice(0, 100)}`, {
+		return createDisplay("web_search", "Web Search", "read", "Web search", `Search: ${query.slice(0, 100)}`, {
 			kind: "unknown",
 			label: query
 		});
@@ -168,14 +168,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 				});
 			}
 		if (toolName.includes("list_files")) {
-			return createDisplay("workspace", "Workspace", "read", "列出文件", "列出 workspace 文件", {
+			return createDisplay("workspace", "Workspace", "read", "List files", "List workspace files", {
 				kind: "file",
 					label: formatSourceScope(args, "[primary]")
 			});
 		}
 		if (toolName.includes("read_text_file")) {
 				const filePath: string = formatSourcePath(args, relativePath ?? "unknown file");
-			return createDisplay("workspace", "Workspace", "read", "读取文件", `读取 ${filePath}`, {
+			return createDisplay("workspace", "Workspace", "read", "Read file", `Read ${filePath}`, {
 				kind: "file",
 				path: filePath,
 				label: filePath
@@ -183,14 +183,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 		if (toolName.includes("search_text")) {
 			const query: string = getStringArg(args, "query") ?? "search";
-			return createDisplay("workspace", "Workspace", "search", "搜索文件", `搜索：${query.slice(0, 100)}`, {
+			return createDisplay("workspace", "Workspace", "search", "Search files", `Search: ${query.slice(0, 100)}`, {
 				kind: "unknown",
 					label: `${formatSourceScope(args, "[primary]")} ${query}`
 			});
 		}
 		if (toolName.includes("propose_")) {
 				const filePath: string = formatSourcePath(args, relativePath ?? "unknown file");
-			return createDisplay("workspace", "Workspace", "propose", "预览文件修改", filePath, {
+			return createDisplay("workspace", "Workspace", "propose", "Preview file change", filePath, {
 				kind: "file",
 				path: filePath,
 				label: filePath
@@ -198,7 +198,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 		if (toolName.includes("create_text_file") || toolName.includes("overwrite_text_file") || toolName.includes("replace_text_in_file") || toolName.includes("replace_line_in_file") || toolName.includes("delete_file")) {
 				const filePath: string = formatSourcePath(args, relativePath ?? "unknown file");
-			return createDisplay("workspace", "Workspace", "write", "写入文件", `写入 ${filePath}`, {
+			return createDisplay("workspace", "Workspace", "write", "Write file", `Write ${filePath}`, {
 				kind: "file",
 				path: filePath,
 				label: filePath
@@ -211,7 +211,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const serverName: string = metadata?.serverName ?? "Custom MCP";
 		const originalToolName: string = metadata?.toolName ?? toolName;
 		const category: ToolEventCategory = metadata?.planAccess === "read" ? "docs" : "write";
-		const title: string = metadata?.planAccess === "read" ? "读取自定义 MCP" : "自定义 MCP 工具";
+		const title: string = metadata?.planAccess === "read" ? "Read custom MCP" : "Custom MCP tool";
 		return createDisplay(serverId, serverName, category, title, `${serverName}: ${originalToolName}`, {
 			kind: "unknown",
 			label: originalToolName
@@ -224,14 +224,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const targetLabel: string = nodePath ?? scenePath ?? "Godot Editor";
 
 		if (toolName.includes("get_context")) {
-			return createDisplay("godot_editor", "Godot Editor", "read", "读取编辑器上下文", "读取当前编辑器在线状态与场景上下文", {
+			return createDisplay("godot_editor", "Godot Editor", "read", "Read editor context", "Read the current editor online state and scene context", {
 				kind: "unknown",
 				label: "Godot Editor"
 			});
 		}
 
 		if (toolName.includes("get_selected_nodes")) {
-			return createDisplay("godot_editor", "Godot Editor", "read", "读取选中节点", "读取当前编辑器选中的节点", {
+			return createDisplay("godot_editor", "Godot Editor", "read", "Read selected nodes", "Read the nodes selected in the current editor", {
 				kind: "scene",
 				label: "selected nodes"
 			});
@@ -246,14 +246,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 				path: scenePath,
 				label: targetLabel
 			};
-			return createDisplay("godot_editor", "Godot Editor", "read", "查看在线节点", `查看 ${targetLabel}`, {
+			return createDisplay("godot_editor", "Godot Editor", "read", "Inspect online node", `Inspect ${targetLabel}`, {
 				...target
 			});
 		}
 
 		if (toolName.includes("capture_scene_view")) {
 			const view: string = getStringArg(args, "view") ?? "auto";
-			return createDisplay("godot_editor", "Godot Editor", "read", "截取场景视图", `截取 ${view} 编辑器场景视口供视觉分析`, {
+			return createDisplay("godot_editor", "Godot Editor", "read", "Capture scene view", `Capture the ${view} editor scene viewport for visual analysis`, {
 				kind: "scene",
 				label: `scene view (${view})`
 			});
@@ -262,13 +262,13 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		if (toolName.includes("apply_scene_patch")) {
 			const target: ToolEventTarget = scenePath === undefined ? {
 				kind: "scene",
-				label: "当前场景"
+				label: "Current scene"
 			} : {
 				kind: "scene",
 				path: scenePath,
 				label: scenePath
 			};
-			return createDisplay("godot_editor", "Godot Editor", "scene", "编辑在线场景", `编辑 ${scenePath ?? "当前场景"}`, {
+			return createDisplay("godot_editor", "Godot Editor", "scene", "Edit online scene", `Edit ${scenePath ?? "current scene"}`, {
 				...target
 			});
 		}
@@ -291,7 +291,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 
 		if (toolName.includes("lsp_get_status")) {
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "检查 LSP 状态", "探测 Godot GDScript LSP", {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Check LSP status", "Probe the Godot GDScript LSP", {
 				kind: "unknown",
 				label: "Godot LSP"
 			});
@@ -299,7 +299,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("lsp_get_file_diagnostics")) {
 			const targetLabel: string = resourcePath ?? "script";
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "读取脚本诊断", `读取 ${targetLabel} 的 LSP 诊断`, {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Read script diagnostics", `Read LSP diagnostics for ${targetLabel}`, {
 				kind: "file",
 				path: targetLabel,
 				label: targetLabel
@@ -308,7 +308,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("lsp_get_document_symbols")) {
 			const targetLabel: string = resourcePath ?? "script";
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "查看脚本符号", `查看 ${targetLabel} 的符号结构`, {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Inspect script symbols", `Inspect the symbol structure of ${targetLabel}`, {
 				kind: "file",
 				path: targetLabel,
 				label: targetLabel
@@ -317,7 +317,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("lsp_hover")) {
 			const targetLabel: string = resourcePath ?? "script";
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "查看 Hover 信息", `查看 ${targetLabel} 的符号说明`, {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Inspect hover information", `Inspect symbol information for ${targetLabel}`, {
 				kind: "file",
 				path: targetLabel,
 				label: targetLabel
@@ -326,7 +326,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("lsp_goto_definition")) {
 			const targetLabel: string = resourcePath ?? "script";
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "查找定义", `查找 ${targetLabel} 中的定义`, {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Find definition", `Find definitions in ${targetLabel}`, {
 				kind: "file",
 				path: targetLabel,
 				label: targetLabel
@@ -334,21 +334,21 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 
 		if (toolName.includes("dap_get_status")) {
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "检查 DAP 状态", "探测 Godot DAP 调试会话", {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Check DAP status", "Probe the Godot DAP debug session", {
 				kind: "unknown",
 				label: "Godot DAP"
 			});
 		}
 
 		if (toolName.includes("dap_get_last_error")) {
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "读取运行错误", "读取 Godot DAP 最近运行错误", {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Read runtime errors", "Read recent runtime errors from Godot DAP", {
 				kind: "unknown",
 				label: "last runtime error"
 			});
 		}
 
 		if (toolName.includes("dap_get_stack_trace")) {
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "读取调用栈", "读取 Godot DAP 调用栈", {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Read call stack", "Read the Godot DAP call stack", {
 				kind: "unknown",
 				label: "stack trace"
 			});
@@ -356,21 +356,21 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("dap_get_variables")) {
 			const reference: string = String(args["variablesReference"] ?? "variables");
-			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "读取变量", `读取变量引用 ${reference}`, {
+			return createDisplay("godot_diagnostics", "Godot Diagnostics", "read", "Read variables", `Read variable reference ${reference}`, {
 				kind: "unknown",
 				label: reference
 			});
 		}
 
 		if (toolName.includes("get_project_log_config")) {
-			return createDisplay("godot", "Godot", "read", "读取日志配置", "解析 Godot 项目日志路径", {
+			return createDisplay("godot", "Godot", "read", "Read log configuration", "Resolve the Godot project log path", {
 				kind: "unknown",
 				label: "project log config"
 			});
 		}
 
 		if (toolName.includes("list_project_logs")) {
-			return createDisplay("godot", "Godot", "read", "列出项目日志", "列出 Godot 项目日志文件", {
+			return createDisplay("godot", "Godot", "read", "List project logs", "List Godot project log files", {
 				kind: "file",
 				label: "project logs"
 			});
@@ -378,14 +378,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("read_project_log")) {
 			const fileName: string = getStringArg(args, "fileName") ?? "godot.log";
-			return createDisplay("godot", "Godot", "read", "读取项目日志", `读取 ${fileName}`, {
+			return createDisplay("godot", "Godot", "read", "Read project log", `Read ${fileName}`, {
 				kind: "file",
 				label: fileName
 			});
 		}
 
 		if (toolName.includes("get_project_settings")) {
-			return createDisplay("godot", "Godot", "read", "读取项目设置", "读取 project.godot 设置", {
+			return createDisplay("godot", "Godot", "read", "Read project settings", "Read project.godot settings", {
 				kind: "file",
 				path: "project.godot",
 				label: "project.godot"
@@ -505,21 +505,21 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 
 		if (toolName.includes("get_editor_config_summary")) {
-			return createDisplay("godot", "Godot", "read", "读取编辑器摘要", "读取 Godot 编辑器设置与项目编辑状态摘要", {
+			return createDisplay("godot", "Godot", "read", "Read editor summary", "Read a summary of Godot editor settings and project edit state", {
 				kind: "unknown",
 				label: "Godot editor config"
 			});
 		}
 
 		if (toolName.includes("get_editor_settings")) {
-			return createDisplay("godot", "Godot", "read", "读取编辑器设置", "读取 editor_settings 配置", {
+			return createDisplay("godot", "Godot", "read", "Read editor settings", "Read editor_settings configuration", {
 				kind: "file",
 				label: "editor_settings"
 			});
 		}
 
 		if (toolName.includes("list_editor_config_files")) {
-			return createDisplay("godot", "Godot", "read", "列出编辑器配置", "列出可读的 Godot 编辑器配置文件", {
+			return createDisplay("godot", "Godot", "read", "List editor configuration", "List readable Godot editor configuration files", {
 				kind: "file",
 				label: "editor config files"
 			});
@@ -527,14 +527,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("read_editor_config_file")) {
 			const fileId: string = getStringArg(args, "fileId") ?? getStringArg(args, "filePath") ?? "editor config";
-			return createDisplay("godot", "Godot", "read", "读取编辑器配置", `读取 ${fileId}`, {
+			return createDisplay("godot", "Godot", "read", "Read editor configuration", `Read ${fileId}`, {
 				kind: "file",
 				label: fileId
 			});
 		}
 
 		if (toolName.includes("get_editor_project_state")) {
-			return createDisplay("godot", "Godot", "read", "读取编辑器状态", "读取当前项目 .godot/editor 状态", {
+			return createDisplay("godot", "Godot", "read", "Read editor state", "Read the current project's .godot/editor state", {
 				kind: "file",
 				path: ".godot/editor",
 				label: ".godot/editor"
@@ -542,7 +542,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 
 		if (toolName.includes("get_recent_projects")) {
-			return createDisplay("godot", "Godot", "read", "读取最近项目", "读取 Godot 最近项目与目录", {
+			return createDisplay("godot", "Godot", "read", "Read recent projects", "Read recent Godot projects and directories", {
 				kind: "file",
 				label: "projects.cfg"
 			});
@@ -550,7 +550,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("propose_set_project_setting") || toolName.includes("propose_unset_project_setting")) {
 			const targetLabel: string = settingKey ?? "project setting";
-			return createDisplay("godot", "Godot", "propose", "预览项目设置修改", `预览 ${targetLabel}`, {
+			return createDisplay("godot", "Godot", "propose", "Preview project setting change", `Preview ${targetLabel}`, {
 				kind: "file",
 				path: "project.godot",
 				label: targetLabel
@@ -559,7 +559,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("set_project_setting") || toolName.includes("unset_project_setting")) {
 			const targetLabel: string = settingKey ?? "project setting";
-			return createDisplay("godot", "Godot", "write", "修改项目设置", `修改 ${targetLabel}`, {
+			return createDisplay("godot", "Godot", "write", "Change project setting", `Change ${targetLabel}`, {
 				kind: "file",
 				path: "project.godot",
 				label: targetLabel
@@ -568,7 +568,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("read_text_file")) {
 			const filePath: string = relativePath ?? "unknown file";
-			return createDisplay("godot", "Godot", "read", "读取文件", `读取 ${filePath}`, {
+			return createDisplay("godot", "Godot", "read", "Read file", `Read ${filePath}`, {
 				kind: "file",
 				path: filePath,
 				label: filePath
@@ -577,7 +577,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("validate_scene_script_references")) {
 			const scenePath: string = relativePath ?? "unknown scene";
-			return createDisplay("godot", "Godot", "scene", "验证场景引用", `验证 ${scenePath} 的脚本节点引用`, {
+			return createDisplay("godot", "Godot", "scene", "Validate scene references", `Validate script node references in ${scenePath}`, {
 				kind: "scene",
 				path: scenePath,
 				label: scenePath
@@ -586,7 +586,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("search_text")) {
 			const query: string = getStringArg(args, "query") ?? "";
-			return createDisplay("godot", "Godot", "search", "搜索文本", `搜索 ${query}`, {
+			return createDisplay("godot", "Godot", "search", "Search text", `Search ${query}`, {
 				kind: "query",
 				label: query
 			});
@@ -597,7 +597,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 				? "scene"
 				: "file";
 			const targetLabel: string = relativePath ?? (targetKind === "scene" ? "unknown scene" : "unknown file");
-			const title: string = targetKind === "scene" ? "预览场景修改" : "预览文件修改";
+			const title: string = targetKind === "scene" ? "Preview scene change" : "Preview file change";
 			return createDisplay("godot", "Godot", "propose", title, `${title} ${targetLabel}`, {
 				kind: targetKind,
 				path: targetLabel,
@@ -608,7 +608,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		if (toolName.includes("scene")) {
 			const scenePath: string = relativePath ?? "unknown scene";
 			const category: ToolEventCategory = toolName.includes("inspect") ? "read" : "scene";
-			const title: string = toolName.includes("inspect") ? "查看场景" : "编辑场景";
+			const title: string = toolName.includes("inspect") ? "Inspect scene" : "Edit scene";
 			return createDisplay("godot", "Godot", category, title, `${title} ${scenePath}`, {
 				kind: "scene",
 				path: scenePath,
@@ -618,14 +618,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 		if (toolName.includes("create_text_file") || toolName.includes("overwrite_text_file") || toolName.includes("replace_text_in_file") || toolName.includes("replace_line_in_file") || toolName.includes("delete_file")) {
 			const filePath: string = relativePath ?? "unknown file";
-			return createDisplay("godot", "Godot", "write", "写入文件", `写入 ${filePath}`, {
+			return createDisplay("godot", "Godot", "write", "Write file", `Write ${filePath}`, {
 				kind: "file",
 				path: filePath,
 				label: filePath
 			});
 		}
 
-		return createDisplay("godot", "Godot", "unknown", "Godot 工具", toolName, {
+		return createDisplay("godot", "Godot", "unknown", "Godot tool", toolName, {
 			kind: "unknown",
 			label: toolName
 		});
@@ -638,7 +638,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 			: typeof operation.path === "string"
 				? operation.path
 				: "scene operation";
-		return createDisplay("terminal", "Terminal", "scene", "执行 Godot 场景脚本", `场景操作 ${scenePath}`, {
+		return createDisplay("terminal", "Terminal", "scene", "Run Godot scene script", `Scene operation ${scenePath}`, {
 			kind: "scene",
 			path: scenePath,
 			label: scenePath
@@ -649,7 +649,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const reason: string | undefined = getStringArg(args, "reason");
 		const commandLine: string | undefined = getStringArg(args, "commandLine");
 		const label: string = reason ?? commandLine ?? toolName;
-		return createDisplay("terminal", "Terminal", "terminal", "运行终端命令", label, {
+		return createDisplay("terminal", "Terminal", "terminal", "Run terminal command", label, {
 			kind: "command",
 			label: commandLine ?? label
 		});
@@ -657,13 +657,13 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 	if (toolName.startsWith("mcp_plugin_dev_")) {
 		const action: string = toolName.slice("mcp_plugin_dev_".length);
 		const labels: Record<string, [ToolEventCategory, string]> = {
-			prepare: ["propose", "设计插件"],
-			apply: ["write", "生成插件工程"],
-			validate: ["read", "验证插件"],
-			install: ["write", "安装插件"],
-			test: ["read", "测试插件"]
+			prepare: ["propose", "Prepare plugin"],
+			apply: ["write", "Generate plugin project"],
+			validate: ["read", "Validate plugin"],
+			install: ["write", "Install plugin"],
+			test: ["read", "Test plugin"]
 		};
-		const [category, title] = labels[action] ?? ["unknown", "开发插件"];
+		const [category, title] = labels[action] ?? ["unknown", "Develop plugin"];
 		const label: string = getStringArg(args, "slug") ?? getStringArg(args, "pluginId") ?? "plugin";
 		return createDisplay("plugin_development", "Plugin Creator", category, title, label, { kind: "unknown", label });
 	}
@@ -672,7 +672,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		const relativePath: string = getStringArg(args, "relativePath") ?? "workspace file";
 		const dependency: string = getStringArg(args, "dependency") ?? "file";
 		const targetPath: string = formatSourcePath(args, relativePath);
-		return createDisplay("workspace", "Workspace", "write", "下载文件", `下载 ${dependency} 到 ${targetPath}`, {
+		return createDisplay("workspace", "Workspace", "write", "Download file", `Download ${dependency} to ${targetPath}`, {
 			kind: "file",
 			path: relativePath,
 			label: targetPath
@@ -680,9 +680,9 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 	}
 
 	if (toolName === "mcp_terminal_get_capabilities") {
-		return createDisplay("terminal", "Terminal", "read", "查看终端能力", "查看可用终端预设", {
+		return createDisplay("terminal", "Terminal", "read", "View terminal capabilities", "View available terminal presets", {
 			kind: "command",
-			label: "终端预设"
+			label: "Terminal presets"
 		});
 	}
 
@@ -698,17 +698,17 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 			path: resourcePath,
 			label
 		};
-		return createDisplay("terminal", "Terminal", "terminal", "运行终端命令", label, target);
+		return createDisplay("terminal", "Terminal", "terminal", "Run terminal command", label, target);
 	}
 
 	if (toolName.includes("context7") || toolName.includes("library") || toolName.includes("docs")) {
-		return createDisplay("context7", "Context7", "docs", "查询文档", toolName, {
+		return createDisplay("context7", "Context7", "docs", "Query documentation", toolName, {
 			kind: "query",
 			label: toolName
 		});
 	}
 
-	return createDisplay("unknown", "MCP", "unknown", "MCP 工具", toolName, {
+	return createDisplay("unknown", "MCP", "unknown", "MCP tool", toolName, {
 		kind: "unknown",
 		label: toolName
 	});

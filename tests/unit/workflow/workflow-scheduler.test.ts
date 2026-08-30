@@ -126,7 +126,7 @@ test("scheduler inserts workspace write retry phases for write guard failures", 
 	assert.equal(command.type, "repair");
 	if (command.type === "repair") {
 		const repairPhase: WorkflowPhase | undefined = command.state.plan.phases[1];
-		assert.equal(repairPhase?.title, "重试实际修改");
+		assert.equal(repairPhase?.title, "Retry implementation");
 		assert.ok(repairPhase?.allowedTools.includes("mcp_workspace_read_text_file"));
 		assert.ok(repairPhase?.allowedTools.includes("mcp_workspace_replace_text_in_file"));
 		assert.equal(repairPhase?.allowedTools.includes("mcp_workspace_propose_replace_text_in_file"), false);
@@ -236,7 +236,7 @@ test("scheduler reports repeated verification failure as a normal warning", (): 
 
 	assert.equal(command.type, "complete_phase");
 	if (command.type === "complete_phase") {
-		assert.match(command.outcome.summary, /重复出现相同失败/);
+		assert.match(command.outcome.summary, /repeated the same failure/);
 		assert.equal(command.outcome.verificationStatus, "unverified");
 	}
 });
@@ -256,7 +256,7 @@ test("scheduler never creates a write repair for a read-stage failure", (): void
 	assert.equal(command.type, "graceful_blocked");
 	if (command.type === "graceful_blocked") {
 		assert.equal(command.outcome.status, "blocked");
-		assert.match(command.outcome.summary, /不能通过自动写入修复/);
+		assert.match(command.outcome.summary, /cannot be repaired through automatic writes/);
 		assert.equal(command.state.plan.phases.some((item: WorkflowPhase): boolean => item.repairOf === phase.id), false);
 		assert.equal(command.state.phaseIndex, 3);
 		assert.deepEqual(command.state.plan.todos.map((todo) => todo.status), ["failed", "skipped", "skipped", "pending"]);

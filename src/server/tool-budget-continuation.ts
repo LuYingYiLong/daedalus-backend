@@ -87,7 +87,7 @@ export function sendToolBudgetRequired(socket: WebSocket, requestId: string, ses
 		totalToolResultChars: pending.totalToolResultChars,
 		toolResultCharLimit: pending.toolResultCharLimit,
 		additionalSteps: pending.additionalSteps,
-		message: "工具调用预算已达到上限，等待用户决定是否继续。"
+		message: "The tool-call budget has been reached. Waiting for the user to decide whether to continue."
 	}, persistRequestId);
 	const pausedRun = getAgentRun(session, persistRequestId);
 	if (pausedRun !== undefined) {
@@ -116,8 +116,8 @@ export function cancelPendingToolBudgetsForRequest(session: ClientSession, reque
 
 export function createToolBudgetStopReason(pending: PendingToolBudget): string {
 	return [
-		"用户选择不继续放行工具调用预算。",
-		`停止原因：${pending.reason}。`,
-		"请停止请求更多工具，基于当前已经获得的工具结果直接回答用户；如果信息不完整，请明确说明仍缺少哪些检查。"
+		"The user chose not to extend the tool-call budget.",
+		`Stop reason: ${pending.reason}.`,
+		"Stop requesting more tools and answer from the tool results already obtained. If the information is incomplete, clearly state which checks are still missing."
 	].join("\n");
 }

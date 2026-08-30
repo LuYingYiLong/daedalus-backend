@@ -15,6 +15,6 @@ test("raw terminal commands use the model-provided purpose as their visible summ
 test("terminal capability discovery is displayed as a read operation", (): void => {
 	const display = describeToolEvent("mcp_terminal_get_capabilities", {});
 	assert.equal(display.category, "read");
-	assert.equal(display.title, "查看终端能力");
-	assert.equal(display.summary, "查看可用终端预设");
+	assert.equal(display.title, "View terminal capabilities");
+	assert.equal(display.summary, "View available terminal presets");
 });

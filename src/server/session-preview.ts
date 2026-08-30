@@ -82,7 +82,7 @@ export function createPreviewValue(value: unknown, depth: number = 0): unknown {
 
 		return [
 			value.slice(0, SESSION_OPEN_PREVIEW_STRING_LIMIT),
-			`\n\n[历史事件内容已截断，原始长度 ${value.length} 字符]`
+			`\n\n[Historical event content truncated; original length: ${value.length} characters]`
 		].join("");
 	}
 
@@ -91,7 +91,7 @@ export function createPreviewValue(value: unknown, depth: number = 0): unknown {
 	}
 
 	if (depth >= 6) {
-		return "[历史事件嵌套内容已截断]";
+		return "[Nested historical event content truncated]";
 	}
 
 	if (Array.isArray(value)) {
@@ -100,7 +100,7 @@ export function createPreviewValue(value: unknown, depth: number = 0): unknown {
 			.map((item: unknown): unknown => createPreviewValue(item, depth + 1));
 
 		if (value.length > SESSION_OPEN_PREVIEW_ARRAY_LIMIT) {
-			previewItems.push(`[历史事件数组已截断，原始长度 ${value.length}]`);
+			previewItems.push(`[Historical event array truncated; original length: ${value.length}]`);
 		}
 
 		return previewItems;

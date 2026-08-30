@@ -47,7 +47,7 @@ function readJsonResult(content: unknown): Record<string, unknown> | null {
 
 function createWakeGuideText(record: Record<string, unknown>): string {
 	return [
-		"Terminal 长任务计时器已到点，请根据当前终端输出判断下一步。",
+		"The Terminal long-running task timer has fired. Use the current terminal output to decide the next step.",
 		`jobId: ${String(record.jobId ?? "")}`,
 		`status: ${String(record.status ?? "unknown")}`,
 		`durationMs: ${String(record.durationMs ?? "unknown")}`,

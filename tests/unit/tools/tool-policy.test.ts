@@ -159,5 +159,5 @@ test("full-trust mode allows every known tool risk", (): void => {
 test("unknown tools are denied", (): void => {
 	const decision = evaluateToolCall("manual", "mcp_godot_missing_tool", {});
 	assert.equal(decision.action, "deny");
-	assert.match(decision.reason, /未知工具/);
+	assert.match(decision.reason, /Unknown tool/);
 });

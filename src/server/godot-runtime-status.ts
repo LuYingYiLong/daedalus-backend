@@ -57,49 +57,49 @@ export function createGodotRuntimeStatus(session: ClientSession, mcpHost: McpHos
 	if (sessionWorkspaceId === null) {
 		warnings.push({
 			code: "session_workspace_missing",
-			message: "当前会话没有绑定 workspace；Godot/LSP 工具可能无法选择项目。"
+			message: "The current session is not bound to a workspace, so Godot/LSP tools may not be able to select a project."
 		});
 	}
 
 	if (sessionWorkspaceId !== null && !connectedWorkspaceIds.includes(sessionWorkspaceId)) {
 		warnings.push({
 			code: "workspace_not_connected",
-			message: "当前会话 workspace 尚未连接 MCP 会话；工具调用前需要先完成 environment.configure 或 workspace.select。"
+			message: "The current session workspace is not connected to an MCP session. Run environment.configure or workspace.select before calling tools."
 		});
 	}
 
 	if (sessionWorkspaceId !== null && editorInstancesForSession.length === 0) {
 		warnings.push({
 			code: "editor_instance_missing",
-			message: "当前 workspace 没有在线 Godot editor instance；editor bridge 工具不可用。"
+			message: "The current workspace has no online Godot editor instance, so editor bridge tools are unavailable."
 		});
 	}
 
 	if (sessionWorkspaceId !== null && editorInstancesForSession.length > 1 && boundEditorInstanceId === null) {
 		warnings.push({
 			code: "editor_binding_required",
-			message: "当前 workspace 有多个 Godot editor instance 在线；写入 editor 工具前需要绑定 editorInstanceId。"
+			message: "Multiple Godot editor instances are online for the current workspace. Bind an editorInstanceId before using editor write tools."
 		});
 	}
 
 	if (boundEditorInstanceId !== null && boundEditor === null) {
 		warnings.push({
 			code: "bound_editor_offline",
-			message: "会话绑定的 Godot editor instance 当前不在线。"
+			message: "The Godot editor instance bound to this session is currently offline."
 		});
 	}
 
 	if (sessionWorkspaceId !== null && diagnosticsWorkspaceId !== null && diagnosticsWorkspaceId !== sessionWorkspaceId) {
 		warnings.push({
 			code: "diagnostics_workspace_mismatch",
-			message: "Godot diagnostics bridge 当前缓存的 workspace 与会话 workspace 不一致。"
+			message: "The workspace cached by the Godot diagnostics bridge does not match the session workspace."
 		});
 	}
 
 	if (sessionWorkspaceId !== null && diagnosticsWorkspaceId === null) {
 		warnings.push({
 			code: "diagnostics_workspace_missing",
-			message: "Godot diagnostics bridge 尚未选择 workspace；首次调用 diagnostics 工具时后端会按会话 workspace 选择。"
+			message: "The Godot diagnostics bridge has not selected a workspace. The backend will select the session workspace on the first diagnostics call."
 		});
 	}
 
@@ -108,7 +108,7 @@ export function createGodotRuntimeStatus(session: ClientSession, mcpHost: McpHos
 	if (lspAvailable === false && lspLastError !== null) {
 		warnings.push({
 			code: "lsp_unavailable",
-			message: `Godot LSP 最近探测失败：${lspLastError}`
+			message: `The most recent Godot LSP probe failed: ${lspLastError}`
 		});
 	}
 

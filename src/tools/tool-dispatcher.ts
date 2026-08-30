@@ -439,8 +439,8 @@ async function executeSingleToolCall(
 				serverId: "internal",
 				serverName: "Daedalus",
 				category: "read",
-				title: "准备总结",
-				summary: "检查 Agent Loop 是否可以开始总结",
+				title: "Prepare summary",
+				summary: "Check whether the Agent Loop can start summarizing",
 				target: { kind: "unknown", label: "summary checkpoint" }
 			});
 			const value: Record<string, unknown> = await toolContext.summaryPreparation.execute(parsedArgs);

@@ -8,7 +8,7 @@ import {
 	listPluginMcps,
 	listPluginSkills
 } from "../runtime/registries.js";
-import { getPluginP2Snapshot } from "../p2/registry.js";
+import { getPluginP2Snapshot } from "../extensions/registry.js";
 import type { PluginRecord } from "../types.js";
 import type { PluginDevelopmentTestCase, PluginDevelopmentTestPlan, PluginDevelopmentTestResult } from "./types.js";
 import { createPluginDiagnostic } from "./diagnostics.js";

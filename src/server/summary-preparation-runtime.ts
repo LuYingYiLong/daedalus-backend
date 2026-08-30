@@ -98,8 +98,8 @@ export function createSummaryPreparationControl(params: {
 					runId: params.runId,
 					stepId: "summarize",
 					stepRunId: `${params.runId}:summary`,
-					title: "总结前检查",
-					foldTitle: "总结前的过程"
+					title: "Pre-summary check",
+					foldTitle: "Pre-summary process"
 				});
 			}
 

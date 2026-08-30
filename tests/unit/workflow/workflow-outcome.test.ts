@@ -66,7 +66,7 @@ test("verify phase with failed terminal validation becomes needs_fix", (): void 
 	assert.equal(outcome.status, "needs_fix");
 	assert.equal(outcome.failedChecks.length, 1);
 	assert.match(outcome.failedChecks[0]?.message ?? "", /Parser Error/);
-	assert.deepEqual(outcome.requiredFixes, ["修复：Parser Error"]);
+	assert.deepEqual(outcome.requiredFixes, ["Fix: Parser Error"]);
 });
 
 test("read phase failure blocks without requesting a workspace repair", (): void => {
@@ -415,7 +415,7 @@ test("verify phase without deterministic validation tool becomes blocked", (): v
 	const outcome = createWorkflowPhaseOutcome(createPhase("verify", "verify"), "phase-run-1", "我检查过了，应该没问题。", []);
 
 	assert.equal(outcome.status, "blocked");
-	assert.match(outcome.blockedReason ?? "", /验证工具/);
+	assert.match(outcome.blockedReason ?? "", /verification tool/);
 	assert.equal(outcome.failedChecks[0]?.code, "verify_tool_missing");
 });
 

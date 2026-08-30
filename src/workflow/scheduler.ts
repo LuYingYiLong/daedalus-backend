@@ -152,7 +152,7 @@ export function scheduleWorkflowPhaseOutcome(
 	outcome = scopeVerificationOutcomeToRegisteredTargets(state.plan, state.phaseOutputs, outcome);
 	if (outcome.status === "needs_fix") {
 		if (phase.toolGroup !== "write" && phase.toolGroup !== "verify") {
-			const message: string = `阶段「${phase.title}」不是写入或验证阶段，不能通过自动写入修复其失败。`;
+			const message: string = `Phase "${phase.title}" is neither a write nor a verification phase, so its failure cannot be repaired through automatic writes.`;
 			const blockedOutcome: WorkflowPhaseOutput = {
 				...outcome,
 				status: "blocked",
@@ -162,7 +162,7 @@ export function scheduleWorkflowPhaseOutcome(
 			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 		if (hasRepeatedRepairFailure(state, phase, outcome)) {
-			const message: string = `验证阶段「${phase.title}」重复出现相同失败且没有修复进展，已停止自动修复。`;
+			const message: string = `Verification phase "${phase.title}" repeated the same failure without progress, so automatic repair was stopped.`;
 			if (phase.toolGroup === "verify") {
 				return completeVerificationWithWarnings(state, phase, outcome, message);
 			}
@@ -170,7 +170,7 @@ export function scheduleWorkflowPhaseOutcome(
 			return scheduleGracefulBlocked(state, phase, blockedOutcome);
 		}
 		if (countWorkflowAutoRepairRounds(state.plan) >= maxAutoRepairRounds) {
-			const message: string = `验证阶段「${phase.title}」仍发现需要修复的问题，已达到自动修复次数上限。`;
+			const message: string = `Verification phase "${phase.title}" still has issues requiring repair, and the automatic repair limit has been reached.`;
 			if (phase.toolGroup === "verify") {
 				return completeVerificationWithWarnings(state, phase, outcome, message);
 			}
@@ -196,7 +196,7 @@ export function scheduleWorkflowPhaseOutcome(
 			};
 		}
 		if (repairTools.tools.length === 0) {
-			const message: string = `验证阶段「${phase.title}」需要写入修复，但无法在不扩大既有授权范围的前提下确定安全工具：${repairTools.reason}`;
+			const message: string = `Verification phase "${phase.title}" requires a write repair, but no safe tool can be selected without expanding the existing authorization: ${repairTools.reason}`;
 			if (phase.toolGroup === "verify") {
 				return completeVerificationWithWarnings(state, phase, outcome, message);
 			}

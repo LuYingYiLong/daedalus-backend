@@ -13,7 +13,7 @@ type FixedWorkflowPhaseId = "inspect" | "implement" | "review" | "verify" | "sum
 const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	inspect: {
 		id: "inspect",
-		title: "理解上下文",
+		title: "Inspect context",
 		toolGroup: "read",
 		toolBudget: "normal",
 		allowedTools: READ_TOOLS,
@@ -22,7 +22,7 @@ const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	},
 	implement: {
 		id: "implement",
-		title: "实现修改",
+		title: "Implement changes",
 		toolGroup: "write",
 		skillId: "file.creator",
 		promptId: "godot.assistant",
@@ -34,7 +34,7 @@ const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	},
 	review: {
 		id: "review",
-		title: "审查结果",
+		title: "Review results",
 		toolGroup: "verify",
 		skillId: "gdscript.review",
 		promptId: "gdscript.reviewer",
@@ -45,7 +45,7 @@ const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	},
 	verify: {
 		id: "verify",
-		title: "运行验证",
+		title: "Run verification",
 		toolGroup: "verify",
 		toolBudget: "normal",
 		allowedTools: [...READ_TOOLS, ...VERIFY_TOOLS],
@@ -54,7 +54,7 @@ const PHASE_TEMPLATES: Record<FixedWorkflowPhaseId, WorkflowPhase> = {
 	},
 	summarize: {
 		id: "summarize",
-		title: "总结交付",
+		title: "Summarize delivery",
 		toolGroup: "summarize",
 		promptId: "godot.assistant",
 		toolBudget: "simple",
@@ -150,7 +150,7 @@ export function createSingleAnswerPlan(params: AiChatParams, allowedTools?: read
 	const title: string = createWorkflowTitle(params.message);
 	const phase: WorkflowPhase = {
 		id: "answer",
-		title: "回答用户",
+		title: "Answer user",
 		toolGroup: "summarize",
 		promptId: params.promptId,
 		skillId: undefined,
@@ -173,7 +173,7 @@ export function createSingleAnswerPlan(params: AiChatParams, allowedTools?: read
 export function createWorkflowTitle(message: string): string {
 	const normalized: string = message.replace(/\s+/g, " ").trim();
 	if (normalized.length <= 24) {
-		return normalized.length > 0 ? normalized : "多阶段任务";
+		return normalized.length > 0 ? normalized : "Multi-stage task";
 	}
 
 	return `${normalized.slice(0, 24)}...`;

@@ -121,23 +121,23 @@ function isBroadGodotPluginGoal(message: string): boolean {
 function createGodotPluginClarification(message: string): PlanDecision {
 	return {
 		decision: "needs_clarification",
-		title: "Godot AI 插件方向澄清",
-		question: "这个目标比较大。你想先把 Godot AI 插件推进到哪个方向？",
+		title: "Clarify the Godot AI plugin direction",
+		question: "This is a broad goal. Which direction should the Godot AI plugin take first?",
 		recommendedReplies: [
 			{
-				label: "前端 GDS 插件",
-				text: "先做前端 GDS 插件，重点是 Godot 编辑器 UI、会话面板、审批交互和 EditorBridge。",
-				description: "适合先打磨用户可见体验。"
+				label: "Frontend GDS plugin",
+				text: "Start with the frontend GDS plugin, focusing on the Godot editor UI, session panel, approval interactions, and EditorBridge.",
+				description: "Best for polishing the user-facing experience first."
 			},
 			{
-				label: "后端 TS 服务",
-				text: "先做后端 TypeScript 服务，重点是 WebSocket/RPC、LLM provider、MCP 工具、审批和会话持久化。",
-				description: "适合先稳定能力底座。"
+				label: "Backend TS service",
+				text: "Start with the backend TypeScript service, focusing on WebSocket/RPC, LLM providers, MCP tools, approvals, and session persistence.",
+				description: "Best for stabilizing the capability foundation first."
 			},
 			{
-				label: "UI 原型",
-				text: "先做 UI/交互原型，重点是聊天、计划、审批、diff、设置和多前端协作流程。",
-				description: "适合先确认产品形态。"
+				label: "UI prototype",
+				text: "Start with a UI and interaction prototype, focusing on chat, plans, approvals, diffs, settings, and multi-client collaboration.",
+				description: "Best for validating the product shape first."
 			}
 		]
 	};
@@ -263,7 +263,7 @@ function ensurePlanMarkdown(title: string, markdown: string, assumptions: readon
 	if (!trimmedMarkdown.startsWith("#")) {
 		lines.push(`# ${title}`);
 	}
-	lines.push(trimmedMarkdown.length > 0 ? trimmedMarkdown : "## Summary\n\n需要先补充计划内容。");
+	lines.push(trimmedMarkdown.length > 0 ? trimmedMarkdown : "## Summary\n\nMore plan details are required.");
 	if (assumptions.length > 0 && !trimmedMarkdown.toLowerCase().includes("assumption")) {
 		lines.push("\n## Assumptions");
 		for (const assumption of assumptions) {
@@ -401,28 +401,28 @@ function createSkippedClarificationFallback(
 	params: AiChatParams,
 	skippedClarifications: readonly PlanSkippedClarification[]
 ): Extract<PlanDecision, { decision: "plan_ready" }> {
-	const title: string = "基于现有上下文的计划";
+	const title: string = "Plan based on the available context";
 	const assumptions: string[] = skippedClarifications.map((clarification: PlanSkippedClarification): string => (
-		`未提供“${clarification.question}”；计划仅基于现有上下文采用最小假设，核心需求、架构、平台或数据格式可能需要后续调整。`
+		`The clarification "${clarification.question}" was not provided. This plan uses the narrowest assumptions from the available context; core requirements, architecture, platform, or data format may need later adjustment.`
 	));
-	const goal: string = params.message.trim() || "完成用户请求";
+	const goal: string = params.message.trim() || "complete the user request";
 	const planMarkdown: string = [
 		`# ${title}`,
 		"",
 		"## Summary",
-		`在缺少部分澄清信息的情况下，为“${goal}”制定可调整的实施计划。`,
+		`Create an adjustable implementation plan for "${goal}" despite the missing clarification details.`,
 		"",
 		"## Key Changes",
-		"- 先检查现有工作区结构、约束和可复用实现，确认实际边界。",
-		"- 在已验证事实范围内实现最小闭环，并将不确定项隔离为可替换决策。",
-		"- 对涉及核心需求、架构、平台或数据格式的假设保持显式记录。",
+		"- Inspect the existing workspace structure, constraints, and reusable implementations to confirm the actual boundary.",
+		"- Implement the smallest complete loop supported by verified facts, and isolate uncertain points as replaceable decisions.",
+		"- Record assumptions involving core requirements, architecture, platform, or data format explicitly.",
 		"",
 		"## Public Interfaces",
-		"- 仅在检查现有接口和数据格式后决定是否需要新增或调整公开接口。",
+		"- Decide whether public interfaces need to be added or changed only after checking existing interfaces and data formats.",
 		"",
 		"## Test Plan",
-		"- 针对实际改动运行项目已有的相关检查和测试。",
-		"- 对被跳过信息相关的行为补充针对性验证或请求后续修订。",
+		"- Run the relevant checks and tests already provided by the project for the actual changes.",
+		"- Add targeted verification or request a later revision for behavior affected by skipped information.",
 		"",
 		"## Assumptions",
 		...assumptions.map((assumption: string): string => `- ${assumption}`)
@@ -493,9 +493,9 @@ export async function createPlanDecision(
 			formatRetryInstruction = [
 				"The previous response was not a parseable JSON decision. Do not call tools and do not emit reasoning, prose, Markdown, or a preamble in this retry.",
 				"Output exactly one JSON object. Do not use a Markdown fence or add any characters before or after the object.",
-				"你上一次没有输出可识别的最终 JSON 决策。现在必须只在最终答案中输出一个 JSON object。",
-				"如果需要用户澄清，必须包含 decision:\"needs_clarification\" 和 question；recommendedReplies 可以为空数组。",
-				"如果计划已经足够明确，必须包含 decision:\"plan_ready\" 和 planMarkdown。"
+				"The previous response did not contain a recognizable final JSON decision. The final answer must now contain exactly one JSON object.",
+				"If clarification is needed, include decision:\"needs_clarification\" and question; recommendedReplies may be an empty array.",
+				"If the plan is clear enough, include decision:\"plan_ready\" and planMarkdown."
 			].join("\n");
 			continue;
 		}
@@ -530,12 +530,12 @@ export async function createPlanDecision(
 function createPlanFormatRecoveryDecision(): Extract<PlanDecision, { decision: "needs_clarification" }> {
 	return {
 		decision: "needs_clarification",
-		title: "计划生成需要重试",
-		question: "规划模型没有返回可用的结构化计划。可以立即重新生成，或补充目标与约束后再生成。",
+		title: "Plan generation needs a retry",
+		question: "The planning model did not return a usable structured plan. Generate it again now, or add goals and constraints before retrying.",
 		recommendedReplies: [
 			{
-				label: "重新生成",
-				text: "请基于已有目标和澄清直接重新生成计划，不再提出新的澄清问题。"
+				label: "Generate again",
+				text: "Generate the plan again from the existing goals and clarifications without asking another clarification question."
 			}
 		]
 	};
@@ -647,7 +647,7 @@ async function runPlanAgentDecision(
 
 	const rawDecision: unknown = parseJsonObjectLoose(agentResult.text);
 	return {
-		decision: normalizePlanDecision(rawDecision, "执行计划"),
+		decision: normalizePlanDecision(rawDecision, "Execute plan"),
 		toolCallCount
 	};
 }
@@ -738,7 +738,7 @@ export async function applyPlanClarification(
 	const nextClarifications: string[] = input.kind === "reply"
 		? [...plan.metadata.clarifications, input.reply.trim()]
 		: [...plan.metadata.clarifications];
-	const skippedQuestion: string = plan.metadata.clarificationQuestion?.trim() || "当前计划澄清问题";
+	const skippedQuestion: string = plan.metadata.clarificationQuestion?.trim() || "Current plan clarification question";
 	const nextSkippedClarifications: PlanSkippedClarification[] = input.kind === "skip"
 		? [...plan.metadata.skippedClarifications, { question: skippedQuestion, skippedAt: new Date().toISOString() }]
 		: [...plan.metadata.skippedClarifications];
@@ -861,7 +861,7 @@ export function createApprovedPlanExecutionParams(
 	workspaceHasGodotCapability?: boolean | undefined
 ): AiChatParams {
 	return {
-		message: "执行计划。",
+		message: "Execute the plan.",
 		mode: "agent",
 		provider,
 		model,

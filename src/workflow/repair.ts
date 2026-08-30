@@ -217,7 +217,7 @@ function createAutoVerifyPhase(
 ): WorkflowPhase {
 	return {
 		id: createUniquePhaseId(plan, AUTO_VERIFY_ID_PREFIX, round),
-		title: verifyOnly ? "补跑验证" : "重新验证修复",
+		title: verifyOnly ? "Rerun verification" : "Re-verify fix",
 		toolGroup: "verify",
 		toolBudget: "normal",
 		allowedTools: [...READ_TOOLS, ...VERIFY_TOOLS],
@@ -328,7 +328,7 @@ export function insertWorkflowAutoRepairPhases(
 	const executionProfile = getWorkflowExecutionProfile(plan.executionProfile);
 	const repairPhase: WorkflowPhase = {
 		id: createUniquePhaseId(plan, AUTO_REPAIR_ID_PREFIX, round),
-		title: isWriteGuardFailure(failedPhase, failedChecks) ? "重试实际修改" : "修复验证问题",
+		title: isWriteGuardFailure(failedPhase, failedChecks) ? "Retry implementation" : "Fix verification issues",
 		toolGroup: "write",
 		skillId: executionProfile.writeSkillId,
 		promptId: executionProfile.promptId,

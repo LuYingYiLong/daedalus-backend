@@ -418,17 +418,17 @@ function collectFailedChecks(phase: WorkflowPhase, observations: WorkflowToolObs
 	const failedChecks: WorkflowFailedCheck[] = [];
 	if (phase.toolGroup === "summarize") {
 		if (agentResultText.trim().length === 0) {
-			failedChecks.push({ code: "summary_content_missing", failureCode: "summary_content_missing", message: "总结阶段没有产生可见正文。", severity: "error" });
+			failedChecks.push({ code: "summary_content_missing", failureCode: "summary_content_missing", message: "The summary phase did not produce visible content.", severity: "error" });
 		}
 		if (phase.allowedTools.length === 0 && observations.length > 0) {
-			failedChecks.push({ code: "summary_tool_call_protocol_violation", failureCode: "summary_tool_call_protocol_violation", message: "总结阶段的结构化协议不允许工具调用。", severity: "error" });
+			failedChecks.push({ code: "summary_tool_call_protocol_violation", failureCode: "summary_tool_call_protocol_violation", message: "The structured protocol for the summary phase does not allow tool calls.", severity: "error" });
 		}
 	}
 	for (const [index, observation] of observations.entries()) {
 		if (observation.status === "approval_required") {
 			failedChecks.push({
 				code: "approval_required",
-				message: `${observation.toolName} 正在等待审批。`,
+				message: `${observation.toolName} is waiting for approval.`,
 					toolCallId: observation.toolCallId,
 					toolName: observation.toolName,
 					sourceFolderId: observation.sourceFolderId
@@ -586,8 +586,8 @@ function collectCompletionContractFailedChecks(
 				code: target.kind === "artifact" ? "target_artifact_missing" : "required_mutation_missing",
 				failureCode: target.kind === "artifact" ? "target_artifact_missing" : "required_mutation_missing",
 				message: target.kind === "artifact"
-					? `写入阶段没有实际创建或修改目标文件 ${target.path}。`
-					: `写入阶段没有实际修改目标项目设置 ${target.key}。`,
+					? `The write phase did not create or modify the target file ${target.path}.`
+					: `The write phase did not modify the target project setting ${target.key}.`,
 				artifact: target.kind === "artifact" ? target.path : target.key,
 				targetKind: target.kind === "artifact" ? target.targetKind : "project_setting",
 				artifactFileRef: target.kind === "artifact" ? target.fileRef : undefined,
@@ -607,8 +607,8 @@ function collectCompletionContractFailedChecks(
 				code: "target_readback_failed",
 				failureCode: "target_readback_failed",
 				message: target.kind === "artifact"
-					? `目标文件 ${target.path} 的回读或检查失败。`
-					: `目标项目设置 ${target.key} 的回读失败。`,
+					? `Reading back or checking target file ${target.path} failed.`
+					: `Reading back target project setting ${target.key} failed.`,
 				artifact: target.kind === "artifact" ? target.path : target.key,
 				targetKind: target.kind === "artifact" ? target.targetKind : "project_setting",
 				artifactFileRef: target.kind === "artifact" ? target.fileRef : undefined,
@@ -651,7 +651,7 @@ function createRequiredFixes(failedChecks: WorkflowFailedCheck[]): string[] {
 		return [];
 	}
 
-	return uniqueStrings(failedChecks.map((check: WorkflowFailedCheck): string => `修复：${check.message}`));
+	return uniqueStrings(failedChecks.map((check: WorkflowFailedCheck): string => `Fix: ${check.message}`));
 }
 
 function summarizeFailedChecks(failedChecks: WorkflowFailedCheck[]): string | undefined {
@@ -717,9 +717,9 @@ export function createWorkflowPhaseOutcome(
 	const summaries: string[] = collectSummaries(observations);
 	const blockedReason: string | undefined = status === "blocked"
 		? (phase.toolGroup === "verify"
-			? hasEnvironmentIssueObservation(observations)
-				? "验证环境不可用，且没有其它成功的可判定验证结果。"
-				: "验证阶段没有运行任何可判定的验证工具。"
+				? hasEnvironmentIssueObservation(observations)
+					? "The verification environment is unavailable, and there are no other successful, conclusive verification results."
+					: "The verification phase did not run any conclusive verification tool."
 			: summaries[0])
 		: undefined;
 	const trimmedAgentText: string = agentResultText.trim();
@@ -742,7 +742,7 @@ export function createWorkflowPhaseOutcome(
 		failedChecks: status === "blocked" && failedChecks.length === 0
 			? [{
 				code: hasEnvironmentIssueObservation(observations) ? "validation_environment_unavailable" : "verify_tool_missing",
-				message: blockedReason ?? "验证阶段缺少验证工具结果。"
+				message: blockedReason ?? "The verification phase has no verification-tool result."
 			}]
 			: failedChecks,
 		requiredFixes: createRequiredFixes(failedChecks),
@@ -969,7 +969,7 @@ export function applyDeterministicVerificationGate(
 		));
 		const failure: WorkflowFailedCheck = createGateFailure(
 			`${requirement}_required`,
-			`验证阶段未产生所需的结构化验证能力：${requirement}。`
+			`The verification phase did not produce the required structured verification capability: ${requirement}.`
 		);
 		if (unavailableObservation !== undefined) {
 			environmentFailures.push({

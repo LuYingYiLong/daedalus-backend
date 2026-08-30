@@ -27,7 +27,7 @@ Backend 是本机常驻的 TypeScript 服务，Studio、Godot 插件、CLI 和�
 | `src/workspace/` | Workspace/source folder、Git、Worktree 和路径边界 |
 | `src/mcp/` | 内置 MCP、custom MCP、终端和 Godot bridge |
 | `src/hooks/` | 命令 Hook 配置、信任、沙箱执行和生命周期决策 |
-| `src/plugins/` | 插件发现、信任、Worker、Harness Sidecar 和 P2 registry |
+| `src/plugins/` | 插件发现、信任、Worker、Harness Sidecar；`extensions/` 管理命令、声明式 UI、语言服务与事件扩展注册 |
 | `src/prompts/`、`src/skills/` | 系统提示、内置 Skill 和工具集合 |
 | `src/app-paths.ts` | Daedalus 配置、会话、插件、日志和临时目录的 Path Registry |
 

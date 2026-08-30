@@ -46,7 +46,7 @@ export class ComputerRuntimeError extends Error {
 export class StudioComputerRuntime {
   private pending = new Map<string, Pending>();
   private grants = new Map<WebSocket, Map<string, Scope>>();
-  private controls = new Map<WebSocket, { scope: Scope; lease: ComputerControlLease }>();
+  private controls = new Map<WebSocket, { scope: Scope; lease: ComputerControlLease; lastState?: string; lastCode?: string | undefined }>();
   private actions = new Map<string, Promise<Record<string, unknown>>>();
   private actionScopes = new Map<string, { socket: WebSocket; scope: Scope; argsHash: string }>();
   constructor(
@@ -306,9 +306,13 @@ export class StudioComputerRuntime {
     const control = this.controls.get(socket);
     if (!control || ["connectionId", "sessionId", "requestId", "runId"].some(key => control.scope[key as keyof Scope] !== value[key as keyof ComputerControlUpdate]))
       throw new ComputerRuntimeError("computer_scope_mismatch");
-    const wasPaused = control.lease.paused;
     control.lease.update(value);
-    if (control.lease.active && wasPaused !== control.lease.paused) this.audit(control.scope, control.lease.paused ? "paused" : "resumed", value.code);
+    // lease 初始等待首个心跳，不等同于已经审计过实际暂停；心跳不重复写审计
+    if (control.lease.active && (control.lastState !== value.state || control.lastCode !== value.code)) {
+      this.audit(control.scope, control.lease.paused ? "paused" : "resumed", value.code);
+      control.lastState = value.state;
+      control.lastCode = value.code;
+    }
   }
   finishTurn(sessionId: string, requestId: string, runId: string): void {
     for (const [id, { scope }] of this.actionScopes) if (scope.sessionId === sessionId && (scope.requestId === requestId || scope.runId === runId)) { this.actions.delete(id); this.actionScopes.delete(id); }

@@ -412,7 +412,7 @@ export async function validatePendingApprovalBeforeExecution(
 	try {
 		resolveToolMapping(pendingApproval.llmToolName, pendingApproval.workspaceId);
 	} catch (error: unknown) {
-		return error instanceof Error ? error.message : "审批工具当前不可用";
+		return error instanceof Error ? error.message : "The approval tool is currently unavailable.";
 	}
 
 	const currentIdentity = getLlmToolExecutionIdentity(
@@ -426,7 +426,7 @@ export async function validatePendingApprovalBeforeExecution(
 		&& currentIdentity !== undefined
 		&& currentIdentity.fingerprint !== pendingApproval.executionFingerprint
 	) {
-		return "当前 workspace 与创建审批时不一致，不能执行该审批。";
+		return "The current workspace differs from the workspace where the approval was created, so this approval cannot be executed.";
 	}
 
 	return null;
@@ -467,7 +467,7 @@ export function sendAgentPaused(socket: WebSocket, requestId: string, session: C
 		reason: "approval_required",
 		approvalId: agentResult.approvalId,
 		toolName: agentResult.toolName,
-		message: `工具 ${agentResult.toolName} 需要审批：${agentResult.approvalId}`
+		message: `Tool ${agentResult.toolName} requires approval: ${agentResult.approvalId}`
 	}, persistRequestId);
 }
 
@@ -543,7 +543,7 @@ export async function sendContinuedAgentResult(
 	}
 	let text: string;
 	if (chatCompletionProtocolFailed) {
-		text = "模型没有完成结构化聊天收束，已安全停止；未执行任何工作区写入。请重试，或切换支持工具调用的模型。";
+		text = "The model did not complete the structured chat response, so the run was stopped safely. No workspace writes were executed. Retry or switch to a model that supports tool calls.";
 	} else if (agentResult.status === "chat_answer") {
 		text = agentResult.answer.answer;
 	} else if (agentResult.status === "execution_decision") {
@@ -592,7 +592,7 @@ export async function sendContinuedAgentResult(
 		throw new LightweightActionVerificationError(completionStatus.failureMessage);
 	}
 	if (completionStatus.resultStatus === "blocked" && text.trim().length === 0) {
-		text = `本轮任务未能完成：${completionStatus.warnings[0] ?? "工具执行失败。"}`;
+		text = `This turn could not be completed: ${completionStatus.warnings[0] ?? "Tool execution failed."}`;
 	}
 	if (getAgentRun(session, pendingContinuation.requestId) !== undefined) {
 		const currentRun: AgentRunState = getAgentRun(session, pendingContinuation.requestId)!;

@@ -3,7 +3,7 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
 import { parseHarnessBundlePatch } from "./harness/patch-parser.js";
-import { pluginP2ManifestSchema, type PluginP2Manifest } from "./p2/protocol.js";
+import { pluginP2ManifestSchema, type PluginP2Manifest } from "./extensions/protocol.js";
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;

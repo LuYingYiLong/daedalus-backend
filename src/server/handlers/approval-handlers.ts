@@ -511,7 +511,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			session.activeAbortControllers.set(continuationRequestId, abortController);
 			throwIfAborted(abortController.signal);
 			if (pendingState?.continuation !== undefined && pendingContinuation === undefined) {
-				const message: string = `当前没有可用的 ${getProviderDisplayName(session.activeProvider)} API key，无法恢复审批后的 LLM continuation。请先配置 provider 后重试。`;
+				const message: string = `No API key is available for ${getProviderDisplayName(session.activeProvider)}, so the approved LLM continuation cannot resume. Configure the provider and retry.`;
 				if (session.sessionId !== undefined) {
 					await appendApprovalEvent(session.sessionId, pending.approvalId, pendingState.requestId, "failed", { message });
 				}
@@ -680,7 +680,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			if (pendingContinuation === undefined) {
 				session.messages.push({
 					role: "system",
-					content: `[工具执行结果] ${pending.llmToolName} 已通过审批并执行完成：\n${result.content.slice(0, 2000)}`
+					content: `[Tool execution result] ${pending.llmToolName} was approved and completed:\n${result.content.slice(0, 2000)}`
 				});
 				break;
 			}
@@ -974,7 +974,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				await removeAgentRunContinuation(continuationRequestId);
 				session.messages.push({
 					role: "system",
-					content: `[工具审批被拒绝] ${createApprovalRejectedFailure(rejected).message}`
+					content: `[Tool approval rejected] ${createApprovalRejectedFailure(rejected).message}`
 				});
 				setWorkbenchActiveRun(session, { status: "idle" });
 				const queueHelpers = await import("../chat-orchestrator.js");

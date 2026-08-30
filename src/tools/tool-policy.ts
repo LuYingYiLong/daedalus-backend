@@ -154,11 +154,11 @@ export function evaluateToolCall(
 	const policy: ToolPolicy | undefined = getEffectiveToolPolicy(toolName, args, workspaceId);
 
 	if (!policy) {
-		return { action: "deny", reason: `未知工具: ${toolName}` };
+		return { action: "deny", reason: `Unknown tool: ${toolName}` };
 	}
 
 	if (isHardBlocked(toolName)) {
-		return { action: "deny", reason: "该工具已被硬性禁用" };
+		return { action: "deny", reason: "This tool is hard-disabled." };
 	}
 
 	if ([
@@ -168,14 +168,14 @@ export function evaluateToolCall(
 		"mcp_scheduled_task_resume",
 		"mcp_scheduled_task_delete",
 	].includes(toolName)) {
-		return { action: "request_approval", reason: "定时任务会持久化未来行为，需要你明确确认。" };
+		return { action: "request_approval", reason: "Scheduled tasks persist future behavior and require explicit confirmation." };
 	}
 
 	const requiredConsent: ToolRequiredConsent | undefined = getRequiredConsentForToolCall(toolName, args, workspaceId);
 	if (requiredConsent !== undefined && mode !== "full-trust") {
 		return {
 			action: "request_approval",
-			reason: "跨工作区或绝对路径终端执行需要用户书面确认",
+			reason: "Terminal execution outside the workspace or against an absolute path requires written user confirmation.",
 			requiredConsent
 		};
 	}
@@ -185,7 +185,7 @@ export function evaluateToolCall(
 			return { action: "allow" };
 		}
 
-		return { action: "request_approval", reason: "此操作会修改文件或外部状态，需要你在 Studio 中确认。" };
+		return { action: "request_approval", reason: "This operation can modify files or external state and requires confirmation in Studio." };
 	}
 
 	if (mode === "auto-safe") {
@@ -201,12 +201,12 @@ export function evaluateToolCall(
 			return { action: "allow" };
 		}
 
-		return { action: "request_approval", reason: "此写操作需要确认（auto-safe 模式）" };
+		return { action: "request_approval", reason: "This write operation requires confirmation in auto-safe mode." };
 	}
 
 	if (mode === "full-trust") {
 		return { action: "allow" };
 	}
 
-	return { action: "deny", reason: "未知审批模式" };
+	return { action: "deny", reason: "Unknown approval mode." };
 }

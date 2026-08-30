@@ -270,7 +270,7 @@ function ensureSummaryStep(steps: LlmPlanStep[], executionProfile: WorkflowExecu
 	if (steps.length === 0) {
 		return [{
 			id: "summarize",
-			title: "总结交付",
+			title: "Summarize delivery",
 			instruction: "直接回答用户需求，说明结论和必要的后续建议。",
 			toolGroup: "summarize",
 			acceptanceCriteria: ["用户需求已经被直接回答，且没有未解决的验证失败或审批。"],
@@ -291,7 +291,7 @@ function ensureSummaryStep(steps: LlmPlanStep[], executionProfile: WorkflowExecu
 		...baseSteps,
 		{
 			id: "summarize",
-			title: "总结交付",
+			title: "Summarize delivery",
 			instruction: "基于前面步骤结果给用户最终总结，说明完成内容、验证状态和剩余风险。",
 			toolGroup: "summarize",
 			acceptanceCriteria: ["所有前置步骤已完成，验证失败、审批和阻塞状态已被如实说明。"],

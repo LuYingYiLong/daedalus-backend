@@ -10,6 +10,8 @@ import type { ClientRequest } from "../../../src/protocol/types.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import { createClientSession, type ClientSession } from "../../../src/server/client-session.js";
 import { createSlashHelpText, handleSlashCommand, listSlashCommands } from "../../../src/server/slash-commands.js";
+import { registerClientConnection, unregisterClientConnection, updateClientConnection, type ClientType } from "../../../src/server/client-connections.js";
+import { computerOverlayPreviewSchema } from "../../../src/protocol/computer-overlay-preview.js";
 
 function createSocketMock(): WebSocket & { sent: unknown[] } {
 	const sent: unknown[] = [];
@@ -89,6 +91,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/help",
 			"/context",
 			"/approvals",
+			"/test-computer-overlay",
 			"/test-approval",
 			"/test-message-queue",
 			"/test-todo-list",
@@ -175,7 +178,7 @@ test("/skill streams and responds even without an active workspace", async (): P
 		)), true);
 		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { ok?: boolean; result?: { text?: string } } | undefined;
 		assert.equal(response?.ok, true);
-		assert.match(response?.result?.text ?? "", /Skill 现在按消息激活/u);
+		assert.match(response?.result?.text ?? "", /Skills are activated per message/u);
 		assert.match(response?.result?.text ?? "", /builtin:skill-creator/u);
 	});
 });
@@ -205,7 +208,7 @@ test("test slash commands are rejected in runtime mode", async (): Promise<void>
 		assert.deepEqual(result, { type: "handled" });
 		assert.equal(session.queuedMessages.length, 0);
 		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { result?: { text?: string } } | undefined;
-		assert.match(response?.result?.text ?? "", /未知指令：`\/test-message-queue`/u);
+		assert.match(response?.result?.text ?? "", /Unknown command: `\/test-message-queue`/u);
 		assert.doesNotMatch(response?.result?.text ?? "", /\/test-todo-list/u);
 	});
 });
@@ -330,4 +333,50 @@ test("removed workflow slash command is handled without starting a run", async (
 	});
 
 	assert.deepEqual(result, { type: "handled" });
+});
+
+test("overlay preview is a development-only response for the requesting interactive Studio", async (): Promise<void> => {
+	await withTempUserProfile(async () => {
+		for (const scenario of [
+			{ mode: "development", client: "studio", arg: "", action: "running" },
+			{ mode: "development", client: "studio", arg: "paused", action: "paused" },
+			{ mode: "development", client: "studio", arg: "click", action: "click" },
+			{ mode: "development", client: "studio", arg: "stop", action: "stop" },
+			{ mode: "runtime", client: "studio", arg: "", action: undefined },
+			{ mode: "development", client: "studio_remote", arg: "", action: undefined },
+			{ mode: "development", client: "studio_scheduler", arg: "", action: undefined },
+			{ mode: "development", client: "cli", arg: "", action: undefined },
+			{ mode: "development", client: "studio", arg: "click --path=test", action: undefined },
+			{ mode: "development", client: "studio", arg: "", goal: true, action: undefined },
+		] as const) {
+			await withBackendMode(scenario.mode, async () => {
+				const socket = createSocketMock();
+				const session = createClientSession(undefined);
+				session.sessionId = "session-preview-fixture";
+				const connection = registerClientConnection(socket, session);
+				updateClientConnection(socket, { clientType: scenario.client as ClientType });
+				try {
+					const request: ClientRequest = { type: "request", id: "preview-fixture", method: "ai.chat", params: {
+						message: `/test-computer-overlay ${scenario.arg}`,
+						mode: "goal" in scenario ? "goal" : "ask", options: { stream: true },
+					} };
+					assert.deepEqual(await handleSlashCommand({ socket, request, session, mcpHost: {} as McpHost, createSessionInfo: () => ({}) }), { type: "handled" });
+					const response = socket.sent.find(m => (m as { type: string }).type === "response") as { result: { computerOverlayPreview?: unknown } };
+					assert.deepEqual(response.result.computerOverlayPreview, scenario.action ? {
+						connectionId: connection.connectionId, sessionId: session.sessionId, requestId: request.id, action: scenario.action,
+					} : undefined);
+					assert.equal(socket.sent.some(m => (m as { type: string }).type === "event" && JSON.stringify(m).includes('"computerOverlayPreview"')), false);
+					assert.equal(session.approvalGateway.listPending().length, 0);
+				} finally { unregisterClientConnection(socket); }
+			});
+		}
+	});
+});
+
+test("overlay preview schema rejects control arguments and invalid scope", () => {
+	const preview = { connectionId: "conn", sessionId: "session", requestId: "request", action: "running" };
+	assert.equal(computerOverlayPreviewSchema.safeParse(preview).success, true);
+	for (const value of [{ ...preview, hwnd: 123 }, { ...preview, action: "type" }, { ...preview, sessionId: "../session" }]) {
+		assert.equal(computerOverlayPreviewSchema.safeParse(value).success, false);
+	}
 });

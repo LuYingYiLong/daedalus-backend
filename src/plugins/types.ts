@@ -1,4 +1,4 @@
-import type { PluginP2Manifest } from "./p2/protocol.js";
+import type { PluginP2Manifest } from "./extensions/protocol.js";
 
 export const PLUGIN_TRUST_STATUSES = ["review_required", "trusted", "disabled"] as const;
 export type PluginTrustStatus = typeof PLUGIN_TRUST_STATUSES[number];

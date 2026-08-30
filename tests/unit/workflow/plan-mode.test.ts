@@ -23,7 +23,7 @@ test("broad Godot AI plugin goal requires clarification with at most three repli
 	assert.ok(decision.question.length > 0);
 	assert.ok(decision.recommendedReplies.length > 0);
 	assert.ok(decision.recommendedReplies.length <= 3);
-	assert.ok(decision.recommendedReplies.some((reply): boolean => reply.text.includes("前端")));
+	assert.ok(decision.recommendedReplies.some((reply): boolean => reply.text.includes("frontend")));
 });
 
 test("a skipped clarification is explicit planner input rather than a synthetic user reply", (): void => {
@@ -215,7 +215,7 @@ test("approved plan execution uses the free Agent Loop without a legacy workflow
 	assert.equal(params.options?.executionPolicy, "auto");
 	assert.equal(params.options?.outputTarget, "workspace");
 	assert.equal(params.options?.toolBudget, "project_edit");
-	assert.equal(params.message, "执行计划。");
+	assert.equal(params.message, "Execute the plan.");
 	assert.equal(params.provider, "moonshot");
 	assert.equal(params.model, "kimi-k3");
 	assert.match(params.systemPrompt ?? "", /执行阶段必须以该计划为主要约束/);

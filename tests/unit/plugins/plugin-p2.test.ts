@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pluginP2ManifestSchema, summarizePluginP2Manifest } from "../../../src/plugins/p2/protocol.js";
+import { pluginP2ManifestSchema, summarizePluginP2Manifest } from "../../../src/plugins/extensions/protocol.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 
 test("P2 manifest keeps capability declarations bounded and summarizes all extension families", (): void => {

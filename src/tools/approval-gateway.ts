@@ -183,7 +183,7 @@ export class ApprovalGateway {
 			}
 			return {
 				action: "request_approval",
-				reason: `下载 ${download.dependency} 到 [${download.sourceFolderId}] ${download.relativePath}；只会下载文件，不会自动安装或运行。`,
+				reason: `Download ${download.dependency} to [${download.sourceFolderId}] ${download.relativePath}. This only downloads the file; it does not install or run it.`,
 				approvalKind: "network_download",
 				downloadAuthorization: createDownloadAuthorizationScope(args, requestId, workspaceId),
 				...(workspaceId === undefined ? {} : { networkAccessRequired: createNetworkAccessRequired(download, workspaceId) })
@@ -464,7 +464,7 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 		if (!this.allowedToolNames.has(llmToolName)) {
 			return {
 				action: "deny",
-				reason: `只读上下文只允许显式授权的 read/verify 工具: ${llmToolName}`
+				reason: `Read-only context permits only explicitly allowed read/verify tools: ${llmToolName}`
 			};
 		}
 		if (this.delegatedToolNames.has(llmToolName)) {
@@ -481,7 +481,7 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 
 		return {
 			action: "deny",
-			reason: `只读上下文禁止 ${policy?.risk ?? "unknown"} 风险工具: ${llmToolName}`
+			reason: `Read-only context does not permit ${policy?.risk ?? "unknown"}-risk tools: ${llmToolName}`
 		};
 	}
 
@@ -511,7 +511,7 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 				options
 			);
 		}
-		throw new Error("只读上下文不允许触发人工审批。");
+		throw new Error("Read-only context cannot request manual approval.");
 	}
 
 	override hasDownloadAuthorization(requestId: string | undefined, fingerprint: string): boolean {

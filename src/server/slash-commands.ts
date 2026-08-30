@@ -14,7 +14,9 @@ import { sendSessionEvent, waitForSessionEventPersistence } from "./session-even
 import { createGlobalSkillWorkspace } from "../skills/runtime.js";
 import { beginAgentRun, updateAgentRun } from "./agent-run-controller.js";
 import type { WorkflowTodoSnapshot } from "../workflow/types.js";
-import { getPluginP2Snapshot } from "../plugins/p2/registry.js";
+import { getPluginP2Snapshot } from "../plugins/extensions/registry.js";
+import { getClientConnection } from "./client-connections.js";
+import { computerOverlayPreviewActionSchema, computerOverlayPreviewSchema, type ComputerOverlayPreview } from "../protocol/computer-overlay-preview.js";
 
 export type SlashCommandDefinition = {
 	command: string;
@@ -37,7 +39,7 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/help",
 		usage: "/help",
 		insertText: "/help",
-		description: "显示指令帮助。",
+		description: "Show available commands.",
 		requiresArgument: false,
 		examples: ["/help"]
 	},
@@ -45,7 +47,7 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/context",
 		usage: "/context",
 		insertText: "/context",
-		description: "显示当前模型、上下文窗口、MCP 和审批信息。",
+		description: "Show the active model, context window, MCP, and approval information.",
 		requiresArgument: false,
 		examples: ["/context"]
 	},
@@ -53,7 +55,7 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/approvals",
 		usage: "/approvals",
 		insertText: "/approvals",
-		description: "显示待审批工具调用。",
+		description: "Show pending tool approvals.",
 		requiresArgument: false,
 		examples: ["/approvals"]
 	},
@@ -61,47 +63,47 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/ask",
 		usage: "/ask [Message]",
 		insertText: "/ask ",
-		description: "切换到 Ask 模式并发送消息。",
+		description: "Switch to Ask mode and send a message.",
 		requiresArgument: true,
-		examples: ["/ask 这是什么意思"]
+		examples: ["/ask What does this mean?"]
 	},
 	{
 		command: "/agent",
 		usage: "/agent [Message]",
 		insertText: "/agent ",
-		description: "切换到 Agent 模式并发送消息。",
+		description: "Switch to Agent mode and send a message.",
 		requiresArgument: true,
-		examples: ["/agent 修复这个错误"]
+		examples: ["/agent Fix this error"]
 	},
 	{
 		command: "/workflow",
 		usage: "/workflow [Task]",
 		insertText: "/workflow ",
-		description: "以完整多阶段 Workflow 执行当前工作区任务。",
+		description: "Run the current workspace task through the full multi-stage workflow.",
 		requiresArgument: true,
-		examples: ["/workflow 重构认证模块并补齐测试"]
+		examples: ["/workflow Refactor the authentication module and add tests"]
 	},
 	{
 		command: "/plan",
 		usage: "/plan [Message]",
 		insertText: "/plan ",
-		description: "切换到 Plan 模式并发送消息。",
+		description: "Switch to Plan mode and send a message.",
 		requiresArgument: true,
-		examples: ["/plan 规划登录系统重构"]
+		examples: ["/plan Plan the login system refactor"]
 	},
 	{
 		command: "/goal",
 		usage: "/goal [Traget]",
 		insertText: "/goal ",
-		description: "切换到 Goal 模式并开始执行目标。",
+		description: "Switch to Goal mode and start executing a goal.",
 		requiresArgument: true,
-		examples: ["/goal 完成登录流程并验证"]
+		examples: ["/goal Complete and verify the login flow"]
 	},
 	{
 		command: "/skills",
 		usage: "/skills",
 		insertText: "/skills",
-		description: "列出可用 skills。",
+		description: "List available skills.",
 		requiresArgument: false,
 		examples: ["/skills"]
 	},
@@ -109,23 +111,23 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/skill",
 		usage: "/skill",
 		insertText: "/skill",
-		description: "说明如何通过 @ 在当前消息激活 skill。",
+		description: "Explain how to activate skills with @ in the current message.",
 		requiresArgument: false,
 		examples: ["/skill"]
 	},
 	{
 		command: "/create-skill",
-		usage: "/create-skill [--personal] [需求]",
+	usage: "/create-skill [--personal] [requirement]",
 		insertText: "/create-skill ",
-		description: "让 AI 创建项目或个人 skill。",
+		description: "Ask AI to create a project or personal skill.",
 		requiresArgument: false,
-		examples: ["/create-skill 创建场景性能审查流程", "/create-skill --personal 创建通用代码审查流程"]
+		examples: ["/create-skill Create a scene performance review workflow", "/create-skill --personal Create a general code review workflow"]
 	},
 	{
 		command: "/reset",
 		usage: "/reset",
 		insertText: "/reset",
-		description: "清空当前会话历史。",
+		description: "Clear the current session history.",
 		requiresArgument: false,
 		examples: ["/reset"]
 	},
@@ -133,9 +135,9 @@ const BASE_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/init",
 		usage: "/init [Requirement]",
 		insertText: "/init ",
-		description: "检查当前 Godot 项目，并请求生成项目根目录 AGENTS.md。",
+		description: "Inspect the current Godot project and request an AGENTS.md file for its root.",
 		requiresArgument: false,
-		examples: ["/init", "/init 请保留现有项目约束"]
+		examples: ["/init", "/init Preserve the existing project constraints"]
 	}
 ] as const;
 
@@ -152,10 +154,18 @@ function getChatModeForSlashCommand(command: string): AiChatParams["mode"] | nul
 
 const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 	{
+		command: "/test-computer-overlay",
+		usage: "/test-computer-overlay [running|paused|click|stop]",
+		insertText: "/test-computer-overlay",
+		description: "Preview the Windows Studio computer-use overlay without observing windows or sending input; defaults to the running state.",
+		requiresArgument: false,
+		examples: ["/test-computer-overlay", "/test-computer-overlay paused", "/test-computer-overlay click", "/test-computer-overlay stop"]
+	},
+	{
 		command: "/test-approval",
 		usage: "/test-approval",
 		insertText: "/test-approval",
-		description: "创建一个用于 Studio UI 调试的待审批文件写入。",
+		description: "Create a pending file-write approval for Studio UI debugging.",
 		requiresArgument: false,
 		examples: ["/test-approval"]
 	},
@@ -163,7 +173,7 @@ const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/test-message-queue",
 		usage: "/test-message-queue",
 		insertText: "/test-message-queue",
-		description: "创建几条不会自动执行的 Studio 消息队列测试项。",
+		description: "Create Studio message-queue test items that do not execute automatically.",
 		requiresArgument: false,
 		examples: ["/test-message-queue"]
 	},
@@ -171,7 +181,7 @@ const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		command: "/test-todo-list",
 		usage: "/test-todo-list",
 		insertText: "/test-todo-list",
-		description: "发送一个不会执行工具的 Studio Todo 浮层测试快照。",
+		description: "Send a Studio Todo overlay test snapshot that does not execute tools.",
 		requiresArgument: false,
 		examples: ["/test-todo-list"]
 	}
@@ -206,7 +216,7 @@ export async function createSlashCommandListResultWithPlugins(): Promise<{ comma
 		command: command.command,
 		usage: command.usage ?? command.command,
 		insertText: `${command.command} `,
-		description: `${command.description}（插件）`,
+		description: `${command.description} (plugin)`,
 		requiresArgument: (command.arguments?.length ?? 0) > 0,
 		examples: [command.usage ?? command.command]
 	}));
@@ -215,9 +225,9 @@ export async function createSlashCommandListResultWithPlugins(): Promise<{ comma
 
 export function createSlashHelpText(): string {
 	return [
-		"## 可用指令",
+		"## Available commands",
 		...getVisibleSlashCommands().map((command: SlashCommandDefinition): string => {
-			return `- \`${command.usage}\`：${command.description}`;
+			return `- \`${command.usage}\`: ${command.description}`;
 		})
 	].join("\n");
 }
@@ -225,7 +235,7 @@ export function createSlashHelpText(): string {
 function formatSessionInfo(session: ClientSession, mcpHost: McpHost, createSessionInfo: SessionInfoFactory): string {
 	const info: Record<string, unknown> = createSessionInfo(session, mcpHost);
 	return [
-		"## 当前上下文",
+		"## Current context",
 		`- Provider configured: ${String(info.providerConfigured)}`,
 		`- Model: ${String(info.model)}`,
 		"- Active skill: per-message (@skill)",
@@ -243,11 +253,11 @@ function formatSessionInfo(session: ClientSession, mcpHost: McpHost, createSessi
 function formatPendingApprovals(session: ClientSession): string {
 	const pending = session.approvalGateway.listPending();
 	if (pending.length === 0) {
-		return "当前没有待审批工具调用。";
+		return "There are no pending tool approvals.";
 	}
 
 	return [
-		"## 待审批工具调用",
+		"## Pending tool approvals",
 		...pending.map((approval): string => [
 			`- ${approval.approvalId}`,
 			`  - Tool: ${approval.llmToolName}`,
@@ -260,7 +270,7 @@ function formatPendingApprovals(session: ClientSession): string {
 async function createTestApproval(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<string> {
 	const workspaceId: string | undefined = session.activeWorkspace?.id;
 	if (workspaceId === undefined) {
-		return "当前会话没有工作区，无法创建文件写入审批。请选择一个工作区后再运行 `/test-approval`。";
+		return "The current session has no workspace, so a file-write approval cannot be created. Select a workspace before running `/test-approval`.";
 	}
 
 	const suffix: string = Date.now().toString(36);
@@ -288,14 +298,14 @@ async function createTestApproval(socket: WebSocket, request: ClientRequest, ses
 	}
 
 	emitWorkbenchUpdated(socket, request.id, session);
-	return `已创建测试审批：\`${pending.approvalId}\`。请在 Studio 审批面板中 Approve 或 Reject。`;
+	return `Created test approval \`${pending.approvalId}\`. Approve or reject it in the Studio Approvals panel.`;
 }
 
 async function createTestMessageQueue(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<string> {
 	const testTexts: string[] = [
-		"测试队列消息 A：检查队列卡片基础样式。",
-		"测试队列消息 B：拖拽我来调整优先级。",
-		"测试队列消息 C：删除我来检查关闭按钮。"
+		"Test queue item A: inspect the basic queue-card styling.",
+		"Test queue item B: drag me to change the priority.",
+		"Test queue item C: delete me to inspect the close button."
 	];
 	const items = testTexts.map((text: string) => enqueueMessage(session, {
 		text
@@ -313,7 +323,7 @@ async function createTestMessageQueue(socket: WebSocket, request: ClientRequest,
 	emitWorkbenchUpdated(socket, request.id, session);
 	await waitForSessionEventPersistence(session);
 
-	return `已创建 ${items.length} 条消息队列 UI 测试项；它们不会自动开始执行。`;
+	return `Created ${items.length} message-queue UI test items. They will not start automatically.`;
 }
 
 async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<void> {
@@ -341,30 +351,30 @@ async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientReques
 		phases: [
 			{
 				id: "inspect",
-				title: "读取上下文",
+				title: "Inspect context",
 				status: "done"
 			},
 			{
 				id: "write",
-				title: "实现修改",
+				title: "Implement changes",
 				status: "running"
 			},
 			{
 				id: "verify",
-				title: "验证结果",
+				title: "Verify results",
 				status: "pending"
 			},
 			{
 				id: "summarize",
-				title: "总结交付",
+				title: "Summarize delivery",
 				status: "pending"
 			}
 		],
 		todos: [
-			{ id: "todo-inspect", phaseId: "inspect", status: "done", text: "读取上下文" },
-			{ id: "todo-write", phaseId: "write", status: "running", text: "实现修改" },
-			{ id: "todo-verify", phaseId: "verify", status: "pending", text: "验证结果" },
-			{ id: "todo-summarize", phaseId: "summarize", status: "pending", text: "总结交付" }
+			{ id: "todo-inspect", phaseId: "inspect", status: "done", text: "Inspect context" },
+			{ id: "todo-write", phaseId: "write", status: "running", text: "Implement changes" },
+			{ id: "todo-verify", phaseId: "verify", status: "pending", text: "Verify results" },
+			{ id: "todo-summarize", phaseId: "summarize", status: "pending", text: "Summarize delivery" }
 		]
 	};
 	updateAgentRun(socket, session, runId, "finalizing", {
@@ -393,7 +403,7 @@ function getSkillWorkspace(session: ClientSession): SkillWorkspace {
 async function formatSkillList(session: ClientSession): Promise<string> {
 	const catalog = await listSkillSummaries(getSkillWorkspace(session));
 	return [
-		"## 可用 Skills",
+		"## Available skills",
 		...catalog.skills.map((skill): string => `- \`${skill.ref}\` [${skill.source}] ${skill.name} - ${skill.description || skill.error || "Invalid skill"} (${skill.enabled ? "enabled" : "disabled"})`)
 	].join("\n");
 }
@@ -404,7 +414,8 @@ async function sendChatText(
 	text: string,
 	session: ClientSession,
 	mcpHost: McpHost,
-	createSessionInfo: SessionInfoFactory
+	createSessionInfo: SessionInfoFactory,
+	computerOverlayPreview?: ComputerOverlayPreview
 ): Promise<void> {
 	if (request.method !== "ai.chat" || request.params.options?.stream !== true) {
 		sendJson(socket, {
@@ -413,7 +424,8 @@ async function sendChatText(
 			ok: true,
 			result: {
 				text,
-				context: createSessionInfo(session, mcpHost)
+				context: createSessionInfo(session, mcpHost),
+				...(computerOverlayPreview ? { computerOverlayPreview } : {})
 			}
 		});
 		return;
@@ -433,7 +445,7 @@ async function sendChatText(
 			startedAt: new Date().toISOString(),
 			steps: [{
 				id: "answer",
-				title: "回答命令",
+				title: "Answer command",
 				toolGroup: "answer",
 				acceptanceCriteria: []
 			}]
@@ -488,7 +500,8 @@ async function sendChatText(
 		ok: true,
 		result: {
 			text,
-			context: createSessionInfo(session, mcpHost)
+			context: createSessionInfo(session, mcpHost),
+			...(computerOverlayPreview ? { computerOverlayPreview } : {})
 		}
 	});
 }
@@ -532,7 +545,7 @@ export async function handleSlashCommand(params: {
 	const chatMode: AiChatParams["mode"] | null = getChatModeForSlashCommand(command);
 	if (chatMode !== null) {
 		if (restText.length === 0) {
-			await sendChatText(socket, request, `请在 \`${command}\` 后提供要发送的消息。`, session, mcpHost, createSessionInfo);
+			await sendChatText(socket, request, `Provide a message after \`${command}\`.`, session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
 		return {
@@ -547,16 +560,45 @@ export async function handleSlashCommand(params: {
 
 	if (command === "/workflow") {
 		if (restText.length === 0) {
-			await sendChatText(socket, request, "请在 `/workflow` 后提供要执行的任务。", session, mcpHost, createSessionInfo);
+			await sendChatText(socket, request, "Provide a task after `/workflow`.", session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
 		await sendChatText(socket, request, "The legacy Workflow command has been removed. Submit this task in Agent mode instead.", session, mcpHost, createSessionInfo);
 		return { type: "handled" };
 	}
 
+	if (command === "/test-computer-overlay") {
+		const connection = getClientConnection(socket);
+		const action = computerOverlayPreviewActionSchema.safeParse(restText || "running");
+		let text: string;
+		let preview: ComputerOverlayPreview | undefined;
+		if (!isDevelopmentSlashCommandEnabled()) {
+			text = `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`;
+		} else if (connection?.clientType !== "studio" || session.scheduledTaskOrigin || request.params.mode === "goal") {
+			text = "This debug command is available only in interactive Windows desktop Studio sessions. Remote, Goal, and scheduled-task sessions are not supported.";
+		} else if (!action.success) {
+			text = "Usage: `/test-computer-overlay [running|paused|click|stop]`. Omitting the argument shows the running state.";
+		} else if (!session.sessionId) {
+			text = "Open or create a Studio session before previewing the computer-use overlay.";
+		} else {
+			preview = computerOverlayPreviewSchema.parse({
+				connectionId: connection.connectionId,
+				sessionId: session.sessionId,
+				requestId: request.id,
+				action: action.data,
+			});
+			text = action.data === "stop"
+				? "Requested the debug overlay to close. This does not stop real computer use."
+				: "Requested the computer-use debug overlay (development Windows Studio only). It does not start a model, observe windows, or send input. Use `paused` / `running` to change state and `click` to preview a click ripple; use Cancel, Ctrl+Alt+Esc, or `stop` to close it. The preview closes automatically after 5 minutes.";
+		}
+		// 预览指令仅随原请求响应返回，不持久化或广播成可重放的会话事件
+		await sendChatText(socket, request, text, session, mcpHost, createSessionInfo, preview);
+		return { type: "handled" };
+	}
+
 	if (command === "/test-approval") {
 		if (!isDevelopmentSlashCommandEnabled()) {
-			await sendChatText(socket, request, `未知指令：\`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
 		await sendChatText(socket, request, await createTestApproval(socket, request, session), session, mcpHost, createSessionInfo);
@@ -565,7 +607,7 @@ export async function handleSlashCommand(params: {
 
 	if (command === "/test-message-queue") {
 		if (!isDevelopmentSlashCommandEnabled()) {
-			await sendChatText(socket, request, `未知指令：\`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
 		await sendChatText(socket, request, await createTestMessageQueue(socket, request, session), session, mcpHost, createSessionInfo);
@@ -574,10 +616,10 @@ export async function handleSlashCommand(params: {
 
 	if (command === "/test-todo-list") {
 		if (!isDevelopmentSlashCommandEnabled()) {
-			await sendChatText(socket, request, `未知指令：\`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
 			return { type: "handled" };
 		}
-		await sendChatText(socket, request, "已发送 Todo 浮层 UI 测试快照；不会调用模型或工具。", session, mcpHost, createSessionInfo);
+		await sendChatText(socket, request, "Sent the Todo overlay UI test snapshot. No model or tool was called.", session, mcpHost, createSessionInfo);
 		await emitTestTodoListSnapshot(socket, request, session);
 		return { type: "handled" };
 	}
@@ -588,7 +630,7 @@ export async function handleSlashCommand(params: {
 	}
 
 	if (command === "/skill") {
-		await sendChatText(socket, request, `Skill 现在按消息激活。请在消息中输入 \`@\` 并选择一个或多个 skill。\n\n${await formatSkillList(session)}`, session, mcpHost, createSessionInfo);
+		await sendChatText(socket, request, `Skills are activated per message. Type \`@\` in a message and select one or more skills.\n\n${await formatSkillList(session)}`, session, mcpHost, createSessionInfo);
 		return { type: "handled" };
 	}
 
@@ -601,8 +643,8 @@ export async function handleSlashCommand(params: {
 				...request.params,
 				skillRefs: ["builtin:skill-creator"],
 				message: requirement.length > 0
-					? `请为我创建一个${personal ? "个人" : "当前项目"} skill。\n\n需求：${requirement}`
-					: `请帮我创建一个${personal ? "个人" : "当前项目"} skill。先询问我这个 skill 要解决的具体工作流，再进行创建。`
+					? `Create a ${personal ? "personal" : "project"} skill for me.\n\nRequirement: ${requirement}`
+					: `Help me create a ${personal ? "personal" : "project"} skill. First ask which workflow this skill should solve, then create it.`
 			}
 		};
 	}
@@ -610,7 +652,7 @@ export async function handleSlashCommand(params: {
 	if (command === "/reset") {
 		session.messages = [];
 		session.fullSessionLoadPromise = undefined;
-		await sendChatText(socket, request, "已清空当前会话历史。", session, mcpHost, createSessionInfo);
+		await sendChatText(socket, request, "Cleared the current session history.", session, mcpHost, createSessionInfo);
 		return { type: "handled" };
 	}
 
@@ -618,7 +660,7 @@ export async function handleSlashCommand(params: {
 		session.messages = [];
 		session.fullSessionLoadPromise = undefined;
 		const extraInstruction: string = restText.length > 0
-			? `\n\n用户补充要求：${restText}`
+			? `\n\nAdditional user requirements: ${restText}`
 			: "";
 
 		return {
@@ -628,16 +670,16 @@ export async function handleSlashCommand(params: {
 				promptId: "godot.assistant",
 				skillRefs: ["builtin:godot-project-init"],
 				message: [
-					"请初始化当前 Godot 项目的 AI 协作上下文。",
-					"请通过 MCP 工具检查项目摘要、场景、脚本、插件和关键配置。",
-					"请生成适合项目根目录的 AGENTS.md 内容，并调用文件创建工具请求创建 `AGENTS.md`。",
-					"如果 `AGENTS.md` 已存在，请读取并总结现有内容，不要覆盖；说明是否建议更新。",
-					"文件创建工具需要用户审批时，请明确告知审批 ID 和用户需要在 Godot 客户端 Approvals 区域批准。"
+					"Initialize the AI collaboration context for the current Godot project.",
+					"Use MCP tools to inspect the project summary, scenes, scripts, plugins, and key configuration.",
+					"Generate AGENTS.md content for the project root and call the file-creation tool to request creating `AGENTS.md`.",
+					"If `AGENTS.md` already exists, read and summarize it without overwriting it, and explain whether an update is recommended.",
+					"When the file-creation tool requires approval, clearly report the approval ID and tell the user to approve it in the Godot client's Approvals area."
 				].join("\n") + extraInstruction
 			}
 		};
 	}
 
-	await sendChatText(socket, request, `未知指令：\`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+	await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
 	return { type: "handled" };
 }

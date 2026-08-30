@@ -4,7 +4,7 @@ const MAX_APPROVAL_REASON_CHARS: number = 500;
 
 export const APPROVAL_REASON_SCHEMA_PROPERTY: Record<string, unknown> = {
 	type: "string",
-	description: "面向用户说明为什么需要执行这次写入或高风险工具调用，描述目的和影响。不要让用户阅读参数来判断。"
+	description: "Explain to the user why this write or high-risk tool call is needed, including its purpose and impact. Do not make the user infer this from the arguments."
 };
 
 export function getApprovalReasonFromArgs(args: Record<string, unknown>, fallback: string): string {

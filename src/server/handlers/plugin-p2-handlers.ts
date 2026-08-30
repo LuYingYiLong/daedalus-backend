@@ -5,16 +5,16 @@ import type { ClientSession } from "../client-session.js";
 import { getClientConnection } from "../client-connections.js";
 import { sendJson } from "../send-json.js";
 import { ensurePluginRuntime, invokePlugin } from "../../plugins/runtime/manager.js";
-import { getPluginCommand, getPluginP2Snapshot } from "../../plugins/p2/registry.js";
+import { getPluginCommand, getPluginP2Snapshot } from "../../plugins/extensions/registry.js";
 import { additionalContextItemSchema } from "../../protocol/schema.js";
-import { acknowledgePluginEvent, publishPluginEvent, subscribePluginEvents } from "../../plugins/p2/event-bus.js";
+import { acknowledgePluginEvent, publishPluginEvent, subscribePluginEvents } from "../../plugins/extensions/event-bus.js";
 import { sendStudioPersistentSessionEvent } from "../session-events.js";
 import { studioBrowserRuntime } from "../studio-browser-runtime.js";
 import { BROWSER_TOOL_NAMES, type BrowserToolName } from "../../tools/browser-tools.js";
 import { getPluginCatalog } from "../../plugins/manager.js";
-import { getPluginUiState, updatePluginUiState } from "../../plugins/p2/ui-state.js";
-import { createNativeConversionReport } from "../../plugins/p2/native-converter.js";
-import { startPluginLanguageService, stopPluginLanguageService } from "../../plugins/p2/language-service.js";
+import { getPluginUiState, updatePluginUiState } from "../../plugins/extensions/ui-state.js";
+import { createNativeConversionReport } from "../../plugins/extensions/native-converter.js";
+import { startPluginLanguageService, stopPluginLanguageService } from "../../plugins/extensions/language-service.js";
 
 type PluginP2Request = Extract<ClientRequest, { method: `plugin.${string}` }>;
 

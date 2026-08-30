@@ -105,6 +105,8 @@ export async function routeToolImageExecutionResult(params: {
 	onProgress?: ((progress: { status: "message" | "success" | "error"; title: string; details: string; code: string }) => void) | undefined;
 }): Promise<IdempotentToolExecutionResult> {
 	const references = params.result.imageReferences ?? [];
+	const computerReference = references.find(reference => reference.source.kind === "computer_observation");
+	const evidence = computerReference?.source.kind === "computer_observation" ? { observationId: computerReference.source.observationId, untrustedEvidence: true } : {};
 	if (references.length === 0) {
 		throw new Error("image_inspection_reference_missing");
 	}
@@ -120,6 +122,7 @@ export async function routeToolImageExecutionResult(params: {
 		const content: string = JSON.stringify({
 			ok: true,
 			route: "current_model",
+			...evidence,
 			provider: params.options.provider,
 			model: currentModel,
 			images: references.map((reference: ProviderToolImageReference) => ({
@@ -150,6 +153,7 @@ export async function routeToolImageExecutionResult(params: {
 		const content: string = JSON.stringify({
 			ok: true,
 			route: "image_recognition_model",
+			...evidence,
 			provider: delegated.provider,
 			model: delegated.model,
 			observation: delegated.observation,
@@ -165,6 +169,7 @@ export async function routeToolImageExecutionResult(params: {
 		params.onProgress?.({ status: "error", title: "Image inspection unavailable", details: reason, code: "image.inspect.unavailable" });
 		const content: string = JSON.stringify({
 			ok: false,
+			...evidence,
 			code: reason === "image_recognition_model_unavailable" ? reason : "image_recognition_failed",
 			route: "unavailable",
 			error: reason,

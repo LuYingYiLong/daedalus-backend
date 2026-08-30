@@ -2,6 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { redactTraceValue } from "../../../src/trace/trace-redactor.js";
 
+test("trace excludes hydrated image pixels and grant secrets without changing evidence references", (): void => {
+	const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+	const input = {
+		accessId: "grant-private",
+		toolText: '{"accessId":"grant-private","observationId":"obs-kept"}',
+		image_url: { url: `data:image/png;base64,${image}` },
+		source: { type: "base64", media_type: "image/png", data: image },
+		inlineData: { mimeType: "image/png", data: image },
+		reference: { source: "computer_observation", sessionId: "session-1", observationId: "obs-kept" }
+	};
+	const redacted = redactTraceValue(input);
+	const serialized = JSON.stringify(redacted.value);
+	assert.equal(serialized.includes(image), false);
+	assert.equal(serialized.includes("grant-private"), false);
+	assert.ok(serialized.includes("obs-kept"));
+	assert.ok(redacted.redactedFields.includes("source.data"));
+	assert.equal(input.source.data, image);
+});
+
 test("trace redactor removes credentials from keys, headers, URLs, and free text", (): void => {
 	const redacted = redactTraceValue({
 		Authorization: "Bearer secret-token-value",

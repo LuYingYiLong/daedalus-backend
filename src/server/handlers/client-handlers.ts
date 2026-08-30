@@ -23,6 +23,9 @@ import {
 	MIN_BRIDGE_PROTOCOL_VERSION
 } from "../bridge-compatibility.js";
 import { studioBrowserRuntime } from "../studio-browser-runtime.js";
+import { studioComputerRuntime } from "../studio-computer-runtime.js";
+import { getComputerObservation } from "../../session/computer-observation-store.js";
+import { getGeneralSettings } from "../../general-settings-store.js";
 import { studioScheduledTaskRuntime } from "../studio-scheduled-task-runtime.js";
 
 function readClientType(value: unknown): ClientType {
@@ -204,10 +207,29 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 		}
 
 		case "browser.tool.result":
+		case "computer.tool.result":
+			if (request.method === "computer.tool.result") {
+				if (getClientConnection(socket)?.clientType !== "studio") throw new Error("computer_client_not_allowed");
+				studioComputerRuntime.handleResult(socket, request.params!);
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
+				break;
+			}
 			studioBrowserRuntime.handleResult(socket, request.params!);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
 			break;
 
+		case "session.computerObservation.get": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("computer_client_not_allowed");
+			const result = await getComputerObservation(request.params!.sessionId, request.params!.observationId, (await getGeneralSettings()).developerMode);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result });
+			break;
+		}
+		case "computer.access.revoked": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("computer_client_not_allowed");
+			studioComputerRuntime.revoke(socket, request.params!);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
+			break;
+		}
 		case "scheduled-task.tool.result":
 			studioScheduledTaskRuntime.handleResult(socket, request.params!);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });

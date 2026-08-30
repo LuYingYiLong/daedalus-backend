@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 9;
+const DB_SCHEMA_VERSION: number = 10;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -118,6 +118,28 @@ function migrateSchema(db: DatabaseSync): void {
 			truncated INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS computer_observations (
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			observation_id TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			tool_call_id TEXT NOT NULL,
+			detail_json TEXT,
+			png BLOB,
+			summary_json TEXT NOT NULL,
+			detail_level TEXT NOT NULL DEFAULT 'full',
+			revision INTEGER NOT NULL DEFAULT 1,
+			PRIMARY KEY(session_id, observation_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_computer_observations_turn ON computer_observations(session_id, request_id);
+		CREATE TRIGGER IF NOT EXISTS trg_search_computer_insert AFTER INSERT ON computer_observations BEGIN
+			UPDATE session_search_source_state SET revision=revision+1, updated_at=datetime('now') WHERE session_id=NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_computer_update AFTER UPDATE ON computer_observations BEGIN
+			UPDATE session_search_source_state SET revision=revision+1, rebuild_epoch=rebuild_epoch+1, updated_at=datetime('now') WHERE session_id=NEW.session_id;
+		END;
+		CREATE TRIGGER IF NOT EXISTS trg_search_computer_delete AFTER DELETE ON computer_observations BEGIN
+			UPDATE session_search_source_state SET revision=revision+1, rebuild_epoch=rebuild_epoch+1, updated_at=datetime('now') WHERE session_id=OLD.session_id;
+		END;
 		CREATE TABLE IF NOT EXISTS summaries (
 			session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE,
 			content TEXT NOT NULL,

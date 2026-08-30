@@ -26,6 +26,7 @@ import {
 } from "../workflow/agent-run-state.js";
 import { annotateActivityEvent, createActivityGroupAccumulator } from "../session/activity-groups.js";
 import { scheduleSessionActivityCompaction } from "../session/activity-compaction.js";
+import { studioComputerRuntime } from "./studio-computer-runtime.js";
 
 const PERSISTED_DELTA_FLUSH_CHARS = 8192;
 const LIVE_DELTA_FLUSH_MS = 32;
@@ -716,6 +717,10 @@ export function sendSessionEvent(
 ): void {
 	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
 	const sessionId: string | undefined = sessionIdOverride ?? getDataSessionId(data) ?? session.sessionId;
+	if (sessionId && ["agent.run.done", "agent.run.error", "agent.run.cancelled", "plan.error"].includes(canonicalEventName)) {
+		const eventRunId = typeof data === "object" && data !== null && "runId" in data && typeof data.runId === "string" ? data.runId : requestId;
+		studioComputerRuntime.finishTurn(sessionId, requestId, eventRunId);
+	}
 	const baseEventData: unknown = withSessionId(data, sessionId);
 	const timelineIdentity = resolveTimelineRequestId(session, requestId, persistRequestId, baseEventData);
 	const eventData: unknown = annotateSessionActivity(session, timelineIdentity.persistRequestId, canonicalEventName, baseEventData);

@@ -3,6 +3,8 @@ dist/
 build/
 *.obj
 *.tsbuildinfo
+.cache/
+.cache-computer-test.log
 
 # Environment
 .env

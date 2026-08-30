@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { composeSystemPrompt, listPromptTemplates, resolvePromptIdForWorkspace } from "../prompts/registry.js";
 import { getGeneralSettings } from "../general-settings-store.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
+import { getStudioComputerControl } from "./studio-computer-runtime.js";
 import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
 import { getStudioPluginDevelopmentControl } from "./studio-plugin-development-context.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
@@ -543,6 +544,7 @@ export function getAllRuntimeToolNames(session: ClientSession, socket: WebSocket
 		editorInstanceId: session.editorInstanceId,
 		sessionId: session.sessionId,
 		clientType: getClientConnection(socket)?.clientType,
+		computerControl: getStudioComputerControl(socket, session),
 		browserControl: getStudioBrowserControl(socket, session.sessionId)
 	}).getEntries().map((entry): string => entry.id);
 
@@ -902,6 +904,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			sessionId: params.session.sessionId,
 			requestId: params.requestId,
 			clientType: getClientConnection(params.socket)?.clientType,
+			computerControl: getStudioComputerControl(params.socket, params.session),
 			browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
 			scheduledTaskControl: getStudioScheduledTaskControl(params.socket, params.session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(params.socket, params.session.sessionId, params.session.activeWorkspace),
@@ -994,6 +997,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 				sessionId: params.session.sessionId,
 				requestId: params.requestId,
 				clientType: getClientConnection(params.socket)?.clientType,
+				computerControl: getStudioComputerControl(params.socket, params.session),
 				browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
 				scheduledTaskControl: getStudioScheduledTaskControl(params.socket, params.session.sessionId),
 				pluginDevelopmentControl: getStudioPluginDevelopmentControl(params.socket, params.session.sessionId, params.session.activeWorkspace),
@@ -2111,6 +2115,7 @@ async function runToolBudgetDecisionContinuation(params: {
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
 			clientType: getClientConnection(socket)?.clientType,
+			computerControl: getStudioComputerControl(socket, session),
 			browserControl: getStudioBrowserControl(socket, session.sessionId),
 			scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),
@@ -2920,6 +2925,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					editorInstanceId: session.editorInstanceId,
 					sessionId: session.sessionId,
 					clientType: getClientConnection(socket)?.clientType,
+					computerControl: getStudioComputerControl(socket, session),
 					browserControl: getStudioBrowserControl(socket, session.sessionId),
 					scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 					pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),

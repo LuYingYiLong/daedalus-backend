@@ -53,6 +53,8 @@ import { hookRuntime } from "../hooks/runtime.js";
 import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
 import { findWorkspace } from "../workspace/registry.js";
 import { BROWSER_TOOL_NAME_SET, type BrowserToolName } from "./browser-tools.js";
+import { COMPUTER_TOOL_NAME_SET, type ComputerToolName } from "./computer-tools.js";
+import { executeComputerTool } from "./computer-tool-execution.js";
 import { SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskToolName } from "./scheduled-task-tools.js";
 import { PLUGIN_DEVELOPMENT_TOOL_NAME_SET, type PluginDevelopmentToolName } from "../plugins/development/types.js";
 
@@ -770,6 +772,8 @@ async function executeSingleToolCall(
 			: undefined;
 		let rawResult: IdempotentToolExecutionResult = PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
 			? await executePluginDevelopmentTool(functionName as PluginDevelopmentToolName, executionArgs, toolContext, abortSignal)
+			: COMPUTER_TOOL_NAME_SET.has(functionName)
+			? await executeComputerTool(functionName as ComputerToolName, executionArgs, toolCall.id, toolContext, abortSignal)
 			: SCHEDULED_TASK_TOOL_NAME_SET.has(functionName)
 			? await executeScheduledTaskTool(functionName as ScheduledTaskToolName, executionArgs, toolContext, abortSignal)
 			: BROWSER_TOOL_NAME_SET.has(functionName)
@@ -819,7 +823,7 @@ async function executeSingleToolCall(
 			throw new Error("Request cancelled");
 		}
 		const effectiveEnricher: ToolResultEnricher | undefined = enricher ?? (
-			functionName === "mcp_image_inspect" && toolContext?.imageRouting !== undefined
+			(functionName === "mcp_image_inspect" || functionName === "mcp_computer_screenshot") && toolContext?.imageRouting !== undefined
 				? async (input): Promise<IdempotentToolExecutionResult> => {
 					const { routeToolImageExecutionResult } = await import("../providers/tool-image-recognition.js");
 					return routeToolImageExecutionResult({
@@ -833,7 +837,7 @@ async function executeSingleToolCall(
 				: undefined
 		);
 		const result: IdempotentToolExecutionResult = effectiveEnricher === undefined
-			? rawResult
+			? functionName === "mcp_computer_screenshot" ? (() => { throw new Error("computer_vision_unavailable"); })() : rawResult
 			: await effectiveEnricher({
 				toolName: functionName,
 				args: executionArgs,
@@ -976,7 +980,7 @@ async function executeSingleToolCall(
 				cached: result.reused,
 				fileEditDraft: result.fileEditDraft,
 				imageGeneration: result.imageGeneration,
-				traceContent: modelResultContent,
+				traceContent: functionName === "mcp_computer_request_access" ? JSON.stringify({ granted: true }) : modelResultContent,
 				...parsedSummary,
 				recovery: successRecovery ?? (parsedSummary.failure === undefined ? undefined : getRecoveryStatus(parsedSummary.failure))
 			});

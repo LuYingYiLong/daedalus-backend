@@ -288,6 +288,10 @@ export async function attachToolTraceOutput(params: {
 }): Promise<void> {
 	if (params.sessionId === undefined || params.requestId === undefined || params.toolCallId === undefined) return;
 	const now: string = new Date().toISOString();
+	let observationId: string | undefined;
+	if (params.toolName?.startsWith("mcp_computer_")) {
+		try { const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output; if (typeof output?.observationId === "string") observationId = output.observationId; } catch { /* 摘要不解析任意窗口文字 */ }
+	}
 	await writeTrace({
 		recordId: createTraceRecordId(params.sessionId, params.requestId, params.toolCallId, "tool_call"),
 		parentId: createTraceRecordId(params.sessionId, params.requestId, "turn"),
@@ -301,8 +305,8 @@ export async function attachToolTraceOutput(params: {
 		startedAt: now,
 		finishedAt: now,
 		detailLevel: "full",
-		summary: params.toolName === undefined ? {} : { toolName: params.toolName },
+		summary: { ...(params.toolName === undefined ? {} : { toolName: params.toolName }), ...(observationId ? { observationId } : {}) },
 		truncated: false,
-		payload: { toolOutput: params.output }
+		payload: { toolOutput: observationId ? { observationId, evidence: "desktop_observation" } : params.output }
 	}, "completed");
 }

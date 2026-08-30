@@ -42,6 +42,7 @@ import {
 	type SummaryPreparationContext
 } from "./summary-control.js";
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_NAME_SET, type BrowserControlContext } from "./browser-tools.js";
+import { COMPUTER_TOOL_NAMES, COMPUTER_TOOL_NAME_SET, type ComputerControlContext } from "./computer-tools.js";
 import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskControlContext } from "./scheduled-task-tools.js";
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 import type { PluginDevelopmentControlContext } from "../plugins/development/types.js";
@@ -75,6 +76,7 @@ export type ToolExecutionContext = {
 		chatMode?: "agent" | "ask" | "plan" | "goal" | undefined;
 	} | undefined;
 	browserControl?: BrowserControlContext | undefined;
+	computerControl?: ComputerControlContext | undefined;
 	scheduledTaskControl?: ScheduledTaskControlContext | undefined;
 	pluginDevelopmentControl?: PluginDevelopmentControlContext | undefined;
 	scheduledMonitorRun?: boolean | undefined;
@@ -87,6 +89,7 @@ export type WorkflowToolGroup = "read" | "verify" | "write";
 // 这是 workflow 的保守默认工具集，不等同于同风险工具的全集。
 const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> = {
 	read: [
+		...COMPUTER_TOOL_NAMES,
 		"mcp_scheduled_tasks_list",
 		"mcp_scheduled_task_report",
 		"mcp_browser_observe",
@@ -227,6 +230,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	...SCHEDULED_TASK_TOOL_NAMES,
 	...BROWSER_TOOL_NAMES,
+	...COMPUTER_TOOL_NAMES,
 	"mcp_skills_load",
 	"mcp_skills_propose_create",
 	"mcp_skills_create",
@@ -288,6 +292,7 @@ function isStaticToolAvailableInContext(toolName: string | undefined, context: T
 	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
 		return context.clientType === "studio" && context.browserControl !== undefined;
 	}
+	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun;
 	if (!isGodotToolName(toolName)) {
 		return true;
 	}

@@ -213,6 +213,9 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		CUSTOM_MCP_TOOLS_SENTINEL
 	].sort());
 	assert.deepEqual(getNoWorkspaceToolNames().sort(), [
+		"mcp_computer_request_access",
+		"mcp_computer_observe",
+		"mcp_computer_screenshot",
 		"mcp_browser_observe",
 		"mcp_browser_navigate",
 		"mcp_browser_navigation",
@@ -310,6 +313,10 @@ test("workflow defaults are catalog-backed and resolve to known tools", (): void
 	});
 	for (const group of ["read", "verify", "write"] as const) {
 		for (const toolName of getDefaultWorkflowToolNames(group)) {
+			if (toolName.startsWith("mcp_computer_")) {
+				assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot observe the desktop");
+				continue;
+			}
 			if (toolName === CUSTOM_MCP_TOOLS_SENTINEL) {
 				continue;
 			}

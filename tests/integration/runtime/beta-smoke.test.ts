@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -34,7 +34,8 @@ const projectFiles: string[] = [
 ];
 
 async function runSmoke(options: SmokeOptions = {}): Promise<{ status: number | null; output: string; events: SmokeEvent[] }> {
-	const root: string = await mkdtemp(path.join(tmpdir(), "daedalus-smoke-script-"));
+	// PowerShell 会展开 Windows 短路径；统一 fixture 根目录再比较隔离边界
+	const root: string = await realpath(await mkdtemp(path.join(tmpdir(), "daedalus-smoke-script-")));
 	const projectRoot: string = path.join(root, "Bridge project");
 	const eventsPath: string = path.join(root, "events.jsonl");
 	try {

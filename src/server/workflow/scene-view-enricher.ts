@@ -54,7 +54,7 @@ export function createSceneViewToolResultEnricher(params: {
 	const capturedAttachments: AdditionalContextItem[] = [];
 
 	const enricher: ToolResultEnricher = async (input): Promise<IdempotentToolExecutionResult> => {
-		if (input.toolName === IMAGE_INSPECT_TOOL) {
+		if (input.toolName === IMAGE_INSPECT_TOOL || input.toolName === "mcp_computer_screenshot") {
 			return routeToolImageExecutionResult({
 				result: input.result,
 				options: params.options,

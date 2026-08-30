@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readComputerScreenshot } from "../session/computer-observation-store.js";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import type { AdditionalContextItem } from "../protocol/types.js";
@@ -23,6 +24,7 @@ import { resolveWorkspaceReadSource } from "../workspace/source-context.js";
 export const IMAGE_INSPECT_TOOL_NAME: string = "mcp_image_inspect";
 
 export type ToolImageSource =
+	| { kind: "computer_observation"; sessionId: string; observationId: string }
 	| {
 		kind: "workspace";
 		workspaceId: string;
@@ -216,6 +218,7 @@ export async function resolveImageInspection(
 }
 
 async function readReferenceBytes(reference: ProviderToolImageReference): Promise<Buffer> {
+	if (reference.source.kind === "computer_observation") return readComputerScreenshot(reference.source.sessionId, reference.source.observationId);
 	if (reference.source.kind === "session") {
 		return reference.source.imageId.startsWith("generated-image-")
 			? (await readGeneratedImageArtifact(reference.source.sessionId, reference.source.imageId)).bytes

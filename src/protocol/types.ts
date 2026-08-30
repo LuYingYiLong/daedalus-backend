@@ -148,6 +148,8 @@ export type StudioDirectEventName =
 	| "session.selectionAsk.message.done"
 	| "session.selectionAsk.message.error"
 	| "browser.tool.request"
+	| "computer.tool.request"
+	| "computer.tool.cancel"
 	| "browser.tool.cancel"
 	| "scheduled-task.tool.request"
 	| "scheduled-task.tool.cancel"

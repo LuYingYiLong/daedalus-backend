@@ -32,6 +32,7 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 	const previousExecutablePath: string | undefined = process.env.GODOT_EXECUTABLE_PATH;
 	const previousAppData: string | undefined = process.env.APPDATA;
 	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const previousSandboxHelper: string | undefined = process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER;
 	const root: string = await mkdtemp(path.join(tmpdir(), "godot-runtime-"));
 	const projectRoot: string = path.join(root, "project");
 	const appDataRoot: string = path.join(root, "appdata");
@@ -44,6 +45,8 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 	process.env.GODOT_EXECUTABLE_PATH = "fake-godot";
 	process.env.APPDATA = appDataRoot;
 	process.env.USERPROFILE = appDataRoot;
+	// 此测试验证沙箱不可用分支，不应被开发机已有的 helper 构建产物改变
+	process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER = path.join(root, "unavailable-helper.exe");
 
 	try {
 		const runtimeTools = await import("../../../src/mcp/godot/tools/runtime-tools.js");
@@ -112,6 +115,8 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 			/Unsupported headless operation extension/u
 		);
 	} finally {
+		if (previousSandboxHelper === undefined) delete process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER;
+		else process.env.DAEDALUS_WINDOWS_SANDBOX_HELPER = previousSandboxHelper;
 		if (previousProjectPath === undefined) {
 			delete process.env.GODOT_PROJECT_PATH;
 		} else {

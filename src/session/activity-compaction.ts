@@ -13,6 +13,7 @@ import type { StoredMessage, StoredSessionEvent } from "./session-store.js";
 import type { DatabaseSync } from "node:sqlite";
 import { publishTraceRecordUpdate } from "../trace/trace-recorder.js";
 import { compactTracePayloadsInTransaction, getTraceRecordsByIds } from "../trace/trace-store.js";
+import { compactComputerObservations } from "./computer-observation-store.js";
 
 export const ACTIVITY_DETAIL_RETENTION_TURNS: number = 10;
 export const ACTIVITY_COMPACTION_SCHEMA_VERSION: number = 1;
@@ -434,6 +435,7 @@ function compactSessionRows(db: DatabaseSync, sessionId: string): ActivityCompac
 	}
 	const compactedTrace = compactTracePayloadsInTransaction(db, sessionId, requestSelection.compactedRequestIds);
 	removedBytes += compactedTrace.removedChars;
+	removedBytes += compactComputerObservations(db, sessionId, requestSelection.compactedRequestIds);
 	return {
 		completedTurns: requestSelection.completedRequestIds.length,
 		retainedTurns: requestSelection.retainedRequestIds.length,
@@ -470,7 +472,7 @@ export async function compactSessionActivity(sessionId: string, enabled: boolean
 		};
 	}
 	const result: ActivityCompactionRowsResult = runSessionTransaction(db, (): ActivityCompactionRowsResult => compactSessionRows(db, sessionId));
-	if (result.compactedEvents > 0) {
+	if (result.compactedEvents > 0 || result.removedBytes > 0) {
 		invalidateSessionTimelineCache(sessionId);
 	}
 	if (result.compactedTraceRecordIds.length > 0) {
@@ -482,7 +484,7 @@ export async function compactSessionActivity(sessionId: string, enabled: boolean
 	return {
 		sessionId,
 		...publicResult,
-		skipped: result.compactedEvents === 0 && (result.compactedTraceRecords ?? 0) === 0 ? "nothing_to_compact" : null,
+		skipped: result.compactedEvents === 0 && (result.compactedTraceRecords ?? 0) === 0 && result.removedBytes === 0 ? "nothing_to_compact" : null,
 	};
 }
 

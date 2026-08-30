@@ -48,6 +48,21 @@ test("schema accepts session-backed image additional context", (): void => {
 	assert.equal(result.success, true);
 });
 
+test("manual screenshot attachments use a neutral summary and preserve image bytes", async (): Promise<void> => {
+	await withTempAppData(async () => {
+		const { createSession } = await import("../../../src/session/session-store.js");
+		const { saveImageAttachment, readImageAttachmentDataUrl } = await import("../../../src/session/session-attachments.js");
+		const session = await createSession("Screenshot fixture");
+		const dataUrl = `data:image/png;base64,${PNG_BYTES.toString("base64")}`;
+		const item = await saveImageAttachment({ sessionId: session.id, mimeType: "image/png", dataUrl, byteSize: PNG_BYTES.length, width: 1, height: 1, title: "窗口截图-测试.png" });
+		assert.match(item.summary ?? "", /用户手动附加的图片/u);
+		assert.doesNotMatch(item.summary ?? "", /剪贴板/u);
+		const data = item.data as Record<string, unknown>;
+		assert.equal(data.sourcePath, undefined);
+		assert.equal(await readImageAttachmentDataUrl(session.id, String(data.attachmentId)), dataUrl);
+	});
+});
+
 test("text attachments are saved under the session and hydrate into prompt context", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessionStore = await import("../../../src/session/session-store.js");

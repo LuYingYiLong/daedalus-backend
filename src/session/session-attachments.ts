@@ -364,7 +364,7 @@ export async function saveImageAttachment(input: SaveImageAttachmentInput): Prom
 		title: input.title?.trim() || `Clipboard image ${createdAt.replace("T", " ").slice(0, 19)}`,
 		sourcePath: input.sourcePath?.trim() || undefined,
 		source: input.source ?? "manual",
-		summary: input.summary?.trim() || "用户为本轮消息附加了一张剪贴板图片；图片内容保存在当前会话附件中。",
+		summary: input.summary?.trim() || "用户手动附加的图片；图片内容保存在当前会话附件中。",
 		createdAt,
 		fileName: `${attachmentId}.png`
 	};

@@ -183,6 +183,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				ok: true,
 				result: {
 					connection: getClientConnection(socket),
+					features: { computerControl: 2 },
 					session: {
 						sessionId: session.sessionId ?? null,
 						workspaceId: session.activeWorkspace?.id ?? null,
@@ -227,6 +228,12 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 		case "computer.access.revoked": {
 			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("computer_client_not_allowed");
 			studioComputerRuntime.revoke(socket, request.params!);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
+			break;
+		}
+		case "computer.control.update": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("computer_client_not_allowed");
+			studioComputerRuntime.updateControl(socket, request.params!);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
 			break;
 		}

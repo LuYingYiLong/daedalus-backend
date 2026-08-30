@@ -73,8 +73,8 @@ function createDisplay(
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
 	if (toolName.startsWith("mcp_computer_")) {
-		const title = toolName === "mcp_computer_request_access" ? "请求观察窗口" : toolName === "mcp_computer_observe" ? "读取窗口结构与文字" : "查看观察截图";
-		return createDisplay("studio_computer", "Daedalus Desktop Perception", "read", title, "仅限本轮用户授权窗口的只读观察", { kind: "unknown", label: "Authorized window" });
+		const title = toolName === "mcp_computer_action" ? "操作授权窗口" : toolName === "mcp_computer_request_access" ? (args.mode === "control" ? "请求操作窗口" : "请求观察窗口") : toolName === "mcp_computer_observe" ? "读取窗口结构与文字" : "查看观察截图";
+		return createDisplay("studio_computer", "Daedalus Computer Use", toolName === "mcp_computer_action" ? "write" : "read", title, "仅限本轮用户授权的窗口", { kind: "unknown", label: "Authorized window" });
 	}
 	if (toolName.startsWith("mcp_scheduled_task")) {
 		const labels: Record<string, [ToolEventCategory, string]> = {

@@ -21,6 +21,26 @@ const providerOptions: ProviderChatOptions = {
 
 const immediateSleep = async (): Promise<void> => {};
 
+test("computer pause gates every network attempt including reconnects", async () => {
+  let calls = 0, waits = 0;
+  let resume!: () => void;
+  const paused = new Promise<void>(resolve => { resume = resolve; });
+  const result = runProviderRequestWithResilience({
+    providerOptions: { ...providerOptions, waitBeforeRequest: async () => { if (++waits === 2) await paused; } },
+    sleep: immediateSleep,
+    execute: async () => {
+      if (++calls === 1) throw Object.assign(new Error("terminated"), { code: "UND_ERR_SOCKET" });
+      return "resumed";
+    }
+  });
+  for (let i = 0; i < 20 && waits < 2; i++) await Promise.resolve();
+  assert.equal(waits, 2);
+  assert.equal(calls, 1);
+  resume();
+  assert.equal(await result, "resumed");
+  assert.equal(calls, 2);
+});
+
 test("OpenAI SDK clients disable hidden retries and keep the connection timeout explicit", (): void => {
 	const chatClient = createOpenAICompatibleClient(providerOptions);
 	const responsesClient = createOpenAIResponsesClient({ provider: "openai", apiKey: "test-key" });

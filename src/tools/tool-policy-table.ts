@@ -4,6 +4,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_computer_request_access": { risk: "read" },
 	"mcp_computer_observe": { risk: "read" },
 	"mcp_computer_screenshot": { risk: "read" },
+	"mcp_computer_action": { risk: "write" },
 	"mcp_scheduled_tasks_list": { risk: "read" },
 	"mcp_scheduled_task_create": { risk: "write" },
 	"mcp_scheduled_task_update": { risk: "write" },

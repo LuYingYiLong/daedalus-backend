@@ -289,8 +289,12 @@ export async function attachToolTraceOutput(params: {
 	if (params.sessionId === undefined || params.requestId === undefined || params.toolCallId === undefined) return;
 	const now: string = new Date().toISOString();
 	let observationId: string | undefined;
+  let actionSummary: Record<string, unknown> = {};
 	if (params.toolName?.startsWith("mcp_computer_")) {
-		try { const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output; if (typeof output?.observationId === "string") observationId = output.observationId; } catch { /* 摘要不解析任意窗口文字 */ }
+		try { const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output; if (typeof output?.observationId === "string") observationId = output.observationId;
+      if (params.toolName === "mcp_computer_action" && output && typeof output === "object") {
+        for (const key of ["actionId", "status", "dispatchedAt", "generation"]) if (typeof output[key] === "string" || typeof output[key] === "number") actionSummary[key] = output[key];
+      } } catch { /* 摘要不解析任意窗口文字 */ }
 	}
 	await writeTrace({
 		recordId: createTraceRecordId(params.sessionId, params.requestId, params.toolCallId, "tool_call"),
@@ -305,8 +309,8 @@ export async function attachToolTraceOutput(params: {
 		startedAt: now,
 		finishedAt: now,
 		detailLevel: "full",
-		summary: { ...(params.toolName === undefined ? {} : { toolName: params.toolName }), ...(observationId ? { observationId } : {}) },
+		summary: { ...(params.toolName === undefined ? {} : { toolName: params.toolName }), ...(observationId ? { observationId } : {}), ...actionSummary },
 		truncated: false,
-		payload: { toolOutput: observationId ? { observationId, evidence: "desktop_observation" } : params.output }
+		payload: { toolOutput: observationId ? { observationId, evidence: "desktop_observation", ...actionSummary } : params.output }
 	}, "completed");
 }

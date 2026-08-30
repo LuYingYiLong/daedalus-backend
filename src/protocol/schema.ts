@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { computerIdSchema, computerToolResultParamsSchema } from "./computer-observation.js";
+import { computerIdSchema, computerToolResultParamsSchema, computerControlUpdateSchema } from "./computer-observation.js";
 import {
 	MAX_IMAGE_BYTES,
 	MAX_IMAGE_DATA_URL_CHARS,
@@ -807,6 +807,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			capabilities: z.object({
 				browserTools: z.boolean().optional(),
 				computerObservation: z.boolean().optional(),
+				computerControl: z.boolean().optional(),
 				scheduledTasks: z.boolean().optional(),
 				scheduledTaskReport: z.boolean().optional(),
 			}).strict()
@@ -819,6 +820,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: computerToolResultParamsSchema
 	}).strict(),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("computer.access.revoked"), params: z.object({ connectionId: computerIdSchema, sessionId: computerIdSchema, requestId: computerIdSchema, runId: computerIdSchema, code: z.string().regex(/^computer_[a-z_]+$/u).max(120) }).strict() }).strict(),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("computer.control.update"), params: computerControlUpdateSchema }).strict(),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("session.computerObservation.get"), params: z.object({ sessionId: computerIdSchema, observationId: computerIdSchema }).strict() }).strict(),
 	z.object({
 		type: z.literal("request"),

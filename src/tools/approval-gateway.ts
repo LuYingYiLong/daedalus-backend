@@ -158,11 +158,17 @@ export class ApprovalGateway {
 			requestId?: string | undefined;
 			sessionId?: string | undefined;
 			activeScenePath?: string | undefined;
+			computerAuthorized?: boolean | undefined;
 		} = {}
 	): Promise<ApprovalDecision> {
 		const requestId: string | undefined = context.requestId;
 		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
 		const effectiveMode: ApprovalMode = goalBinding?.approvalMode ?? this.mode;
+		if (llmToolName === "mcp_computer_action") {
+			return context.computerAuthorized === true && goalBinding === undefined
+				? { action: "allow" }
+				: { action: "deny", reason: "computer_consent_required", code: "computer_consent_required" };
+		}
 		if (llmToolName === "mcp_workspace_download_file") {
 			const download = getDownloadRequest(args);
 			if (download === null) {
@@ -452,6 +458,7 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 			requestId?: string | undefined;
 			sessionId?: string | undefined;
 			activeScenePath?: string | undefined;
+			computerAuthorized?: boolean | undefined;
 		} = {}
 	): Promise<ApprovalDecision> {
 		if (!this.allowedToolNames.has(llmToolName)) {

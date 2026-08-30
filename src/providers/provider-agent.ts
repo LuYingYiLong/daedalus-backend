@@ -159,6 +159,22 @@ function assertContinuationMatchesAdapter(options: ProviderChatOptions, continua
 	}
 }
 
+function withComputerRequestGate(options: ProviderChatOptions, context: ToolExecutionContext | undefined): ProviderChatOptions {
+  if (!context?.requestId || !context.computerControl?.waitUntilRunning) return options;
+  const prior = options.waitBeforeRequest;
+  return { ...options, waitBeforeRequest: async signal => {
+    await prior?.(signal);
+    await context.computerControl!.waitUntilRunning!(context.requestId!, signal);
+  } };
+}
+
+function withComputerInputPolicy(params: AiChatParams, allowedTools: readonly string[] | undefined, context: ToolExecutionContext | undefined): ToolExecutionContext | undefined {
+	if (!context?.computerControl?.withInputPolicy) return context;
+	const allowed = (params.mode ?? "agent") === "agent" && params.options?.executionPolicy !== "read_only"
+		&& (allowedTools === undefined || allowedTools.includes("mcp_computer_action"));
+	return { ...context, computerControl: context.computerControl.withInputPolicy(allowed) };
+}
+
 function withImageRoutingContext(
 	toolContext: ToolExecutionContext | undefined,
 	options: ProviderChatOptions,
@@ -183,6 +199,8 @@ export async function runProviderAgent(
 	toolResultEnricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, {
 		params,
@@ -206,6 +224,8 @@ export async function runProviderAgentStreaming(
 	toolResultEnricher?: ToolResultEnricher | undefined,
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const prepared = await prepareToolAvailability(allowedToolNames, systemPrompt, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, {
 		params,
@@ -229,6 +249,8 @@ export async function continueProviderAgent(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, { params, continuation, approvedToolResult, allowedToolNames: effectiveTools },
 		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgent(params, options, continuation, approvedToolResult, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
@@ -247,6 +269,8 @@ export async function continueProviderAgentStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, { params, continuation, approvedToolResult, allowedToolNames: effectiveTools },
 		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentStreaming(params, options, continuation, approvedToolResult, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
@@ -264,6 +288,8 @@ export async function continueProviderAgentAfterToolBudget(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames: effectiveTools, reason: "tool_budget_resumed" },
 		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentAfterToolBudget(params, options, continuation, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));
@@ -281,6 +307,8 @@ export async function continueProviderAgentAfterToolBudgetStreaming(
 	toolContext?: ToolExecutionContext | undefined
 ): Promise<ProviderAgentResult> {
 	assertContinuationMatchesAdapter(options, continuation);
+	toolContext = withComputerInputPolicy(params, allowedToolNames, toolContext);
+	options = withComputerRequestGate(options, toolContext);
 	const effectiveTools = await filterContinuationTools(allowedToolNames, toolContext, options);
 	return runWithProviderTrace(params, options, toolContext, { params, continuation, allowedToolNames: effectiveTools, reason: "tool_budget_resumed" },
 		(): Promise<ProviderAgentResult> => resolveProviderAdapter(options).continueAgentAfterToolBudgetStreaming(params, options, continuation, mcpHost, gateway, effectiveTools, onEvent, abortSignal, withImageRoutingContext(toolContext, options, params.message)));

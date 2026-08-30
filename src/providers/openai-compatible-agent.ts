@@ -1324,6 +1324,7 @@ async function runAgentLoop(
 	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
+		if (toolContext?.requestId) await toolContext.computerControl?.waitUntilRunning?.(toolContext.requestId, abortSignal);
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
 		}

@@ -45,6 +45,10 @@ export function redactTraceValue(input: unknown): RedactedTraceValue {
 	let truncated: boolean = false;
 	const visit = (value: unknown, path: string): unknown => {
 		if (typeof value === "string") {
+      // Provider 的 function.arguments 是 JSON 字符串，不能绕开输入正文脱敏
+      if (value.length <= MAX_TRACE_STRING_CHARS && value.startsWith("{") && (value.includes('"action"') || value.includes('"mcp_computer_action"'))) {
+        try { const parsed: unknown = JSON.parse(value); return JSON.stringify(visit(parsed, path)); } catch { /* 普通文本继续按原有规则脱敏 */ }
+      }
 			const redacted = redactString(value);
 			if (redacted.redacted) redactedFields.push(path || "$text");
 			truncated ||= redacted.truncated;
@@ -60,6 +64,11 @@ export function redactTraceValue(input: unknown): RedactedTraceValue {
 			|| typeof imageSource.mimeType === "string" && imageSource.mimeType.startsWith("image/");
 		for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
 			const nextPath: string = path.length === 0 ? key : `${path}.${key}`;
+			if (key === "text" && imageSource.type === "text" && path.endsWith(".action")) {
+        result[key] = REDACTED_VALUE;
+        redactedFields.push(nextPath);
+        continue;
+      }
 			if (base64Image && key === "data") {
 				result[key] = "[image payload omitted]";
 				redactedFields.push(nextPath);

@@ -89,7 +89,7 @@ export type WorkflowToolGroup = "read" | "verify" | "write";
 // 这是 workflow 的保守默认工具集，不等同于同风险工具的全集。
 const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> = {
 	read: [
-		...COMPUTER_TOOL_NAMES,
+		...COMPUTER_TOOL_NAMES.filter(name => name !== "mcp_computer_action"),
 		"mcp_scheduled_tasks_list",
 		"mcp_scheduled_task_report",
 		"mcp_browser_observe",
@@ -162,6 +162,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_terminal_run_safe_preset"
 	],
 	write: [
+		"mcp_computer_action",
 		"mcp_scheduled_task_create",
 		"mcp_scheduled_task_update",
 		"mcp_scheduled_task_pause",
@@ -292,7 +293,7 @@ function isStaticToolAvailableInContext(toolName: string | undefined, context: T
 	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
 		return context.clientType === "studio" && context.browserControl !== undefined;
 	}
-	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun;
+	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun && (toolName !== "mcp_computer_action" || context.computerControl.inputAllowed === true);
 	if (!isGodotToolName(toolName)) {
 		return true;
 	}

@@ -10,6 +10,7 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 	"mcp_computer_request_access": { serverId: "studio_computer", toolName: "request_access" },
 	"mcp_computer_observe": { serverId: "studio_computer", toolName: "observe" },
 	"mcp_computer_screenshot": { serverId: "studio_computer", toolName: "screenshot" },
+	"mcp_computer_action": { serverId: "studio_computer", toolName: "action" },
 	"mcp_scheduled_tasks_list": { serverId: "studio_scheduled_tasks", toolName: "list" },
 	"mcp_scheduled_task_create": { serverId: "studio_scheduled_tasks", toolName: "create" },
 	"mcp_scheduled_task_update": { serverId: "studio_scheduled_tasks", toolName: "update" },

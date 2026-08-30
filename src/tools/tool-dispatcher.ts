@@ -271,6 +271,7 @@ async function executeSingleToolCall(
 	toolContext?: ToolExecutionContext | undefined,
 	abortSignal?: AbortSignal | undefined
 ): Promise<DispatchedToolResult> {
+	if (toolContext?.requestId) await toolContext.computerControl?.waitUntilRunning?.(toolContext.requestId, abortSignal);
 	if (abortSignal?.aborted) {
 		throw new Error("Request cancelled");
 	}
@@ -320,7 +321,7 @@ async function executeSingleToolCall(
 	try {
 		argsParsed = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
 	} catch {
-		const message: string = `Invalid JSON arguments: ${toolCall.function.arguments}`;
+		const message: string = functionName === "mcp_computer_action" ? "Invalid computer action arguments" : `Invalid JSON arguments: ${toolCall.function.arguments}`;
 		const baseFailure: ToolFailure = {
 			code: "invalid_arguments",
 			category: "protocol",
@@ -508,6 +509,7 @@ async function executeSingleToolCall(
 			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
 		}
 	}
+	const displayArgs = functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, action: { ...(executionArgs.action as Record<string, unknown>), ...((executionArgs.action as Record<string, unknown>)?.type === "text" ? { text: "[redacted]" } : {}) } } : executionArgs;
 	const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, executionArgs);
 	if (exhaustedFailure !== undefined) {
 		onEvent?.({
@@ -532,7 +534,8 @@ async function executeSingleToolCall(
 	const decision = await gateway.evaluate(functionName, executionArgs, toolCall.id, workspaceId, {
 		requestId: toolContext?.requestId,
 		sessionId: toolContext?.sessionId,
-		activeScenePath
+		activeScenePath,
+		computerAuthorized: toolContext?.computerControl?.inputAllowed === true && toolContext.requestId !== undefined && toolContext.computerControl.hasControl?.(toolContext.requestId) === true
 	});
 	if (decision.review !== undefined) {
 		onEvent?.({
@@ -553,7 +556,7 @@ async function executeSingleToolCall(
 		step,
 		action: decision.action,
 		reason: "reason" in decision ? decision.reason : undefined,
-		args: executionArgs
+		args: functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, type: (executionArgs.action as Record<string, unknown> | undefined)?.type } : executionArgs
 	});
 
 	if (decision.action === "deny") {
@@ -635,10 +638,10 @@ async function executeSingleToolCall(
 						networkAccessRequired: decision.networkAccessRequired
 					}
 				);
-				logger.info("tool", "approval_required", { toolCallId: toolCall.id, toolName: functionName, step, approvalId: pending.approvalId, workspaceId, reason, args: executionArgs });
+				logger.info("tool", "approval_required", { toolCallId: toolCall.id, toolName: functionName, step, approvalId: pending.approvalId, workspaceId, reason, args: displayArgs });
 				onEvent?.({
 					type: "tool.approval_required", step, toolCallId: toolCall.id, toolName: functionName,
-					approvalId: pending.approvalId, reason, args: executionArgs, requiredConsent: pending.requiredConsent,
+					approvalId: pending.approvalId, reason, args: displayArgs, requiredConsent: pending.requiredConsent,
 					approvalKind: pending.approvalKind, downloadAuthorization: pending.downloadAuthorization,
 					networkAccessRequired: pending.networkAccessRequired, ...describeToolEvent(functionName, executionArgs, workspaceId)
 				});
@@ -669,7 +672,7 @@ async function executeSingleToolCall(
 				approvalId: pending.approvalId,
 				workspaceId,
 				reason,
-				args: executionArgs
+				args: displayArgs
 			});
 			onEvent?.({
 				type: "tool.approval_required",
@@ -678,7 +681,7 @@ async function executeSingleToolCall(
 				toolName: functionName,
 				approvalId: pending.approvalId,
 				reason,
-				args: executionArgs,
+				args: displayArgs,
 				requiredConsent: pending.requiredConsent,
 				approvalKind: pending.approvalKind,
 				downloadAuthorization: pending.downloadAuthorization,
@@ -696,7 +699,7 @@ async function executeSingleToolCall(
 			step,
 			toolCallId: toolCall.id,
 			toolName: functionName,
-			args: executionArgs,
+			args: displayArgs,
 			...describeToolEvent(functionName, executionArgs, workspaceId)
 		});
 	}
@@ -755,7 +758,7 @@ async function executeSingleToolCall(
 		toolName: functionName,
 		step,
 		workspaceId,
-		args: executionArgs
+		args: displayArgs
 	});
 	try {
 		if (abortSignal?.aborted) {
@@ -767,7 +770,7 @@ async function executeSingleToolCall(
 				requestId: toolContext?.requestId ?? toolCall.id,
 				toolCallId: toolCall.id,
 				workspaceId,
-				args: executionArgs
+				args: displayArgs
 			})
 			: undefined;
 		let rawResult: IdempotentToolExecutionResult = PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
@@ -840,7 +843,7 @@ async function executeSingleToolCall(
 			? functionName === "mcp_computer_screenshot" ? (() => { throw new Error("computer_vision_unavailable"); })() : rawResult
 			: await effectiveEnricher({
 				toolName: functionName,
-				args: executionArgs,
+				args: displayArgs,
 				result: rawResult,
 				onProgress: onEvent === undefined
 					? undefined

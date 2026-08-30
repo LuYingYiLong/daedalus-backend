@@ -2,6 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { redactTraceValue } from "../../../src/trace/trace-redactor.js";
 
+test("computer input text is redacted in structured and provider-encoded arguments", () => {
+  const args = { observationId: "frame-kept", action: { type: "text", text: "private-entered-content" } };
+  const result = redactTraceValue({ args, function: { name: "mcp_computer_action", arguments: JSON.stringify(args) } });
+  assert.equal(JSON.stringify(result.value).includes("private-entered-content"), false);
+  assert.equal(JSON.stringify(result.value).includes("frame-kept"), true);
+  assert.ok(result.redactedFields.length >= 2);
+  assert.equal(args.action.text, "private-entered-content");
+});
+
 test("trace excludes hydrated image pixels and grant secrets without changing evidence references", (): void => {
 	const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
 	const input = {

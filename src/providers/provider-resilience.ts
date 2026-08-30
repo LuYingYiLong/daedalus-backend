@@ -409,6 +409,7 @@ export async function runProviderRequestWithResilience<T>(options: ProviderResil
 	syncReconnectState();
 
 	while (true) {
+		await options.providerOptions.waitBeforeRequest?.(options.abortSignal);
 		if (options.abortSignal?.aborted === true) throw createAbortError();
 		const attemptController = new AbortController();
 		let attemptActive: boolean = true;

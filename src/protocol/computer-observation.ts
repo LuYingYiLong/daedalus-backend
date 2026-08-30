@@ -6,6 +6,7 @@ export const computerToolNameSchema = z.enum([
   "mcp_computer_request_access",
   "mcp_computer_observe",
   "mcp_computer_screenshot",
+  "mcp_computer_action",
 ]);
 export type ComputerToolName = z.infer<typeof computerToolNameSchema>;
 const rectSchema = z
@@ -89,14 +90,33 @@ export const computerObservationSchema = z
   });
 export type ComputerObservation = z.infer<typeof computerObservationSchema>;
 export const computerAccessResultSchema = z
-  .object({ granted: z.literal(true), accessId: computerIdSchema })
+  .object({ granted: z.literal(true), accessId: computerIdSchema, mode: z.enum(["observe", "control"]).optional(), generation: z.number().int().positive().optional() })
   .strict();
+export const computerKeySchema = z.enum(["Enter", "Tab", "Shift+Tab", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Ctrl+A", "Ctrl+F", "Ctrl+S", "Ctrl+Z", "Ctrl+Y"]);
+const pixel = z.number().finite().min(0).max(2560);
+export const computerActionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("click"), x: pixel, y: pixel, count: z.union([z.literal(1), z.literal(2)]) }).strict(),
+  z.object({ type: z.literal("text"), text: z.string().min(1).max(4096) }).strict(),
+  z.object({ type: z.literal("scroll"), x: pixel, y: pixel, axis: z.enum(["horizontal", "vertical"]), amount: z.number().int().min(-10).max(10).refine(n => n !== 0) }).strict(),
+  z.object({ type: z.literal("key"), key: computerKeySchema }).strict(),
+]);
+export const computerActionResultSchema = z.object({
+  actionId: computerIdSchema, observationId: computerIdSchema,
+  status: z.enum(["dispatched", "not_dispatched", "unknown"]),
+  dispatchedAt: z.string().datetime(), generation: z.number().int().positive(),
+}).strict();
+export const computerControlUpdateSchema = z.object({
+  connectionId: computerIdSchema, sessionId: computerIdSchema, requestId: computerIdSchema, runId: computerIdSchema,
+  generation: z.number().int().positive(), state: z.enum(["running", "paused", "cancelled"]),
+  sequence: z.number().int().nonnegative(), code: z.string().regex(/^computer_[a-z_]+$/u).max(120).optional(),
+}).strict();
+export type ComputerControlUpdate = z.infer<typeof computerControlUpdateSchema>;
 export const computerToolResultParamsSchema = z.discriminatedUnion("ok", [
   z
     .object({
       callId: computerIdSchema,
       ok: z.literal(true),
-      result: z.union([computerAccessResultSchema, computerObservationSchema]),
+      result: z.union([computerAccessResultSchema, computerObservationSchema, computerActionResultSchema]),
     })
     .strict(),
   z
@@ -121,10 +141,11 @@ export type ComputerToolResultParams = z.infer<
 >;
 export const computerArgsSchemas = {
   mcp_computer_request_access: z
-    .object({ reason: z.string().trim().min(1).max(2000) })
+    .object({ reason: z.string().trim().min(1).max(2000), mode: z.enum(["observe", "control"]).optional() })
     .strict(),
   mcp_computer_observe: z.object({}).strict(),
   mcp_computer_screenshot: z
     .object({ observationId: computerIdSchema })
     .strict(),
+  mcp_computer_action: z.object({ observationId: computerIdSchema, action: computerActionSchema }).strict(),
 } as const;

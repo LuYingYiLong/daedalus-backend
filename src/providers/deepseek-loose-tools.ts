@@ -10,6 +10,7 @@ const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
 	computer_request_access: "mcp_computer_request_access",
 	computer_observe: "mcp_computer_observe",
 	computer_screenshot: "mcp_computer_screenshot",
+	computer_action: "mcp_computer_action",
 	load_skill: "mcp_skills_load",
 	propose_create_skill: "mcp_skills_propose_create",
 	create_skill: "mcp_skills_create",

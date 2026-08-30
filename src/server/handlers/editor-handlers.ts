@@ -1,7 +1,7 @@
 import type WebSocket from "ws";
 import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
-import type { ClientSession } from "../client-session.js";
+import { applyWorkspaceToSession, type ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import { getClientConnection, updateClientConnection } from "../client-connections.js";
 import { findWorkspace } from "../../workspace/registry.js";
@@ -54,9 +54,7 @@ export async function handleEditorRequest(socket: WebSocket, request: ClientRequ
 			if (workspace !== undefined) {
 				try {
 					await mcpHost.ensureWorkspace(workspace);
-					session.activeWorkspace = workspace;
-					session.godotProjectPath = workspace.rootPath;
-					session.godotExecutablePath = workspace.godotExecutablePath ?? session.godotExecutablePath;
+					applyWorkspaceToSession(session, workspace);
 				} catch (error: unknown) {
 					sendJson(socket, {
 						type: "response",

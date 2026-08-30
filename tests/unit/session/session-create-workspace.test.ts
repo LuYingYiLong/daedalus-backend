@@ -4,29 +4,21 @@ import { resolveSessionCreateWorkspaceId } from "../../../src/server/session-cre
 
 test("session.create workspace resolution does not let Studio inherit stale active workspace", (): void => {
 	assert.equal(resolveSessionCreateWorkspaceId({
-		requestedWorkspaceId: undefined,
-		clientType: "studio",
-		activeWorkspaceId: "workspace-example"
+		requestedWorkspaceId: undefined
 	}), undefined);
 });
 
 test("session.create workspace resolution preserves explicit workspace choices", (): void => {
 	assert.equal(resolveSessionCreateWorkspaceId({
-		requestedWorkspaceId: "workspace-selected",
-		clientType: "studio",
-		activeWorkspaceId: "workspace-example"
+		requestedWorkspaceId: "workspace-selected"
 	}), "workspace-selected");
 	assert.equal(resolveSessionCreateWorkspaceId({
-		requestedWorkspaceId: null,
-		clientType: "studio",
-		activeWorkspaceId: "workspace-example"
+		requestedWorkspaceId: null
 	}), undefined);
 });
 
-test("session.create workspace resolution keeps Godot plugin active workspace default", (): void => {
+test("session.create workspace resolution does not infer a workspace for clients without an explicit choice", (): void => {
 	assert.equal(resolveSessionCreateWorkspaceId({
-		requestedWorkspaceId: undefined,
-		clientType: "godot_plugin",
-		activeWorkspaceId: "workspace-example"
-	}), "workspace-example");
+		requestedWorkspaceId: undefined
+	}), undefined);
 });

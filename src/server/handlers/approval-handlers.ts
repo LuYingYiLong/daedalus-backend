@@ -107,7 +107,7 @@ import { awaitWithAbort, isCancellationError, sendAgentCancelled, beginRequestEx
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt } from "../token-budget.js";
 import { createSessionContextControl } from "../context-control-runtime.js";
 import { createAgentTodoControl } from "../todo-control-runtime.js";
-import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "../session-preview.js";
+import { getSessionWorkspaceRoot, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "../session-preview.js";
 import { createProviderChatOptions } from "../provider-chat-options.js";
 import { createGodotRuntimeStatus } from "../godot-runtime-status.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "../additional-context.js";
@@ -183,7 +183,7 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 		godotDiagnostics: mcpHost.getDiagnosticsBridge().getCachedStatus(),
 		godotRuntime: createGodotRuntimeStatus(session, mcpHost),
 		godotExecutablePath: session.activeWorkspace?.godotExecutablePath ?? session.godotExecutablePath ?? null,
-		godotProjectPath: getSessionProjectPath(session) || null,
+		workspaceRoot: getSessionWorkspaceRoot(session) || null,
 		activeWorkspace: session.activeWorkspace ? {
 			id: session.activeWorkspace.id,
 			name: session.activeWorkspace.name,

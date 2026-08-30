@@ -84,8 +84,8 @@ class SessionSearchService {
 	private closed: boolean = false;
 
 	constructor() {
-		registerSessionDeletedListener((sessionId: string): void => {
-			void this.removeSession(sessionId).catch((error: unknown): void => {
+		registerSessionDeletedListener((sessionId: string): Promise<void> => {
+			return this.removeSession(sessionId).catch((error: unknown): void => {
 				logger.warn("session_search", "delete_cleanup_failed", {
 					sessionId,
 					error: error instanceof Error ? error.message : String(error)

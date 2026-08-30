@@ -780,20 +780,17 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.hello"),
 		params: z.object({
 			protocolVersion: z.literal(3),
-			clientType: z.enum(["godot_editor_bridge", "godot_plugin", "studio", "studio_remote", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
+			clientType: z.enum(["godot_editor_bridge", "studio", "studio_remote", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
 			workspaceId: z.string().min(1).optional(),
 			godotExecutablePath: z.string().min(1).optional(),
 			editorInstanceId: z.string().min(1).max(160).optional(),
-			pluginVersion: z.string().min(1).max(64).optional(),
-			pluginProtocolVersion: z.number().int().positive().optional(),
-			studioBindingVersion: z.string().min(1).max(64).optional(),
 			bridgeVersion: z.string().min(1).max(64).optional(),
 			bridgeProtocolVersion: z.number().int().positive().optional(),
 			godotVersion: z.string().min(1).max(64).optional(),
 			capabilities: z.record(z.string().min(1), z.boolean()).optional()
-		})
+		}).strict()
 	}),
 	z.object({
 		type: z.literal("request"),
@@ -2252,9 +2249,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("environment.configure"),
 		params: z.object({
 			godotExecutablePath: z.string().min(1).optional(),
-			godotProjectPath: z.string().min(1).optional(),
+			workspaceRoot: z.string().min(1).optional(),
 			sessionId: z.string().min(1).nullable().optional(),
-		}),
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

@@ -6,14 +6,14 @@ import test from "node:test";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 import { REQUEST_HANDLER_METHODS, REQUEST_HANDLERS } from "../../../src/server/request-dispatcher.js";
 
-const configuredPluginDir: string | undefined = process.env.DAEDALUS_EDITOR_BRIDGE_DIR;
-const pluginDir: string = configuredPluginDir ?? "D:/GodotProjects/example/addons/daedalus_editor_bridge";
+const configuredBridgeDir: string | undefined = process.env.DAEDALUS_BRIDGE_DIR;
+const bridgeDir: string = configuredBridgeDir ?? path.resolve(process.cwd(), "..", "daedalus-bridge", "addons", "daedalus_bridge");
 const bridgeRuntimePaths: string[] = [
-	path.join(pluginDir, "scripts", "bridge_runtime.gd"),
-	path.join(pluginDir, "scripts", "editor_context.gd")
+	path.join(bridgeDir, "scripts", "bridge_runtime.gd"),
+	path.join(bridgeDir, "scripts", "editor_context.gd")
 ];
-const frontendRpcSkipReason: string | undefined = configuredPluginDir === undefined && bridgeRuntimePaths.some((filePath: string): boolean => !existsSync(filePath))
-	? `Daedalus Editor Bridge sources not found at ${pluginDir}; set DAEDALUS_EDITOR_BRIDGE_DIR to enable this external contract test.`
+const frontendRpcSkipReason: string | undefined = configuredBridgeDir === undefined && bridgeRuntimePaths.some((filePath: string): boolean => !existsSync(filePath))
+	? `Daedalus Bridge sources not found at ${bridgeDir}; set DAEDALUS_BRIDGE_DIR to enable this external contract test.`
 	: undefined;
 const BACKEND_ONLY_OR_STUDIO_RPC_METHODS: Set<string> = new Set([
 	"attachment.image.generated.get",
@@ -123,7 +123,7 @@ async function readBackendSchemaMethods(): Promise<string[]> {
 
 async function readFrontendRpcMethods(): Promise<string[]> {
 	for (const filePath of bridgeRuntimePaths) {
-		assert.ok(existsSync(filePath), `Daedalus Editor Bridge source not found at ${filePath}`);
+		assert.ok(existsSync(filePath), `Daedalus Bridge source not found at ${filePath}`);
 	}
 	const source: string = (await Promise.all(bridgeRuntimePaths.map(async (filePath: string): Promise<string> => await fs.readFile(filePath, "utf8")))).join("\n");
 	const bridgeMethods: string[] = ["client.hello", "editor.context.update", "editor.heartbeat", "editor.tool.result"];
@@ -191,6 +191,49 @@ test("client.hello accepts Studio Remote without changing protocol v3", (): void
 			}
 		}
 	}).success, true);
+});
+
+test("client.hello rejects the removed Godot plugin client type", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "removed-plugin-hello",
+		method: "client.hello",
+		params: {
+			protocolVersion: 3,
+			clientType: "godot_plugin"
+		}
+	}).success, false);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "removed-plugin-field",
+		method: "client.hello",
+		params: {
+			protocolVersion: 3,
+			clientType: "godot_editor_bridge",
+			pluginProtocolVersion: 3
+		}
+	}).success, false);
+});
+
+test("environment.configure accepts only the generic workspace root", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "configure-workspace",
+		method: "environment.configure",
+		params: {
+			workspaceRoot: "D:/Workspaces/example",
+			sessionId: null
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "configure-godot-legacy",
+		method: "environment.configure",
+		params: {
+			godotProjectPath: "D:/GodotProjects/example",
+			sessionId: null
+		}
+	}).success, false);
 });
 
 test("session trace RPCs validate strict developer paging requests", (): void => {

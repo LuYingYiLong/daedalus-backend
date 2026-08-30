@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getDefaultArchivedSessionsDir, getDefaultSessionsDir, getGoalCheckpointsRoot } from "../app-paths.js";
 import type { ChatMessage } from "../protocol/types.js";
-import type { SessionWorktreeMetadata, WorkspaceConfig, WorkspaceLaunchTargetId } from "../workspace/types.js";
+import type { SessionWorktreeMetadata, WorkspaceConfig, WorkspaceKind, WorkspaceLaunchTargetId } from "../workspace/types.js";
 import { findContainingWorkspaceSourceFolder } from "../workspace/registry.js";
 import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson, toSqlValue } from "./session-database.js";
 import { buildCanonicalTimelineBlocks, getVisibleAssistantMarkdownSegments, type TimelineBlock, type TimelinePlanApproval, type TimelinePlanClarification } from "./timeline-blocks.js";
@@ -33,7 +33,7 @@ export type SessionMetadata = {
 	pinned?: boolean | undefined;
 	workspaceId?: string | undefined;
 	workspaceName?: string | undefined;
-	workspaceKind?: "godot" | undefined;
+	workspaceKind?: WorkspaceKind | undefined;
 	workspaceRoot?: string | undefined;
 	godotExecutablePath?: string | undefined;
 	activeSkillId?: string | undefined;
@@ -1460,7 +1460,7 @@ async function deleteSessionRecord(sessionId: string, archived: boolean): Promis
 		});
 	}
 	invalidateTimelineCache(safeSessionId);
-	notifySessionDeleted(safeSessionId);
+	await notifySessionDeleted(safeSessionId);
 }
 
 export async function deleteSession(sessionId: string): Promise<void> {

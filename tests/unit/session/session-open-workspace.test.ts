@@ -22,13 +22,13 @@ test("workspace restore updates a reused runtime", (): void => {
 	const runtime = createClientSession(undefined);
 	runtime.sessionId = "session-open-restore";
 	runtime.activeWorkspace = undefined;
-	runtime.godotProjectPath = undefined;
+	runtime.workspaceRoot = undefined;
 	runtime.godotExecutablePath = undefined;
 
 	applyWorkspaceToSession(runtime, workspace);
 
 	const restoredWorkspace: WorkspaceConfig | undefined = runtime.activeWorkspace as WorkspaceConfig | undefined;
 	assert.equal(restoredWorkspace?.id, workspace.id);
-	assert.equal(runtime.godotProjectPath, workspace.rootPath);
+	assert.equal(runtime.workspaceRoot, workspace.rootPath);
 	assert.equal(runtime.godotExecutablePath, workspace.godotExecutablePath);
 });

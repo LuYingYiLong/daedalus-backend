@@ -74,12 +74,12 @@ The current release line is coordinated through checked manifests:
 | --- | --- |
 | Backend RPC | Protocol v3 |
 | Daedalus Studio | 1.0.8 or newer for the current binary line |
-| Godot Daedalus plugin | Plugin protocol v3 |
+| Daedalus Bridge | Editor Bridge Protocol v4 |
 | Godot | 4.5 or newer for the current editor plugin |
 | Source runtime | Node.js 24.18.0 or newer |
 | Production binary | Windows x64 SEA |
 
-The authoritative values live in `package.json` under `daedalusBinary` and in each release manifest. Studio refuses incompatible binaries and plugin protocols instead of attempting a best-effort connection.
+The authoritative values live in `package.json` under `daedalusBinary` and in each release manifest. Studio refuses incompatible binaries and Editor Bridge protocol versions instead of attempting a best-effort connection.
 
 ## Quick Start
 

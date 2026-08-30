@@ -23,8 +23,11 @@ function cloneStoredAdditionalContextItems(items: readonly AdditionalContextItem
 	return items.map((item: AdditionalContextItem): AdditionalContextItem => ({ ...item }));
 }
 
-export function getSessionProjectPath(session: ClientSession): string {
-	return session.activeWorkspace?.rootPath ?? session.godotProjectPath ?? process.env.GODOT_PROJECT_PATH ?? "";
+export function getSessionWorkspaceRoot(session: ClientSession): string {
+	return session.activeWorkspace?.rootPath
+		?? session.workspaceRoot
+		?? process.env.GODOT_PROJECT_PATH
+		?? "";
 }
 
 export function toChatMessage(message: StoredMessage): ChatMessage {

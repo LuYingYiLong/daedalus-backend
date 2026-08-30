@@ -66,6 +66,30 @@ test("workspace registry persists runtime workspaces", async (): Promise<void> =
 	});
 });
 
+test("workspace registry distinguishes generic directories from Godot projects", async (): Promise<void> => {
+	await withTempAppData(async (registry): Promise<void> => {
+		const workspaceRoot: string = await fs.mkdtemp(path.join(os.tmpdir(), "daedalus-generic-workspace-"));
+		const godotRoot: string = await fs.mkdtemp(path.join(os.tmpdir(), "daedalus-godot-workspace-"));
+		await fs.writeFile(path.join(godotRoot, "project.godot"), "[application]\n", "utf8");
+
+		const genericWorkspace: WorkspaceConfig = registry.createRuntimeWorkspace(workspaceRoot);
+		const godotWorkspace: WorkspaceConfig = registry.createRuntimeWorkspace(godotRoot);
+		const explicitlyGeneric: WorkspaceConfig = registry.normalizeWorkspaceConfig({
+			id: "explicit-generic",
+			name: "Generic",
+			kind: "workspace",
+			rootPath: godotRoot
+		});
+
+		assert.equal(genericWorkspace.kind, "workspace");
+		assert.equal(godotWorkspace.kind, "godot");
+		assert.equal(explicitlyGeneric.kind, "workspace");
+
+		await fs.rm(workspaceRoot, { recursive: true, force: true });
+		await fs.rm(godotRoot, { recursive: true, force: true });
+	});
+});
+
 test("workspace registry normalizes legacy single-root projects", async (): Promise<void> => {
 	await withTempAppData(async (registry): Promise<void> => {
 		const rootPath: string = await fs.mkdtemp(path.join(os.tmpdir(), "godot-daedalus-legacy-root-"));
@@ -218,5 +242,14 @@ test("workspace registry hydrates missing runtime workspaces from session metada
 			}
 		]);
 		assert.equal(duplicateHydrated.length, 0);
+
+		const genericHydrated: WorkspaceConfig[] = registry.hydrateWorkspacesFromSessionMetadata([
+			{
+				workspaceId: "runtime-generic-680ece18e3",
+				workspaceName: "generic",
+				workspaceRoot: "D:/Workspaces/generic"
+			}
+		]);
+		assert.equal(genericHydrated[0]?.kind, "workspace");
 	});
 });

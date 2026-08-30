@@ -251,6 +251,23 @@ test("session store persists workspace metadata snapshot", async (): Promise<voi
 		assert.equal(opened.metadata.workspaceId, "workspace-a");
 		assert.equal(opened.metadata.workspaceRoot, "D:/GodotProjects/project-a");
 		assert.equal(opened.metadata.godotExecutablePath, "D:/Godot/Godot.exe");
+
+		const genericMetadata = await store.createSession("Generic workspace session", undefined, undefined, {
+			id: "workspace-generic",
+			name: "Generic workspace",
+			kind: "workspace",
+			rootPath: "D:/Workspaces/generic",
+			icon: 0,
+			color: 0,
+			sourceFolders: [{
+				id: "primary-generic",
+				path: "D:/Workspaces/generic",
+				capabilities: { git: true, godot: false }
+			}],
+			primarySourceFolderId: "primary-generic"
+		});
+		assert.equal(genericMetadata.workspaceKind, "workspace");
+		assert.equal(genericMetadata.workspaceRoot, "D:/Workspaces/generic");
 	});
 });
 

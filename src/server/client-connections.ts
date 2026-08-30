@@ -5,7 +5,7 @@ import type { ClientSession } from "./client-session.js";
 import { sendJson } from "./send-json.js";
 import { sessionSearchService } from "../session-search/service.js";
 
-export type ClientType = "godot_editor_bridge" | "godot_plugin" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
+export type ClientType = "godot_editor_bridge" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
 
 export type ClientCapabilities = Partial<Record<
 	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",

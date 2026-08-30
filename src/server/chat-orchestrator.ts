@@ -155,7 +155,7 @@ import {
 	shouldTerminalizeReturnedAgentRun
 } from "./run-cancellation.js";
 import { estimateTextTokens, estimateMessagesTokens, estimateTextTokensForProvider, estimateCurrentMessageTokensForProvider, computeHistoryBudget, appendChatTurnToSession, appendUserMessageToSession, appendFailedChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterSessionLlmContextMessages } from "./token-budget.js";
-import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
+import { getSessionWorkspaceRoot, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
@@ -1718,7 +1718,7 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 		godotDiagnostics: mcpHost.getDiagnosticsBridge().getCachedStatus(),
 		godotRuntime: createGodotRuntimeStatus(session, mcpHost),
 		godotExecutablePath: session.activeWorkspace?.godotExecutablePath ?? session.godotExecutablePath ?? null,
-		godotProjectPath: getSessionProjectPath(session) || null,
+		workspaceRoot: getSessionWorkspaceRoot(session) || null,
 		activeWorkspace: session.activeWorkspace ? {
 			id: session.activeWorkspace.id,
 			name: session.activeWorkspace.name,

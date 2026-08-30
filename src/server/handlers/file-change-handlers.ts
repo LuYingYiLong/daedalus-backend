@@ -5,12 +5,12 @@ import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
-import { getSessionProjectPath } from "../session-preview.js";
+import { getSessionWorkspaceRoot } from "../session-preview.js";
 
 export async function handleFileChangeRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, _mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
 	case "fileChange.create": {
-		const projectPath: string = getSessionProjectPath(session);
+		const projectPath: string = getSessionWorkspaceRoot(session);
 
 		if (!projectPath) {
 			sendJson(socket, {
@@ -113,7 +113,7 @@ export async function handleFileChangeRequest(socket: WebSocket, request: Client
 	}
 
 	case "fileChange.overwrite": {
-		const projectPath: string = getSessionProjectPath(session);
+		const projectPath: string = getSessionWorkspaceRoot(session);
 
 		if (!projectPath) {
 			sendJson(socket, {
@@ -220,7 +220,7 @@ export async function handleFileChangeRequest(socket: WebSocket, request: Client
 	}
 
 	case "fileChange.delete": {
-		const projectPath: string = getSessionProjectPath(session);
+		const projectPath: string = getSessionWorkspaceRoot(session);
 
 		if (!projectPath) {
 			sendJson(socket, {

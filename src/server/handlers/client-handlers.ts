@@ -1,7 +1,7 @@
 import type WebSocket from "ws";
 import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
-import type { ClientSession } from "../client-session.js";
+import { applyWorkspaceToSession, type ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import {
 	getClientConnection,
@@ -26,7 +26,7 @@ import { studioBrowserRuntime } from "../studio-browser-runtime.js";
 import { studioScheduledTaskRuntime } from "../studio-scheduled-task-runtime.js";
 
 function readClientType(value: unknown): ClientType {
-	return value === "godot_editor_bridge" || value === "godot_plugin" || value === "studio" || value === "studio_remote" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
+	return value === "godot_editor_bridge" || value === "studio" || value === "studio_remote" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
 		? value
 		: "legacy";
 }
@@ -75,11 +75,11 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 			const params = request.params!;
 			const clientType: ClientType = readClientType(params.clientType);
 			const isEditorBridge: boolean = clientType === "godot_editor_bridge";
-			if (clientType === "godot_plugin" || (isEditorBridge && !isBridgeProtocolSupported(params.bridgeProtocolVersion))) {
+			if (isEditorBridge && !isBridgeProtocolSupported(params.bridgeProtocolVersion)) {
 				rejectBridgeHandshake(
 					socket,
 					request.id,
-					isEditorBridge ? params.bridgeProtocolVersion : params.pluginProtocolVersion
+					params.bridgeProtocolVersion
 				);
 				break;
 			}
@@ -111,9 +111,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 					: createSourceScopedWorkspace(configuredSource.workspace, configuredSource.sourceFolder.id);
 
 				// 在异步初始化 MCP 前先绑定会话，避免后续并发请求继续使用持久化默认工作区。
-				session.activeWorkspace = workspace;
-				session.godotProjectPath = workspace.rootPath;
-				session.godotExecutablePath = workspace.godotExecutablePath ?? session.godotExecutablePath;
+				applyWorkspaceToSession(session, workspace);
 				try {
 					await mcpHost.ensureWorkspace(workspace);
 				} catch (error: unknown) {

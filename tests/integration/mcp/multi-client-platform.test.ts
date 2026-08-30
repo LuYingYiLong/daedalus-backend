@@ -62,46 +62,13 @@ test("Editor Bridge v4 hello replaces the persisted default with the project wor
 
 		assert.equal(session.activeWorkspace?.name, "example");
 		assert.equal(session.activeWorkspace?.id, ensuredWorkspaceId);
-		assert.equal(session.godotProjectPath, session.activeWorkspace?.rootPath);
+		assert.equal(session.workspaceRoot, session.activeWorkspace?.rootPath);
 		assert.equal(getClientConnection(socket)?.workspaceId, session.activeWorkspace?.id);
 		assert.equal(getClientConnection(socket)?.workspaceRoot, session.activeWorkspace?.rootPath);
 		assert.equal(socket.sent.at(-1)?.ok, true);
 	} finally {
 		unregisterClientConnection(socket);
 		cleanupProjectWorkspace();
-	}
-});
-
-test("legacy Godot plugin hello is rejected before workspace registration", async (): Promise<void> => {
-	const socket = createSocket();
-	const session = createClientSession(undefined);
-	registerClientConnection(socket, session);
-	let workspaceEnsured: boolean = false;
-	const host = {
-		async ensureWorkspace(): Promise<void> {
-			workspaceEnsured = true;
-		}
-	} as unknown as McpHost;
-
-	try {
-		await handleClientRequest(socket, {
-			type: "request",
-			id: "legacy-hello",
-			method: "client.hello",
-			params: {
-				protocolVersion: 3,
-				clientType: "godot_plugin",
-				pluginProtocolVersion: 3,
-				workspaceRoot: "D:/GodotProjects/legacy"
-			}
-		}, session, host);
-		assert.equal(workspaceEnsured, false);
-		assert.equal(session.activeWorkspace, undefined);
-		assert.equal(socket.sent.at(-1)?.ok, false);
-		assert.equal((socket.sent.at(-1)?.error as Record<string, unknown>).code, "bridge_protocol_unsupported");
-		assert.equal(getClientConnection(socket)?.bridgeHandshakeAccepted, false);
-	} finally {
-		unregisterClientConnection(socket);
 	}
 });
 

@@ -150,7 +150,7 @@ import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
 import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, hasOtherInFlightRequest, parseMessage } from "./request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt, filterLlmContextMessages, getTokenCounter } from "./token-budget.js";
-import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
+import { getSessionWorkspaceRoot, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { hydrateImageAttachmentContexts } from "../session/session-attachments.js";
 import { getUserPrompt } from "../user-prompt-store.js";
@@ -264,11 +264,12 @@ function restoreWorkspaceFromSessionMetadata(metadata: SessionMetadata): Workspa
 	}
 
 	const fallbackName: string = path.basename(metadata.workspaceRoot) || metadata.workspaceRoot;
+	const runtimeWorkspace: WorkspaceConfig = createRuntimeWorkspace(metadata.workspaceRoot, metadata.godotExecutablePath);
 	return upsertRuntimeWorkspace({
-		...createRuntimeWorkspace(metadata.workspaceRoot, metadata.godotExecutablePath),
+		...runtimeWorkspace,
 		id: metadata.workspaceId,
 		name: metadata.workspaceName ?? fallbackName,
-		kind: metadata.workspaceKind ?? "godot"
+		kind: metadata.workspaceKind ?? runtimeWorkspace.kind
 	});
 }
 
@@ -666,7 +667,7 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 		godotDiagnostics: mcpHost.getDiagnosticsBridge().getCachedStatus(),
 		godotRuntime: createGodotRuntimeStatus(session, mcpHost),
 		godotExecutablePath: session.activeWorkspace?.godotExecutablePath ?? session.godotExecutablePath ?? null,
-		godotProjectPath: getSessionProjectPath(session) || null,
+		workspaceRoot: getSessionWorkspaceRoot(session) || null,
 		activeWorkspace: session.activeWorkspace ? {
 			id: session.activeWorkspace.id,
 			name: session.activeWorkspace.name,
@@ -740,26 +741,9 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		case "session.create": {
 			const requestedWorkspaceId: string | null | undefined = request.params.workspaceId;
 			const clientConnection = getClientConnection(socket);
-			const shouldUseConnectionWorkspace: boolean = clientConnection?.clientType === "godot_plugin";
 			let workspaceId: string | undefined = resolveSessionCreateWorkspaceId({
-				requestedWorkspaceId,
-				clientType: clientConnection?.clientType,
-				activeWorkspaceId: session.activeWorkspace?.id
+				requestedWorkspaceId
 			});
-			if (
-				clientConnection?.clientType === "godot_plugin"
-				&& session.activeWorkspace !== undefined
-				&& requestedWorkspaceId !== undefined
-				&& requestedWorkspaceId !== session.activeWorkspace.id
-			) {
-				logger.warn("session", "godot_workspace_override_ignored", {
-					requestedWorkspaceId,
-					activeWorkspaceId: session.activeWorkspace.id,
-					activeWorkspaceRoot: session.activeWorkspace.rootPath,
-					sessionId: session.sessionId
-				});
-				workspaceId = session.activeWorkspace.id;
-			}
 			let workspace: WorkspaceConfig | undefined;
 
 			if (workspaceId) {
@@ -827,9 +811,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			clearWorkbenchNextStepHints(session, undefined, false);
 
 			session = bindConnectionToSessionRuntime(socket, metadata.id, session);
-			if (workspace !== undefined || requestedWorkspaceId === null || !shouldUseConnectionWorkspace) {
-				applyWorkspaceToSessionRuntime(socket, session, workspace);
-			}
+			applyWorkspaceToSessionRuntime(socket, session, workspace);
 			subscribeSocketToSession(socket, metadata.id);
 			await runSessionStartHooks(session, "startup", request.id);
 
@@ -1317,18 +1299,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				if (!reusingRuntime) {
 					await runSessionStartHooks(session, "resume", request.id);
 				}
-				const godotGoalFallback: boolean = getClientConnection(socket)?.clientType === "godot_plugin"
-					&& timeline.metadata.chatMode === "goal";
 				const serializedWorkbench = serializeWorkbench(session);
-				const clientWorkbench = godotGoalFallback
-					? {
-						...serializedWorkbench,
-						composer: {
-							...(serializedWorkbench.composer as Record<string, unknown>),
-							chatMode: "agent"
-						}
-					}
-					: serializedWorkbench;
 
 				sendJson(socket, {
 					type: "response",
@@ -1338,7 +1309,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						opened: true,
 						metadata: {
 							...timeline.metadata,
-							chatMode: godotGoalFallback ? "agent" : timeline.metadata.chatMode,
 							approvalMode: session.approvalGateway.getMode(),
 							activeSkillId: undefined,
 							legacySkillRefs: timeline.metadata.activeSkillId === undefined
@@ -1359,10 +1329,10 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						selectionAskThreads: timeline.metadata.forkedFrom === undefined
 							? await listSelectionAskThreads(timeline.metadata.id)
 							: [],
-						currentGoal: getClientConnection(socket)?.clientType === "godot_plugin" || timeline.metadata.forkedFrom !== undefined
+						currentGoal: timeline.metadata.forkedFrom !== undefined
 							? null
 							: await getLatestAgentGoal(timeline.metadata.id),
-						workbench: clientWorkbench,
+						workbench: serializedWorkbench,
 						...serializeAgentRunRuntime(session),
 						workspaceWarning: workspaceWarning ?? null
 					}

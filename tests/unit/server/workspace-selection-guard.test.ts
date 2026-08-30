@@ -89,7 +89,7 @@ test("Studio Remote uses the same session workspace lock as Studio", (): void =>
 
 test("non-Studio clients can still select runtime workspaces for existing sessions", (): void => {
 	assert.deepEqual(evaluateWorkspaceSelectionForSession({
-		clientType: "godot_plugin",
+		clientType: "godot_editor_bridge",
 		session: {
 			sessionId: "session-a",
 			activeWorkspace: workspaceA

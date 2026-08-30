@@ -436,6 +436,10 @@ export async function resetSessionDatabaseForTests(databasePath?: string): Promi
 		statePromisesByPath.delete(path);
 	}
 	await Promise.all(closeOperations);
+	// Session tests use the same temporary profile for the search cache. Close
+	// that independent SQLite handle before the fixture directory is removed.
+	const { closeSearchCacheDatabase } = await import("../session-search/search-cache.js");
+	await closeSearchCacheDatabase();
 	testDatabasePath = databasePath ?? null;
 }
 

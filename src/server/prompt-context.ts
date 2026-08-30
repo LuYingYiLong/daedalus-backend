@@ -96,7 +96,7 @@ import { normalizeChatParamsForMode, resolveAllowedToolsForChatParams } from "./
 import { logPromptTrace, logProjectInstructionTrace } from "./prompt-trace.js";
 import { isCancellationError, sendAgentCancelled, beginRequestExecution, finishRequestExecution, parseMessage } from "./request-lifecycle.js";
 import { estimateTextTokens, estimateMessagesTokens, computeHistoryBudget, appendChatTurnToSession, selectHistoryForModel, createSummaryMessage, loadSessionCompressorPrompt } from "./token-budget.js";
-import { getSessionProjectPath, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
+import { getSessionWorkspaceRoot, toChatMessage, clampSessionOpenMessageLimit, createPreviewValue, createTimelinePageResult, startFullSessionLoad, waitForFullSessionLoad } from "./session-preview.js";
 import { createProviderChatOptions } from "./provider-chat-options.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "./additional-context.js";
@@ -248,7 +248,7 @@ function createSessionInfoResult(session: ClientSession, mcpHost: McpHost, histo
 		godotDiagnostics: mcpHost.getDiagnosticsBridge().getCachedStatus(),
 		godotRuntime: createGodotRuntimeStatus(session, mcpHost),
 		godotExecutablePath: session.activeWorkspace?.godotExecutablePath ?? session.godotExecutablePath ?? null,
-		godotProjectPath: getSessionProjectPath(session) || null,
+		workspaceRoot: getSessionWorkspaceRoot(session) || null,
 		activeWorkspace: session.activeWorkspace ? {
 			id: session.activeWorkspace.id,
 			name: session.activeWorkspace.name,
@@ -290,7 +290,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	const serverIds: string[] = mcpHost.getConnectedServerIds(workspaceId);
 	const workspaceHasGodot: boolean = hasGodotWorkspaceCapability(session.activeWorkspace);
 	const shouldIncludeGodotContext: boolean = session.activeWorkspace === undefined
-		? session.godotExecutablePath !== undefined || session.godotProjectPath !== undefined
+		? session.godotExecutablePath !== undefined
 		: workspaceHasGodot;
 	const godotRuntime: Record<string, unknown> | undefined = shouldIncludeGodotContext
 		? createGodotRuntimeStatus(session, mcpHost)
@@ -354,8 +354,8 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 				sections.push(`- Godot 可执行文件：\`${session.godotExecutablePath}\``);
 			}
 
-			if (session.godotProjectPath) {
-				sections.push(`- Godot 项目路径：\`${session.godotProjectPath}\``);
+			if (session.workspaceRoot) {
+				sections.push(`- 工作区根路径：\`${session.workspaceRoot}\``);
 			}
 		}
 

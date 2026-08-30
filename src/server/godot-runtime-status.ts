@@ -38,7 +38,7 @@ function getEndpointLastError(endpointStatus: unknown): string | null {
 
 export function createGodotRuntimeStatus(session: ClientSession, mcpHost: McpHost): Record<string, unknown> {
 	const sessionWorkspaceId: string | null = session.activeWorkspace?.id ?? null;
-	const sessionWorkspaceRoot: string | null = session.activeWorkspace?.rootPath ?? session.godotProjectPath ?? null;
+	const sessionWorkspaceRoot: string | null = session.activeWorkspace?.rootPath ?? session.workspaceRoot ?? null;
 	const boundEditorInstanceId: string | null = session.editorInstanceId ?? null;
 	const mcpActiveWorkspaceId: string | null = mcpHost.getActiveWorkspaceId() ?? null;
 	const connectedWorkspaceIds: string[] = mcpHost.getConnectedWorkspaceIds();

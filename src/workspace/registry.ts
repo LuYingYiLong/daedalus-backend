@@ -3,7 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { getDefaultWorkspaceConfigPath } from "../app-paths.js";
 import { writeJsonFileAtomicSync } from "../json-file-store.js";
-import type { SessionWorktreeMetadata, WorkspaceColor, WorkspaceConfig, WorkspaceIcon, WorkspaceSourceFolder } from "./types.js";
+import type { SessionWorktreeMetadata, WorkspaceColor, WorkspaceConfig, WorkspaceIcon, WorkspaceKind, WorkspaceSourceFolder } from "./types.js";
 import { logger } from "../logger.js";
 
 let configuredWorkspaceCache: WorkspaceConfig[] | null = null;
@@ -13,7 +13,7 @@ const sessionRuntimeWorkspaces: Map<string, WorkspaceConfig> = new Map();
 export type WorkspaceMetadataSource = {
 	workspaceId?: string | undefined;
 	workspaceName?: string | undefined;
-	workspaceKind?: "godot" | undefined;
+	workspaceKind?: WorkspaceKind | undefined;
 	workspaceRoot?: string | undefined;
 	godotExecutablePath?: string | undefined;
 	worktree?: SessionWorktreeMetadata | undefined;
@@ -113,6 +113,17 @@ function isWorkspaceColor(value: unknown): value is WorkspaceColor {
 	return Number.isInteger(value) && typeof value === "number" && value >= 0 && value <= 7;
 }
 
+export function isWorkspaceKind(value: unknown): value is WorkspaceKind {
+	return value === "workspace" || value === "godot";
+}
+
+function inferWorkspaceKind(sourceFolders: readonly WorkspaceSourceFolder[], godotExecutablePath?: string | undefined): WorkspaceKind {
+	return sourceFolders.some((folder: WorkspaceSourceFolder): boolean => folder.capabilities.godot)
+		|| (godotExecutablePath !== undefined && godotExecutablePath.trim().length > 0)
+		? "godot"
+		: "workspace";
+}
+
 function readLegacySourceFolders(raw: LegacyWorkspaceConfig, fallbackRoot: string): WorkspaceSourceFolder[] {
 	if (!Array.isArray(raw.sourceFolders)) {
 		return [createSourceFolder(fallbackRoot)];
@@ -163,11 +174,15 @@ export function normalizeWorkspaceConfig(rawInput: unknown): WorkspaceConfig {
 	const primary: WorkspaceSourceFolder = sourceFolders.find((folder): boolean => folder.id === requestedPrimaryId)
 		?? sourceFolders[0]!;
 	const nameInput: string = typeof raw.name === "string" ? raw.name.trim() : "";
+	const requestedKind: WorkspaceKind | undefined = isWorkspaceKind(raw.kind) ? raw.kind : undefined;
 
 	return {
 		id: raw.id,
 		name: nameInput || basename(primary.path) || primary.path,
-		kind: "godot",
+		kind: requestedKind ?? inferWorkspaceKind(
+			sourceFolders,
+			typeof raw.godotExecutablePath === "string" ? raw.godotExecutablePath : undefined
+		),
 		rootPath: primary.path,
 		icon: isWorkspaceIcon(raw.icon) ? raw.icon : 0,
 		color: isWorkspaceColor(raw.color) ? raw.color : 0,
@@ -413,16 +428,20 @@ export function createRuntimeWorkspace(rootPath: string, godotExecutablePath?: s
 	const normalizedRootPath: string = resolve(rootPath);
 	const hash: string = createHash("sha1").update(normalizedRootPath.toLowerCase()).digest("hex").slice(0, 10);
 	const name: string = basename(normalizedRootPath) || normalizedRootPath;
+	const sourceFolder: WorkspaceSourceFolder = createSourceFolder(normalizedRootPath);
 
 	return {
 		id: `runtime-${hash}`,
 		name,
-		kind: "godot",
+		kind: sourceFolder.capabilities.godot
+			|| (godotExecutablePath !== undefined && godotExecutablePath.trim().length > 0)
+			? "godot"
+			: "workspace",
 		rootPath: normalizedRootPath,
 		icon: 0,
 		color: 0,
-		sourceFolders: [createSourceFolder(normalizedRootPath)],
-		primarySourceFolderId: createWorkspaceSourceFolderId(normalizedRootPath),
+		sourceFolders: [sourceFolder],
+		primarySourceFolderId: sourceFolder.id,
 		godotExecutablePath
 	};
 }
@@ -463,17 +482,12 @@ export function hydrateWorkspacesFromSessionMetadata(metadataList: WorkspaceMeta
 			continue;
 		}
 
-		const fallbackName: string = basename(metadata.workspaceRoot) || metadata.workspaceRoot;
+		const runtimeWorkspace: WorkspaceConfig = createRuntimeWorkspace(metadata.workspaceRoot, metadata.godotExecutablePath);
 		hydrated.push(upsertRuntimeWorkspace({
+			...runtimeWorkspace,
 			id: metadata.workspaceId,
-			name: metadata.workspaceName ?? fallbackName,
-			kind: metadata.workspaceKind ?? "godot",
-			rootPath: metadata.workspaceRoot,
-			icon: 0,
-			color: 0,
-			sourceFolders: [createSourceFolder(metadata.workspaceRoot)],
-			primarySourceFolderId: createWorkspaceSourceFolderId(metadata.workspaceRoot),
-			godotExecutablePath: metadata.godotExecutablePath
+			name: metadata.workspaceName ?? runtimeWorkspace.name,
+			kind: metadata.workspaceKind ?? runtimeWorkspace.kind
 		}));
 	}
 

@@ -72,17 +72,17 @@ export function registerAutomationTools(server: McpServer, config: AutomationCon
 		title: "Configure Daedalus environment",
 		description: "Configure the active runtime workspace through environment.configure before creating or opening smoke sessions.",
 		inputSchema: z.object({
-			godotProjectPath: z.string().min(1),
+			workspaceRoot: z.string().min(1),
 			godotExecutablePath: z.string().min(1).optional(),
 			timeoutMs: z.number().int().positive().max(300000).optional()
 		})
 	}, async (input: {
-		godotProjectPath: string;
+		workspaceRoot: string;
 		godotExecutablePath?: string | undefined;
 		timeoutMs?: number | undefined;
 	}): Promise<ToolResult> => runTool(async (): Promise<unknown> => {
 		const params: Record<string, unknown> = {
-			godotProjectPath: input.godotProjectPath
+			workspaceRoot: input.workspaceRoot
 		};
 		if (input.godotExecutablePath !== undefined) {
 			params.godotExecutablePath = input.godotExecutablePath;

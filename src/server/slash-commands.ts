@@ -236,7 +236,7 @@ function formatSessionInfo(session: ClientSession, mcpHost: McpHost, createSessi
 		`- Approval mode: ${String(info.approvalMode)}`,
 		`- Pending approvals: ${String(info.pendingApprovals)}`,
 		`- MCP servers: ${JSON.stringify(info.mcpServers)}`,
-		`- Godot project: ${String(info.godotProjectPath ?? "")}`
+		`- Workspace root: ${String(info.workspaceRoot ?? "")}`
 	].join("\n");
 }
 
@@ -384,8 +384,8 @@ function getSkillWorkspace(session: ClientSession): SkillWorkspace {
 	if (session.activeWorkspace !== undefined) {
 		return { id: session.activeWorkspace.id, rootPath: session.activeWorkspace.rootPath };
 	}
-	if (session.godotProjectPath !== undefined) {
-		return { id: `runtime:${session.godotProjectPath}`, rootPath: session.godotProjectPath };
+	if (session.workspaceRoot !== undefined) {
+		return { id: `runtime:${session.workspaceRoot}`, rootPath: session.workspaceRoot };
 	}
 	return createGlobalSkillWorkspace();
 }

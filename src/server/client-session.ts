@@ -91,8 +91,8 @@ export type ClientSession = {
 	providerModel?: string | undefined;
 	providerBaseUrl?: string | undefined;
 	providerRequestOverrides?: ProviderRequestOverrides | undefined;
+	workspaceRoot?: string | undefined;
 	godotExecutablePath?: string | undefined;
-	godotProjectPath?: string | undefined;
 	messages: ChatMessage[];
 	modelProfile: ModelProfile;
 	approvalGateway: ApprovalGateway;
@@ -146,6 +146,8 @@ export function createClientSession(defaultWorkspace: WorkspaceConfig | undefine
 		modelProfile: getDefaultModelProfile(),
 		approvalGateway: new ApprovalGateway(),
 		activeWorkspace: defaultWorkspace,
+		workspaceRoot: defaultWorkspace?.rootPath,
+		godotExecutablePath: defaultWorkspace?.godotExecutablePath,
 		pendingAiContinuations: new Map(),
 		pendingToolBudgets: new Map(),
 		aiDeltaEventBuffers: new Map(),
@@ -185,13 +187,13 @@ export function createClientSession(defaultWorkspace: WorkspaceConfig | undefine
 export function applyWorkspaceToSession(session: ClientSession, workspace: WorkspaceConfig | undefined): void {
 	if (workspace === undefined) {
 		session.activeWorkspace = undefined;
-		session.godotProjectPath = undefined;
+		session.workspaceRoot = undefined;
 		session.godotExecutablePath = undefined;
 		return;
 	}
 
 	session.activeWorkspace = workspace;
-	session.godotProjectPath = workspace.rootPath;
+	session.workspaceRoot = workspace.rootPath;
 	session.godotExecutablePath = workspace.godotExecutablePath;
 }
 

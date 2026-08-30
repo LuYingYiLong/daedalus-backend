@@ -2,8 +2,7 @@ import type WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import type { ClientRequest } from "../../protocol/types.js";
 import type { McpHost } from "../../mcp/mcp-host.js";
-import type { ClientSession } from "../client-session.js";
-import { clearActiveSession } from "../client-session.js";
+import { applyWorkspaceToSession, clearActiveSession, type ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import { deleteWorkspace, findWorkspace, getWorkspaceSourceFolder, hydrateWorkspacesFromSessionMetadata, loadWorkspaces, unregisterSessionRuntimeWorkspace, updateWorkspace, upsertRuntimeWorkspace } from "../../workspace/registry.js";
 import type { WorkspaceColor, WorkspaceConfig, WorkspaceIcon } from "../../workspace/types.js";
@@ -144,8 +143,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			}
 
 			if (selectionDecision.bindToSession) {
-				session.activeWorkspace = workspace;
-				session.godotProjectPath = workspace.rootPath;
+				applyWorkspaceToSession(session, workspace);
 			}
 			logger.info("workspace", "selected", {
 				workspaceId: workspace.id,
@@ -201,9 +199,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				await mcpHost.closeWorkspace(workspace.id);
 				if (session.activeWorkspace?.id === workspace.id) {
 					await mcpHost.switchWorkspace(workspace);
-					session.activeWorkspace = workspace;
-					session.godotProjectPath = workspace.rootPath;
-					session.godotExecutablePath = workspace.godotExecutablePath;
+					applyWorkspaceToSession(session, workspace);
 					updateClientConnection(socket, {
 						workspaceId: workspace.id,
 						workspaceRoot: workspace.rootPath
@@ -276,9 +272,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 			if (activeSessionMove !== undefined) {
 				const destination: WorkspaceConfig | undefined = findWorkspace(activeSessionMove.workspaceId);
 				if (destination !== undefined) {
-					session.activeWorkspace = destination;
-					session.godotProjectPath = destination.rootPath;
-					session.godotExecutablePath = destination.godotExecutablePath;
+					applyWorkspaceToSession(session, destination);
 					await mcpHost.ensureWorkspace(destination);
 					updateClientConnection(socket, {
 						workspaceId: destination.id,
@@ -289,9 +283,7 @@ export async function handleWorkspaceRequest(socket: WebSocket, request: ClientR
 				clearActiveSession(session);
 			}
 			if (session.activeWorkspace?.id === workspace.id && activeSessionMove === undefined) {
-				session.activeWorkspace = undefined;
-				session.godotProjectPath = undefined;
-				session.godotExecutablePath = undefined;
+				applyWorkspaceToSession(session, undefined);
 				updateClientConnection(socket, {
 					workspaceId: null,
 					workspaceRoot: null

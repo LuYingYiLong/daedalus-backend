@@ -98,10 +98,12 @@ export type SessionWorktreeMetadata = {
 	displayName?: string | undefined;
 };
 
+export type WorkspaceKind = "workspace" | "godot";
+
 export type WorkspaceConfig = {
 	id: string;
 	name: string;
-	kind: "godot";
+	kind: WorkspaceKind;
 	rootPath: string;
 	icon: WorkspaceIcon;
 	color: WorkspaceColor;

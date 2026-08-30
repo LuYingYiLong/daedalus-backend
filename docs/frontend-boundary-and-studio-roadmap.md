@@ -63,7 +63,7 @@ Studio 不应该绕过后端安全边界。它是更大的 UI，不是更高权�
 
 两个前端共享同一个后端协议，但能力声明不同：
 
-- `clientType: "godot_plugin"`：编辑器内客户端，声明 editor context、inline diff、approval 和 workspace 绑定能力。
+- `clientType: "godot_editor_bridge"`：独立的 Godot 编辑器桥接客户端，使用 Editor Bridge Protocol v4 声明 editor context、inline diff、approval 和 workspace 绑定能力。
 - `clientType: "studio"`：独立工作台客户端，声明大 timeline、approval、asset task、workspace management 等能力。
 
 后端必须继续保持这些安全边界：
@@ -76,7 +76,7 @@ Studio 不应该绕过后端安全边界。它是更大的 UI，不是更高权�
 建议新增或强化的协议对象：
 
 ```ts
-type ClientSurface = "godot_plugin" | "studio" | "cli" | "smoke";
+type ClientSurface = "godot_editor_bridge" | "studio" | "studio_remote" | "cli" | "smoke";
 
 type LongTaskKind =
 	| "image_generation"

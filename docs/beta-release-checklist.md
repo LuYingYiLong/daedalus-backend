@@ -4,7 +4,7 @@
 
 ## 自动门禁
 
-在 `D:\godot-daedalus_backend` 执行：
+在后端仓库根目录执行：
 
 ```powershell
 npm ci
@@ -12,13 +12,16 @@ npm run check
 npm run smoke:beta
 ```
 
-`npm run smoke:beta` 会启动本地后端，运行 Godot headless 脚本检查，并执行 `backend.health` WebSocket smoke。可通过环境变量覆盖：
+`npm run smoke:beta` 使用临时 `USERPROFILE` 和 `APPDATA` 隔离后端数据与 Godot 设置，通过 WebSocket ping 等待后端就绪，并对 `addons/daedalus_bridge` 下全部 GDScript 执行 headless `--check-only`。必须指定 Godot 可执行文件和包含当前 Daedalus Bridge 的项目：
 
 ```powershell
-$env:GODOT_EXECUTABLE_PATH = "D:\Godot_v4.5.1-stable_win64.exe\Godot_v4.5.1-stable_win64.exe"
-$env:GODOT_PROJECT_PATH = "D:\GodotProjects\example"
-$env:GODOT_DAEDALUS_PLUGIN_DIR = "D:\GodotProjects\example\addons\godot_daedalus"
+$env:GODOT_EXECUTABLE_PATH = "C:\Godot\Godot_v4.7-stable_win64.exe"
+$env:GODOT_PROJECT_PATH = "D:\Workspaces\daedalus-bridge"
+$env:DAEDALUS_BRIDGE_DIR = "$env:GODOT_PROJECT_PATH\addons\daedalus_bridge"
+npm run smoke:beta
 ```
+
+`DAEDALUS_BRIDGE_DIR` 也供 `npm test` 的跨仓库协议契约测试使用，CI 必须显式设置，避免缺失 Bridge 时静默跳过。单独运行 smoke 时可省略此变量，脚本会从项目目录推导；不再接受旧 `addons/godot_daedalus` 布局或旧插件测试入口。缺失必需文件、后端启动失败、Godot 解析错误或非零退出码均会阻断门禁。日志保留在输出提示的临时目录中，不读取本机已有会话和配置。
 
 真实 provider 写文件和 inline diff 快照可用单独 smoke 覆盖。它会真实调用 LLM、真实写入一个带时间戳的 `scripts/daedalus_inline_diff_smoke_*.gd` 文件，并且只自动批准该 smoke 文件相关写入：
 

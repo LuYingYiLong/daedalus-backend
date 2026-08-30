@@ -15,11 +15,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout frontend plugin repository
+      - name: Checkout Daedalus Bridge repository
         uses: actions/checkout@v4
         with:
           repository: LuYingYiLong/godot-daedalus
-          path: godot-daedalus-frontend
+          path: daedalus-bridge
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -39,7 +39,7 @@ jobs:
           npm run check
         env:
           USERPROFILE: ${{ runner.temp }}/userprofile
-          GODOT_DAEDALUS_PLUGIN_DIR: ${{ github.workspace }}/godot-daedalus-frontend/addons/godot_daedalus
+          DAEDALUS_BRIDGE_DIR: ${{ github.workspace }}/daedalus-bridge/addons/daedalus_bridge
 
   beta-windows:
     runs-on: windows-latest
@@ -47,9 +47,8 @@ jobs:
 
     env:
       GODOT_VERSION: 4.7-stable
-      FRONTEND_DIR: ${{ github.workspace }}\godot-daedalus-frontend
-      GODOT_DAEDALUS_PLUGIN_DIR: ${{ github.workspace }}\godot-daedalus-frontend\addons\godot_daedalus
-      GODOT_PROJECT_PATH: ${{ github.workspace }}\godot-daedalus-frontend
+      DAEDALUS_BRIDGE_DIR: ${{ github.workspace }}\daedalus-bridge\addons\daedalus_bridge
+      GODOT_PROJECT_PATH: ${{ github.workspace }}\daedalus-bridge
 
     steps:
       - name: Checkout backend repository
@@ -57,11 +56,11 @@ jobs:
         with:
           path: backend
 
-      - name: Checkout frontend plugin repository
+      - name: Checkout Daedalus Bridge repository
         uses: actions/checkout@v4
         with:
           repository: LuYingYiLong/godot-daedalus
-          path: godot-daedalus-frontend
+          path: daedalus-bridge
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

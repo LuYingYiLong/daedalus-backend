@@ -222,6 +222,7 @@ export function createToolFailure(
 	}
 
 	const message: string = error instanceof Error ? error.message : typeof error === "string" ? error : "Tool execution failed";
+	if (/^computer_grounding_[a-z_]+$/u.test(message)) return { code: message, category: /scope|required/u.test(message) ? "policy" : "environment", message, retryable: false, artifactRefs: [...(context.artifactRefs ?? [])] };
 	if (/^computer_[a-z_]+$/u.test(message)) return { code: message, category: /denied|disabled|consent|scope|revoked|cancelled/u.test(message) ? "policy" : "environment", message, retryable: /busy|rate_limited|observation_stale|timeout/u.test(message), artifactRefs: [...(context.artifactRefs ?? [])] };
 	const legacyFailure = LEGACY_EXACT_FAILURES.get(message);
 	const leadingCode: string | undefined = parseLeadingCode(message);

@@ -26,6 +26,9 @@ export function createOpenAIResponsesClient(options: ProviderChatOptions, onTran
 		maxRetries: 0,
 		timeout: 60_000
 	};
+	if (options.sensitivePayload === true) {
+		clientOptions.logLevel = "off";
+	}
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(options.baseUrl);
 	if (normalizedBaseUrl !== undefined) {
 		clientOptions.baseURL = normalizedBaseUrl;

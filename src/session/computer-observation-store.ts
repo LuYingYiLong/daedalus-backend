@@ -6,6 +6,12 @@ import {
 } from "../protocol/computer-observation.js";
 import { assertSupportedImageSignature } from "../protocol/image-file-signature.js";
 import {
+  COMPUTER_GROUNDINGS_PER_FRAME,
+  computerGroundingResultSchema,
+  type ComputerGroundingResult,
+} from "../protocol/computer-grounding.js";
+import { redactTraceValue } from "../trace/trace-redactor.js";
+import {
   getSessionDatabase,
   runSessionTransaction,
   sqlJson,
@@ -14,6 +20,7 @@ import {
 import type { ProviderToolImageReference } from "../providers/tool-image-reference.js";
 type Row = {
   detail_json: string | null;
+  groundings_json: string | null;
   png: Uint8Array | null;
   request_id: string;
   summary_json: string;
@@ -40,6 +47,8 @@ export async function saveComputerObservation(
       width: observation.width,
       height: observation.height,
       truncated: observation.truncated,
+      groundingCount: 0,
+      groundingCandidateCount: 0,
     };
     db.prepare(
       "INSERT INTO computer_observations(session_id,observation_id,request_id,tool_call_id,detail_json,summary_json) VALUES(?,?,?,?,?,?)",
@@ -54,6 +63,81 @@ export async function saveComputerObservation(
   });
   return observation;
 }
+
+function readGroundings(value: string | null): ComputerGroundingResult[] {
+  return value === null
+    ? []
+    : computerGroundingResultSchema.array().max(COMPUTER_GROUNDINGS_PER_FRAME)
+        .parse(parseSqlJson<unknown>(value));
+}
+
+function getGroundingRow(
+  db: DatabaseSync,
+  sessionId: string,
+  requestId: string,
+  observationId: string,
+): Row {
+  const row = db.prepare(
+    "SELECT detail_json,groundings_json,request_id,summary_json,detail_level FROM computer_observations WHERE session_id=? AND observation_id=?",
+  ).get(sessionId, observationId) as Row | undefined;
+  if (!row || row.request_id !== requestId)
+    throw new Error("computer_observation_stale");
+  if (row.detail_level !== "full" || row.detail_json === null)
+    throw new Error("computer_details_compacted");
+  return row;
+}
+
+export async function assertComputerGroundingCapacity(
+  sessionId: string,
+  requestId: string,
+  observationId: string,
+): Promise<void> {
+  const db = await getSessionDatabase();
+  const row = getGroundingRow(db, sessionId, requestId, observationId);
+  if (readGroundings(row.groundings_json).length >= COMPUTER_GROUNDINGS_PER_FRAME)
+    throw new Error("computer_grounding_limit");
+}
+
+export async function saveComputerGrounding(
+  sessionId: string,
+  requestId: string,
+  result: ComputerGroundingResult,
+  isCurrent?: () => boolean,
+): Promise<void> {
+  const parsed = computerGroundingResultSchema.parse(result);
+  const db = await getSessionDatabase();
+  runSessionTransaction(db, (): void => {
+    // 数据库等待期间可能取消或换帧，存储检查不授予任何操作权限
+    if (isCurrent && !isCurrent()) throw new Error("computer_grounding_stale");
+    const row = getGroundingRow(db, sessionId, requestId, parsed.observationId);
+    const groundings = readGroundings(row.groundings_json);
+    if (groundings.some((entry) => entry.groundingId === parsed.groundingId)) return;
+    if (groundings.length >= COMPUTER_GROUNDINGS_PER_FRAME)
+      throw new Error("computer_grounding_limit");
+    const redact = (value: string, limit: number): string =>
+      (redactTraceValue(value).value as string).slice(0, limit);
+    const stored: ComputerGroundingResult = {
+      ...parsed,
+      target: redact(parsed.target, 2000),
+      candidates: parsed.candidates.map((candidate) => ({
+        ...candidate,
+        description: redact(candidate.description, 1000),
+      })),
+    };
+    groundings.push(stored);
+    const summary = {
+      ...parseSqlJson<Record<string, unknown>>(row.summary_json),
+      groundingCount: groundings.length,
+      groundingCandidateCount: groundings.reduce((count, entry) => count + entry.candidates.length, 0),
+      groundingStatus: stored.status,
+    };
+    // 视觉证据单独保存，保持后续同帧截图校验使用的 detail_json 完全不变
+    db.prepare(
+      "UPDATE computer_observations SET groundings_json=?,summary_json=?,revision=revision+1 WHERE session_id=? AND observation_id=?",
+    ).run(sqlJson(groundings), sqlJson(summary), sessionId, parsed.observationId);
+  });
+}
+
 export async function saveComputerScreenshot(
   sessionId: string,
   requestId: string,
@@ -147,6 +231,9 @@ export async function getComputerObservation(
     ...(detailLevel === "full"
       ? {
           observation: parseSqlJson(row.detail_json),
+          ...(row.groundings_json !== null
+            ? { groundings: readGroundings(row.groundings_json) }
+            : {}),
           ...(row.png
             ? {
                 dataUrl: `data:image/png;base64,${Buffer.from(row.png).toString("base64")}`,
@@ -165,14 +252,16 @@ export function compactComputerObservations(
   for (const requestId of requestIds) {
     const rows = db
       .prepare(
-        "SELECT detail_json,png FROM computer_observations WHERE session_id=? AND request_id=? AND detail_level='full'",
+        "SELECT detail_json,groundings_json,png FROM computer_observations WHERE session_id=? AND request_id=? AND detail_level='full'",
       )
       .all(sessionId, requestId) as Row[];
     for (const row of rows)
       removedBytes +=
-        Buffer.byteLength(row.detail_json ?? "") + (row.png?.byteLength ?? 0);
+        Buffer.byteLength(row.detail_json ?? "") +
+        Buffer.byteLength(row.groundings_json ?? "") +
+        (row.png?.byteLength ?? 0);
     db.prepare(
-      "UPDATE computer_observations SET detail_json=NULL,png=NULL,detail_level='compacted',revision=revision+1 WHERE session_id=? AND request_id=? AND detail_level='full'",
+      "UPDATE computer_observations SET detail_json=NULL,groundings_json=NULL,png=NULL,detail_level='compacted',revision=revision+1 WHERE session_id=? AND request_id=? AND detail_level='full'",
     ).run(sessionId, requestId);
   }
   return removedBytes;

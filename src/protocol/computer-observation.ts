@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { computerLocateArgsSchema, computerGroundingValidateArgsSchema, computerGroundingValidationSchema } from "./computer-grounding.js";
 
 export const COMPUTER_RESULT_MAX_BYTES = 8 * 1024 * 1024;
 export const computerIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/u);
@@ -7,8 +8,10 @@ export const computerToolNameSchema = z.enum([
   "mcp_computer_observe",
   "mcp_computer_screenshot",
   "mcp_computer_action",
+  "mcp_computer_locate",
 ]);
 export type ComputerToolName = z.infer<typeof computerToolNameSchema>;
+export type ComputerForwardedOperation = Exclude<ComputerToolName, "mcp_computer_locate"> | "grounding.prepare" | "grounding.validate";
 const rectSchema = z
   .object({
     x: z.number().finite().min(-100000).max(100000),
@@ -92,6 +95,11 @@ export const computerObservationSchema = z
     }
   });
 export type ComputerObservation = z.infer<typeof computerObservationSchema>;
+export const computerGroundingFrameSchema = z.object({
+  observation: computerObservationSchema.refine(v => v.dataUrl !== undefined, "Grounding requires the exact frame"),
+  generation: z.number().int().nonnegative(),
+}).strict();
+export type ComputerGroundingFrame = z.infer<typeof computerGroundingFrameSchema>;
 export const computerAccessResultSchema = z
   .object({ granted: z.literal(true), accessId: computerIdSchema, mode: z.enum(["observe", "control"]).optional(), generation: z.number().int().positive().optional() })
   .strict();
@@ -123,7 +131,7 @@ export const computerToolResultParamsSchema = z.discriminatedUnion("ok", [
     .object({
       callId: computerIdSchema,
       ok: z.literal(true),
-      result: z.union([computerAccessResultSchema, computerObservationSchema, computerActionResultSchema]),
+      result: z.union([computerAccessResultSchema, computerObservationSchema, computerActionResultSchema, computerGroundingFrameSchema, computerGroundingValidationSchema]),
     })
     .strict(),
   z
@@ -154,5 +162,15 @@ export const computerArgsSchemas = {
   mcp_computer_screenshot: z
     .object({ observationId: computerIdSchema })
     .strict(),
-  mcp_computer_action: z.object({ observationId: computerIdSchema, action: computerActionSchema }).strict(),
+  mcp_computer_action: z.object({ observationId: computerIdSchema, action: computerActionSchema, groundingId: computerIdSchema.optional() }).strict()
+    .refine(v => v.groundingId === undefined || "nodeId" in v.action, "Grounding only supports UIA actions"),
+  mcp_computer_locate: computerLocateArgsSchema,
+} as const;
+export const computerForwardedArgsSchemas = {
+  mcp_computer_request_access: computerArgsSchemas.mcp_computer_request_access,
+  mcp_computer_observe: computerArgsSchemas.mcp_computer_observe,
+  mcp_computer_screenshot: computerArgsSchemas.mcp_computer_screenshot,
+  mcp_computer_action: computerArgsSchemas.mcp_computer_action,
+  "grounding.prepare": computerArgsSchemas.mcp_computer_screenshot,
+  "grounding.validate": computerGroundingValidateArgsSchema,
 } as const;

@@ -98,6 +98,8 @@ export type ProviderDefinition = {
 export type ProviderChatOptions = {
 	/** 本地运行等待点，不发送给模型或持久化；覆盖网络重试 */
 	waitBeforeRequest?: (signal?: AbortSignal) => Promise<void>;
+	/** 内部敏感载荷标记，禁止 SDK 输出请求日志；不发送给模型或持久化 */
+	sensitivePayload?: boolean;
 	provider: ProviderId;
 	apiKey: string;
 	baseUrl?: string | undefined;

@@ -82,7 +82,7 @@ test("computer RPC strictly validates results and additional capability", () => 
   );
 });
 test("computer tools are read-only desktop capabilities and are absent for Remote/Goal", () => {
-  const computerControl = { inputAllowed: true, execute: async () => ({}) };
+  const computerControl = { inputAllowed: true, groundingSupported: true, execute: async () => ({}) };
   for (const clientType of [
     "studio_remote",
     "studio_scheduler",

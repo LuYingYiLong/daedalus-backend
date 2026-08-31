@@ -215,6 +215,7 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 	assert.deepEqual(getNoWorkspaceToolNames().sort(), [
 		"mcp_computer_request_access",
 		"mcp_computer_observe",
+		"mcp_computer_locate",
 		"mcp_computer_screenshot",
 		"mcp_computer_action",
 		"mcp_browser_observe",

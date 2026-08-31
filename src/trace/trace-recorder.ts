@@ -293,7 +293,11 @@ export async function attachToolTraceOutput(params: {
 	if (params.toolName?.startsWith("mcp_computer_")) {
 		try { const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output; if (typeof output?.observationId === "string") observationId = output.observationId;
       if (params.toolName === "mcp_computer_action" && output && typeof output === "object") {
-        for (const key of ["actionId", "status", "dispatchedAt", "generation"]) if (typeof output[key] === "string" || typeof output[key] === "number") actionSummary[key] = output[key];
+        for (const key of ["actionId", "groundingId", "status", "dispatchedAt", "generation"]) if (typeof output[key] === "string" || typeof output[key] === "number") actionSummary[key] = output[key];
+      }
+      if (params.toolName === "mcp_computer_locate" && output && typeof output === "object") {
+        for (const key of ["groundingId", "status", "provider", "model", "durationMs"]) if (typeof output[key] === "string" || typeof output[key] === "number") actionSummary[key] = output[key];
+        if (Array.isArray(output.candidates)) actionSummary.candidateCount = output.candidates.length;
       } } catch { /* 摘要不解析任意窗口文字 */ }
 	}
 	await writeTrace({

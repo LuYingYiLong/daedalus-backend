@@ -321,7 +321,7 @@ async function executeSingleToolCall(
 	try {
 		argsParsed = JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
 	} catch {
-		const message: string = functionName === "mcp_computer_action" ? "Invalid computer action arguments" : `Invalid JSON arguments: ${toolCall.function.arguments}`;
+		const message: string = COMPUTER_TOOL_NAME_SET.has(functionName) ? "Invalid computer tool arguments" : `Invalid JSON arguments: ${toolCall.function.arguments}`;
 		const baseFailure: ToolFailure = {
 			code: "invalid_arguments",
 			category: "protocol",
@@ -509,7 +509,11 @@ async function executeSingleToolCall(
 			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
 		}
 	}
-	const displayArgs = functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, action: { ...(executionArgs.action as Record<string, unknown>), ...((executionArgs.action as Record<string, unknown>)?.type === "text" ? { text: "[redacted]" } : (executionArgs.action as Record<string, unknown>)?.type === "uia_set_value" ? { value: "[redacted]" } : {}) } } : executionArgs;
+	const displayArgs = functionName === "mcp_computer_action"
+		? { observationId: executionArgs.observationId, groundingId: executionArgs.groundingId, action: { ...(executionArgs.action as Record<string, unknown>), ...((executionArgs.action as Record<string, unknown>)?.type === "text" ? { text: "[redacted]" } : (executionArgs.action as Record<string, unknown>)?.type === "uia_set_value" ? { value: "[redacted]" } : {}) } }
+		: functionName === "mcp_computer_locate"
+			? { observationId: executionArgs.observationId, uiaAction: executionArgs.uiaAction ?? "uia_invoke" }
+			: executionArgs;
 	const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, executionArgs);
 	if (exhaustedFailure !== undefined) {
 		onEvent?.({
@@ -556,7 +560,7 @@ async function executeSingleToolCall(
 		step,
 		action: decision.action,
 		reason: "reason" in decision ? decision.reason : undefined,
-		args: functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, type: (executionArgs.action as Record<string, unknown> | undefined)?.type } : executionArgs
+		args: functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, type: (executionArgs.action as Record<string, unknown> | undefined)?.type } : displayArgs
 	});
 
 	if (decision.action === "deny") {

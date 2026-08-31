@@ -80,6 +80,9 @@ export function createOpenAICompatibleClient(options: ProviderChatOptions, onTra
 		maxRetries: 0,
 		timeout: 60_000
 	};
+	if (options.sensitivePayload === true) {
+		clientOptions.logLevel = "off";
+	}
 	const requestFetch: typeof fetch = createProviderRequestOverrideFetch(globalThis.fetch, options.requestOverrides);
 	if (onTransportActivity !== undefined) {
 		clientOptions.fetch = createTransportActivityFetch(requestFetch, onTransportActivity);

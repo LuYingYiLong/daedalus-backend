@@ -808,6 +808,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 				browserTools: z.boolean().optional(),
 				computerObservation: z.boolean().optional(),
 				computerControl: z.boolean().optional(),
+				computerGrounding: z.boolean().optional(),
 				scheduledTasks: z.boolean().optional(),
 				scheduledTaskReport: z.boolean().optional(),
 			}).strict()

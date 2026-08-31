@@ -293,7 +293,7 @@ function isStaticToolAvailableInContext(toolName: string | undefined, context: T
 	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
 		return context.clientType === "studio" && context.browserControl !== undefined;
 	}
-	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun && (toolName !== "mcp_computer_action" || context.computerControl.inputAllowed === true);
+	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun && (toolName !== "mcp_computer_action" || context.computerControl.inputAllowed === true) && (toolName !== "mcp_computer_locate" || context.computerControl.groundingSupported === true);
 	if (!isGodotToolName(toolName)) {
 		return true;
 	}

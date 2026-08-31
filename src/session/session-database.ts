@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 10;
+const DB_SCHEMA_VERSION: number = 11;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -124,6 +124,7 @@ function migrateSchema(db: DatabaseSync): void {
 			request_id TEXT NOT NULL,
 			tool_call_id TEXT NOT NULL,
 			detail_json TEXT,
+			groundings_json TEXT,
 			png BLOB,
 			summary_json TEXT NOT NULL,
 			detail_level TEXT NOT NULL DEFAULT 'full',
@@ -369,9 +370,6 @@ function migrateSchema(db: DatabaseSync): void {
 		DROP TABLE IF EXISTS event_aliases;
 		DROP TABLE IF EXISTS legacy_imports;
 		DROP TABLE IF EXISTS migration_issues;
-		INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-		VALUES (${DB_SCHEMA_VERSION}, datetime('now'));
-		PRAGMA user_version = ${DB_SCHEMA_VERSION};
 	`);
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
@@ -381,6 +379,17 @@ function migrateSchema(db: DatabaseSync): void {
 	if (!agentGoalColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "dismissed_at")) {
 		db.exec("ALTER TABLE agent_goals ADD COLUMN dismissed_at TEXT");
 	}
+	runSessionTransaction(db, (): void => {
+		const observationColumns = db.prepare("PRAGMA table_info(computer_observations)").all();
+		if (!observationColumns.some((column): boolean => column.name === "groundings_json")) {
+			db.exec("ALTER TABLE computer_observations ADD COLUMN groundings_json TEXT");
+		}
+		db.exec(`
+			INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+			VALUES (${DB_SCHEMA_VERSION}, datetime('now'));
+			PRAGMA user_version = ${DB_SCHEMA_VERSION};
+		`);
+	});
 }
 
 async function openDatabase(): Promise<SessionDatabaseState> {

@@ -9,6 +9,7 @@ const ATTRIBUTE_PATTERN: RegExp = new RegExp(`(${XML_NAME_PATTERN})\\s*=\\s*(?:"
 const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
 	computer_request_access: "mcp_computer_request_access",
 	computer_observe: "mcp_computer_observe",
+	computer_locate: "mcp_computer_locate",
 	computer_screenshot: "mcp_computer_screenshot",
 	computer_action: "mcp_computer_action",
 	load_skill: "mcp_skills_load",

@@ -183,7 +183,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				ok: true,
 				result: {
 					connection: getClientConnection(socket),
-					features: { computerControl: 3 },
+					features: { computerControl: 3, computerGrounding: 1 },
 					session: {
 						sessionId: session.sessionId ?? null,
 						workspaceId: session.activeWorkspace?.id ?? null,
@@ -203,6 +203,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				if (typeof value === "boolean") capabilities[key as keyof ClientCapabilities] = value;
 			}
 			const info = updateClientConnection(socket, { capabilities });
+			if (capabilities.computerGrounding !== true || capabilities.computerObservation !== true) studioComputerRuntime.disableGrounding(socket);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { connection: info } });
 			break;
 		}

@@ -2,14 +2,17 @@ import { randomUUID, createHash } from "node:crypto";
 import WebSocket from "ws";
 import {
   computerAccessResultSchema,
-  computerArgsSchemas,
+  computerForwardedArgsSchemas,
   computerObservationSchema,
   computerActionResultSchema,
   type ComputerControlUpdate,
   COMPUTER_RESULT_MAX_BYTES,
   type ComputerToolResultParams,
-  type ComputerToolName,
+  type ComputerForwardedOperation,
+  computerGroundingFrameSchema,
 } from "../protocol/computer-observation.js";
+import { computerLocateArgsSchema, computerGroundingValidationSchema } from "../protocol/computer-grounding.js";
+import { ComputerGroundingRuntime } from "./computer-grounding-runtime.js";
 import type { ComputerControlContext } from "../tools/computer-tools.js";
 import type { ClientSession } from "./client-session.js";
 import { getClientConnection, getActiveSessionRunController } from "./client-connections.js";
@@ -28,7 +31,7 @@ type Scope = {
 type Pending = {
   socket: WebSocket;
   scope: Scope;
-  toolName: ComputerToolName;
+  toolName: ComputerForwardedOperation;
   args: Record<string, unknown>;
   control?: { approvalMode: "manual" | "auto-safe" | "full-trust"; cancel(code: string): void; modeUnchanged(): boolean };
   actionId?: string;
@@ -44,6 +47,7 @@ export class ComputerRuntimeError extends Error {
   }
 }
 export class StudioComputerRuntime {
+  private readonly grounding = new ComputerGroundingRuntime();
   private pending = new Map<string, Pending>();
   private grants = new Map<WebSocket, Map<string, Scope>>();
   private controls = new Map<WebSocket, { scope: Scope; lease: ComputerControlLease; lastState?: string; lastCode?: string | undefined }>();
@@ -72,6 +76,32 @@ export class StudioComputerRuntime {
       );
     return {
       inputAllowed: inputAllowed && getClientConnection(socket)?.capabilities.computerControl === true,
+      groundingSupported: getClientConnection(socket)?.capabilities.computerGrounding === true,
+      locate: input => {
+        const args = computerLocateArgsSchema.parse(input.args);
+        const connection = getClientConnection(socket);
+        const run = findRun(input.requestId);
+        if (!connection || !session.sessionId) return Promise.reject(new ComputerRuntimeError("computer_disabled"));
+        const scope: Scope = {
+          connectionId: connection.connectionId, sessionId: session.sessionId,
+          requestId: run?.rootRequestId ?? input.requestId, runId: explicitRunId ?? run?.runId ?? input.requestId,
+          toolCallId: input.toolCallId,
+        };
+        const assertAuthorized = (): void => {
+          const current = getClientConnection(socket);
+          const grant = this.grants.get(socket)?.get(`${scope.sessionId}:${scope.requestId}`);
+          if (socket.readyState !== WebSocket.OPEN || current?.connectionId !== scope.connectionId || current.clientType !== "studio" || !current.capabilities.computerObservation || !current.capabilities.computerGrounding || session.scheduledTaskOrigin || run?.goalId)
+            throw new ComputerRuntimeError("computer_disabled");
+          if (!grant || grant.runId !== scope.runId || grant.connectionId !== scope.connectionId) throw new ComputerRuntimeError("computer_consent_required");
+          const control = this.controls.get(socket);
+          if (control && control.scope.requestId === scope.requestId && (!control.lease.active || control.lease.paused)) throw new ComputerRuntimeError("computer_paused");
+        };
+        try { assertAuthorized(); } catch (error) { return Promise.reject(error); }
+        return this.grounding.run(socket, scope, { ...input, args }, (operation, params, signal) => {
+          assertAuthorized();
+          return this.execute(socket, scope, operation, params, signal);
+        }, assertAuthorized);
+      },
       withInputPolicy: allowed => this.createControl(socket, session, explicitRunId, allowed),
       hasControl: requestId => {
         const control = this.controls.get(socket);
@@ -86,6 +116,7 @@ export class StudioComputerRuntime {
       canonicalRequestId: (requestId) =>
         findRun(requestId)?.rootRequestId ?? requestId,
       execute: (toolName, args, requestId, toolCallId, signal) => {
+        if (toolName === "mcp_computer_locate") return Promise.reject(new ComputerRuntimeError("computer_tool_not_supported"));
         const connection = getClientConnection(socket);
         if (
           connection?.clientType !== "studio" ||
@@ -150,12 +181,14 @@ export class StudioComputerRuntime {
   execute(
     socket: WebSocket,
     scope: Scope,
-    toolName: ComputerToolName,
+    toolName: ComputerForwardedOperation,
     rawArgs: Record<string, unknown>,
     signal?: AbortSignal,
     control?: Pending["control"],
   ): Promise<Record<string, unknown>> {
-    const args = computerArgsSchemas[toolName].parse(rawArgs);
+    const schema = computerForwardedArgsSchemas[toolName];
+    if (!schema) return Promise.reject(new ComputerRuntimeError("computer_tool_not_supported"));
+    const args = schema.parse(rawArgs);
     if (socket.readyState !== WebSocket.OPEN || signal?.aborted)
       return Promise.reject(new ComputerRuntimeError("computer_disconnected"));
     if (this.pending.size >= 32)
@@ -167,6 +200,11 @@ export class StudioComputerRuntime {
       if (this.actionScopes.get(actionId)?.argsHash !== argsHash) return Promise.reject(new ComputerRuntimeError("computer_action_mismatch"));
       return this.actions.get(actionId)!;
     }
+    if (toolName === "mcp_computer_action") {
+      try { this.grounding.assertAction(socket, scope, args); } catch (error) { return Promise.reject(error); }
+    }
+    if (["mcp_computer_observe", "mcp_computer_action", "mcp_computer_request_access"].includes(toolName))
+      this.grounding.invalidate((owner, candidate) => owner === socket && candidate.sessionId === scope.sessionId && candidate.requestId === scope.requestId && candidate.runId === scope.runId);
     if (toolName === "mcp_computer_request_access")
       this.audit(scope, "requested");
     const operation = new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -231,11 +269,23 @@ export class StudioComputerRuntime {
     if (!params.ok) {
       if (pending.toolName === "mcp_computer_request_access")
         this.audit(pending.scope, "denied", params.error.code);
-      if (pending.actionId) this.audit(pending.scope, "action_failed", params.error.code, { actionId: pending.actionId, observationId: pending.args.observationId, actionType, transport });
+      if (pending.actionId) this.audit(pending.scope, "action_failed", params.error.code, { actionId: pending.actionId, observationId: pending.args.observationId, groundingId: pending.args.groundingId, actionType, transport });
       pending.reject(new ComputerRuntimeError(params.error.code));
       return;
     }
     try {
+      if (pending.toolName === "grounding.prepare") {
+        const frame = computerGroundingFrameSchema.parse(params.result);
+        if (frame.observation.observationId !== pending.args.observationId) throw new ComputerRuntimeError("computer_observation_mismatch");
+        pending.resolve(frame);
+        return;
+      }
+      if (pending.toolName === "grounding.validate") {
+        const valid = computerGroundingValidationSchema.parse(params.result);
+        if (valid.observationId !== pending.args.observationId || valid.generation !== pending.args.generation) throw new ComputerRuntimeError("computer_grounding_stale");
+        pending.resolve(valid);
+        return;
+      }
       const result =
         pending.toolName === "mcp_computer_request_access"
           ? computerAccessResultSchema.parse(params.result)
@@ -271,7 +321,7 @@ export class StudioComputerRuntime {
         this.grants.set(socket, grants);
         this.audit(pending.scope, pending.args.mode === "control" && pending.control?.approvalMode === "full-trust" ? "auto_allowed" : "allowed");
       }
-      if ("actionId" in result) this.audit(pending.scope, "action_dispatched", undefined, { ...result, actionType, transport });
+      if ("actionId" in result) this.audit(pending.scope, "action_dispatched", undefined, { ...result, groundingId: pending.args.groundingId, actionType, transport });
       pending.resolve(result);
     } catch {
       pending.reject(new ComputerRuntimeError("computer_result_invalid"));
@@ -281,6 +331,7 @@ export class StudioComputerRuntime {
     socket: WebSocket,
     value: Omit<Scope, "toolCallId"> & { code: string },
   ): void {
+    this.grounding.invalidate((owner, scope) => owner === socket && scope.connectionId === value.connectionId && scope.sessionId === value.sessionId && scope.requestId === value.requestId && scope.runId === value.runId, "computer_cancelled");
     // 启动覆盖层后、grant result 到达前也可能取消，必须停止该请求的模型控制器
     for (const [id, pending] of this.pending) {
       if (pending.socket !== socket || !pending.control || !["connectionId", "sessionId", "requestId", "runId"].every(key => pending.scope[key as keyof Scope] === value[key as keyof typeof value])) continue;
@@ -311,6 +362,7 @@ export class StudioComputerRuntime {
     if (!control || ["connectionId", "sessionId", "requestId", "runId"].some(key => control.scope[key as keyof Scope] !== value[key as keyof ComputerControlUpdate]))
       throw new ComputerRuntimeError("computer_scope_mismatch");
     control.lease.update(value);
+    this.grounding.update(socket, value, value.generation, value.state);
     // lease 初始等待首个心跳，不等同于已经审计过实际暂停；心跳不重复写审计
     if (control.lease.active && (control.lastState !== value.state || control.lastCode !== value.code)) {
       this.audit(control.scope, control.lease.paused ? "paused" : "resumed", value.code);
@@ -319,6 +371,7 @@ export class StudioComputerRuntime {
     }
   }
   finishTurn(sessionId: string, requestId: string, runId: string): void {
+    this.grounding.invalidate((_socket, scope) => scope.sessionId === sessionId && (scope.requestId === requestId || scope.runId === runId), "computer_cancelled", true);
     for (const [id, { scope }] of this.actionScopes) if (scope.sessionId === sessionId && (scope.requestId === requestId || scope.runId === runId)) { this.actions.delete(id); this.actionScopes.delete(id); }
     for (const [socket, grants] of this.grants)
       for (const grant of grants.values())
@@ -329,6 +382,7 @@ export class StudioComputerRuntime {
           this.revoke(socket, { ...grant, code: "computer_turn_finished" });
   }
   detachSocket(socket: WebSocket): void {
+    this.grounding.invalidate(owner => owner === socket, "computer_disconnected", true);
     for (const [id, action] of this.actionScopes) if (action.socket === socket) { this.actions.delete(id); this.actionScopes.delete(id); }
     this.controls.get(socket)?.lease.cancel("computer_disconnected");
     this.controls.delete(socket);
@@ -345,6 +399,9 @@ export class StudioComputerRuntime {
     clearTimeout(pending.timer);
     pending.cleanup();
     this.pending.delete(id);
+  }
+  disableGrounding(socket: WebSocket): void {
+    this.grounding.invalidate(owner => owner === socket, "computer_disabled");
   }
 }
 let auditQueue: Promise<void> = Promise.resolve();

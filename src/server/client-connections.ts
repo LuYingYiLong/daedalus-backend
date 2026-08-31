@@ -8,7 +8,7 @@ import { sessionSearchService } from "../session-search/service.js";
 export type ClientType = "godot_editor_bridge" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
 
 export type ClientCapabilities = Partial<Record<
-	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "computerObservation" | "computerControl" | "computerGrounding" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",
+	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "externalBrowser" | "computerObservation" | "computerControl" | "computerGrounding" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",
 	boolean
 >>;
 

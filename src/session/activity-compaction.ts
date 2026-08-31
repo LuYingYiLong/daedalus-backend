@@ -14,6 +14,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { publishTraceRecordUpdate } from "../trace/trace-recorder.js";
 import { compactTracePayloadsInTransaction, getTraceRecordsByIds } from "../trace/trace-store.js";
 import { compactComputerObservations } from "./computer-observation-store.js";
+import { compactBrowserActivity } from "./browser-activity-store.js";
 
 export const ACTIVITY_DETAIL_RETENTION_TURNS: number = 10;
 export const ACTIVITY_COMPACTION_SCHEMA_VERSION: number = 1;
@@ -436,6 +437,7 @@ function compactSessionRows(db: DatabaseSync, sessionId: string): ActivityCompac
 	const compactedTrace = compactTracePayloadsInTransaction(db, sessionId, requestSelection.compactedRequestIds);
 	removedBytes += compactedTrace.removedChars;
 	removedBytes += compactComputerObservations(db, sessionId, requestSelection.compactedRequestIds);
+	removedBytes += compactBrowserActivity(db, sessionId, requestSelection.compactedRequestIds);
 	return {
 		completedTurns: requestSelection.completedRequestIds.length,
 		retainedTurns: requestSelection.retainedRequestIds.length,

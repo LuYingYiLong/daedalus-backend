@@ -23,6 +23,8 @@ import {
 	MIN_BRIDGE_PROTOCOL_VERSION
 } from "../bridge-compatibility.js";
 import { studioBrowserRuntime } from "../studio-browser-runtime.js";
+import { revokeExternalBrowser, updateExternalBrowser } from "../external-browser-runtime.js";
+import { getBrowserActivity } from "../../session/browser-activity-store.js";
 import { studioComputerRuntime } from "../studio-computer-runtime.js";
 import { getComputerObservation } from "../../session/computer-observation-store.js";
 import { getGeneralSettings } from "../../general-settings-store.js";
@@ -183,7 +185,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				ok: true,
 				result: {
 					connection: getClientConnection(socket),
-					features: { computerControl: 3, computerGrounding: 1 },
+					features: { computerControl: 3, computerGrounding: 1, externalBrowser: 1 },
 					session: {
 						sessionId: session.sessionId ?? null,
 						workspaceId: session.activeWorkspace?.id ?? null,
@@ -203,11 +205,22 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				if (typeof value === "boolean") capabilities[key as keyof ClientCapabilities] = value;
 			}
 			const info = updateClientConnection(socket, { capabilities });
+			if (capabilities.externalBrowser !== true) revokeExternalBrowser(socket);
 			if (capabilities.computerGrounding !== true || capabilities.computerObservation !== true) studioComputerRuntime.disableGrounding(socket);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { connection: info } });
 			break;
 		}
 
+		case "browser.external.update":
+			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("browser_client_not_allowed");
+			updateExternalBrowser(socket, request.params!);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true } });
+			break;
+		case "session.browserActivity.get": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw new Error("browser_client_not_allowed");
+			const p = request.params!, result = await getBrowserActivity(p.sessionId, (await getGeneralSettings()).developerMode, p.id, p.before);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result }); break;
+		}
 		case "browser.tool.result":
 		case "computer.tool.result":
 			if (request.method === "computer.tool.result") {

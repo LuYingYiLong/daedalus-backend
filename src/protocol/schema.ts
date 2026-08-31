@@ -799,6 +799,8 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.info"),
 		params: z.object({}).optional()
 	}),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("browser.external.update"), params: z.object({ sessionId: z.string().min(1).max(160), runId: z.string().min(1).max(160), generation: z.string().min(1).max(160), state: z.enum(["heartbeat", "revoke"]) }).strict() }).strict(),
+	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("session.browserActivity.get"), params: z.object({ sessionId: z.string().min(1).max(160), id: z.string().uuid().optional(), before: z.string().uuid().optional() }).strict() }).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
@@ -806,6 +808,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			capabilities: z.object({
 				browserTools: z.boolean().optional(),
+				externalBrowser: z.boolean().optional(),
 				computerObservation: z.boolean().optional(),
 				computerControl: z.boolean().optional(),
 				computerGrounding: z.boolean().optional(),

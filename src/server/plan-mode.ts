@@ -581,6 +581,7 @@ async function runPlanAgentDecision(
 		runtime.mcpHost,
 		{
 			requestId: planThreadRequestId,
+			hookContext: { chatMode: "plan", approvalMode: "auto-safe", model: "planner" },
 			operationRequestId,
 			planId: runtime.planId ?? null
 		},

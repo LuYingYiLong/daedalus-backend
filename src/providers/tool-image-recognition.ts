@@ -106,7 +106,9 @@ export async function routeToolImageExecutionResult(params: {
 }): Promise<IdempotentToolExecutionResult> {
 	const references = params.result.imageReferences ?? [];
 	const computerReference = references.find(reference => reference.source.kind === "computer_observation");
-	const evidence = computerReference?.source.kind === "computer_observation" ? { observationId: computerReference.source.observationId, untrustedEvidence: true } : {};
+	const browserReference = references.find(reference => reference.source.kind === "browser_activity");
+	const evidence = computerReference?.source.kind === "computer_observation" ? { observationId: computerReference.source.observationId, untrustedEvidence: true }
+		: browserReference?.source.kind === "browser_activity" ? { activityId: browserReference.source.activityId, externalBrowser: true, untrustedEvidence: true } : {};
 	if (references.length === 0) {
 		throw new Error("image_inspection_reference_missing");
 	}

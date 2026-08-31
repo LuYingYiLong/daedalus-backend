@@ -402,6 +402,7 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 						if (!executionSlotAvailable) {
 							throw new Error("Timed out waiting for the plan authoring run to finish before executing the approved plan.");
 						}
+						registerApprovedBrowserPlan(socket, executionRequestId, plan.metadata.originalMessage);
 						await handleChatRequest(socket, executionRequest, session, mcpHost);
 					})().catch((error: unknown): void => {
 						const message: string = error instanceof Error ? error.message : String(error);
@@ -481,3 +482,4 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 		});
 	}
 }
+import { registerApprovedBrowserPlan } from "../external-browser-runtime.js";

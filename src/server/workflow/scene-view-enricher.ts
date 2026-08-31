@@ -64,6 +64,7 @@ export function createSceneViewToolResultEnricher(params: {
 			});
 		}
 		if (BROWSER_SCREENSHOT_TOOLS.has(input.toolName)) {
+			if (input.result.imageReferences?.some(ref => ref.source.kind === "browser_activity")) return routeToolImageExecutionResult({ result: input.result, options: params.options, contextText: params.phaseInstruction, abortSignal: params.abortSignal, onProgress: input.onProgress });
 			const capture: JsonRecord = parseCaptureResult(input.result.content);
 			const dataUrl: string | undefined = getString(capture, "dataUrl");
 			if (dataUrl === undefined) return input.result;

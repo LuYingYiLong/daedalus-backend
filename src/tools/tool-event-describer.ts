@@ -96,6 +96,9 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 	if (toolName.startsWith("mcp_browser_")) {
 		const action = toolName.slice("mcp_browser_".length);
 		const labels: Record<string, [ToolEventCategory, string, string]> = {
+			connect: ["read", "Connect external browser", "Inspect only the exact user-supplied URL"],
+			propose: ["read", "Propose browser steps", "Finish this turn and ask for conversational confirmation"],
+			execute_step: ["write", "Execute authorized browser step", `Step ${String(args.stepId ?? "")}`],
 			observe: ["read", "Observe webpage", "Read visible page content and interactive elements"],
 			navigate: ["read", "Open webpage", getStringArg(args, "url") ?? "Navigate to webpage"],
 			navigation: ["read", "Navigate webpage", getStringArg(args, "action") ?? "Navigate current webpage"],

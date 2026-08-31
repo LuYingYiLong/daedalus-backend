@@ -93,6 +93,8 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_scheduled_tasks_list",
 		"mcp_scheduled_task_report",
 		"mcp_browser_observe",
+		"mcp_browser_connect",
+		"mcp_browser_propose",
 		"mcp_browser_navigate",
 		"mcp_browser_navigation",
 		"mcp_browser_scroll",
@@ -169,6 +171,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_scheduled_task_resume",
 		"mcp_scheduled_task_delete",
 		"mcp_browser_click",
+		"mcp_browser_execute_step",
 		"mcp_browser_type",
 		"mcp_browser_select",
 		"mcp_image_generate",
@@ -291,6 +294,7 @@ function isStaticToolAvailableInContext(toolName: string | undefined, context: T
 			: context.clientType === "studio" && (SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES.has(toolName) || (toolName === "mcp_scheduled_task_report" && context.scheduledMonitorRun === true));
 	}
 	if (toolName !== undefined && BROWSER_TOOL_NAME_SET.has(toolName)) {
+		if (["mcp_browser_connect", "mcp_browser_propose", "mcp_browser_execute_step"].includes(toolName)) return context.clientType === "studio" && context.browserControl?.externalSupported === true && !context.scheduledMonitorRun && context.hookContext?.chatMode !== "goal" && !(toolName === "mcp_browser_propose" && context.hookContext?.chatMode === "plan");
 		return context.clientType === "studio" && context.browserControl !== undefined;
 	}
 	if (toolName !== undefined && COMPUTER_TOOL_NAME_SET.has(toolName)) return context.clientType === "studio" && context.computerControl !== undefined && context.hookContext?.chatMode !== "goal" && !context.scheduledMonitorRun && (toolName !== "mcp_computer_action" || context.computerControl.inputAllowed === true) && (toolName !== "mcp_computer_locate" || context.computerControl.groundingSupported === true);

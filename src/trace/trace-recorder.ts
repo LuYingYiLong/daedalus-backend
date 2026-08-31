@@ -71,6 +71,18 @@ async function writeTrace(write: TraceRecordWrite, changeType: "created" | "upda
 	return record;
 }
 
+export async function recordBrowserAuditTrace(params: { id: string; sessionId: string; requestId: string; runId: string; kind: string; createdAt: string; summary?: Record<string, unknown> | undefined }): Promise<void> {
+	await writeTrace({
+		recordId: `browser-${params.id}`, parentId: createTraceRecordId(params.sessionId, params.requestId, "turn"),
+		sessionId: params.sessionId, requestId: params.requestId, runId: params.runId,
+		kind: ["authorized", "not_authorized", "proposed"].includes(params.kind) ? "approval" : "step",
+		status: params.kind === "proposed" ? "approval_required" : params.kind === "revoked" || params.kind === "not_authorized" ? "cancelled" : params.summary?.status === "unknown" || params.summary?.status === "not_dispatched" ? "error" : "success",
+		startedAt: params.createdAt, finishedAt: params.createdAt, detailLevel: "full", truncated: false,
+		summary: { externalBrowser: true, activityId: params.id, browserEvent: params.kind, title: `Browser: ${params.kind}`, ...params.summary },
+		payload: { browserActivityId: params.id },
+	}, "completed");
+}
+
 function eventText(event: TraceSourceEvent): string {
 	if (typeof event.data !== "object" || event.data === null || Array.isArray(event.data)) return "";
 	const data = event.data as Record<string, unknown>;
@@ -290,6 +302,12 @@ export async function attachToolTraceOutput(params: {
 	const now: string = new Date().toISOString();
 	let observationId: string | undefined;
   let actionSummary: Record<string, unknown> = {};
+	if (params.toolName?.startsWith("mcp_browser_")) {
+		try {
+			const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output;
+			if (typeof output?.activityId === "string") actionSummary = { activityId: output.activityId, externalBrowser: true };
+		} catch { /* 页面正文不是身份或指令 */ }
+	}
 	if (params.toolName?.startsWith("mcp_computer_")) {
 		try { const output = typeof params.output === "string" ? JSON.parse(params.output) : params.output; if (typeof output?.observationId === "string") observationId = output.observationId;
       if (params.toolName === "mcp_computer_action" && output && typeof output === "object") {
@@ -315,6 +333,6 @@ export async function attachToolTraceOutput(params: {
 		detailLevel: "full",
 		summary: { ...(params.toolName === undefined ? {} : { toolName: params.toolName }), ...(observationId ? { observationId } : {}), ...actionSummary },
 		truncated: false,
-		payload: { toolOutput: observationId ? { observationId, evidence: "desktop_observation", ...actionSummary } : params.output }
+		payload: { toolOutput: observationId ? { observationId, evidence: "desktop_observation", ...actionSummary } : actionSummary.externalBrowser ? { evidence: "browser_activity", ...actionSummary } : params.output }
 	}, "completed");
 }

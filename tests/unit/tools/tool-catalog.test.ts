@@ -213,6 +213,9 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		CUSTOM_MCP_TOOLS_SENTINEL
 	].sort());
 	assert.deepEqual(getNoWorkspaceToolNames().sort(), [
+		"mcp_browser_connect",
+		"mcp_browser_propose",
+		"mcp_browser_execute_step",
 		"mcp_computer_request_access",
 		"mcp_computer_observe",
 		"mcp_computer_locate",
@@ -249,6 +252,7 @@ test("workspace runtime filter hides Godot tools without an active workspace", (
 		CUSTOM_MCP_TOOLS_SENTINEL
 	].sort());
 	assert.deepEqual(filterToolNamesForWorkspace(getDefaultWorkflowToolNames("write"), undefined).sort(), [
+		"mcp_browser_execute_step",
 		"mcp_computer_action",
 		"mcp_browser_click",
 		"mcp_browser_select",
@@ -316,6 +320,7 @@ test("workflow defaults are catalog-backed and resolve to known tools", (): void
 	});
 	for (const group of ["read", "verify", "write"] as const) {
 		for (const toolName of getDefaultWorkflowToolNames(group)) {
+			if (["mcp_browser_connect", "mcp_browser_propose", "mcp_browser_execute_step"].includes(toolName)) { assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot access external tabs"); continue; }
 			if (toolName.startsWith("mcp_computer_")) {
 				assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot observe the desktop");
 				continue;

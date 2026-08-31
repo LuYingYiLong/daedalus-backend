@@ -159,11 +159,14 @@ export class ApprovalGateway {
 			sessionId?: string | undefined;
 			activeScenePath?: string | undefined;
 			computerAuthorized?: boolean | undefined;
+			browserAuthorized?: boolean | undefined;
 		} = {}
 	): Promise<ApprovalDecision> {
 		const requestId: string | undefined = context.requestId;
 		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
 		const effectiveMode: ApprovalMode = goalBinding?.approvalMode ?? this.mode;
+		if (llmToolName === "mcp_browser_execute_step") return context.browserAuthorized === true && goalBinding === undefined
+			? { action: "allow" } : { action: "deny", reason: "browser_consent_required", code: "browser_consent_required" };
 		if (llmToolName === "mcp_computer_action") {
 			return context.computerAuthorized === true && goalBinding === undefined
 				? { action: "allow" }

@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import type { BrowserControlContext, BrowserToolName } from "../tools/browser-tools.js";
 import type { ServerEvent } from "../protocol/types.js";
 import { sendJson } from "./send-json.js";
+import type { BrowserScope } from "../protocol/external-browser.js";
 
 const MAX_PENDING_CALLS: number = 32;
 const MAX_RESULT_BYTES: number = 3 * 1024 * 1024;
@@ -46,6 +47,10 @@ export class StudioBrowserRuntime {
 		};
 	}
 
+	forwardExternal(socket: WebSocket, scope: BrowserScope, toolCallId: string, operation: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+		return this.execute(socket, scope.sessionId, operation, args, signal, { scope, toolCallId });
+	}
+
 	handleResult(socket: WebSocket, params: BrowserToolResultParams): void {
 		const pending: PendingCall | undefined = this.pending.get(params.callId);
 		if (pending === undefined) {
@@ -79,7 +84,7 @@ export class StudioBrowserRuntime {
 		}
 	}
 
-	private execute(socket: WebSocket, sessionId: string, toolName: BrowserToolName, args: Record<string, unknown>, abortSignal?: AbortSignal | undefined): Promise<Record<string, unknown>> {
+	private execute(socket: WebSocket, sessionId: string, toolName: string, args: Record<string, unknown>, abortSignal?: AbortSignal | undefined, external?: { scope: BrowserScope; toolCallId: string }): Promise<Record<string, unknown>> {
 		if (socket.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new StudioBrowserToolError("browser_runtime_disconnected", "Daedalus Studio browser runtime is unavailable.", true));
 		}
@@ -94,25 +99,28 @@ export class StudioBrowserRuntime {
 		return new Promise<Record<string, unknown>>((resolve, reject): void => {
 			const timer: NodeJS.Timeout = setTimeout((): void => {
 				const pending: PendingCall | undefined = this.pending.get(callId);
-				if (pending !== undefined) this.rejectPending(pending, new StudioBrowserToolError("browser_tool_timeout", "Daedalus Studio browser tool timed out.", true));
+				if (pending !== undefined) {
+					sendJson(socket, this.createEvent("browser.tool.cancel", sessionId, callId, { callId, ...(external ? { external: true, ...external } : {}) }, external?.scope));
+					this.rejectPending(pending, new StudioBrowserToolError("browser_tool_timeout", "Daedalus Studio browser tool timed out.", false));
+				}
 			}, DEFAULT_TIMEOUT_MS);
 			const pending: PendingCall = { callId, socket, timer, resolve, reject };
 			if (abortSignal !== undefined) {
 				const handleAbort = (): void => {
 					if (!this.pending.has(callId)) return;
-					sendJson(socket, this.createEvent("browser.tool.cancel", sessionId, callId, { callId }));
+					sendJson(socket, this.createEvent("browser.tool.cancel", sessionId, callId, { callId, ...(external ? { external: true, ...external } : {}) }, external?.scope));
 					this.rejectPending(pending, new StudioBrowserToolError("browser_tool_cancelled", "Browser tool call was cancelled."));
 				};
 				abortSignal.addEventListener("abort", handleAbort, { once: true });
 				pending.abortCleanup = (): void => abortSignal.removeEventListener("abort", handleAbort);
 			}
 			this.pending.set(callId, pending);
-			sendJson(socket, this.createEvent("browser.tool.request", sessionId, callId, { callId, sessionId, toolName, args, timeoutMs: DEFAULT_TIMEOUT_MS }));
+			sendJson(socket, this.createEvent("browser.tool.request", sessionId, callId, { callId, sessionId, toolName, args, timeoutMs: DEFAULT_TIMEOUT_MS, ...(external ? { external: true, ...external } : {}) }, external?.scope));
 		});
 	}
 
-	private createEvent(event: "browser.tool.request" | "browser.tool.cancel", sessionId: string, callId: string, data: Record<string, unknown>): ServerEvent {
-		return { protocolVersion: 3, type: "event", eventId: callId, event, sessionId, requestId: callId, runId: callId, sequence: Date.now() * 1000, createdAt: new Date().toISOString(), data };
+	private createEvent(event: "browser.tool.request" | "browser.tool.cancel", sessionId: string, callId: string, data: Record<string, unknown>, scope?: BrowserScope): ServerEvent {
+		return { protocolVersion: 3, type: "event", eventId: callId, event, sessionId, requestId: scope?.requestId ?? callId, runId: scope?.runId ?? callId, sequence: Date.now() * 1000, createdAt: new Date().toISOString(), data };
 	}
 
 	private rejectPending(pending: PendingCall, error: Error): void {

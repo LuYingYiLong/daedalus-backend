@@ -344,6 +344,32 @@ test("provider config persists cross-provider task model routing", async (): Pro
 	});
 });
 
+test("task routing preserves the active provider model when no provider model is saved", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		installReadOnlySecretStore(async (_service: string, account: string): Promise<string | null> => {
+			return account === "provider:deepseek:api_key" ? "deepseek-key" : null;
+		});
+
+		await saveProviderConfig({
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash"
+		});
+
+		await saveProviderConfig({
+			provider: "deepseek",
+			activate: false,
+			modelRouting: {
+				imageRecognition: { provider: "deepseek", model: "deepseek-v4-flash-vision-exp" }
+			}
+		});
+
+		assert.equal((await loadProviderConfigWithSecret())?.model, "deepseek-v4-flash");
+		assert.equal((await loadProviderConfigWithSecret("deepseek"))?.model, "deepseek-v4-flash");
+		assert.equal((await getProviderModelSelectionStatus()).activeModel.modelId, "deepseek-v4-flash");
+	});
+});
+
 test("image generation model routing is explicit and rejects unsupported models", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const { generateImage, ImageGenerationError } = await import("../../../src/providers/image-generation.js");

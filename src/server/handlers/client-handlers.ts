@@ -183,7 +183,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				ok: true,
 				result: {
 					connection: getClientConnection(socket),
-					features: { computerControl: 2 },
+					features: { computerControl: 3 },
 					session: {
 						sessionId: session.sessionId ?? null,
 						workspaceId: session.activeWorkspace?.id ?? null,

@@ -509,7 +509,7 @@ async function executeSingleToolCall(
 			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
 		}
 	}
-	const displayArgs = functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, action: { ...(executionArgs.action as Record<string, unknown>), ...((executionArgs.action as Record<string, unknown>)?.type === "text" ? { text: "[redacted]" } : {}) } } : executionArgs;
+	const displayArgs = functionName === "mcp_computer_action" ? { observationId: executionArgs.observationId, action: { ...(executionArgs.action as Record<string, unknown>), ...((executionArgs.action as Record<string, unknown>)?.type === "text" ? { text: "[redacted]" } : (executionArgs.action as Record<string, unknown>)?.type === "uia_set_value" ? { value: "[redacted]" } : {}) } } : executionArgs;
 	const exhaustedFailure: ToolFailure | undefined = toolContext?.agentLoopRecovery?.beforeCall(functionName, executionArgs);
 	if (exhaustedFailure !== undefined) {
 		onEvent?.({

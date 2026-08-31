@@ -226,10 +226,12 @@ export class StudioComputerRuntime {
       return;
     }
     this.remove(params.callId, pending);
+    const actionType = (pending.args.action as Record<string, unknown> | undefined)?.type;
+    const transport = typeof actionType === "string" && actionType.startsWith("uia_") ? "uia" : "keyboard";
     if (!params.ok) {
       if (pending.toolName === "mcp_computer_request_access")
         this.audit(pending.scope, "denied", params.error.code);
-      if (pending.actionId) this.audit(pending.scope, "action_failed", params.error.code, { actionId: pending.actionId, observationId: pending.args.observationId, actionType: (pending.args.action as Record<string, unknown>)?.type });
+      if (pending.actionId) this.audit(pending.scope, "action_failed", params.error.code, { actionId: pending.actionId, observationId: pending.args.observationId, actionType, transport });
       pending.reject(new ComputerRuntimeError(params.error.code));
       return;
     }
@@ -239,6 +241,8 @@ export class StudioComputerRuntime {
           ? computerAccessResultSchema.parse(params.result)
           : pending.toolName === "mcp_computer_action" ? computerActionResultSchema.parse(params.result) : computerObservationSchema.parse(params.result);
       if ("actionId" in result && (result.actionId !== pending.actionId || result.observationId !== pending.args.observationId))
+        throw new ComputerRuntimeError("computer_action_mismatch");
+      if ("actionId" in result && result.transport !== undefined && result.transport !== transport)
         throw new ComputerRuntimeError("computer_action_mismatch");
       if ("nodes" in result) {
         if (
@@ -267,7 +271,7 @@ export class StudioComputerRuntime {
         this.grants.set(socket, grants);
         this.audit(pending.scope, pending.args.mode === "control" && pending.control?.approvalMode === "full-trust" ? "auto_allowed" : "allowed");
       }
-      if ("actionId" in result) this.audit(pending.scope, "action_dispatched", undefined, { ...result, actionType: (pending.args.action as Record<string, unknown>)?.type });
+      if ("actionId" in result) this.audit(pending.scope, "action_dispatched", undefined, { ...result, actionType, transport });
       pending.resolve(result);
     } catch {
       pending.reject(new ComputerRuntimeError("computer_result_invalid"));

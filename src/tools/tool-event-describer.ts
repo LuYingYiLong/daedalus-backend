@@ -73,8 +73,11 @@ function createDisplay(
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
 	if (toolName.startsWith("mcp_computer_")) {
+		const action = args.action && typeof args.action === "object" ? args.action as Record<string, unknown> : undefined;
+		const kind = typeof action?.type === "string" ? action.type : "";
+		const channel = kind.startsWith("uia_") ? "UIA control operation" : kind === "click" || kind === "scroll" ? "Synthetic touch" : "Keyboard input";
 		const title = toolName === "mcp_computer_action" ? "Control authorized window" : toolName === "mcp_computer_request_access" ? (args.mode === "control" ? "Request control window" : "Request observation window") : toolName === "mcp_computer_observe" ? "Read window structure and text" : "View observation screenshot";
-		return createDisplay("studio_computer", "Daedalus Computer Use", toolName === "mcp_computer_action" ? "write" : "read", title, "Limited to the window authorized for this turn", { kind: "unknown", label: "Authorized window" });
+		return createDisplay("studio_computer", "Daedalus Computer Use", toolName === "mcp_computer_action" ? "write" : "read", title, toolName === "mcp_computer_action" ? `${channel}; limited to the window authorized for this turn` : "Limited to the window authorized for this turn", { kind: "unknown", label: "Authorized window" });
 	}
 	if (toolName.startsWith("mcp_scheduled_task")) {
 		const labels: Record<string, [ToolEventCategory, string]> = {

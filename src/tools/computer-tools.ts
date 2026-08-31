@@ -33,7 +33,7 @@ export const COMPUTER_TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "mcp_computer_action",
-      description: "Dispatch one input to the authorized window using the current observation's image-pixel coordinates. Requires control authorization. Re-observe after each action, pause, stale frame or unknown result; never retry an uncertain action. Dispatched input does not prove the application completed the task." + evidenceWarning,
+      description: "Dispatch one authorized-window action. Prefer explicit uia_* actions only when the current observation node's supportedActions includes that action; use its nodeId, never a name or handle. uia_set_value replaces a non-password editable text field (empty clears it); text simulates typing. Only UIA and the restricted keyboard channel are available. Coordinate clicks, double-clicks, touch swipes and mouse-wheel injection are unavailable. Use uia_scroll only for a supported scroll container. If the application exposes no supported UIA action and keyboard navigation is insufficient, explain the limitation and ask the user to act; do not invent node IDs or another input channel. Never silently switch input channels or retry an uncertain action. No system-mouse fallback. Requires control authorization and a fresh observation after each action/pause. Dispatched does not prove application success." + evidenceWarning,
       parameters: {
         type: "object", properties: {
           observationId: { type: "string" },

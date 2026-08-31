@@ -27,10 +27,13 @@ const nodeSchema = z
     bounds: rectSchema,
     enabled: z.boolean(),
     password: z.boolean(),
+    supportedActions: z.array(z.enum(["uia_invoke", "uia_toggle", "uia_select", "uia_set_value", "uia_scroll", "uia_expand_collapse"])).max(6).optional(),
   })
   .strict()
   .refine(
-    (node) => !node.password || (node.name === "" && node.automationId === ""),
+    (node) => (!node.password || (node.name === "" && node.automationId === "")) &&
+      (!(node.password || !node.enabled) || !node.supportedActions?.length) &&
+      new Set(node.supportedActions).size === (node.supportedActions?.length ?? 0),
     "Password content is not allowed",
   );
 export const computerObservationSchema = z
@@ -93,17 +96,21 @@ export const computerAccessResultSchema = z
   .object({ granted: z.literal(true), accessId: computerIdSchema, mode: z.enum(["observe", "control"]).optional(), generation: z.number().int().positive().optional() })
   .strict();
 export const computerKeySchema = z.enum(["Enter", "Tab", "Shift+Tab", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Ctrl+A", "Ctrl+F", "Ctrl+S", "Ctrl+Z", "Ctrl+Y"]);
-const pixel = z.number().finite().min(0).max(2560);
 export const computerActionSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("click"), x: pixel, y: pixel, count: z.union([z.literal(1), z.literal(2)]) }).strict(),
   z.object({ type: z.literal("text"), text: z.string().min(1).max(4096) }).strict(),
-  z.object({ type: z.literal("scroll"), x: pixel, y: pixel, axis: z.enum(["horizontal", "vertical"]), amount: z.number().int().min(-10).max(10).refine(n => n !== 0) }).strict(),
   z.object({ type: z.literal("key"), key: computerKeySchema }).strict(),
+  z.object({ type: z.literal("uia_invoke"), nodeId: computerIdSchema }).strict(),
+  z.object({ type: z.literal("uia_toggle"), nodeId: computerIdSchema }).strict(),
+  z.object({ type: z.literal("uia_select"), nodeId: computerIdSchema }).strict(),
+  z.object({ type: z.literal("uia_set_value"), nodeId: computerIdSchema, value: z.string().max(4096) }).strict(),
+  z.object({ type: z.literal("uia_scroll"), nodeId: computerIdSchema, axis: z.enum(["horizontal", "vertical"]), amount: z.enum(["small_increment", "small_decrement", "large_increment", "large_decrement"]) }).strict(),
+  z.object({ type: z.literal("uia_expand_collapse"), nodeId: computerIdSchema, state: z.enum(["expanded", "collapsed"]) }).strict(),
 ]);
 export const computerActionResultSchema = z.object({
   actionId: computerIdSchema, observationId: computerIdSchema,
   status: z.enum(["dispatched", "not_dispatched", "unknown"]),
   dispatchedAt: z.string().datetime(), generation: z.number().int().positive(),
+  transport: z.enum(["uia", "keyboard"]).optional(),
 }).strict();
 export const computerControlUpdateSchema = z.object({
   connectionId: computerIdSchema, sessionId: computerIdSchema, requestId: computerIdSchema, runId: computerIdSchema,

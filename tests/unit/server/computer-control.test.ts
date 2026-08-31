@@ -89,7 +89,7 @@ test("action dedup returns the same result, old run updates cannot cancel a new 
   const grant = runtime.execute(socket, scope, "mcp_computer_request_access", { mode: "control", reason: "fixture" }, undefined, metadata);
   runtime.handleResult(socket, { callId: sent.at(-1)!.data.callId as string, ok: true, result: { granted: true, accessId: "lease", mode: "control", generation: 1 } });
   await grant;
-  const args = { observationId: "frame", action: { type: "click", x: 2, y: 3, count: 1 } };
+  const args = { observationId: "frame", action: { type: "uia_invoke", nodeId: "button" } };
   const first = runtime.execute(socket, scope, "mcp_computer_action", args, undefined, metadata);
   const second = runtime.execute(socket, scope, "mcp_computer_action", args, undefined, metadata);
   const event = sent.at(-1)!.data;

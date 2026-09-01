@@ -469,7 +469,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 				try {
 					const toolsResult = await mcpHost.listTools(serverId, workspaceId);
 					const toolLines: string[] = toolsResult.tools.map((tool) => {
-						const description: string = tool.description ?? "";
+						const description: string = typeof tool.description === "string" ? tool.description : "";
 						return `- ${tool.name}${description.length > 0 ? `：${description}` : ""}`;
 					});
 					sections.push("可用工具：");

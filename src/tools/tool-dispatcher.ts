@@ -76,6 +76,7 @@ export type OnToolEvent = (event: ToolEvent) => void;
 
 const FULL_RESULT_ENRICHMENT_TOOLS: ReadonlySet<string> = new Set([
 	"mcp_godot_editor_capture_scene_view",
+	"mcp_godot_runtime_screenshot",
 	"mcp_image_inspect",
 	"mcp_browser_observe",
 	"mcp_browser_screenshot"
@@ -817,7 +818,8 @@ async function executeSingleToolCall(
 						code: "terminal_output",
 						terminalOutputDelta
 					});
-				}
+				},
+			toolCall.id
 			);
 		if (enricher === undefined && (functionName === "mcp_browser_observe" || functionName === "mcp_browser_screenshot")) {
 			try {
@@ -834,7 +836,7 @@ async function executeSingleToolCall(
 			throw new Error("Request cancelled");
 		}
 		const effectiveEnricher: ToolResultEnricher | undefined = enricher ?? (
-			(functionName === "mcp_image_inspect" || functionName === "mcp_computer_screenshot" || functionName === "mcp_browser_screenshot") && toolContext?.imageRouting !== undefined
+			(functionName === "mcp_image_inspect" || functionName === "mcp_computer_screenshot" || functionName === "mcp_browser_screenshot" || functionName === "mcp_godot_runtime_screenshot") && toolContext?.imageRouting !== undefined
 				? async (input): Promise<IdempotentToolExecutionResult> => {
 					const { routeToolImageExecutionResult } = await import("../providers/tool-image-recognition.js");
 					return routeToolImageExecutionResult({
@@ -848,7 +850,9 @@ async function executeSingleToolCall(
 				: undefined
 		);
 		const result: IdempotentToolExecutionResult = effectiveEnricher === undefined
-			? functionName === "mcp_computer_screenshot" ? (() => { throw new Error("computer_vision_unavailable"); })() : rawResult
+			? functionName === "mcp_computer_screenshot" ? (() => { throw new Error("computer_vision_unavailable"); })()
+				: functionName === "mcp_godot_runtime_screenshot" ? (() => { throw new Error("godot_runtime_vision_unavailable"); })()
+					: rawResult
 			: await effectiveEnricher({
 				toolName: functionName,
 				args: displayArgs,

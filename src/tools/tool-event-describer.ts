@@ -224,6 +224,20 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		});
 	}
 
+	if (toolName.startsWith("mcp_godot_runtime_")) {
+		const nodeId: string = getStringArg(args, "nodeId") ?? "live Control tree";
+		if (toolName.endsWith("_observe")) {
+			return createDisplay("godot_runtime", "Godot Runtime Test", "read", "Observe runtime UI", "Observe the live Godot Control tree", { kind: "unknown", label: "Godot runtime" });
+		}
+		if (toolName.endsWith("_screenshot")) {
+			return createDisplay("godot_runtime", "Godot Runtime Test", "read", "Capture runtime viewport", "Capture the current Godot viewport", { kind: "scene", label: "runtime viewport" });
+		}
+		if (toolName.endsWith("_action")) {
+			return createDisplay("godot_runtime", "Godot Runtime Test", "write", "Operate runtime control", `Dispatch an allowlisted action to ${nodeId}`, { kind: "scene", label: nodeId });
+		}
+		return createDisplay("godot_runtime", "Godot Runtime Test", "read", toolName.endsWith("_wait") ? "Wait for runtime state" : "Assert runtime state", `Verify ${nodeId}`, { kind: "scene", label: nodeId });
+	}
+
 	if (toolName.startsWith("mcp_godot_editor_")) {
 		const scenePath: string | undefined = getStringArg(args, "scenePath");
 		const nodePath: string | undefined = getStringArg(args, "nodePath");

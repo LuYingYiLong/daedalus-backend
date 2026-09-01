@@ -3,6 +3,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 export type McpRequestContext = {
 	workspaceId?: string | undefined;
 	editorInstanceId?: string | undefined;
+	sessionId?: string | undefined;
+	requestId?: string | undefined;
+	runId?: string | undefined;
+	toolCallId?: string | undefined;
 };
 
 const mcpRequestContextStorage: AsyncLocalStorage<McpRequestContext> = new AsyncLocalStorage<McpRequestContext>();
@@ -20,5 +24,8 @@ export function getCurrentMcpEditorInstanceId(): string | undefined {
 }
 
 export async function withMcpRequestContext<T>(context: McpRequestContext, run: () => Promise<T>): Promise<T> {
-	return await mcpRequestContextStorage.run(context, run);
+	return await mcpRequestContextStorage.run({
+		...mcpRequestContextStorage.getStore(),
+		...context
+	}, run);
 }

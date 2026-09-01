@@ -4,6 +4,7 @@ import { findWorkspace, isPathInsideWorkspaceSources } from "../workspace/regist
 import { getPluginMcpToolByLlmName, getPluginTool } from "../plugins/runtime/registries.js";
 import type { DownloadAuthorizationScope } from "./download-authorization.js";
 import type { NetworkAccessRequired } from "./download-authorization.js";
+import { godotRuntimeTestBridge } from "../mcp/godot/bridges/runtime-test-bridge.js";
 
 export type ApprovalMode = "manual" | "auto-safe" | "full-trust";
 
@@ -159,6 +160,13 @@ export function evaluateToolCall(
 
 	if (isHardBlocked(toolName)) {
 		return { action: "deny", reason: "This tool is hard-disabled." };
+	}
+
+	if (toolName === "mcp_godot_runtime_action") {
+		const testSessionId: unknown = args.testSessionId;
+		return typeof testSessionId === "string" && godotRuntimeTestBridge.isActiveSession(testSessionId, workspaceId)
+			? { action: "allow" }
+			: { action: "deny", reason: "Start an explicit Godot runtime test session in Studio before dispatching runtime input.", code: "runtime_test_session_required" };
 	}
 
 	if ([

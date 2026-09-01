@@ -107,8 +107,11 @@ export async function routeToolImageExecutionResult(params: {
 	const references = params.result.imageReferences ?? [];
 	const computerReference = references.find(reference => reference.source.kind === "computer_observation");
 	const browserReference = references.find(reference => reference.source.kind === "browser_activity");
+	const godotRuntimeReference = references.find(reference => reference.source.kind === "godot_runtime");
 	const evidence = computerReference?.source.kind === "computer_observation" ? { observationId: computerReference.source.observationId, untrustedEvidence: true }
-		: browserReference?.source.kind === "browser_activity" ? { activityId: browserReference.source.activityId, externalBrowser: true, untrustedEvidence: true } : {};
+		: browserReference?.source.kind === "browser_activity" ? { activityId: browserReference.source.activityId, externalBrowser: true, untrustedEvidence: true }
+			: godotRuntimeReference?.source.kind === "godot_runtime" ? { observationId: godotRuntimeReference.source.observationId, godotRuntime: true, untrustedEvidence: true }
+				: {};
 	if (references.length === 0) {
 		throw new Error("image_inspection_reference_missing");
 	}

@@ -5,10 +5,10 @@ import type { ClientSession } from "./client-session.js";
 import { sendJson } from "./send-json.js";
 import { sessionSearchService } from "../session-search/service.js";
 
-export type ClientType = "godot_editor_bridge" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
+export type ClientType = "godot_editor_bridge" | "godot_runtime_test_bridge" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
 
 export type ClientCapabilities = Partial<Record<
-	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "externalBrowser" | "computerObservation" | "computerControl" | "computerGrounding" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",
+	"editorTools" | "editorUndoRedo" | "sceneViewCapture" | "godotRuntimeTest" | "godotRuntimeInput" | "godotRuntimeAssertions" | "inlineDiffUndo" | "inlineDiffView" | "sessionSubscribe" | "approval" | "externalMcp" | "browserTools" | "externalBrowser" | "computerObservation" | "computerControl" | "computerGrounding" | "scheduledTasks" | "scheduledTaskReport" | "remoteControl",
 	boolean
 >>;
 
@@ -24,6 +24,8 @@ export type ClientConnectionInfo = {
 	workspaceId?: string | undefined;
 	workspaceRoot?: string | undefined;
 	editorInstanceId?: string | undefined;
+	runtimeInstanceId?: string | undefined;
+	testSessionId?: string | undefined;
 	bridgeProtocolVersion?: number | undefined;
 	bridgeHandshakeAccepted: boolean;
 	capabilities: ClientCapabilities;
@@ -60,6 +62,8 @@ function toPublicInfo(record: ConnectionRecord): ClientConnectionInfo {
 		workspaceId: record.workspaceId,
 		workspaceRoot: record.workspaceRoot,
 		editorInstanceId: record.editorInstanceId,
+		runtimeInstanceId: record.runtimeInstanceId,
+		testSessionId: record.testSessionId,
 		bridgeProtocolVersion: record.bridgeProtocolVersion,
 		bridgeHandshakeAccepted: record.bridgeHandshakeAccepted,
 		capabilities: { ...record.capabilities }
@@ -111,6 +115,8 @@ export function updateClientConnection(socket: WebSocket, update: {
 	workspaceId?: string | null | undefined;
 	workspaceRoot?: string | null | undefined;
 	editorInstanceId?: string | undefined;
+	runtimeInstanceId?: string | undefined;
+	testSessionId?: string | undefined;
 	bridgeProtocolVersion?: number | undefined;
 	bridgeHandshakeAccepted?: boolean | undefined;
 	capabilities?: ClientCapabilities | undefined;
@@ -129,6 +135,8 @@ export function updateClientConnection(socket: WebSocket, update: {
 		record.workspaceRoot = update.workspaceRoot ?? undefined;
 	}
 	record.editorInstanceId = update.editorInstanceId ?? record.editorInstanceId;
+	record.runtimeInstanceId = update.runtimeInstanceId ?? record.runtimeInstanceId;
+	record.testSessionId = update.testSessionId ?? record.testSessionId;
 	record.bridgeProtocolVersion = update.bridgeProtocolVersion ?? record.bridgeProtocolVersion;
 	record.bridgeHandshakeAccepted = update.bridgeHandshakeAccepted ?? record.bridgeHandshakeAccepted;
 	record.capabilities = update.capabilities ?? record.capabilities;

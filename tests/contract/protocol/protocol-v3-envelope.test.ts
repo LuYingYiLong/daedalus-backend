@@ -46,6 +46,34 @@ test("v3 client hello explicitly declares its protocol version", (): void => {
 	}).success, true);
 });
 
+test("runtime test bridge hello and result requests require explicit identities", (): void => {
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "runtime-hello",
+		method: "client.hello",
+		params: {
+			protocolVersion: 3,
+			clientType: "godot_runtime_test_bridge",
+			workspaceRoot: "C:/fixture/project",
+			runtimeInstanceId: "runtime-one",
+			testSessionId: "godot-test-123",
+			testSessionToken: "0123456789abcdefghijklmnopqrstuvwxyz",
+			bridgeProtocolVersion: 4,
+		}
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "runtime-result-missing-instance",
+		method: "godot.runtime.tool.result",
+		params: {
+			callId: "call-one",
+			testSessionId: "godot-test-123",
+			ok: true,
+			result: {},
+		}
+	}).success, false);
+});
+
 test("v3 envelope schema rejects older transport versions", (): void => {
 	assert.equal(clientRequestEnvelopeSchema.safeParse({
 		protocolVersion: 2,

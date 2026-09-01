@@ -781,12 +781,15 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.hello"),
 		params: z.object({
 			protocolVersion: z.literal(3),
-			clientType: z.enum(["godot_editor_bridge", "studio", "studio_remote", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
+			clientType: z.enum(["godot_editor_bridge", "godot_runtime_test_bridge", "studio", "studio_remote", "studio_scheduler", "cli", "smoke", "external_mcp"]).optional(),
 			clientName: z.string().min(1).max(120).optional(),
 			workspaceRoot: z.string().min(1).optional(),
 			workspaceId: z.string().min(1).optional(),
 			godotExecutablePath: z.string().min(1).optional(),
 			editorInstanceId: z.string().min(1).max(160).optional(),
+			runtimeInstanceId: z.string().min(1).max(160).optional(),
+			testSessionId: z.string().min(1).max(160).optional(),
+			testSessionToken: z.string().min(32).max(256).optional(),
 			bridgeVersion: z.string().min(1).max(64).optional(),
 			bridgeProtocolVersion: z.number().int().positive().optional(),
 			godotVersion: z.string().min(1).max(64).optional(),
@@ -807,6 +810,9 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("client.capabilities.update"),
 		params: z.object({
 			capabilities: z.object({
+				godotRuntimeTest: z.boolean().optional(),
+				godotRuntimeInput: z.boolean().optional(),
+				godotRuntimeAssertions: z.boolean().optional(),
 				browserTools: z.boolean().optional(),
 				externalBrowser: z.boolean().optional(),
 				computerObservation: z.boolean().optional(),
@@ -2274,6 +2280,55 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("editor.context.update"),
 		params: z.record(z.string(), z.unknown()),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godot.runtimeTest.create"),
+		params: z.object({ workspaceId: z.string().min(1).max(240).optional(), sourceFolderId: z.string().min(1).max(160).optional() }).strict().optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godot.runtimeTest.status"),
+		params: z.object({ workspaceId: z.string().min(1).max(240).optional() }).strict().optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godot.runtimeTest.stop"),
+		params: z.object({ testSessionId: z.string().min(1).max(160) }).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godot.runtime.heartbeat"),
+		params: z.object({
+			testSessionId: z.string().min(1).max(160),
+			runtimeInstanceId: z.string().min(1).max(160),
+			treeRevision: z.number().int().nonnegative(),
+			scenePath: z.string().max(2048).optional(),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("godot.runtime.tool.result"),
+		params: z.object({
+			callId: z.string().min(1).max(200),
+			testSessionId: z.string().min(1).max(160),
+			runtimeInstanceId: z.string().min(1).max(160),
+			ok: z.boolean(),
+			result: z.record(z.string(), z.unknown()).optional(),
+			error: z.object({
+				code: z.string().min(1).max(160),
+				message: z.string().min(1).max(8000),
+				retryable: z.boolean(),
+			}).strict().optional(),
+		}).strict().superRefine((value, context): void => {
+			if (value.ok && value.result === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful runtime tool results require result." });
+			if (!value.ok && value.error === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Failed runtime tool results require error." });
+		}),
 	}),
 	z.object({
 		type: z.literal("request"),

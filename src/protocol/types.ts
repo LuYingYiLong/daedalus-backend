@@ -107,6 +107,8 @@ export type CanonicalServerEventName =
 	| "guide.applied"
 	| "session.renamed"
 	| "editor.tool.requested"
+	| "godot.runtime.tool.requested"
+	| "godot.runtime.tool.cancelled"
 	| "mcp.config.updated"
 	| "skill.catalog.changed"
 	| "usage.metrics.recorded"

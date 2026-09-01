@@ -146,6 +146,10 @@ function detachEditorBridgeSocket(socket: WebSocket, mcpHost: McpHost): void {
 	mcpHost.getEditorBridge().detachSocket(socket);
 }
 
+function detachGodotRuntimeSocket(socket: WebSocket, mcpHost: McpHost): void {
+	mcpHost.getRuntimeTestBridge().detachSocket(socket);
+}
+
 function abortActiveRequests(session: ClientSession): void {
 	for (const controller of session.activeAbortControllers.values()) {
 		controller.abort();
@@ -232,7 +236,10 @@ function handleSocketMessage(
 	let failed: boolean = false;
 	withMcpRequestContext({
 		workspaceId: connectionSession.activeWorkspace?.id,
-		editorInstanceId: connectionSession.editorInstanceId
+		editorInstanceId: connectionSession.editorInstanceId,
+		sessionId: connectionSession.sessionId,
+		requestId: requestData.id,
+		runId: requestData.id
 	}, async (): Promise<void> => {
 		await dispatchRequest(socket, requestData, connectionSession, mcpHost);
 	}).catch((error: unknown): void => {
@@ -264,6 +271,7 @@ function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: M
 		});
 	}
 	detachEditorBridgeSocket(socket, mcpHost);
+	detachGodotRuntimeSocket(socket, mcpHost);
 	studioBrowserRuntime.detachSocket(socket);
 	revokeExternalBrowser(socket);
 	studioComputerRuntime.detachSocket(socket);

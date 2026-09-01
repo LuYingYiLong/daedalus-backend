@@ -46,6 +46,7 @@ import { COMPUTER_TOOL_NAMES, COMPUTER_TOOL_NAME_SET, type ComputerControlContex
 import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskControlContext } from "./scheduled-task-tools.js";
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 import type { PluginDevelopmentControlContext } from "../plugins/development/types.js";
+import { godotRuntimeTestBridge } from "../mcp/godot/bridges/runtime-test-bridge.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -56,7 +57,7 @@ export type ToolExecutionContext = {
 	executionControlAvailable?: boolean | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
 	chatCompletionAvailable?: boolean | undefined;
-	clientType?: "studio" | "studio_remote" | "studio_scheduler" | "godot_editor_bridge" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
+	clientType?: "studio" | "studio_remote" | "studio_scheduler" | "godot_editor_bridge" | "godot_runtime_test_bridge" | "cli" | "smoke" | "external_mcp" | "legacy" | undefined;
 	imageRouting?: {
 		options: ProviderChatOptions;
 		contextText: string;
@@ -110,6 +111,8 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_read_text_file",
 		"mcp_workspace_search_text",
 		"mcp_godot_get_runtime_status",
+		"mcp_godot_runtime_observe",
+		"mcp_godot_runtime_screenshot",
 		"mcp_godot_get_godot_version",
 		"mcp_godot_search_documentation",
 		"mcp_godot_get_debug_output",
@@ -159,12 +162,15 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		CUSTOM_MCP_TOOLS_SENTINEL
 	],
 	verify: [
+		"mcp_godot_runtime_wait",
+		"mcp_godot_runtime_assert",
 		"mcp_godot_validate_scene_script_references",
 		"mcp_godot_lsp_get_file_diagnostics",
 		"mcp_terminal_run_safe_preset"
 	],
 	write: [
 		"mcp_computer_action",
+		"mcp_godot_runtime_action",
 		"mcp_scheduled_task_create",
 		"mcp_scheduled_task_update",
 		"mcp_scheduled_task_pause",
@@ -287,6 +293,11 @@ function isGodotToolName(toolName: string | undefined): boolean {
 }
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
+	if (toolName?.startsWith("mcp_godot_runtime_") === true) {
+		if (context.clientType !== "studio" || context.scheduledMonitorRun || context.hookContext?.chatMode === "goal") return false;
+		if (!godotRuntimeTestBridge.isOnline(context.workspaceId)) return false;
+		if (toolName === "mcp_godot_runtime_action") return context.hookContext?.chatMode === "agent";
+	}
 	if (toolName !== undefined && SCHEDULED_TASK_TOOL_NAME_SET.has(toolName)) {
 		if (context.scheduledTaskControl === undefined) return false;
 		return context.clientType === "studio_scheduler"

@@ -14,12 +14,14 @@ import { stripApprovalReasonArg } from "./approval-reason.js";
 import type { TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
 import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { createSourceScopedWorkspace, findWorkspace } from "../workspace/registry.js";
+import { godotRuntimeTestBridge, GODOT_RUNTIME_TEST_SERVER_ID } from "../mcp/godot/bridges/runtime-test-bridge.js";
+import { withMcpRequestContext } from "../mcp/request-context.js";
 
 const TOOL_EXECUTION_DEDUP_TTL_MS: number = 30 * 60 * 1000;
 const MAX_COMPLETED_TOOL_EXECUTIONS: number = 500;
 
 type ToolResultContent = {
-	content: Array<{ type: string; text?: string }>;
+	content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 };
 
 type ToolExecutionRecord = {
@@ -387,9 +389,13 @@ async function executeMappedTool(
 	preserveFullResultForEnrichment: boolean = false,
 	abortSignal?: AbortSignal | undefined,
 	onProgress?: ((progress: McpProgressNotification) => void) | undefined,
-	sessionId?: string | undefined
+	sessionId?: string | undefined,
+	toolCallId?: string | undefined
 ): Promise<IdempotentToolExecutionResult> {
-	const result = await mcpHost.callTool(
+	const result: ToolResultContent = await withMcpRequestContext({
+		...(sessionId === undefined ? {} : { sessionId }),
+		...(toolCallId === undefined ? {} : { toolCallId })
+	}, async (): Promise<ToolResultContent> => await mcpHost.callTool(
 		serverId,
 		toolName,
 		args,
@@ -399,15 +405,35 @@ async function executeMappedTool(
 		abortSignal,
 		onProgress,
 		sessionId
-	) as ToolResultContent;
+	) as ToolResultContent);
 	const textResult: string = extractTextContent(result);
 	const truncated: boolean = textResult.length > MAX_TOOL_RESULT_CHARS;
+	let imageReferences: ProviderToolImageReference[] | undefined;
+	if (serverId === GODOT_RUNTIME_TEST_SERVER_ID && toolName === "screenshot") {
+		let metadata: Record<string, unknown>;
+		try {
+			metadata = JSON.parse(textResult) as Record<string, unknown>;
+		} catch {
+			throw new Error("runtime_screenshot_metadata_invalid");
+		}
+		if (typeof metadata.testSessionId !== "string"
+			|| typeof metadata.runtimeInstanceId !== "string"
+			|| typeof metadata.observationId !== "string") {
+			throw new Error("runtime_screenshot_metadata_invalid");
+		}
+		imageReferences = [godotRuntimeTestBridge.getScreenshotReference(
+			metadata.testSessionId,
+			metadata.runtimeInstanceId,
+			metadata.observationId
+		)];
+	}
 	return {
 		content: preserveFullResultForEnrichment ? textResult : trimToolResult(textResult),
 		rawContentLength: textResult.length,
 		truncated,
 		reused: false,
-		fingerprint
+		fingerprint,
+		...(imageReferences === undefined ? {} : { imageReferences })
 	};
 }
 
@@ -543,7 +569,8 @@ export async function executeLlmToolWithIdempotency(
 	abortSignal?: AbortSignal | undefined,
 	commandAuthorization?: TerminalCommandAuthorization | undefined,
 	preserveFullResultForEnrichment: boolean = false,
-	onProgress?: ((progress: McpProgressNotification) => void) | undefined
+	onProgress?: ((progress: McpProgressNotification) => void) | undefined,
+	toolCallId?: string | undefined
 ): Promise<IdempotentToolExecutionResult> {
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
@@ -592,7 +619,8 @@ export async function executeLlmToolWithIdempotency(
 				preserveFullResultForEnrichment,
 				abortSignal,
 				onProgress,
-				sessionId
+				sessionId,
+				toolCallId
 			)
 		);
 		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);
@@ -637,7 +665,8 @@ export async function executeLlmToolWithIdempotency(
 				preserveFullResultForEnrichment,
 				abortSignal,
 				onProgress,
-			sessionId
+				sessionId,
+			toolCallId
 			)
 		);
 		scheduleEditorFilesystemRefreshAfterGodotMutation(mcpHost, llmToolName, args, workspaceId);

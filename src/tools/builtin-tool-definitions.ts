@@ -575,6 +575,98 @@ const GODOT_RUNTIME_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	)
 ];
 
+const GODOT_RUNTIME_TEST_TOOL_DEFINITIONS: ChatCompletionTool[] = [
+	createSceneToolDefinition(
+		"mcp_godot_runtime_observe",
+		"Observe the live Control tree of the explicit Godot runtime test session. This is read-only and returns short-lived observation and node identifiers.",
+		{
+			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
+			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 }
+		},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_runtime_action",
+		"Dispatch exactly one allowlisted action to a Control from the latest runtime observation. Available only in Agent execution while an explicit Studio runtime test session is active.",
+		{
+			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
+			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 },
+			observationId: { type: "string", minLength: 1, maxLength: 240 },
+			nodeId: { type: "string", minLength: 1, maxLength: 240 },
+			actionId: { type: "string", minLength: 1, maxLength: 160, description: "Stable unique id for this action. Reusing it must not dispatch input twice." },
+			action: {
+				oneOf: [
+					{ type: "object", properties: { type: { const: "button_press" } }, required: ["type"], additionalProperties: false },
+					{ type: "object", properties: { type: { const: "toggle" } }, required: ["type"], additionalProperties: false },
+					{ type: "object", properties: { type: { const: "set_text" }, text: { type: "string", maxLength: 4096 } }, required: ["type", "text"], additionalProperties: false },
+					{ type: "object", properties: { type: { const: "select" }, index: { type: "integer", minimum: 0, maximum: 10000 } }, required: ["type", "index"], additionalProperties: false },
+					{
+						type: "object",
+						properties: {
+							type: { const: "key_press" },
+							key: { type: "string", enum: ["enter", "tab", "shift+tab", "escape", "backspace", "delete", "arrow_up", "arrow_down", "arrow_left", "arrow_right", "home", "end", "page_up", "page_down", "ctrl+a", "ctrl+f", "ctrl+s", "ctrl+z", "ctrl+y"] }
+						},
+						required: ["type", "key"],
+						additionalProperties: false
+					}
+				]
+			}
+		},
+		["testSessionId", "runtimeInstanceId", "observationId", "nodeId", "actionId", "action"]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_runtime_wait",
+		"Wait for one allowlisted property of an observed Godot Control to equal the expected value. It cannot read arbitrary object properties.",
+		{
+			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
+			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 },
+			observationId: { type: "string", minLength: 1, maxLength: 240 },
+			nodeId: { type: "string", minLength: 1, maxLength: 240 },
+			assertion: {
+				type: "object",
+				properties: {
+					property: { type: "string", enum: ["exists", "visible", "visibleInTree", "enabled", "text", "buttonPressed", "selected", "currentTab", "testState"] },
+					equals: { type: ["string", "number", "boolean", "null"] }
+				},
+				required: ["property", "equals"],
+				additionalProperties: false
+			},
+			timeoutMsec: { type: "integer", minimum: 1, maximum: 30000 }
+		},
+		["testSessionId", "runtimeInstanceId", "observationId", "nodeId", "assertion"]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_runtime_assert",
+		"Assert one allowlisted property of an observed Godot Control without executing input.",
+		{
+			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
+			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 },
+			observationId: { type: "string", minLength: 1, maxLength: 240 },
+			nodeId: { type: "string", minLength: 1, maxLength: 240 },
+			assertion: {
+				type: "object",
+				properties: {
+					property: { type: "string", enum: ["exists", "visible", "visibleInTree", "enabled", "text", "buttonPressed", "selected", "currentTab", "testState"] },
+					equals: { type: ["string", "number", "boolean", "null"] }
+				},
+				required: ["property", "equals"],
+				additionalProperties: false
+			}
+		},
+		["testSessionId", "runtimeInstanceId", "observationId", "nodeId", "assertion"]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_runtime_screenshot",
+		"Capture the current Godot viewport as auxiliary evidence for an existing runtime observation. Do not use the image as the only success assertion.",
+		{
+			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
+			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 },
+			observationId: { type: "string", minLength: 1, maxLength: 240 }
+		},
+		["testSessionId", "runtimeInstanceId", "observationId"]
+	)
+];
+
 const GODOT_HEADLESS_OPERATION_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	createSceneToolDefinition(
 		"mcp_godot_get_uid",
@@ -901,6 +993,7 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	...WEB_SEARCH_TOOL_DEFINITIONS,
 	...WORKSPACE_TOOL_DEFINITIONS,
 	...GODOT_RUNTIME_TOOL_DEFINITIONS,
+	...GODOT_RUNTIME_TEST_TOOL_DEFINITIONS,
 	...GODOT_HEADLESS_OPERATION_TOOL_DEFINITIONS,
 	...SCENE_TOOL_DEFINITIONS,
 	...GODOT_PROJECT_SEMANTIC_TOOL_DEFINITIONS,

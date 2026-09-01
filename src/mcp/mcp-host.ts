@@ -9,6 +9,11 @@ import * as path from "node:path";
 import { buildCustomMcpServerConfigs } from "./custom-mcp-config-store.js";
 import { GODOT_DIAGNOSTICS_SERVER_ID, GodotDiagnosticsBridge } from "./godot/bridges/diagnostics-bridge.js";
 import { GODOT_EDITOR_SERVER_ID, GodotEditorBridge } from "./godot/bridges/editor-bridge.js";
+import {
+	GODOT_RUNTIME_TEST_SERVER_ID,
+	GodotRuntimeTestBridge,
+	godotRuntimeTestBridge
+} from "./godot/bridges/runtime-test-bridge.js";
 import { McpSession } from "./mcp-session.js";
 import type { McpServerConfig } from "./types.js";
 import {
@@ -179,6 +184,7 @@ export class McpHost {
 	private globalCustomInitialized: boolean = false;
 	private activeWorkspaceId?: string | undefined;
 	private readonly editorBridge: GodotEditorBridge = new GodotEditorBridge();
+	private readonly runtimeTestBridge: GodotRuntimeTestBridge = godotRuntimeTestBridge;
 	private readonly diagnosticsBridge: GodotDiagnosticsBridge = new GodotDiagnosticsBridge();
 	private readonly sourceIndex: WorkspaceSourceIndex = new WorkspaceSourceIndex();
 
@@ -737,6 +743,10 @@ export class McpHost {
 		return this.editorBridge;
 	}
 
+	getRuntimeTestBridge(): GodotRuntimeTestBridge {
+		return this.runtimeTestBridge;
+	}
+
 	getDiagnosticsBridge(): GodotDiagnosticsBridge {
 		return this.diagnosticsBridge;
 	}
@@ -782,6 +792,7 @@ export class McpHost {
 			if (this.editorBridge.isOnline()) {
 				serverIds.push(GODOT_EDITOR_SERVER_ID);
 			}
+			if (this.runtimeTestBridge.isOnline()) serverIds.push(GODOT_RUNTIME_TEST_SERVER_ID);
 			return serverIds.sort();
 		}
 
@@ -791,6 +802,7 @@ export class McpHost {
 			if (this.editorBridge.isOnline(resolvedWorkspaceId)) {
 				serverIds.push(GODOT_EDITOR_SERVER_ID);
 			}
+			if (this.runtimeTestBridge.isOnline(resolvedWorkspaceId)) serverIds.push(GODOT_RUNTIME_TEST_SERVER_ID);
 			return serverIds.sort();
 		}
 
@@ -799,6 +811,7 @@ export class McpHost {
 		if (this.editorBridge.isOnline(resolvedWorkspaceId)) {
 			serverIds.push(GODOT_EDITOR_SERVER_ID);
 		}
+		if (this.runtimeTestBridge.isOnline(resolvedWorkspaceId)) serverIds.push(GODOT_RUNTIME_TEST_SERVER_ID);
 		return serverIds.sort();
 	}
 
@@ -931,6 +944,10 @@ export class McpHost {
 			return this.editorBridge.listTools();
 		}
 
+		if (serverId === GODOT_RUNTIME_TEST_SERVER_ID) {
+			return this.runtimeTestBridge.listTools();
+		}
+
 		if (serverId === GODOT_DIAGNOSTICS_SERVER_ID) {
 			return this.diagnosticsBridge.listTools();
 		}
@@ -1014,6 +1031,20 @@ export class McpHost {
 			delete forwardedArgs.sourceFolderId;
 			delete forwardedArgs.scope;
 			return this.editorBridge.callTool(name, forwardedArgs, routedWorkspaceId, editorInstanceId);
+		}
+
+		if (serverId === GODOT_RUNTIME_TEST_SERVER_ID) {
+			const workspace: WorkspaceConfig | undefined = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
+			let routedWorkspaceId: string | undefined = workspaceId;
+			if (workspace !== undefined) {
+				const selection = resolveWorkspaceSources(workspace, { sourceFolderId, operation: "godot" });
+				if (selection.kind !== "source") throw new Error("source_required: runtime tests require one Godot source folder.");
+				routedWorkspaceId = createSourceScopedWorkspace(workspace, selection.source.id).id;
+			}
+			const forwardedArgs: Record<string, unknown> = { ...args };
+			delete forwardedArgs.sourceFolderId;
+			delete forwardedArgs.scope;
+			return this.runtimeTestBridge.callTool(name, forwardedArgs, routedWorkspaceId, abortSignal);
 		}
 
 		if (serverId === GODOT_DIAGNOSTICS_SERVER_ID) {

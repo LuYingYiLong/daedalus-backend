@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import WebSocket from "ws";
 import { clearDynamicMcpToolsForWorkspace, clearGlobalDynamicMcpTools, replaceDynamicMcpToolsForWorkspace, replaceGlobalDynamicMcpTools } from "../../../src/tools/dynamic-mcp-tools.js";
 import { createWorkspaceToolCatalog } from "../../../src/tools/tool-catalog.js";
 import { filterToolNamesForWorkspace, getDefaultWorkflowToolNames, getNoWorkspaceToolNames } from "../../../src/tools/tool-catalog.js";
@@ -7,6 +8,7 @@ import { CUSTOM_MCP_TOOLS_SENTINEL } from "../../../src/tools/tool-sentinels.js"
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../../src/tools/execution-control.js";
 import { CHAT_COMPLETION_CONTROL_TOOL_NAME } from "../../../src/tools/chat-completion-control.js";
 import { CONTEXT_CONTROL_TOOL_NAMES, type ContextControlContext } from "../../../src/tools/context-control.js";
+import { godotRuntimeTestBridge } from "../../../src/mcp/godot/bridges/runtime-test-bridge.js";
 
 function getFunctionToolName(tool: { type: string; function?: { name: string } | undefined }): string {
 	assert.equal(tool.type, "function");
@@ -71,6 +73,49 @@ test("workspace tool catalog keeps builtin metadata complete", (): void => {
 	assert.deepEqual(healthAudit?.mapping, { serverId: "godot", toolName: "audit_project_health" });
 	assert.equal(healthAudit?.policy.risk, "read");
 	assert.equal(catalog.getToolNamesForPhase("read").includes("mcp_godot_audit_project_health"), true);
+});
+
+test("Godot runtime test write tools are exposed only to Studio Agent mode", (): void => {
+	const owner = { readyState: WebSocket.OPEN, send(): void {}, close(): void {} } as unknown as WebSocket;
+	const runtime = { readyState: WebSocket.OPEN, send(): void {}, close(): void {} } as unknown as WebSocket;
+	const runtimeSession = godotRuntimeTestBridge.createSession(owner, "workspace-a:source", "C:/fixture/project", "workspace-a");
+	godotRuntimeTestBridge.attachRuntime(runtime, {
+		testSessionId: runtimeSession.testSessionId,
+		testSessionToken: runtimeSession.token,
+		runtimeInstanceId: "runtime-one",
+		workspaceRoot: "C:/fixture/project",
+	});
+	godotRuntimeTestBridge.heartbeat(runtime, { testSessionId: runtimeSession.testSessionId, runtimeInstanceId: "runtime-one", treeRevision: 1 });
+	const base = {
+		workspaceId: "workspace-a",
+		hasGodotWorkspaceCapability: true,
+		clientType: "studio" as const,
+	};
+	const ask = createWorkspaceToolCatalog({ ...base, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "ask" as const } });
+	const plan = createWorkspaceToolCatalog({ ...base, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "plan" as const } });
+	const agent = createWorkspaceToolCatalog({ ...base, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "agent" as const } });
+	const remote = createWorkspaceToolCatalog({ ...base, clientType: "studio_remote" as const, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "agent" as const } });
+
+	try {
+		assert.notEqual(ask.getEntry("mcp_godot_runtime_observe"), undefined);
+		assert.equal(ask.getEntry("mcp_godot_runtime_action"), undefined);
+		assert.equal(plan.getEntry("mcp_godot_runtime_action"), undefined);
+		assert.notEqual(agent.getEntry("mcp_godot_runtime_action"), undefined);
+		assert.equal(remote.getEntry("mcp_godot_runtime_observe"), undefined);
+	} finally {
+		godotRuntimeTestBridge.stopSession(owner, runtimeSession.testSessionId);
+	}
+});
+
+test("Godot runtime tools are hidden until an explicit runtime instance is connected", (): void => {
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "runtime-offline-workspace",
+		hasGodotWorkspaceCapability: true,
+		clientType: "studio",
+		hookContext: { model: "fixture", approvalMode: "manual", chatMode: "agent" },
+	});
+	assert.equal(catalog.getEntry("mcp_godot_runtime_observe"), undefined);
+	assert.equal(catalog.getEntry("mcp_godot_runtime_action"), undefined);
 });
 
 test("workspace tool catalog exposes approval reason schema for write tools", (): void => {
@@ -323,6 +368,10 @@ test("workflow defaults are catalog-backed and resolve to known tools", (): void
 			if (["mcp_browser_connect", "mcp_browser_propose", "mcp_browser_execute_step"].includes(toolName)) { assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot access external tabs"); continue; }
 			if (toolName.startsWith("mcp_computer_")) {
 				assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot observe the desktop");
+				continue;
+			}
+			if (toolName.startsWith("mcp_godot_runtime_")) {
+				assert.equal(catalog.getEntry(toolName), undefined, "Scheduled monitors cannot operate a Godot runtime test session");
 				continue;
 			}
 			if (toolName === CUSTOM_MCP_TOOLS_SENTINEL) {

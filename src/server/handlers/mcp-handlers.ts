@@ -15,8 +15,14 @@ import {
 import { createProviderStatusEvent } from "../../providers/provider-error.js";
 import { SecretStoreUnavailableError } from "../../secrets/secret-store.js";
 import { logger } from "../../logger.js";
+import { getClientConnection } from "../client-connections.js";
 
-function canCallMcpToolDirectly(toolName: string): boolean {
+function canCallMcpToolDirectly(toolName: string, serverId: string, args: Record<string, unknown>, mcpHost: McpHost, workspaceId?: string | undefined): boolean {
+	if (serverId === "godot_runtime") {
+		if (!["observe", "action", "wait", "assert", "screenshot"].includes(toolName)) return false;
+		if (toolName !== "action") return true;
+		return typeof args.testSessionId === "string" && mcpHost.getRuntimeTestBridge().isActiveSession(args.testSessionId, workspaceId);
+	}
 	const allowedTools: Set<string> = new Set([
 		"get_project_summary",
 		"list_project_files",
@@ -113,7 +119,8 @@ export async function handleMcpRequest(socket: WebSocket, request: ClientRequest
 		const serverId: string = request.params.serverId ?? "godot";
 
 		try {
-			if (!canCallMcpToolDirectly(request.params.name)) {
+			if (serverId === "godot_runtime" && getClientConnection(socket)?.clientType !== "studio") throw new Error("runtime_test_studio_required");
+			if (!canCallMcpToolDirectly(request.params.name, serverId, request.params.args ?? {}, mcpHost, workspaceId)) {
 				sendJson(socket, {
 					type: "response",
 					id: request.id,

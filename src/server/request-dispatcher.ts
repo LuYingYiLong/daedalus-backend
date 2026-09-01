@@ -89,6 +89,10 @@ const handleEditorRequest: RequestHandler = createLazyHandler(async (): Promise<
 	return (await import("./handlers/editor-handlers.js")).handleEditorRequest;
 });
 
+const handleGodotRuntimeRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/godot-runtime-handlers.js")).handleGodotRuntimeRequest;
+});
+
 const handleWorkspaceRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
 	return (await import("./handlers/workspace-handlers.js")).handleWorkspaceRequest;
 });
@@ -367,6 +371,11 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"editor.context.update",
 	"editor.heartbeat",
 	"editor.tool.result",
+	"godot.runtimeTest.create",
+	"godot.runtimeTest.status",
+	"godot.runtimeTest.stop",
+	"godot.runtime.heartbeat",
+	"godot.runtime.tool.result",
 	"workspace.list",
 	"workspace.tree.order.get",
 	"workspace.tree.order.update",
@@ -625,6 +634,11 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["editor.context.update", handleEditorRequest],
 	["editor.heartbeat", handleEditorRequest],
 	["editor.tool.result", handleEditorRequest],
+	["godot.runtimeTest.create", handleGodotRuntimeRequest],
+	["godot.runtimeTest.status", handleGodotRuntimeRequest],
+	["godot.runtimeTest.stop", handleGodotRuntimeRequest],
+	["godot.runtime.heartbeat", handleGodotRuntimeRequest],
+	["godot.runtime.tool.result", handleGodotRuntimeRequest],
 	["workspace.list", handleWorkspaceRequest],
 	["workspace.tree.order.get", handleWorkspaceRequest],
 	["workspace.tree.order.update", handleWorkspaceRequest],

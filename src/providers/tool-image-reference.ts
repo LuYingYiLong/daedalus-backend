@@ -21,12 +21,14 @@ import {
 import { createWorkspaceFileService } from "../workspace/files.js";
 import { findWorkspace, getWorkspaceSourceFolder } from "../workspace/registry.js";
 import { resolveWorkspaceReadSource } from "../workspace/source-context.js";
+import { godotRuntimeTestBridge } from "../mcp/godot/bridges/runtime-test-bridge.js";
 
 export const IMAGE_INSPECT_TOOL_NAME: string = "mcp_image_inspect";
 
 export type ToolImageSource =
 	| { kind: "browser_activity"; sessionId: string; activityId: string }
 	| { kind: "computer_observation"; sessionId: string; observationId: string }
+	| { kind: "godot_runtime"; testSessionId: string; runtimeInstanceId: string; observationId: string }
 	| {
 		kind: "workspace";
 		workspaceId: string;
@@ -222,6 +224,13 @@ export async function resolveImageInspection(
 async function readReferenceBytes(reference: ProviderToolImageReference): Promise<Buffer> {
 	if (reference.source.kind === "browser_activity") return readBrowserScreenshot(reference.source.sessionId, reference.source.activityId);
 	if (reference.source.kind === "computer_observation") return readComputerScreenshot(reference.source.sessionId, reference.source.observationId);
+	if (reference.source.kind === "godot_runtime") {
+		return godotRuntimeTestBridge.readScreenshot(
+			reference.source.testSessionId,
+			reference.source.runtimeInstanceId,
+			reference.source.observationId
+		);
+	}
 	if (reference.source.kind === "session") {
 		return reference.source.imageId.startsWith("generated-image-")
 			? (await readGeneratedImageArtifact(reference.source.sessionId, reference.source.imageId)).bytes

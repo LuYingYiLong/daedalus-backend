@@ -31,7 +31,7 @@ import { getGeneralSettings } from "../../general-settings-store.js";
 import { studioScheduledTaskRuntime } from "../studio-scheduled-task-runtime.js";
 
 function readClientType(value: unknown): ClientType {
-	return value === "godot_editor_bridge" || value === "studio" || value === "studio_remote" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
+	return value === "godot_editor_bridge" || value === "godot_runtime_test_bridge" || value === "studio" || value === "studio_remote" || value === "studio_scheduler" || value === "cli" || value === "smoke" || value === "external_mcp"
 		? value
 		: "legacy";
 }
@@ -39,6 +39,7 @@ function readClientType(value: unknown): ClientType {
 function getDefaultClientName(clientType: ClientType): string {
 	if (clientType === "studio") return "Daedalus Studio";
 	if (clientType === "studio_remote") return "Daedalus Remote";
+	if (clientType === "godot_runtime_test_bridge") return "Daedalus Runtime Test";
 	return "Daedalus Editor Bridge";
 }
 
@@ -80,7 +81,9 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 			const params = request.params!;
 			const clientType: ClientType = readClientType(params.clientType);
 			const isEditorBridge: boolean = clientType === "godot_editor_bridge";
-			if (isEditorBridge && !isBridgeProtocolSupported(params.bridgeProtocolVersion)) {
+			const isRuntimeBridge: boolean = clientType === "godot_runtime_test_bridge";
+			const isGodotBridge: boolean = isEditorBridge || isRuntimeBridge;
+			if (isGodotBridge && !isBridgeProtocolSupported(params.bridgeProtocolVersion)) {
 				rejectBridgeHandshake(
 					socket,
 					request.id,
@@ -105,8 +108,42 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				});
 				break;
 			}
+			if (isRuntimeBridge && (
+				params.bridgeVersion === undefined
+					|| params.godotVersion === undefined
+					|| params.workspaceRoot === undefined
+					|| params.runtimeInstanceId === undefined
+					|| params.testSessionId === undefined
+					|| params.testSessionToken === undefined
+			)) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: { code: "runtime_bridge_hello_invalid", message: "Runtime Bridge hello requires bridge, Godot, workspace, runtime instance, and test session identity." }
+				});
+				break;
+			}
+			if (isRuntimeBridge) {
+				try {
+					mcpHost.getRuntimeTestBridge().validateHello({
+						testSessionId: params.testSessionId!,
+						testSessionToken: params.testSessionToken!,
+						runtimeInstanceId: params.runtimeInstanceId!,
+						workspaceRoot: params.workspaceRoot!
+					});
+				} catch (error: unknown) {
+					sendJson(socket, {
+						type: "response",
+						id: request.id,
+						ok: false,
+						error: { code: "runtime_bridge_unauthorized", message: error instanceof Error ? error.message : "Runtime test authorization failed." }
+					});
+					break;
+				}
+			}
 			let workspace: WorkspaceConfig | undefined;
-			if (isEditorBridge && params.workspaceRoot !== undefined) {
+			if (isGodotBridge && params.workspaceRoot !== undefined) {
 				const configuredSource = findWorkspaceSourceByPath(params.workspaceRoot);
 				workspace = configuredSource === undefined
 					? upsertRuntimeWorkspace(createRuntimeWorkspace(
@@ -139,10 +176,20 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				workspaceId: workspace?.id ?? params.workspaceId,
 				workspaceRoot: workspace?.rootPath ?? params.workspaceRoot,
 				editorInstanceId: params.editorInstanceId,
-				bridgeProtocolVersion: isEditorBridge ? params.bridgeProtocolVersion : undefined,
-				bridgeHandshakeAccepted: isEditorBridge,
+				runtimeInstanceId: params.runtimeInstanceId,
+				testSessionId: params.testSessionId,
+				bridgeProtocolVersion: isGodotBridge ? params.bridgeProtocolVersion : undefined,
+				bridgeHandshakeAccepted: isGodotBridge,
 				capabilities: readCapabilities(params.capabilities)
 			});
+			if (isRuntimeBridge) {
+				mcpHost.getRuntimeTestBridge().attachRuntime(socket, {
+					testSessionId: params.testSessionId!,
+					testSessionToken: params.testSessionToken!,
+					runtimeInstanceId: params.runtimeInstanceId!,
+					workspaceRoot: params.workspaceRoot!
+				});
+			}
 			// Studio 正常重连时握手频繁，仅在传输排障时保留这类元数据。
 			logger.debug("client", "hello", {
 				connectionId: info.connectionId,
@@ -168,10 +215,10 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 						enabled: true,
 						protocolVersion: 3
 					},
-					bridgeCompatibility: {
+				bridgeCompatibility: {
 						minProtocolVersion: MIN_BRIDGE_PROTOCOL_VERSION,
 						maxProtocolVersion: MAX_BRIDGE_PROTOCOL_VERSION,
-						accepted: !isEditorBridge || isBridgeProtocolSupported(params.bridgeProtocolVersion)
+						accepted: !isGodotBridge || isBridgeProtocolSupported(params.bridgeProtocolVersion)
 					}
 				}
 			});
@@ -185,7 +232,7 @@ export async function handleClientRequest(socket: WebSocket, request: ClientRequ
 				ok: true,
 				result: {
 					connection: getClientConnection(socket),
-					features: { computerControl: 3, computerGrounding: 1, externalBrowser: 1 },
+					features: { computerControl: 3, computerGrounding: 1, externalBrowser: 1, godotRuntimeTest: 1 },
 					session: {
 						sessionId: session.sessionId ?? null,
 						workspaceId: session.activeWorkspace?.id ?? null,

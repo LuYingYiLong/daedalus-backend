@@ -505,12 +505,6 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 
 const GODOT_RUNTIME_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	createSceneToolDefinition(
-		"mcp_godot_get_runtime_status",
-		"读取当前 Godot runtime 状态，包括 Godot 可执行文件、项目路径和 active runtime job。",
-		{},
-		[]
-	),
-	createSceneToolDefinition(
 		"mcp_godot_get_godot_version",
 		"调用 Godot --version，确认当前 Godot 可执行文件版本。",
 		{},
@@ -577,8 +571,20 @@ const GODOT_RUNTIME_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 
 const GODOT_RUNTIME_TEST_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	createSceneToolDefinition(
+		"mcp_godot_runtime_status",
+		"Read the current visible Godot Runtime Test state without starting or changing a process. Use the returned state to decide whether a launch is needed.",
+		{},
+		[]
+	),
+	createSceneToolDefinition(
+		"mcp_godot_runtime_start",
+		"Start or reuse a visible Studio-managed Runtime Test for the current Godot project. Returns the testSessionId and runtimeInstanceId needed by runtime observation and action tools. This is the supported way to open an interactive project window; it never launches headless Godot.",
+		{},
+		[]
+	),
+	createSceneToolDefinition(
 		"mcp_godot_runtime_observe",
-		"Observe the live Control tree of the explicit Godot runtime test session. This is read-only and returns short-lived observation and node identifiers.",
+		"Observe the live Control tree of a connected visible Runtime Test. This is read-only and returns short-lived observation and node identifiers. If no runtime is connected, read status or use the Runtime Test start tool in Agent mode.",
 		{
 			testSessionId: { type: "string", minLength: 1, maxLength: 160 },
 			runtimeInstanceId: { type: "string", minLength: 1, maxLength: 160 }

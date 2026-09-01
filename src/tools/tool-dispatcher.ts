@@ -57,6 +57,7 @@ import { COMPUTER_TOOL_NAME_SET, type ComputerToolName } from "./computer-tools.
 import { executeComputerTool } from "./computer-tool-execution.js";
 import { SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskToolName } from "./scheduled-task-tools.js";
 import { PLUGIN_DEVELOPMENT_TOOL_NAME_SET, type PluginDevelopmentToolName } from "../plugins/development/types.js";
+import { GODOT_RUNTIME_START_TOOL_NAME } from "./godot-runtime-control.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -148,6 +149,26 @@ async function executePluginDevelopmentTool(
 		throw new Error("plugin_development_runtime_unavailable");
 	}
 	const result = await toolContext.pluginDevelopmentControl.execute(toolName, args, abortSignal);
+	const content: string = JSON.stringify(result);
+	return { content, rawContentLength: content.length, truncated: false, reused: false };
+}
+
+async function executeGodotRuntimeStartTool(
+	toolCallId: string,
+	args: Record<string, unknown>,
+	toolContext: ToolExecutionContext | undefined,
+	abortSignal: AbortSignal | undefined,
+): Promise<IdempotentToolExecutionResult> {
+	if (toolContext?.clientType !== "studio"
+		|| toolContext.godotRuntimeControl === undefined
+		|| toolContext.requestId === undefined) {
+		throw new Error("runtime_test_studio_unavailable: Keep the current Studio session connected and use a Godot workspace.");
+	}
+	const result: Record<string, unknown> = await toolContext.godotRuntimeControl.start(
+		args,
+		{ requestId: toolContext.requestId, toolCallId },
+		abortSignal,
+	);
 	const content: string = JSON.stringify(result);
 	return { content, rawContentLength: content.length, truncated: false, reused: false };
 }
@@ -782,7 +803,9 @@ async function executeSingleToolCall(
 				args: displayArgs
 			})
 			: undefined;
-		let rawResult: IdempotentToolExecutionResult = PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
+		let rawResult: IdempotentToolExecutionResult = functionName === GODOT_RUNTIME_START_TOOL_NAME
+			? await executeGodotRuntimeStartTool(toolCall.id, executionArgs, toolContext, abortSignal)
+			: PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
 			? await executePluginDevelopmentTool(functionName as PluginDevelopmentToolName, executionArgs, toolContext, abortSignal)
 			: COMPUTER_TOOL_NAME_SET.has(functionName)
 			? await executeComputerTool(functionName as ComputerToolName, executionArgs, toolCall.id, toolContext, abortSignal)

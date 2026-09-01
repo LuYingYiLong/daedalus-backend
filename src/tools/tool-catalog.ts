@@ -46,7 +46,7 @@ import { COMPUTER_TOOL_NAMES, COMPUTER_TOOL_NAME_SET, type ComputerControlContex
 import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskControlContext } from "./scheduled-task-tools.js";
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 import type { PluginDevelopmentControlContext } from "../plugins/development/types.js";
-import { godotRuntimeTestBridge } from "../mcp/godot/bridges/runtime-test-bridge.js";
+import type { GodotRuntimeControlContext } from "./godot-runtime-control.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -78,6 +78,7 @@ export type ToolExecutionContext = {
 	} | undefined;
 	browserControl?: BrowserControlContext | undefined;
 	computerControl?: ComputerControlContext | undefined;
+	godotRuntimeControl?: GodotRuntimeControlContext | undefined;
 	scheduledTaskControl?: ScheduledTaskControlContext | undefined;
 	pluginDevelopmentControl?: PluginDevelopmentControlContext | undefined;
 	scheduledMonitorRun?: boolean | undefined;
@@ -110,7 +111,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_get_git_history",
 		"mcp_workspace_read_text_file",
 		"mcp_workspace_search_text",
-		"mcp_godot_get_runtime_status",
+		"mcp_godot_runtime_status",
 		"mcp_godot_runtime_observe",
 		"mcp_godot_runtime_screenshot",
 		"mcp_godot_get_godot_version",
@@ -170,6 +171,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 	],
 	write: [
 		"mcp_computer_action",
+		"mcp_godot_runtime_start",
 		"mcp_godot_runtime_action",
 		"mcp_scheduled_task_create",
 		"mcp_scheduled_task_update",
@@ -212,9 +214,6 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_godot_propose_apply_scene_patch",
 		"mcp_godot_apply_scene_patch",
 		"mcp_godot_editor_apply_scene_patch",
-		"mcp_godot_launch_editor",
-		"mcp_godot_run_project",
-		"mcp_godot_stop_project",
 		"mcp_godot_resave_resource",
 		"mcp_godot_update_project_uids",
 		"mcp_godot_save_scene_variant",
@@ -253,6 +252,12 @@ const NO_WORKSPACE_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_image_inspect",
 	"mcp_godot_search_documentation",
 	"mcp_web_search"
+]);
+const LEGACY_GODOT_PROCESS_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"mcp_godot_get_runtime_status",
+	"mcp_godot_launch_editor",
+	"mcp_godot_run_project",
+	"mcp_godot_stop_project",
 ]);
 
 export function isToolAvailableWithoutWorkspace(toolName: string): boolean {
@@ -293,9 +298,17 @@ function isGodotToolName(toolName: string | undefined): boolean {
 }
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
+	if (toolName !== undefined && LEGACY_GODOT_PROCESS_TOOL_NAMES.has(toolName)) return false;
 	if (toolName?.startsWith("mcp_godot_runtime_") === true) {
 		if (context.clientType !== "studio" || context.scheduledMonitorRun || context.hookContext?.chatMode === "goal") return false;
-		if (!godotRuntimeTestBridge.isOnline(context.workspaceId)) return false;
+		// Keep the Runtime Test tool surface stable for the whole provider loop.
+		// A runtime can become online after `start`, but provider tool definitions
+		// are fixed when the loop begins. Hiding observe/action while offline made
+		// the same run unable to continue after a successful visible launch.
+		// Status may discover an offline runtime after provider tools are fixed for the loop.
+		// Keep start visible in Studio Agent mode and return a structured capability error
+		// from the dispatcher if this particular Studio cannot launch it.
+		if (toolName === "mcp_godot_runtime_start") return context.hookContext?.chatMode === "agent";
 		if (toolName === "mcp_godot_runtime_action") return context.hookContext?.chatMode === "agent";
 	}
 	if (toolName !== undefined && SCHEDULED_TASK_TOOL_NAME_SET.has(toolName)) {

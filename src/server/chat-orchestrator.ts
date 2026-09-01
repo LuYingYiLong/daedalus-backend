@@ -6,6 +6,7 @@ import { beginExternalBrowserTurn, finishExternalBrowserTurn, markBrowserProposa
 import { getStudioComputerControl } from "./studio-computer-runtime.js";
 import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
 import { getStudioPluginDevelopmentControl } from "./studio-plugin-development-context.js";
+import { getStudioGodotRuntimeControl } from "./studio-godot-runtime.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
@@ -546,7 +547,8 @@ export function getAllRuntimeToolNames(session: ClientSession, socket: WebSocket
 		sessionId: session.sessionId,
 		clientType: getClientConnection(socket)?.clientType,
 		computerControl: getStudioComputerControl(socket, session),
-		browserControl: getStudioBrowserControl(socket, session.sessionId)
+		browserControl: getStudioBrowserControl(socket, session.sessionId),
+		godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id)
 	}).getEntries().map((entry): string => entry.id);
 
 	if (session.activeWorkspace === undefined) {
@@ -907,6 +909,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			clientType: getClientConnection(params.socket)?.clientType,
 			computerControl: getStudioComputerControl(params.socket, params.session),
 			browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
+			godotRuntimeControl: getStudioGodotRuntimeControl(params.socket, params.session.sessionId, params.session.activeWorkspace?.id),
 			scheduledTaskControl: getStudioScheduledTaskControl(params.socket, params.session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(params.socket, params.session.sessionId, params.session.activeWorkspace),
 			scheduledMonitorRun: params.session.scheduledTaskOrigin?.kind === "monitor",
@@ -1000,6 +1003,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 				clientType: getClientConnection(params.socket)?.clientType,
 				computerControl: getStudioComputerControl(params.socket, params.session),
 				browserControl: getStudioBrowserControl(params.socket, params.session.sessionId),
+				godotRuntimeControl: getStudioGodotRuntimeControl(params.socket, params.session.sessionId, params.session.activeWorkspace?.id),
 				scheduledTaskControl: getStudioScheduledTaskControl(params.socket, params.session.sessionId),
 				pluginDevelopmentControl: getStudioPluginDevelopmentControl(params.socket, params.session.sessionId, params.session.activeWorkspace),
 				scheduledMonitorRun: params.session.scheduledTaskOrigin?.kind === "monitor",
@@ -2119,6 +2123,7 @@ async function runToolBudgetDecisionContinuation(params: {
 			clientType: getClientConnection(socket)?.clientType,
 			computerControl: getStudioComputerControl(socket, session),
 			browserControl: getStudioBrowserControl(socket, session.sessionId),
+			godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
 			scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),
 			scheduledMonitorRun: session.scheduledTaskOrigin?.kind === "monitor",
@@ -2933,6 +2938,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					clientType: getClientConnection(socket)?.clientType,
 					computerControl: getStudioComputerControl(socket, session),
 					browserControl: getStudioBrowserControl(socket, session.sessionId),
+					godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
 					scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 					pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),
 					scheduledMonitorRun: session.scheduledTaskOrigin?.kind === "monitor",

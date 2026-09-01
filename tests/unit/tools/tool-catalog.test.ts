@@ -90,6 +90,7 @@ test("Godot runtime test write tools are exposed only to Studio Agent mode", ():
 		workspaceId: "workspace-a",
 		hasGodotWorkspaceCapability: true,
 		clientType: "studio" as const,
+		godotRuntimeControl: { start: async (): Promise<Record<string, unknown>> => ({ online: true }) },
 	};
 	const ask = createWorkspaceToolCatalog({ ...base, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "ask" as const } });
 	const plan = createWorkspaceToolCatalog({ ...base, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "plan" as const } });
@@ -97,25 +98,64 @@ test("Godot runtime test write tools are exposed only to Studio Agent mode", ():
 	const remote = createWorkspaceToolCatalog({ ...base, clientType: "studio_remote" as const, hookContext: { model: "fixture", approvalMode: "manual" as const, chatMode: "agent" as const } });
 
 	try {
+		assert.notEqual(ask.getEntry("mcp_godot_runtime_status"), undefined);
+		assert.equal(ask.getEntry("mcp_godot_runtime_start"), undefined);
 		assert.notEqual(ask.getEntry("mcp_godot_runtime_observe"), undefined);
 		assert.equal(ask.getEntry("mcp_godot_runtime_action"), undefined);
 		assert.equal(plan.getEntry("mcp_godot_runtime_action"), undefined);
 		assert.notEqual(agent.getEntry("mcp_godot_runtime_action"), undefined);
+		assert.notEqual(agent.getEntry("mcp_godot_runtime_start"), undefined);
+		assert.notEqual(agent.getEntry("mcp_godot_runtime_status"), undefined);
+		assert.equal(remote.getEntry("mcp_godot_runtime_status"), undefined);
+		assert.equal(remote.getEntry("mcp_godot_runtime_start"), undefined);
 		assert.equal(remote.getEntry("mcp_godot_runtime_observe"), undefined);
 	} finally {
 		godotRuntimeTestBridge.stopSession(owner, runtimeSession.testSessionId);
 	}
 });
 
-test("Godot runtime tools are hidden until an explicit runtime instance is connected", (): void => {
+test("Godot runtime tools remain discoverable while the visible runtime is offline", (): void => {
 	const catalog = createWorkspaceToolCatalog({
 		workspaceId: "runtime-offline-workspace",
 		hasGodotWorkspaceCapability: true,
 		clientType: "studio",
+		godotRuntimeControl: { start: async (): Promise<Record<string, unknown>> => ({ online: true }) },
 		hookContext: { model: "fixture", approvalMode: "manual", chatMode: "agent" },
 	});
-	assert.equal(catalog.getEntry("mcp_godot_runtime_observe"), undefined);
-	assert.equal(catalog.getEntry("mcp_godot_runtime_action"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_status"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_start"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_observe"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_action"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_wait"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_assert"), undefined);
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_screenshot"), undefined);
+});
+
+test("Godot runtime start remains discoverable when Studio launch capability is unavailable", (): void => {
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "runtime-start-unavailable-workspace",
+		hasGodotWorkspaceCapability: true,
+		clientType: "studio",
+		hookContext: { model: "fixture", approvalMode: "manual", chatMode: "agent" },
+	});
+
+	assert.notEqual(catalog.getEntry("mcp_godot_runtime_start"), undefined);
+});
+
+test("legacy sandboxed Godot process tools are never exposed to the model", (): void => {
+	const catalog = createWorkspaceToolCatalog({
+		workspaceId: "workspace-godot",
+		hasGodotWorkspaceCapability: true,
+		clientType: "studio",
+		hookContext: { model: "fixture", approvalMode: "manual", chatMode: "agent" },
+	});
+	for (const toolName of ["mcp_godot_get_runtime_status", "mcp_godot_launch_editor", "mcp_godot_run_project", "mcp_godot_stop_project"]) {
+		assert.equal(catalog.getEntry(toolName), undefined);
+		assert.equal(getDefaultWorkflowToolNames("write").includes(toolName), false);
+	}
+	assert.equal(getDefaultWorkflowToolNames("read").includes("mcp_godot_get_runtime_status"), false);
+	assert.equal(getDefaultWorkflowToolNames("read").includes("mcp_godot_runtime_status"), true);
+	assert.equal(getDefaultWorkflowToolNames("write").includes("mcp_godot_runtime_start"), true);
 });
 
 test("workspace tool catalog exposes approval reason schema for write tools", (): void => {

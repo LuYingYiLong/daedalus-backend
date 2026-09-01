@@ -28,6 +28,7 @@ import { revokeExternalBrowser } from "./external-browser-runtime.js";
 import { studioComputerRuntime } from "./studio-computer-runtime.js";
 import { studioScheduledTaskRuntime } from "./studio-scheduled-task-runtime.js";
 import { pluginDevelopmentReviewRuntime } from "../plugins/development/service.js";
+import { studioGodotRuntime } from "./studio-godot-runtime.js";
 
 export type WebSocketServerRuntimeOptions = {
 	host?: string | undefined;
@@ -275,6 +276,7 @@ function handleSocketClose(socket: WebSocket, session: ClientSession, mcpHost: M
 	studioBrowserRuntime.detachSocket(socket);
 	revokeExternalBrowser(socket);
 	studioComputerRuntime.detachSocket(socket);
+	studioGodotRuntime.detachSocket(socket);
 	studioScheduledTaskRuntime.detachSocket(socket);
 	pluginDevelopmentReviewRuntime.detachSocket(socket);
 	unregisterClientConnection(socket);

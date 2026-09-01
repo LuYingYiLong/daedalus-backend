@@ -151,6 +151,14 @@ test("role prompts defer global expression rules to CORE", async (): Promise<voi
 	assert.match(workspacePrompt, /表达方式与状态真实性遵循 CORE/);
 });
 
+test("Godot runtime guidance never infers editor connectivity from runtime status", async (): Promise<void> => {
+	const godotPrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/godot-assistant.md"), "utf8");
+
+	assert.match(godotPrompt, /mcp_godot_runtime_status.*只报告可见 Runtime Test 的生命周期/);
+	assert.match(godotPrompt, /mcp_godot_editor_get_context/);
+	assert.match(godotPrompt, /不得从 Runtime Test 状态.*推断编辑器离线/);
+});
+
 test("all user-facing role prompts inherit CORE before mode and custom instructions", async (): Promise<void> => {
 	for (const template of listPromptTemplates()) {
 		const prompt: string = await composeSystemPrompt(

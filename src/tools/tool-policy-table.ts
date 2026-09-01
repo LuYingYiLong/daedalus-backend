@@ -56,6 +56,8 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_workspace_download_file": { risk: "write" },
 	"mcp_workspace_delete_file": { risk: "destructive" },
 	"mcp_godot_get_runtime_status": { risk: "read" },
+	"mcp_godot_runtime_status": { risk: "read" },
+	"mcp_godot_runtime_start": { risk: "write" },
 	"mcp_godot_runtime_observe": { risk: "read" },
 	"mcp_godot_runtime_action": { risk: "write" },
 	"mcp_godot_runtime_wait": { risk: "verify" },

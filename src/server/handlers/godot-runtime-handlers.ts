@@ -10,6 +10,7 @@ import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { ClientSession } from "../client-session.js";
 import { getClientConnection } from "../client-connections.js";
 import { sendJson } from "../send-json.js";
+import { studioGodotRuntime } from "../studio-godot-runtime.js";
 
 function requireStudio(socket: WebSocket): void {
 	if (getClientConnection(socket)?.clientType !== "studio") throw new Error("runtime_test_studio_required");
@@ -65,6 +66,12 @@ export async function handleGodotRuntimeRequest(
 			requireStudio(socket);
 			const stopped: boolean = mcpHost.getRuntimeTestBridge().stopSession(socket, request.params.testSessionId);
 			sendJson(socket, { type: "response", id: request.id, ok: true, result: { stopped } });
+			break;
+		}
+		case "godot.runtimeTest.start.result": {
+			requireStudio(socket);
+			studioGodotRuntime.handleResult(socket, request.params);
+			sendJson(socket, { type: "response", id: request.id, ok: true, result: { accepted: true, callId: request.params.callId } });
 			break;
 		}
 		case "godot.runtime.heartbeat": {

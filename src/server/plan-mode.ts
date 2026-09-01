@@ -28,6 +28,7 @@ import { getClientConnection } from "./client-connections.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import { getStudioBrowserControl } from "./studio-browser-context.js";
 import { getStudioComputerControl } from "./studio-computer-runtime.js";
+import { getStudioGodotRuntimeControl } from "./studio-godot-runtime.js";
 import { getStudioScheduledTaskControl } from "./studio-scheduled-task-context.js";
 import { getStudioPluginDevelopmentControl } from "./studio-plugin-development-context.js";
 import { createSceneViewToolResultEnricher } from "./workflow/scene-view-enricher.js";
@@ -625,6 +626,7 @@ async function runPlanAgentDecision(
 			clientType: getClientConnection(runtime.socket)?.clientType,
 			computerControl: getStudioComputerControl(runtime.socket, runtime.session),
 			browserControl: getStudioBrowserControl(runtime.socket, runtime.session.sessionId),
+			godotRuntimeControl: getStudioGodotRuntimeControl(runtime.socket, runtime.session.sessionId, runtime.session.activeWorkspace?.id),
 			scheduledTaskControl: getStudioScheduledTaskControl(runtime.socket, runtime.session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(runtime.socket, runtime.session.sessionId, runtime.session.activeWorkspace),
 			scheduledMonitorRun: runtime.session.scheduledTaskOrigin?.kind === "monitor"

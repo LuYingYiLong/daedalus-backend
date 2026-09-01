@@ -65,6 +65,8 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 		serverId: "godot",
 		toolName: "get_runtime_status"
 	},
+	"mcp_godot_runtime_status": { serverId: "godot_runtime", toolName: "status" },
+	"mcp_godot_runtime_start": { serverId: "internal", toolName: "godot_runtime_start" },
 	"mcp_godot_runtime_observe": { serverId: "godot_runtime", toolName: "observe" },
 	"mcp_godot_runtime_action": { serverId: "godot_runtime", toolName: "action" },
 	"mcp_godot_runtime_wait": { serverId: "godot_runtime", toolName: "wait" },

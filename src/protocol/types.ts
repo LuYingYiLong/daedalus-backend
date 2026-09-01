@@ -149,6 +149,8 @@ export type StudioDirectEventName =
 	| "session.selectionAsk.message.delta"
 	| "session.selectionAsk.message.done"
 	| "session.selectionAsk.message.error"
+	| "godot.runtimeTest.start.request"
+	| "godot.runtimeTest.start.cancel"
 	| "browser.tool.request"
 	| "computer.tool.request"
 	| "computer.tool.cancel"

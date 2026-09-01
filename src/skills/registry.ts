@@ -28,7 +28,7 @@ export type Skill = {
 const READ_TOOLS: string[] = [
 	"mcp_skills_load",
 	"mcp_image_inspect",
-	"mcp_godot_get_runtime_status",
+	"mcp_godot_runtime_status",
 	"mcp_godot_get_godot_version",
 	"mcp_godot_search_documentation",
 	"mcp_godot_get_debug_output",
@@ -79,10 +79,7 @@ const VERIFY_TOOLS: string[] = [
 
 const TERMINAL_WRITE_TOOLS: string[] = [
 	"mcp_terminal_run_write_preset",
-	"mcp_terminal_run_godot_scene_script",
-	"mcp_godot_launch_editor",
-	"mcp_godot_run_project",
-	"mcp_godot_stop_project"
+	"mcp_terminal_run_godot_scene_script"
 ];
 
 const HEADLESS_RESOURCE_WRITE_TOOLS: string[] = [

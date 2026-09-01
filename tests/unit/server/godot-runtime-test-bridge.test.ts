@@ -25,6 +25,66 @@ function createSocket(): SocketFixture {
 	return socket;
 }
 
+function parseTextResult(result: { content: Array<{ type: string; text?: string | undefined }> }): Record<string, unknown> {
+	const text: string | undefined = result.content[0]?.text;
+	assert.equal(typeof text, "string");
+	return JSON.parse(text!) as Record<string, unknown>;
+}
+
+test("Godot runtime status reports only the visible Runtime Test lifecycle", async (): Promise<void> => {
+	const originalNow: () => number = Date.now;
+	let now: number = Date.parse("2026-09-01T00:00:00.000Z");
+	Date.now = (): number => now;
+	try {
+		const bridge = new GodotRuntimeTestBridge();
+		const owner = createSocket();
+		const runtime = createSocket();
+		const notStarted = parseTextResult(await bridge.callTool("status", {}, "workspace"));
+		assert.equal(notStarted.status, "not_started");
+		assert.equal(notStarted.scope, "runtime_test");
+		assert.equal(notStarted.editorConnectionState, "not_reported_by_this_tool");
+		assert.match(String(notStarted.instruction), /does not report the Godot editor connection/u);
+
+		const created = bridge.createSession(owner, "workspace:source", "C:/fixture/godot-project", "workspace");
+		const launching = parseTextResult(await bridge.callTool("status", {}, "workspace"));
+		assert.equal(launching.status, "launching");
+		assert.equal(launching.runtimeReady, false);
+		assert.match(String(launching.instruction), /waiting for the Runtime Bridge handshake/u);
+		now += 5 * 60_000 + 1;
+		const stalled = parseTextResult(await bridge.callTool("status", {}, "workspace"));
+		assert.equal(stalled.status, "disconnected");
+		assert.match(String(stalled.instruction), /mcp_godot_runtime_start/u);
+
+		bridge.attachRuntime(runtime, {
+			testSessionId: created.testSessionId,
+			testSessionToken: created.token,
+			runtimeInstanceId: "runtime-one",
+			workspaceRoot: "C:/fixture/godot-project",
+		});
+		bridge.heartbeat(runtime, {
+			testSessionId: created.testSessionId,
+			runtimeInstanceId: "runtime-one",
+			treeRevision: 2,
+			scenePath: "res://main.tscn",
+		});
+		const online = parseTextResult(await bridge.callTool("status", {}, "workspace"));
+		assert.equal(online.status, "online");
+		assert.equal(online.runtimeReady, true);
+		assert.equal((online.sessions as Array<Record<string, unknown>>)[0]?.scenePath, "res://main.tscn");
+
+		now += 8_000;
+		const disconnected = parseTextResult(await bridge.callTool("status", {}, "workspace"));
+		assert.equal(disconnected.status, "disconnected");
+		assert.equal(disconnected.runtimeReady, false);
+		assert.match(String(disconnected.instruction), /mcp_godot_runtime_start/u);
+
+		bridge.stopSession(owner, created.testSessionId);
+		assert.equal(parseTextResult(await bridge.callTool("status", {}, "workspace")).status, "not_started");
+	} finally {
+		Date.now = originalNow;
+	}
+});
+
 test("Godot runtime test sessions bind token, workspace, instance, and tool result", async (): Promise<void> => {
 	const bridge = new GodotRuntimeTestBridge();
 	const owner = createSocket();

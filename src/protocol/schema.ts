@@ -2302,6 +2302,24 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("godot.runtimeTest.start.result"),
+		params: z.object({
+			callId: z.string().min(1).max(200),
+			ok: z.boolean(),
+			result: z.record(z.string(), z.unknown()).optional(),
+			error: z.object({
+				code: z.string().min(1).max(160),
+				message: z.string().min(1).max(8000),
+				retryable: z.boolean(),
+			}).strict().optional(),
+		}).strict().superRefine((value, context): void => {
+			if (value.ok && value.result === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Successful Runtime Test start results require result." });
+			if (!value.ok && value.error === undefined) context.addIssue({ code: z.ZodIssueCode.custom, message: "Failed Runtime Test start results require error." });
+		}),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("godot.runtime.heartbeat"),
 		params: z.object({
 			testSessionId: z.string().min(1).max(160),

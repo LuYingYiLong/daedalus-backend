@@ -10,8 +10,11 @@ export const GODOT_RUNTIME_TEST_SERVER_ID: string = "godot_runtime";
 
 const SESSION_TTL_MS: number = 30 * 60 * 1000;
 const HEARTBEAT_STALE_MS: number = 7_000;
+// Keep a newly-created launch alive while Godot performs its initial import.
+// The Studio start controller owns the matching five-minute hard deadline.
+const STARTUP_STALE_MS: number = 5 * 60_000;
 const TOOL_TIMEOUT_MS: number = 30_000;
-const RUNTIME_TOOL_NAMES: ReadonlySet<string> = new Set(["observe", "action", "wait", "assert", "screenshot"]);
+const RUNTIME_TOOL_NAMES: ReadonlySet<string> = new Set(["status", "observe", "action", "wait", "assert", "screenshot"]);
 const RUNTIME_ASSERTION_PROPERTIES: ReadonlySet<string> = new Set(["exists", "visible", "visibleInTree", "enabled", "text", "buttonPressed", "selected", "currentTab", "testState"]);
 const RUNTIME_KEYS: ReadonlySet<string> = new Set(["enter", "tab", "shift+tab", "escape", "backspace", "delete", "arrow_up", "arrow_down", "arrow_left", "arrow_right", "home", "end", "page_up", "page_down", "ctrl+a", "ctrl+f", "ctrl+s", "ctrl+z", "ctrl+y"]);
 
@@ -72,6 +75,20 @@ export type GodotRuntimeTestSessionSummary = {
 	lastHeartbeatAt: string | null;
 	treeRevision: number | null;
 	scenePath: string | null;
+};
+
+export type GodotRuntimeTestAvailability = {
+	ok: true;
+	scope: "runtime_test";
+	editorConnectionState: "not_reported_by_this_tool";
+	status: "not_started" | "launching" | "online" | "disconnected";
+	visibleWindowRequired: true;
+	runtimeReady: boolean;
+	targetRequired: boolean;
+	sessions: Array<Pick<GodotRuntimeTestSessionSummary,
+		"testSessionId" | "runtimeInstanceId" | "online" | "lastHeartbeatAt" | "treeRevision" | "scenePath"
+	>>;
+	instruction: string;
 };
 
 export type GodotRuntimeHello = {
@@ -272,8 +289,49 @@ export class GodotRuntimeTestBridge {
 		return this.listSessions(workspaceId).some((session): boolean => session.online);
 	}
 
+	getStatus(workspaceId?: string | undefined): GodotRuntimeTestAvailability {
+		const sessions: GodotRuntimeTestSessionSummary[] = this.listSessions(workspaceId);
+		const onlineSessions: GodotRuntimeTestSessionSummary[] = sessions.filter((session): boolean => session.online);
+		const now: number = Date.now();
+		const status: GodotRuntimeTestAvailability["status"] = onlineSessions.length > 0
+			? "online"
+			: sessions.length === 0
+				? "not_started"
+				: sessions.some((session): boolean => session.runtimeInstanceId === null
+					&& now - Date.parse(session.createdAt) <= STARTUP_STALE_MS)
+					? "launching"
+					: "disconnected";
+		const lifecycleInstruction: string = status === "online"
+			? "The visible Runtime Test is connected. Observe it before performing any action."
+			: status === "launching"
+				? "A visible Runtime Test is waiting for the Runtime Bridge handshake. Do not launch another Godot process; the background start service is still waiting for Godot to finish loading."
+				: status === "disconnected"
+					? "The Runtime Test lost its runtime connection. In Studio Agent mode, use mcp_godot_runtime_start once to replace it with a visible Runtime Test."
+					: "No visible Runtime Test has been started. In Studio Agent mode, use mcp_godot_runtime_start to open the project in a visible Runtime Test window.";
+		const instruction: string = `${lifecycleInstruction} This status does not report the Godot editor connection.`;
+		return {
+			ok: true,
+			scope: "runtime_test",
+			editorConnectionState: "not_reported_by_this_tool",
+			status,
+			visibleWindowRequired: true,
+			runtimeReady: onlineSessions.length > 0,
+			targetRequired: onlineSessions.length > 1,
+			sessions: sessions.map((session): GodotRuntimeTestAvailability["sessions"][number] => ({
+				testSessionId: session.testSessionId,
+				runtimeInstanceId: session.runtimeInstanceId,
+				online: session.online,
+				lastHeartbeatAt: session.lastHeartbeatAt,
+				treeRevision: session.treeRevision,
+				scenePath: session.scenePath,
+			})),
+			instruction,
+		};
+	}
+
 	listTools(): { tools: JsonObject[] } {
 		return { tools: [
+			{ name: "status", description: "Read only the visible Godot Runtime Test lifecycle without starting a process. This does not report Godot editor connectivity.", inputSchema: { type: "object", properties: {} } },
 			{ name: "observe", description: "Observe the live Godot Control tree in an explicit runtime test session.", inputSchema: { type: "object", properties: { testSessionId: { type: "string" }, runtimeInstanceId: { type: "string" } } } },
 			{ name: "action", description: "Dispatch one allowlisted Godot InputEvent action to an observed Control.", inputSchema: { type: "object", properties: {}, additionalProperties: true } },
 			{ name: "wait", description: "Wait for an allowlisted runtime Control state.", inputSchema: { type: "object", properties: {}, additionalProperties: true } },
@@ -284,6 +342,7 @@ export class GodotRuntimeTestBridge {
 
 	async callTool(name: string, args: JsonObject, workspaceId?: string | undefined, abortSignal?: AbortSignal | undefined) {
 		if (!RUNTIME_TOOL_NAMES.has(name)) throw new Error(`runtime_tool_unknown: ${name}`);
+		if (name === "status") return textResult(this.getStatus(workspaceId ?? getCurrentMcpWorkspaceId()));
 		const session: RuntimeTestSession = this.selectSession(args, workspaceId ?? getCurrentMcpWorkspaceId());
 		const forwardedArgs: JsonObject = this.validateToolArgs(name, args, session);
 		const result: unknown = await this.requestRuntimeTool(session, name, forwardedArgs, abortSignal);

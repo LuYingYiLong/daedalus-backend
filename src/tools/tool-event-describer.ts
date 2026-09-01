@@ -226,6 +226,12 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 
 	if (toolName.startsWith("mcp_godot_runtime_")) {
 		const nodeId: string = getStringArg(args, "nodeId") ?? "live Control tree";
+		if (toolName.endsWith("_status")) {
+			return createDisplay("godot_runtime", "Godot Runtime Test", "read", "Check runtime test", "Check the visible Runtime Test connection", { kind: "unknown", label: "Godot Runtime Test" });
+		}
+		if (toolName.endsWith("_start")) {
+			return createDisplay("godot_runtime", "Godot Runtime Test", "write", "Start runtime test", "Start the project in a visible Runtime Test window", { kind: "unknown", label: "Godot Runtime Test" });
+		}
 		if (toolName.endsWith("_observe")) {
 			return createDisplay("godot_runtime", "Godot Runtime Test", "read", "Observe runtime UI", "Observe the live Godot Control tree", { kind: "unknown", label: "Godot runtime" });
 		}

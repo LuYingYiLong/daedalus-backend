@@ -85,14 +85,62 @@ test("agent loop runtime tool names retain Studio browser tools when enabled", (
 			clientType: "studio",
 			capabilities: { browserTools: true }
 		});
-		const enabledNames = getAllRuntimeToolNames(session, socket);
+		const enabledNames = getAllRuntimeToolNames(session, socket, {
+			model: "fixture",
+			approvalMode: "auto-safe",
+			chatMode: "agent"
+		});
 		assert.equal(enabledNames.includes("mcp_browser_navigate"), true);
 		assert.equal(enabledNames.includes("mcp_browser_observe"), true);
 
 		updateClientConnection(socket, { capabilities: { browserTools: false } });
-		const disabledNames = getAllRuntimeToolNames(session, socket);
+		const disabledNames = getAllRuntimeToolNames(session, socket, {
+			model: "fixture",
+			approvalMode: "auto-safe",
+			chatMode: "agent"
+		});
 		assert.equal(disabledNames.includes("mcp_browser_navigate"), false);
 		assert.equal(disabledNames.includes("mcp_browser_observe"), false);
+	} finally {
+		unregisterClientConnection(socket);
+	}
+});
+
+test("agent loop runtime tool names retain visible Runtime Test controls", (): void => {
+	const socket: WebSocket = {} as WebSocket;
+	const session = createClientSession({
+		...browserWorkspace,
+		id: "runtime-godot-test",
+		sourceFolders: [{
+			...browserWorkspace.sourceFolders[0]!,
+			id: "source-godot-test",
+			capabilities: { git: false, godot: true }
+		}],
+		primarySourceFolderId: "source-godot-test"
+	});
+	session.sessionId = "session-godot-test";
+	registerClientConnection(socket, session);
+
+	try {
+		updateClientConnection(socket, {
+			clientType: "studio",
+			capabilities: { godotRuntimeTest: true }
+		});
+		const agentNames = getAllRuntimeToolNames(session, socket, {
+			model: "fixture",
+			approvalMode: "auto-safe",
+			chatMode: "agent"
+		});
+		assert.equal(agentNames.includes("mcp_godot_runtime_start"), true);
+		assert.equal(agentNames.includes("mcp_godot_runtime_action"), true);
+
+		const askNames = getAllRuntimeToolNames(session, socket, {
+			model: "fixture",
+			approvalMode: "auto-safe",
+			chatMode: "ask"
+		});
+		assert.equal(askNames.includes("mcp_godot_runtime_start"), false);
+		assert.equal(askNames.includes("mcp_godot_runtime_action"), false);
 	} finally {
 		unregisterClientConnection(socket);
 	}

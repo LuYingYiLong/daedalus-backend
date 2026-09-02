@@ -112,7 +112,7 @@ import {
 } from "./client-session.js";
 import { getToolPolicy } from "../tools/tool-policy.js";
 import { isPlanSafeDynamicMcpToolName } from "../tools/dynamic-mcp-tools.js";
-import { createWorkspaceToolCatalog, filterToolNamesForWorkspace, getNoWorkspaceToolNames } from "../tools/tool-catalog.js";
+import { createWorkspaceToolCatalog, filterToolNamesForWorkspace, getNoWorkspaceToolNames, type ToolExecutionContext } from "../tools/tool-catalog.js";
 import { ensureSessionPluginRuntimes } from "../plugins/runtime/manager.js";
 import { ApprovalGateway, ReadOnlyToolApprovalGateway, type PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError, type ExecutionControlContext } from "../tools/execution-control.js";
@@ -539,7 +539,11 @@ function createExecutionDecisionCompletionContract(
 	return targets.length === 0 ? undefined : { targets, requireAll: true };
 }
 
-export function getAllRuntimeToolNames(session: ClientSession, socket: WebSocket): readonly string[] {
+export function getAllRuntimeToolNames(
+	session: ClientSession,
+	socket: WebSocket,
+	hookContext: NonNullable<ToolExecutionContext["hookContext"]>
+): readonly string[] {
 	const availableNames: string[] = createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace?.id,
 		hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
@@ -548,7 +552,8 @@ export function getAllRuntimeToolNames(session: ClientSession, socket: WebSocket
 		clientType: getClientConnection(socket)?.clientType,
 		computerControl: getStudioComputerControl(socket, session),
 		browserControl: getStudioBrowserControl(socket, session.sessionId),
-		godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id)
+		godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
+		hookContext
 	}).getEntries().map((entry): string => entry.id);
 
 	if (session.activeWorkspace === undefined) {
@@ -575,13 +580,14 @@ function resolveHiddenAnswerToolNames(
 	params: AiChatParams,
 	allowedToolNames: readonly string[] | undefined,
 	session: ClientSession,
-	socket: WebSocket
+	socket: WebSocket,
+	hookContext: NonNullable<ToolExecutionContext["hookContext"]>
 ): readonly string[] {
 	if (routeDecision.lane === "direct") {
 		return [];
 	}
 
-	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket);
+	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, hookContext);
 	if (routeDecision.lane === "lightweight") {
 		return sourceToolNames;
 	}
@@ -2930,6 +2936,11 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					requestId: request.id,
 					abortSignal: abortController.signal
 				});
+				const toolHookContext: NonNullable<ToolExecutionContext["hookContext"]> = {
+					model: resolveChatModel(options),
+					approvalMode: session.approvalGateway.getMode(),
+					chatMode: effectiveParams.mode
+				};
 				const budgetToolCatalog = createWorkspaceToolCatalog({
 					workspaceId: session.activeWorkspace?.id,
 					hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
@@ -2965,7 +2976,8 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					summaryPreparationAvailable: (
 						(effectiveParams.mode === "agent" || effectiveParams.mode === "goal")
 						&& effectiveParams.options?.executionPolicy !== "read_only"
-					)
+					),
+					hookContext: toolHookContext
 				});
 				const budgetToolDefinitions = allowedToolNames === undefined
 					? budgetToolCatalog.getDefinitions()
@@ -3176,8 +3188,15 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					);
 				}
 
-				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(routeDecision, effectiveParams, allowedToolNames, session, socket);
-				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket);
+				const hiddenAnswerToolNames: readonly string[] = resolveHiddenAnswerToolNames(
+					routeDecision,
+					effectiveParams,
+					allowedToolNames,
+					session,
+					socket,
+					toolHookContext
+				);
+				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, toolHookContext);
 				const hiddenAnswerApprovalGateway: ApprovalGateway = (
 					routeDecision.lane !== "lightweight"
 					&& routeDecision.lane !== "tool_assisted"

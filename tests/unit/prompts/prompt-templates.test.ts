@@ -159,6 +159,15 @@ test("Godot runtime guidance never infers editor connectivity from runtime statu
 	assert.match(godotPrompt, /不得从 Runtime Test 状态.*推断编辑器离线/);
 });
 
+test("Godot runtime guidance starts visible tests autonomously when interactive validation is required", async (): Promise<void> => {
+	const godotPrompt: string = await readFile(path.resolve(process.cwd(), "src/prompts/templates/base/godot-assistant.md"), "utf8");
+
+	assert.match(godotPrompt, /验收条件需要交互式试玩、画面核验或运行期 UI 行为验证/);
+	assert.match(godotPrompt, /若未在线，必须自行调用 `mcp_godot_runtime_start`/);
+	assert.match(godotPrompt, /不要求用户先手动启动窗口/);
+	assert.match(godotPrompt, /明确要求不运行或仅做静态检查时才省略启动/);
+});
+
 test("all user-facing role prompts inherit CORE before mode and custom instructions", async (): Promise<void> => {
 	for (const template of listPromptTemplates()) {
 		const prompt: string = await composeSystemPrompt(

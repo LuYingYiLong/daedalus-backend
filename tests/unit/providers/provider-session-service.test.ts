@@ -69,3 +69,40 @@ test("ensuring provider credentials preserves the session selected model", async
 		}
 	}
 });
+
+test("ensuring provider credentials uses activeModel instead of a provider-local task model", async (): Promise<void> => {
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const appDataDir: string = await mkdtemp(join(tmpdir(), "daedalus-provider-session-active-model-"));
+	process.env.USERPROFILE = appDataDir;
+	installReadOnlySecretStore(async (): Promise<string | null> => "deepseek-key");
+
+	try {
+		await saveProviderConfig({
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			apiKey: "deepseek-key",
+		});
+		await saveProviderConfig({
+			provider: "deepseek",
+			model: "deepseek-v4-flash-vision-exp",
+			activate: false,
+		});
+		const runtime: ProviderSessionRuntime = {
+			activeProvider: "deepseek",
+			modelProfile: getDefaultModelProfile("deepseek"),
+		};
+
+		const apiKey: string | undefined = await ensureProviderConfigured(runtime);
+
+		assert.equal(apiKey, "deepseek-key");
+		assert.equal(runtime.providerModel, "deepseek-v4-flash");
+		assert.equal(runtime.modelProfile.model, "deepseek-v4-flash");
+	} finally {
+		resetSecretStoreDriver();
+		if (previousUserProfile === undefined) {
+			delete process.env.USERPROFILE;
+		} else {
+			process.env.USERPROFILE = previousUserProfile;
+		}
+	}
+});

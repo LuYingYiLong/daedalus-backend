@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 import {
 	hydrateToolImageReference,
-	resolveImageInspection
+	resolveImageInspection,
+	type ProviderToolImageReference
 } from "../../../src/providers/tool-image-reference.js";
 import { createRuntimeWorkspace, deleteWorkspace } from "../../../src/workspace/registry.js";
 import {
@@ -168,4 +169,41 @@ test("provider request builders hydrate image bytes only after matching tool res
 		}
 		await rm(root, { recursive: true, force: true });
 	}
+});
+
+test("provider request builders keep the agent loop usable when tool image evidence expires", async (): Promise<void> => {
+	const reference: ProviderToolImageReference = {
+		toolCallId: "call-stale-runtime-image",
+		source: {
+			kind: "godot_runtime",
+			testSessionId: "expired-test-session",
+			runtimeInstanceId: "expired-runtime",
+			observationId: "expired-observation",
+		},
+		title: "Godot runtime viewport",
+		mimeType: "image/png",
+		byteSize: ONE_PIXEL_PNG.byteLength,
+		sha256: "0".repeat(64),
+	};
+	const chatMessages: ChatCompletionMessageParam[] = await injectToolImagesIntoChatMessages([
+		{ role: "assistant", content: null, tool_calls: [{ id: reference.toolCallId!, type: "function", function: { name: "mcp_godot_runtime_screenshot", arguments: "{}" } }] },
+		{ role: "tool", tool_call_id: reference.toolCallId!, content: "{\"ok\":true}" },
+	], [reference]);
+	assert.equal(chatMessages[2]?.role, "user");
+	assert.match(JSON.stringify(chatMessages[2]), /runtime_screenshot_stale/u);
+	assert.match(JSON.stringify(chatMessages[2]), /recoverable evidence error/u);
+	assert.doesNotMatch(JSON.stringify(chatMessages), /data:image\/png;base64/u);
+
+	const responseItems = await injectToolImagesIntoResponseInput([{
+		type: "function_call_output",
+		call_id: reference.toolCallId!,
+		output: "{\"ok\":true}",
+	} as ResponseInputItem], [reference]);
+	assert.match(JSON.stringify(responseItems[1]), /runtime_screenshot_stale/u);
+
+	const anthropicMessages = await injectToolImagesIntoAnthropicMessages([{
+		role: "user",
+		content: [{ type: "tool_result", tool_use_id: reference.toolCallId!, content: "{\"ok\":true}" }],
+	}], [reference]);
+	assert.match(JSON.stringify(anthropicMessages[0]), /runtime_screenshot_stale/u);
 });

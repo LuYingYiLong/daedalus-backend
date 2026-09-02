@@ -28,7 +28,10 @@ export async function ensureProviderConfigured(runtime: ProviderSessionRuntime):
 		return runtime.providerApiKey;
 	}
 
-	const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret(runtime.activeProvider);
+	const activeConfig: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
+	const config: ProviderConfigWithSecret | null = activeConfig?.provider === runtime.activeProvider
+		? activeConfig
+		: await loadProviderConfigWithSecret(runtime.activeProvider);
 	if (config === null || config.apiKey === undefined) {
 		return undefined;
 	}
@@ -36,7 +39,9 @@ export async function ensureProviderConfigured(runtime: ProviderSessionRuntime):
 	runtime.providerApiKey = config.apiKey;
 	runtime.providerBaseUrl = normalizeConfiguredProviderBaseUrl(config.baseUrl);
 	runtime.providerRequestOverrides = cloneProviderRequestOverrides(config.requestOverrides);
-	const model: string = runtime.providerModel ?? config.model ?? getProviderDefaultModel(runtime.activeProvider);
+	const model: string = runtime.providerModel
+		?? (activeConfig?.provider === runtime.activeProvider ? activeConfig.model : undefined)
+		?? getProviderDefaultModel(runtime.activeProvider);
 	runtime.providerModel = model;
 	runtime.modelProfile = resolveModelProfile(runtime.activeProvider, model);
 	return runtime.providerApiKey;

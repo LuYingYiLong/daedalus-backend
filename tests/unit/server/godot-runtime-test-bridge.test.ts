@@ -223,7 +223,7 @@ test("Godot runtime tool cancellation preserves the originating run identity", a
 	bridge.stopSession(owner, created.testSessionId);
 });
 
-test("Godot runtime screenshots remain bound to one observation and are cleared by a new observation", async (): Promise<void> => {
+test("Godot runtime screenshots survive a new observation and use a bounded session cache", async (): Promise<void> => {
 	const bridge = new GodotRuntimeTestBridge();
 	const owner = createSocket();
 	const runtime = createSocket();
@@ -280,9 +280,37 @@ test("Godot runtime screenshots remain bound to one observation and are cleared 
 		result: { ok: true, observationId: "observation-two", nodes: [] },
 	});
 	await observePending;
+	assert.deepEqual(bridge.readScreenshot(created.testSessionId, "runtime-one", "observation-one"), screenshotPng);
+
+	for (const observationId of ["observation-two", "observation-three", "observation-four"]) {
+		const nextScreenshotPending = bridge.callTool("screenshot", {
+			testSessionId: created.testSessionId,
+			runtimeInstanceId: "runtime-one",
+			observationId,
+		}, "workspace:source");
+		const nextScreenshotEvent = runtime.sent.at(-1)!;
+		const nextScreenshotData = nextScreenshotEvent.data as Record<string, unknown>;
+		bridge.handleToolResult(runtime, {
+			callId: String(nextScreenshotData.callId),
+			testSessionId: created.testSessionId,
+			runtimeInstanceId: "runtime-one",
+			ok: true,
+			result: {
+				ok: true,
+				observationId,
+				mimeType: "image/png",
+				width: 1,
+				height: 1,
+				byteLength: screenshotPng.byteLength,
+				data: screenshotPng.toString("base64"),
+			},
+		});
+		await nextScreenshotPending;
+	}
 	assert.throws(
 		(): Buffer => bridge.readScreenshot(created.testSessionId, "runtime-one", "observation-one"),
 		/runtime_screenshot_stale/u,
 	);
+	assert.deepEqual(bridge.readScreenshot(created.testSessionId, "runtime-one", "observation-four"), screenshotPng);
 	bridge.stopSession(owner, created.testSessionId);
 });

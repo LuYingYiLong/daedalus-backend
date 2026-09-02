@@ -14,6 +14,9 @@ const HEARTBEAT_STALE_MS: number = 7_000;
 // The Studio start controller owns the matching five-minute hard deadline.
 const STARTUP_STALE_MS: number = 5 * 60_000;
 const TOOL_TIMEOUT_MS: number = 30_000;
+// A later tool in the same model batch may create a new observation before the
+// provider continuation hydrates an earlier screenshot reference.
+const RUNTIME_SCREENSHOT_CACHE_LIMIT: number = 3;
 const RUNTIME_TOOL_NAMES: ReadonlySet<string> = new Set(["status", "observe", "action", "wait", "assert", "screenshot"]);
 const RUNTIME_ASSERTION_PROPERTIES: ReadonlySet<string> = new Set(["exists", "visible", "visibleInTree", "enabled", "text", "buttonPressed", "selected", "currentTab", "testState"]);
 const RUNTIME_KEYS: ReadonlySet<string> = new Set(["enter", "tab", "shift+tab", "escape", "backspace", "delete", "arrow_up", "arrow_down", "arrow_left", "arrow_right", "home", "end", "page_up", "page_down", "ctrl+a", "ctrl+f", "ctrl+s", "ctrl+z", "ctrl+y"]);
@@ -62,6 +65,7 @@ type RuntimeScreenshot = {
 	width: number;
 	height: number;
 	sha256: string;
+	createdAtMs: number;
 };
 
 export type GodotRuntimeTestSessionSummary = {
@@ -230,9 +234,6 @@ export class GodotRuntimeTestBridge {
 		clearTimeout(pending.timeout);
 		if (params.ok) {
 			try {
-				if (pending.toolName === "observe" || pending.toolName === "action") {
-					this.clearScreenshots(pending.testSessionId);
-				}
 				if (pending.toolName === "screenshot") {
 					this.storeScreenshot(pending.testSessionId, pending.runtimeInstanceId, params.result);
 				}
@@ -565,7 +566,6 @@ export class GodotRuntimeTestBridge {
 			|| bytes.readUInt32BE(20) !== height) {
 			throw new Error("runtime_screenshot_invalid");
 		}
-		this.clearScreenshots(testSessionId);
 		const screenshot: RuntimeScreenshot = {
 			testSessionId,
 			runtimeInstanceId,
@@ -573,9 +573,18 @@ export class GodotRuntimeTestBridge {
 			bytes,
 			width,
 			height,
-			sha256: createHash("sha256").update(bytes).digest("hex")
+			sha256: createHash("sha256").update(bytes).digest("hex"),
+			createdAtMs: Date.now(),
 		};
-		this.screenshots.set(this.screenshotKey(testSessionId, runtimeInstanceId, value.observationId), screenshot);
+		const screenshotKey: string = this.screenshotKey(testSessionId, runtimeInstanceId, value.observationId);
+		this.screenshots.delete(screenshotKey);
+		this.screenshots.set(screenshotKey, screenshot);
+		const sessionScreenshots: Array<[string, RuntimeScreenshot]> = Array.from(this.screenshots.entries())
+			.filter((entry: [string, RuntimeScreenshot]): boolean => entry[1].testSessionId === testSessionId)
+			.sort((left: [string, RuntimeScreenshot], right: [string, RuntimeScreenshot]): number => left[1].createdAtMs - right[1].createdAtMs);
+		for (const [key] of sessionScreenshots.slice(0, -RUNTIME_SCREENSHOT_CACHE_LIMIT)) {
+			this.screenshots.delete(key);
+		}
 	}
 
 	private clearScreenshots(testSessionId: string): void {

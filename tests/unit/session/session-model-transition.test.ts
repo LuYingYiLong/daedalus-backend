@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { hasSessionUserTurn } from "../../../src/session/session-model-transition.js";
+import { upsertTraceRecord } from "../../../src/trace/trace-store.js";
 
 test("a model selected before the first user turn establishes the session baseline", (): void => {
 	assert.equal(hasSessionUserTurn([]), false);
@@ -35,6 +36,20 @@ test("latest completed turn model is used when session metadata is stale", async
 					model: "mimo-v2.5",
 				},
 			},
+		});
+		await upsertTraceRecord({
+			recordId: "auxiliary-vision-model-call",
+			sessionId: metadata.id,
+			kind: "model_call",
+			status: "success",
+			requestId: "request-1",
+			provider: "deepseek",
+			model: "deepseek-v4-flash-vision-exp",
+			startedAt: "2099-01-01T00:00:00.000Z",
+			finishedAt: "2099-01-01T00:00:01.000Z",
+			detailLevel: "summary",
+			summary: { task: "imageRecognition" },
+			truncated: false,
 		});
 
 		assert.deepEqual(await transitions.readLatestSessionModelRef(metadata.id), {

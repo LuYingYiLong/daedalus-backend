@@ -57,6 +57,16 @@ export type HydratedProviderToolImage = ProviderToolImageReference & {
 	dataUrl: string;
 };
 
+export type ToolImageHydrationFailure = {
+	reference: ProviderToolImageReference;
+	code: string;
+};
+
+export type AvailableToolImageHydration = {
+	images: HydratedProviderToolImage[];
+	failures: ToolImageHydrationFailure[];
+};
+
 export type ResolvedImageInspection = {
 	reference: ProviderToolImageReference;
 	artifactRef: string;
@@ -270,6 +280,52 @@ export async function hydrateToolImageReferences(
 		throw new Error(`Inspected images exceed the ${MAX_TOTAL_IMAGE_BYTES} byte continuation limit.`);
 	}
 	return Promise.all(references.map(hydrateToolImageReference));
+}
+
+function getToolImageHydrationFailureCode(error: unknown): string {
+	const message: string = error instanceof Error ? error.message.trim() : "";
+	const leadingCode: string | undefined = /^([a-z][a-z0-9_]{1,79})(?::|$)/u.exec(message)?.[1];
+	return leadingCode ?? "tool_image_unavailable";
+}
+
+export async function hydrateAvailableToolImageReferences(
+	references: readonly ProviderToolImageReference[]
+): Promise<AvailableToolImageHydration> {
+	if (references.length > MAX_IMAGE_ATTACHMENTS) {
+		return {
+			images: [],
+			failures: references.map((reference: ProviderToolImageReference): ToolImageHydrationFailure => ({
+				reference,
+				code: "tool_image_count_exceeded",
+			})),
+		};
+	}
+	const totalBytes: number = references.reduce((sum: number, reference: ProviderToolImageReference): number => sum + reference.byteSize, 0);
+	if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
+		return {
+			images: [],
+			failures: references.map((reference: ProviderToolImageReference): ToolImageHydrationFailure => ({
+				reference,
+				code: "tool_image_bytes_exceeded",
+			})),
+		};
+	}
+
+	const settled: PromiseSettledResult<HydratedProviderToolImage>[] = await Promise.allSettled(
+		references.map(hydrateToolImageReference)
+	);
+	const images: HydratedProviderToolImage[] = [];
+	const failures: ToolImageHydrationFailure[] = [];
+	for (let index: number = 0; index < settled.length; index += 1) {
+		const result: PromiseSettledResult<HydratedProviderToolImage> = settled[index] as PromiseSettledResult<HydratedProviderToolImage>;
+		const reference: ProviderToolImageReference = references[index] as ProviderToolImageReference;
+		if (result.status === "fulfilled") {
+			images.push(result.value);
+		} else {
+			failures.push({ reference, code: getToolImageHydrationFailureCode(result.reason) });
+		}
+	}
+	return { images, failures };
 }
 
 export function createImageContextFromHydratedReference(image: HydratedProviderToolImage): AdditionalContextItem {

@@ -702,7 +702,9 @@ export async function loadProviderConfigWithSecret(provider?: ProviderId | undef
 
 	const result: ProviderConfigWithSecret = {
 		provider: activeProvider,
-		model: entry?.model ?? (activeProvider === stored.activeModel.providerId ? stored.activeModel.modelId : undefined),
+		model: provider === undefined
+			? stored.activeModel.modelId
+			: entry?.model ?? (activeProvider === stored.activeModel.providerId ? stored.activeModel.modelId : undefined),
 		apiKey: apiKey ?? undefined
 	};
 	if (entry?.baseUrl !== undefined) {
@@ -782,7 +784,7 @@ export async function getProviderConfigStatus(): Promise<ProviderConfigStatus> {
 		modelRouting: stored.modelRouting,
 		provider: activeStatus.provider,
 		configured: activeStatus.configured,
-		model: activeStatus.model,
+		model: activeStatus.configured ? stored.activeModel.modelId : null,
 		baseUrl: activeStatus.baseUrl,
 		apiKeyMasked: activeStatus.apiKeyMasked,
 		keyStorage: "keytar",

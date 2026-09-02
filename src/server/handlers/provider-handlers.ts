@@ -89,11 +89,6 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 
 	case "provider.config.get":
 		try {
-			const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
-			if (config !== null) {
-				applyProviderConfigToRuntime(session, config);
-			}
-
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -116,11 +111,6 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 	case "provider.current.get":
 	case "provider.modelSelection.get":
 		try {
-			const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
-			if (config !== null) {
-				applyProviderConfigToRuntime(session, config);
-			}
-
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -143,9 +133,11 @@ export async function handleProviderRequest(socket: WebSocket, request: ClientRe
 	case "provider.config.set":
 		try {
 			await saveProviderConfig(request.params);
-			const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
-			if (config !== null) {
-				applyProviderConfigToRuntime(session, config);
+			if (session.sessionId === undefined && request.params.activate !== false) {
+				const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
+				if (config !== null) {
+					applyProviderConfigToRuntime(session, config);
+				}
 			}
 			logger.info("provider", "config_saved", {
 				provider: request.params.provider,

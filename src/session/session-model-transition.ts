@@ -16,11 +16,6 @@ export type PendingSessionModelTransition = {
 	to: SessionModelRef;
 };
 
-type TimestampedModelRef = {
-	ref: SessionModelRef;
-	createdAt: string;
-};
-
 export function hasSessionUserTurn(messages: readonly { role: string }[]): boolean {
 	return messages.some((message: { role: string }): boolean => message.role === "user");
 }
@@ -64,9 +59,8 @@ function readUsedModelRef(data: unknown): SessionModelRef | null {
 }
 
 function readLatestUsedModelRef(db: DatabaseSync, sessionId: string): SessionModelRef | null {
-	const candidates: TimestampedModelRef[] = [];
 	const eventRows = db.prepare(`
-		SELECT data_json, created_at
+		SELECT data_json
 		FROM session_events
 		WHERE session_id = ? AND channel = 'timeline' AND event_name = 'agent.message.done'
 		ORDER BY sequence DESC
@@ -74,29 +68,10 @@ function readLatestUsedModelRef(db: DatabaseSync, sessionId: string): SessionMod
 	for (const row of eventRows) {
 		const ref: SessionModelRef | null = readUsedModelRef(parseSqlJson<unknown>(row.data_json));
 		if (ref !== null) {
-			candidates.push({ ref, createdAt: String(row.created_at ?? "") });
+			return ref;
 		}
 	}
-
-	const traceRows = db.prepare(`
-		SELECT provider, model, started_at
-		FROM trace_records
-		WHERE session_id = ? AND provider IS NOT NULL AND model IS NOT NULL
-		ORDER BY sequence DESC
-	`).all(sessionId) as Record<string, unknown>[];
-	for (const row of traceRows) {
-		const ref: SessionModelRef | null = readModelRef({ provider: row.provider, model: row.model });
-		if (ref !== null) {
-			candidates.push({ ref, createdAt: String(row.started_at ?? "") });
-		}
-	}
-
-	return candidates.reduce<TimestampedModelRef | null>(
-		(latest: TimestampedModelRef | null, candidate: TimestampedModelRef): TimestampedModelRef => (
-			latest === null || candidate.createdAt >= latest.createdAt ? candidate : latest
-		),
-		null,
-	)?.ref ?? null;
+	return null;
 }
 
 export async function readLatestSessionModelRef(sessionId: string): Promise<SessionModelRef | null> {

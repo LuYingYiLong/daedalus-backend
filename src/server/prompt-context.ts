@@ -4,7 +4,6 @@ import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, M
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { chatWithDeepSeek, createDeepSeekClient, resolveChatModel, type ProviderChatOptions } from "../providers/deepseek-client.js";
-import { normalizeConfiguredProviderBaseUrl } from "../providers/provider-base-url.js";
 import { McpHost } from "../mcp/mcp-host.js";
 import type { CustomMcpServerRuntimeStatus } from "../mcp/mcp-host.js";
 import {
@@ -18,7 +17,7 @@ import { sendJson } from "./send-json.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-profiles.js";
+import { getDefaultModelProfile } from "../tokens/model-profiles.js";
 import { type TokenCounter } from "../tokens/token-counter.js";
 import { createTokenCounter } from "../tokens/token-counter-factory.js";
 import { computeInputBudget, selectMessagesWithinBudget } from "../session/session-compressor.js";
@@ -49,9 +48,7 @@ import {
 import {
 	clearProviderConfig,
 	getProviderConfigStatus,
-	loadProviderConfigWithSecret,
-	saveProviderConfig,
-	type ProviderConfigWithSecret
+	saveProviderConfig
 } from "../providers/provider-config-store.js";
 import { listProviderModels } from "../providers/provider-models.js";
 import { estimateProviderMessagesTokens, estimateProviderTextTokens } from "../providers/provider-token-estimator.js";
@@ -136,34 +133,6 @@ import {
 } from "./approval-continuation.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
 import { logger } from "../logger.js";
-import { cloneProviderRequestOverrides } from "../providers/provider-request-overrides.js";
-
-function applyProviderConfigToSession(session: ClientSession, config: ProviderConfigWithSecret): void {
-	session.activeProvider = config.provider;
-	if (config.apiKey !== undefined) {
-		session.providerApiKey = config.apiKey;
-	}
-
-	session.providerModel = config.model;
-	session.providerBaseUrl = normalizeConfiguredProviderBaseUrl(config.baseUrl);
-	session.providerRequestOverrides = cloneProviderRequestOverrides(config.requestOverrides);
-
-	session.modelProfile = resolveModelProfile(config.provider, config.model ?? getProviderDefaultModel(config.provider));
-}
-
-async function ensureProviderConfigured(session: ClientSession): Promise<string | undefined> {
-	if (session.providerApiKey !== undefined) {
-		return session.providerApiKey;
-	}
-
-	const config: ProviderConfigWithSecret | null = await loadProviderConfigWithSecret();
-	if (config === null || config.apiKey === undefined) {
-		return undefined;
-	}
-
-	applyProviderConfigToSession(session, config);
-	return session.providerApiKey;
-}
 
 function canCallMcpToolDirectly(toolName: string): boolean {
 	const allowedTools: Set<string> = new Set([

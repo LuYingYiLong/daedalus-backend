@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iostream>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,13 +29,20 @@ struct Options {
     std::vector<std::wstring> readOnly;
     bool network = false;
     bool shell = false;
+    bool cancelOnStdinClose = false;
     std::vector<std::wstring> command;
 };
 
 struct AclGrant {
     std::wstring path;
-    PSECURITY_DESCRIPTOR descriptor = nullptr;
-    PACL oldDacl = nullptr;
+    bool inherit = false;
+    DWORD permissions = 0;
+};
+
+struct ScopedHandle {
+    HANDLE value = nullptr;
+    ~ScopedHandle() { if (value != nullptr && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+    operator HANDLE() const { return value; }
 };
 
 struct Profile {
@@ -45,7 +53,7 @@ struct Profile {
 
 void fail(const std::wstring& message) {
     std::wcerr << L"daedalus sandbox helper: " << message << std::endl;
-    ExitProcess(2);
+    throw std::runtime_error("sandbox operation failed");
 }
 
 std::wstring errorText(DWORD code = GetLastError()) {
@@ -190,6 +198,7 @@ void parseArguments(int argc, wchar_t** argv, Options& options) {
         else if (argument == L"--read-only" && index + 1 < argc) options.readOnly.push_back(argv[++index]);
         else if (argument == L"--network") options.network = true;
         else if (argument == L"--no-network") options.network = false;
+        else if (argument == L"--cancel-on-stdin-close") options.cancelOnStdinClose = true;
         else if (argument == L"--argv") {
             options.shell = false;
             ++index;
@@ -210,9 +219,42 @@ void parseArguments(int argc, wchar_t** argv, Options& options) {
     if (options.workspace.empty() || options.cwd.empty() || options.command.empty()) fail(L"workspace, cwd and command are required");
 }
 
-void grantAcl(const std::wstring& path, PSID sid, DWORD permissions, std::vector<AclGrant>& grants) {
+// 多个 helper 修改同一父目录时，仅串行化 ACL 事务，不串行化沙箱运行。
+struct AclTransaction {
+    HANDLE mutex = CreateMutexW(nullptr, FALSE, L"Local\\DaedalusSandboxAclTransactions.v1");
+    AclTransaction() {
+        if (mutex == nullptr) fail(L"cannot create ACL transaction mutex");
+        const DWORD result = WaitForSingleObject(mutex, 30000);
+        if (result != WAIT_OBJECT_0 && result != WAIT_ABANDONED) {
+            CloseHandle(mutex);
+            fail(L"cannot acquire ACL transaction mutex");
+        }
+    }
+    ~AclTransaction() { ReleaseMutex(mutex); CloseHandle(mutex); }
+};
+
+DWORD setPathDacl(const std::wstring& path, PACL dacl, bool propagate) {
+    if (propagate) return SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, dacl, nullptr);
+    // 低层对象 API 仅更新当前目录，避免遍历父目录树和申请不必要的 DELETE 权限。
+    const HANDLE file = CreateFileW(path.c_str(), WRITE_DAC, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return GetLastError();
+    SECURITY_DESCRIPTOR descriptor{};
+    InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION);
+    SetSecurityDescriptorDacl(&descriptor, TRUE, dacl, FALSE);
+    const DWORD status = SetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, &descriptor) ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(file);
+    return status;
+}
+
+void grantAcl(const std::wstring& path, PSID sid, DWORD permissions, std::vector<AclGrant>& grants, bool inherit = true) {
     const std::wstring canonical = fullPath(path);
-    if (std::any_of(grants.begin(), grants.end(), [&](const AclGrant& value) { return equalsInsensitive(value.path, canonical); })) return;
+    auto previous = std::find_if(grants.begin(), grants.end(), [&](const AclGrant& value) { return equalsInsensitive(value.path, canonical); });
+    if (previous != grants.end()) {
+        if ((previous->permissions & permissions) == permissions && (previous->inherit || !inherit)) return;
+        permissions |= previous->permissions;
+        inherit = inherit || previous->inherit;
+    }
+    AclTransaction transaction;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
     PACL oldDacl = nullptr;
     PSID owner = nullptr;
@@ -223,7 +265,7 @@ void grantAcl(const std::wstring& path, PSID sid, DWORD permissions, std::vector
     EXPLICIT_ACCESSW access{};
     access.grfAccessPermissions = permissions;
     access.grfAccessMode = GRANT_ACCESS;
-    access.grfInheritance = isDirectory(canonical) ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+    access.grfInheritance = inherit && isDirectory(canonical) ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
     access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
     access.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
     access.Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
@@ -232,13 +274,27 @@ void grantAcl(const std::wstring& path, PSID sid, DWORD permissions, std::vector
         if (descriptor != nullptr) LocalFree(descriptor);
         fail(L"cannot construct ACL for " + canonical + L": " + errorText());
     }
-    if (SetNamedSecurityInfoW(const_cast<LPWSTR>(canonical.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, newDacl, nullptr) != ERROR_SUCCESS) {
+    const DWORD setStatus = setPathDacl(canonical, newDacl, inherit);
+    if (setStatus != ERROR_SUCCESS) {
         if (newDacl != nullptr) LocalFree(newDacl);
         if (descriptor != nullptr) LocalFree(descriptor);
-        fail(L"cannot grant sandbox ACL for " + canonical + L": " + errorText());
+        fail(L"cannot grant sandbox ACL for " + canonical + L" (error " + std::to_wstring(setStatus) + L"): " + errorText(setStatus));
     }
     if (newDacl != nullptr) LocalFree(newDacl);
-    grants.push_back({canonical, descriptor, oldDacl});
+    if (descriptor != nullptr) LocalFree(descriptor);
+    if (previous != grants.end()) { previous->permissions = permissions; previous->inherit = inherit; }
+    else grants.push_back({canonical, inherit, permissions});
+}
+
+void grantParentMetadata(const std::wstring& path, PSID sid, std::vector<AclGrant>& grants) {
+    // Node realpath/lstat 会检查祖先；禁止向祖先授予列目录、读内容或继承权限。
+    fs::path parent = fs::path(fullPath(path)).parent_path();
+    while (!parent.empty()) {
+        grantAcl(parent.wstring(), sid, FILE_READ_ATTRIBUTES | FILE_TRAVERSE | SYNCHRONIZE, grants, false);
+        const fs::path next = parent.parent_path();
+        if (next == parent) break;
+        parent = next;
+    }
 }
 
 bool isSystemPath(const std::wstring& value) {
@@ -288,12 +344,38 @@ void cleanupStagedCommand(const std::wstring& stagingDirectory) {
     fs::remove_all(stagingDirectory, error);
 }
 
-void restoreAcls(std::vector<AclGrant>& grants) {
+struct StagedCommand {
+    std::wstring directory;
+    ~StagedCommand() { cleanupStagedCommand(directory); }
+};
+
+bool restoreAcls(std::vector<AclGrant>& grants, PSID sid) {
+    bool restored = true;
     for (auto iterator = grants.rbegin(); iterator != grants.rend(); ++iterator) {
-        SetNamedSecurityInfoW(const_cast<LPWSTR>(iterator->path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, iterator->oldDacl, nullptr);
-        if (iterator->descriptor != nullptr) LocalFree(iterator->descriptor);
+        AclTransaction transaction;
+        PSECURITY_DESCRIPTOR descriptor = nullptr;
+        PACL currentDacl = nullptr;
+        DWORD status = GetNamedSecurityInfoW(iterator->path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, &currentDacl, nullptr, &descriptor);
+        if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) continue;
+        PACL newDacl = nullptr;
+        if (status == ERROR_SUCCESS) {
+            EXPLICIT_ACCESSW access{};
+            // SID 每次运行唯一；仅撤销自己的 ACE，保留其他并发运行及用户的权限修改。
+            access.grfAccessMode = REVOKE_ACCESS;
+            access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+            access.Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
+            status = SetEntriesInAclW(1, &access, currentDacl, &newDacl);
+            if (status == ERROR_SUCCESS) status = setPathDacl(iterator->path, newDacl, iterator->inherit);
+        }
+        if (newDacl != nullptr) LocalFree(newDacl);
+        if (descriptor != nullptr) LocalFree(descriptor);
+        if (status != ERROR_SUCCESS) {
+            restored = false;
+            std::wcerr << L"daedalus sandbox helper: cannot restore ACL for " << iterator->path << L": " << errorText(status) << std::endl;
+        }
     }
     grants.clear();
+    return restored;
 }
 
 Profile createProfile(bool network) {
@@ -357,8 +439,8 @@ std::wstring buildCommandLine(const Options& options, const std::wstring& resolv
 
 DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<AclGrant>& grants) {
     const std::wstring originalCommand = resolveCommand(options.command.front());
-    std::wstring stagingDirectory;
-    const std::wstring resolvedCommand = stageProtectedCommand(originalCommand, stagingDirectory);
+    StagedCommand staging;
+    const std::wstring resolvedCommand = stageProtectedCommand(originalCommand, staging.directory);
     // CreateProcessAsUser requires the current-drive entry when it receives a
     // deliberately reduced environment block. Node's child_process environment
     // object does not preserve these `=C:` entries, so restore the one used by
@@ -378,6 +460,8 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
     }
     grantAcl(options.workspace, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE, grants);
     for (const std::wstring& path : options.readOnly) grantAcl(path, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
+    const auto grantedPaths = grants;
+    for (const auto& grant : grantedPaths) grantParentMetadata(grant.path, profile.sid, grants);
 
     // Do not pass the caller's anonymous pipes directly into the AppContainer:
     // Node creates them with an ACL that does not include the lowbox SID.  A
@@ -438,7 +522,11 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
     std::wstring commandLine = buildCommandLine(options, resolvedCommand);
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
-    const BOOL created = CreateProcessAsUserW(nullptr, nullptr, mutableCommand.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW, nullptr, options.cwd.c_str(), &startup.StartupInfo, &processInfo);
+    ScopedHandle job{CreateJobObjectW(nullptr, nullptr)};
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
+    jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (job.value == nullptr || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jobLimits, sizeof(jobLimits))) fail(L"cannot create sandbox process job");
+    const BOOL created = CreateProcessAsUserW(nullptr, nullptr, mutableCommand.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, options.cwd.c_str(), &startup.StartupInfo, &processInfo);
     DeleteProcThreadAttributeList(attributes);
     HeapFree(GetProcessHeap(), 0, attributes);
     if (!created) {
@@ -449,9 +537,16 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
         CloseHandle(childStdoutWrite);
         CloseHandle(helperStderrRead);
         CloseHandle(childStderrWrite);
-        cleanupStagedCommand(stagingDirectory);
         fail(L"cannot start the sandboxed process (error " + std::to_wstring(createError) + L"): " + errorText(createError));
     }
+    if (!AssignProcessToJobObject(job, processInfo.hProcess)) {
+        TerminateProcess(processInfo.hProcess, 2);
+        WaitForSingleObject(processInfo.hProcess, INFINITE);
+        CloseHandle(processInfo.hThread);
+        CloseHandle(processInfo.hProcess);
+        fail(L"cannot assign sandbox process to job");
+    }
+    if (ResumeThread(processInfo.hThread) == static_cast<DWORD>(-1)) fail(L"cannot resume sandbox process");
     CloseHandle(childStdinRead);
     CloseHandle(childStdoutWrite);
     CloseHandle(childStderrWrite);
@@ -472,29 +567,35 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
             }
         }
     };
-    std::thread stdinPump([pump, outerStdin, helperStdinWrite]() {
+    HANDLE inputClosed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (inputClosed == nullptr) fail(L"cannot create sandbox cancellation event");
+    std::thread stdinPump([pump, outerStdin, helperStdinWrite, inputClosed]() {
         pump(outerStdin, helperStdinWrite);
         CloseHandle(helperStdinWrite);
+        SetEvent(inputClosed);
     });
     stdinPump.detach();
     std::thread stdoutPump([pump, helperStdoutRead, outerStdout]() { pump(helperStdoutRead, outerStdout); });
     std::thread stderrPump([pump, helperStderrRead, outerStderr]() { pump(helperStderrRead, outerStderr); });
     CloseHandle(processInfo.hThread);
+    // stdin EOF 是 broker 的取消信号，终止受限 Job 后仍由 helper 回收 ACL。
+    const HANDLE waits[] = {processInfo.hProcess, inputClosed};
+    if (options.cancelOnStdinClose && WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) TerminateJobObject(job, 1);
     WaitForSingleObject(processInfo.hProcess, INFINITE);
     DWORD exitCode = 1;
     GetExitCodeProcess(processInfo.hProcess, &exitCode);
     CloseHandle(processInfo.hProcess);
+    TerminateJobObject(job, 0);
     stdoutPump.join();
     stderrPump.join();
     CloseHandle(helperStdoutRead);
     CloseHandle(helperStderrRead);
-    cleanupStagedCommand(stagingDirectory);
     return exitCode;
 }
 
 } // namespace
 
-int wmain(int argc, wchar_t** argv) {
+int run(int argc, wchar_t** argv) {
     Options options;
     parseArguments(argc, argv, options);
     DWORD lowBoxConsoleEnabled = 1;
@@ -513,11 +614,16 @@ int wmain(int argc, wchar_t** argv) {
     try {
         exitCode = runInAppContainer(options, profile, grants);
     } catch (...) {
-        restoreAcls(grants);
+        restoreAcls(grants, profile.sid);
         deleteProfile(profile);
         throw;
     }
-    restoreAcls(grants);
+    const bool restored = restoreAcls(grants, profile.sid);
     deleteProfile(profile);
-    return static_cast<int>(exitCode);
+    return restored ? static_cast<int>(exitCode) : 2;
+}
+
+int wmain(int argc, wchar_t** argv) {
+    try { return run(argc, argv); }
+    catch (const std::exception&) { return 2; }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { encodeHarnessRequest, parseHarnessEvent } from "../../../src/plugins/ha
 import { readHarnessRuntimeConfig, updateHarnessRuntimeConfig } from "../../../src/plugins/harness/config-store.js";
 import { detectHarnessInstallation } from "../../../src/plugins/harness/installation.js";
 import { createSanitizedHarnessPatch, parseHarnessBundlePatch } from "../../../src/plugins/harness/patch-parser.js";
-import { invokeHarness, startHarnessSidecar, stopHarnessSidecar } from "../../../src/plugins/harness/runner.js";
+import { invokeHarness, startHarnessSidecar, stopHarnessSidecar, type HarnessHandle } from "../../../src/plugins/harness/runner.js";
 import { getPluginToolEntries } from "../../../src/plugins/runtime/registries.js";
 import type { HarnessInstallation, PluginRecord } from "../../../src/plugins/types.js";
 
@@ -114,16 +114,30 @@ test("fake Harness Sidecar performs the versioned handshake and publishes isolat
 	};
 	try {
 		process.env.USERPROFILE = profileRoot;
-		let handle;
-		try {
-			handle = await startHarnessSidecar(record, { pluginId: record.id, sessionId: "fixture-session", workspaceRoot: packageRoot, capabilities: ["tools", "skills", "hooks", "mcp"] }, installation, { onSnapshot: (): void => undefined, onClosed: (): void => undefined });
-		} catch (error: unknown) {
-			if ((error as { code?: unknown }).code === "plugin_harness_sandbox_unavailable") { t.skip("OS sandbox is unavailable in this test environment."); return; }
-			throw error;
+		let handle: HarnessHandle | undefined;
+		for (const ignoreShutdown of [false, true, false]) {
+			try {
+				handle = await startHarnessSidecar(record, { pluginId: record.id, sessionId: "fixture-session", workspaceRoot: packageRoot, capabilities: ["tools", "skills", "hooks", "mcp"] }, { ...installation, args: [...installation.args!, ...(ignoreShutdown ? ["--fixture-ignore-shutdown"] : [])] }, { onSnapshot: (): void => undefined, onClosed: (): void => undefined });
+			} catch (error: unknown) {
+				if ((error as { code?: unknown }).code === "plugin_harness_sandbox_unavailable") { t.skip("OS sandbox is unavailable in this test environment."); return; }
+				throw error;
+			}
+			try {
+				assert.equal(getPluginToolEntries().some((tool): boolean => tool.pluginId === record.id && tool.namespace === "harness"), true);
+				assert.deepEqual(await invokeHarness(handle, "tool", "fixture_echo", { value: "ready" }), { echoed: "ready" });
+				await Promise.all([stopHarnessSidecar(handle), stopHarnessSidecar(handle)]);
+				if (!ignoreShutdown || process.platform === "win32") assert.equal(handle.child.signalCode, null);
+				assert.equal(handle.child.exitCode, ignoreShutdown && process.platform === "win32" ? 1 : ignoreShutdown ? null : 0);
+				await assert.rejects(access(handle.prepared.runtimeRoot), { code: "ENOENT" });
+				if (!ignoreShutdown) assert.equal(await readFile(join(packageRoot, "shutdown-completed.txt"), "utf8"), "complete");
+			} finally { await stopHarnessSidecar(handle); }
 		}
-		assert.equal(getPluginToolEntries().some((tool): boolean => tool.pluginId === record.id && tool.namespace === "harness"), true);
-		assert.deepEqual(await invokeHarness(handle, "tool", "fixture_echo", { value: "ready" }), { echoed: "ready" });
-		await stopHarnessSidecar(handle);
+		await assert.rejects(startHarnessSidecar(record,
+			{ pluginId: record.id, sessionId: "fixture-session", workspaceRoot: packageRoot, capabilities: ["tools"] },
+			{ ...installation, args: [...installation.args!, "--fixture-fail-start"] },
+			{ onSnapshot: (): void => undefined, onClosed: (): void => undefined }
+		), /fixture startup failed/u);
+		await assert.rejects(access(handle!.prepared.runtimeRoot), { code: "ENOENT" });
 	} finally {
 		if (originalProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = originalProfile;

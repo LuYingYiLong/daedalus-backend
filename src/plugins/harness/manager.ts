@@ -5,12 +5,11 @@ import { addPluginRuntimeLog } from "../runtime/runtime-logs.js";
 import { pluginFingerprint } from "../manager.js";
 import { invalidateHarnessPluginTrust, readHarnessRuntimeConfig } from "./config-store.js";
 import { detectHarnessInstallation } from "./installation.js";
-import { invokeHarness, startHarnessSidecar, stopHarnessSidecar, type HarnessHandle } from "./runner.js";
+import { invokeHarness, startHarnessSidecar, stopHarnessSidecar, terminateHarnessSidecar, type HarnessHandle } from "./runner.js";
 import { clearPluginRegistrations } from "../runtime/registries.js";
 import { createHarnessRuntimeFingerprint } from "./trust.js";
 import { clearPluginQuarantine, getPluginIsolation, recordPluginFailure } from "../runtime/quarantine.js";
 import { readChildRssBytes } from "../runtime/resource-usage.js";
-import { terminateProcess } from "../../mcp/terminal/process-runner.js";
 import { MAX_HARNESS_RSS_BYTES, PLUGIN_IDLE_TIMEOUT_MS } from "../runtime/runtime-limits.js";
 import { getRuntimeRecoveryFields } from "../runtime/runtime-snapshot.js";
 
@@ -110,7 +109,7 @@ export async function ensureHarnessRuntime(pluginId: string, context: Omit<Plugi
 				handle.failed = true;
 				const error = new Error("Harness Sidecar exceeded its memory limit.");
 				setSnapshot(pluginId, { status: "failed", lastError: error.message });
-				terminateProcess(handle.child, true);
+				terminateHarnessSidecar(handle);
 			}
 		}).catch((): void => undefined);
 	}, 2_000);

@@ -66,6 +66,8 @@ export type HarnessHandle = {
 	closed: Promise<void>;
 	resolveClosed: () => void;
 	finalized: boolean;
+	cleanupError?: Error | undefined;
+	stopPromise?: Promise<void> | undefined;
 	activeCalls: number;
 	stopping: boolean;
 	failed: boolean;
@@ -142,14 +144,45 @@ function dispatchQueued(handle: HarnessHandle): void {
 	}
 }
 
-function finalizeHandle(handle: HarnessHandle, callbacks: HarnessRunnerCallbacks, error: Error): void {
+async function finalizeHandle(handle: HarnessHandle, callbacks: HarnessRunnerCallbacks, error: Error): Promise<void> {
 	if (handle.finalized) return;
 	handle.finalized = true;
 	handle.rejectReady(error);
 	rejectPending(handle, error);
-	handle.resolveClosed();
-	void handle.prepared.cleanup();
-	callbacks.onClosed(handle, error);
+	try {
+		await handle.prepared.cleanup();
+	} catch (cleanupError: unknown) {
+		handle.cleanupError = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+		handle.failed = true;
+	} finally {
+		// closed 包含 helper 的权限恢复和唯一一次目录清理。
+		handle.resolveClosed();
+		callbacks.onClosed(handle, handle.cleanupError ?? error);
+	}
+}
+
+async function waitForClose(handle: HarnessHandle): Promise<boolean> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			handle.closed.then((): boolean => true),
+			new Promise<boolean>((resolve): void => { timer = setTimeout((): void => resolve(false), HARNESS_SHUTDOWN_TIMEOUT_MS); })
+		]);
+	} finally { clearTimeout(timer); }
+}
+
+export function terminateHarnessSidecar(handle: HarnessHandle): void {
+	// Windows helper 以 stdin EOF 取消 Job，必须保留 broker 执行 ACL 恢复。
+	if (process.platform === "win32") handle.child.stdin.end();
+	else terminateProcess(handle.child, true);
+}
+
+async function closeHarnessSidecar(handle: HarnessHandle): Promise<void> {
+	if (!await waitForClose(handle)) {
+		terminateHarnessSidecar(handle);
+		if (!await waitForClose(handle)) throw new Error("Harness sandbox did not finish shutdown; runtime files were retained.");
+	}
+	if (handle.cleanupError !== undefined) throw handle.cleanupError;
 }
 
 function applyRegistrySnapshot(pluginId: string, registry: HarnessRegistrySnapshot): void {
@@ -242,7 +275,7 @@ function queuedInvoke(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" 
 			reject(Object.assign(new Error("Harness invoke timed out."), { code: "plugin_harness_timeout" }));
 			handle.failed = true;
 			handle.stopping = true;
-			terminateProcess(handle.child, true);
+			terminateHarnessSidecar(handle);
 			dispatchQueued(handle);
 		}, timeoutMs);
 		handle.pending.set(id, { resolve, reject, timer, startedAt: Date.now(), started: false, message });
@@ -273,6 +306,7 @@ export async function startHarnessSidecar(
 		network: false
 	});
 	if (!sandbox.available) { await prepared.cleanup(); throw Object.assign(new Error(sandbox.error), { code: "plugin_harness_sandbox_unavailable" }); }
+	if (process.platform === "win32") sandbox.args.unshift("--cancel-on-stdin-close");
 	const child = spawn(sandbox.command, sandbox.args, { cwd: context.workspaceRoot ?? prepared.runtimeRoot, env: sandbox.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: false });
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
@@ -285,7 +319,7 @@ export async function startHarnessSidecar(
 		handle.buffer += chunk;
 		if (Buffer.byteLength(handle.buffer, "utf8") > MAX_HARNESS_FRAME_BYTES * 2) {
 			handle.rejectReady(new Error("Harness bridge output exceeds the buffer limit."));
-			terminateProcess(child, true);
+			terminateHarnessSidecar(handle);
 			return;
 		}
 		let newline: number;
@@ -301,7 +335,7 @@ export async function startHarnessSidecar(
 				const failure = error instanceof Error ? error : new Error(String(error));
 				rejectPending(handle, failure);
 				handle.rejectReady(failure);
-				terminateProcess(child, true);
+				terminateHarnessSidecar(handle);
 			}
 		}
 	});
@@ -310,39 +344,45 @@ export async function startHarnessSidecar(
 		handle.stderr = redact(`${handle.stderr}${chunk}`);
 		addPluginRuntimeLog({ pluginId: record.id, sessionId: context.sessionId, event: "error", status: "failed", message: handle.stderr.slice(-2_000) });
 	});
-	child.once("error", (error: Error): void => { finalizeHandle(handle, callbacks, error); });
+	child.stdin.on("error", (error: Error): void => { handle.rejectReady(error); rejectPending(handle, error); });
+	child.once("error", (error: Error): void => { handle.rejectReady(error); rejectPending(handle, error); });
 	child.once("close", (exitCode: number | null): void => {
 		callbacks.onSnapshot({ lastExitCode: exitCode });
 		const error = new Error(handle.stderr.trim() || "Harness Sidecar exited.");
-		finalizeHandle(handle, callbacks, error);
+		void finalizeHandle(handle, callbacks, error);
 	});
 	callbacks.onSnapshot({ runtimeKind: "harness", status: "starting", harnessStatus: "ready", bundleSummary: prepared.summary, harnessVersion: installation.version, bridgeProtocolVersion: HARNESS_BRIDGE_PROTOCOL_VERSION });
+	let startupTimer: NodeJS.Timeout | undefined;
 	try {
 		await Promise.race([
 			handle.ready,
-			new Promise<void>((_resolve, reject): void => { setTimeout((): void => reject(Object.assign(new Error("Harness Sidecar startup timed out."), { code: "plugin_harness_start_timeout" })), HARNESS_START_TIMEOUT_MS); })
+			new Promise<void>((_resolve, reject): void => { startupTimer = setTimeout((): void => reject(Object.assign(new Error("Harness Sidecar startup timed out."), { code: "plugin_harness_start_timeout" })), HARNESS_START_TIMEOUT_MS); })
 		]);
 	} catch (error: unknown) {
-		if (child.exitCode === null) terminateProcess(child, true);
-		await Promise.race([closed, new Promise<void>((resolve): void => { setTimeout(resolve, HARNESS_SHUTDOWN_TIMEOUT_MS); })]);
-		await prepared.cleanup();
+		terminateHarnessSidecar(handle);
+		try { await closeHarnessSidecar(handle); }
+		catch (cleanupError: unknown) { throw new AggregateError([error, cleanupError], "Harness startup and cleanup failed."); }
 		throw error;
-	}
+	} finally { clearTimeout(startupTimer); }
 	return handle;
 }
 
 export async function invokeHarness(handle: HarnessHandle, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+	if (handle.stopping || handle.finalized) throw new Error("Harness Sidecar is stopping or closed.");
 	if (handle.pending.size >= 16) throw Object.assign(new Error("Harness runtime call queue is full."), { code: "plugin_runtime_queue_full" });
 	handle.lastUsedAt = Date.now();
 	return await queuedInvoke(handle, kind, name, args, Math.min(timeoutMs ?? HARNESS_CALL_TIMEOUT_MS, HARNESS_CALL_TIMEOUT_MS));
 }
 
 export async function stopHarnessSidecar(handle: HarnessHandle): Promise<void> {
-	handle.stopping = true;
-	try { await request(handle, "shutdown", {}, HARNESS_SHUTDOWN_TIMEOUT_MS); }
-	catch { /* Process termination below remains authoritative. */ }
-	if (handle.child.exitCode === null) terminateProcess(handle.child, true);
-	await Promise.race([handle.closed, new Promise<void>((resolve): void => { setTimeout(resolve, HARNESS_SHUTDOWN_TIMEOUT_MS); })]);
-	rejectPending(handle, new Error("Harness Sidecar stopped."));
-	await handle.prepared.cleanup();
+	handle.stopPromise ??= (async (): Promise<void> => {
+		handle.stopping = true;
+		if (!handle.finalized) {
+			try { await request(handle, "shutdown", {}, HARNESS_SHUTDOWN_TIMEOUT_MS); }
+			catch { /* 退出或无响应都继续等待 broker 完成回收。 */ }
+		}
+		await closeHarnessSidecar(handle);
+		rejectPending(handle, new Error("Harness Sidecar stopped."));
+	})();
+	await handle.stopPromise;
 }

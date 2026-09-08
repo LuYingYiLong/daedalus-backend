@@ -36,7 +36,7 @@ $outputDirectory = Split-Path -Parent $outputPath
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 $sourceRelative = [System.IO.Path]::GetRelativePath($projectRoot, $sourcePath)
 $outputRelative = [System.IO.Path]::GetRelativePath($projectRoot, $outputPath)
-$compileCommand = "cl.exe /nologo /std:c++20 /O2 /EHsc /D_WIN32_WINNT=0x0A00 `"$sourceRelative`" /Fe:`"$outputRelative`" /link /SUBSYSTEM:CONSOLE OneCore.lib"
+$compileCommand = "cl.exe /nologo /utf-8 /std:c++20 /O2 /EHsc /D_WIN32_WINNT=0x0A00 `"$sourceRelative`" /Fe:`"$outputRelative`" /link /SUBSYSTEM:CONSOLE OneCore.lib"
 & cmd.exe /d /s /c "call `"$vcvarsPath`" && $compileCommand"
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
     throw "Windows sandbox helper compilation failed."

@@ -6,6 +6,7 @@ import { APPROVAL_REASON_ARG, APPROVAL_REASON_SCHEMA_PROPERTY } from "./approval
 import { BROWSER_TOOL_DEFINITIONS } from "./browser-tools.js";
 import { COMPUTER_TOOL_DEFINITIONS } from "./computer-tools.js";
 import { SCHEDULED_TASK_TOOL_DEFINITIONS } from "./scheduled-task-tools.js";
+import { SUBAGENT_TOOL_DEFINITIONS } from "./subagent-tools.js";
 
 type ChatCompletionFunctionTool = Extract<ChatCompletionTool, { type: "function" }>;
 
@@ -2186,7 +2187,7 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 ];
 
 export const BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = withApprovalReasonSchemas(
-	withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS, ...COMPUTER_TOOL_DEFINITIONS, ...SCHEDULED_TASK_TOOL_DEFINITIONS])
+	withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS, ...COMPUTER_TOOL_DEFINITIONS, ...SCHEDULED_TASK_TOOL_DEFINITIONS, ...SUBAGENT_TOOL_DEFINITIONS])
 );
 
 export function getToolDefinitions(workspaceId?: string | undefined): ChatCompletionTool[] {

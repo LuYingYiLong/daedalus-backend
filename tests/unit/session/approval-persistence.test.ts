@@ -84,7 +84,12 @@ function createPendingContinuation(): PendingAiContinuation {
 			}]
 		},
 		executionControl: { lane: "probe", allowMutationEscalation: true, requireDecision: true },
-		chatCompletion: { requireSubmission: true }
+		chatCompletion: { requireSubmission: true },
+		subagent: {
+			graphId: "graph-test",
+			nodeId: "node-test",
+			workspaceId: "workspace-subagent"
+		}
 	};
 }
 
@@ -147,6 +152,11 @@ test("approval persistence folds pending, interrupted, and executed states", ():
 	assert.equal(runtimeContinuation.lightweightActionState?.observations[0]?.toolCallId, "call-test");
 	assert.deepEqual(runtimeContinuation.executionControl, { lane: "probe", allowMutationEscalation: true, requireDecision: true });
 	assert.deepEqual(runtimeContinuation.chatCompletion, { requireSubmission: true });
+	assert.deepEqual(runtimeContinuation.subagent, {
+		graphId: "graph-test",
+		nodeId: "node-test",
+		workspaceId: "workspace-subagent"
+	});
 });
 
 test("hydrated approval states keep in-memory approvals created during continuation races", (): void => {

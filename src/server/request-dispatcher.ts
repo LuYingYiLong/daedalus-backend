@@ -109,6 +109,10 @@ const handleGoalRequest: RequestHandler = createLazyHandler(async (): Promise<Re
 	return (await import("./handlers/goal-handlers.js")).handleGoalRequest;
 });
 
+const handleSubagentRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/subagent-handlers.js")).handleSubagentRequest;
+});
+
 const handleHookRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
 	return (await import("./handlers/hook-handlers.js")).handleHookRequest;
 });
@@ -177,6 +181,12 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"provider.model.update",
 	"ai.chat",
 	"agent.run.retry",
+	"agent.subgraph.get",
+	"agent.subgraph.list",
+	"agent.subgraph.cancel",
+	"agent.subgraph.retry",
+	"agent.subgraph.merge.preview",
+	"agent.subgraph.merge.apply",
 	"agent.goal.current",
 	"agent.goal.pause",
 	"agent.goal.resume",
@@ -525,6 +535,12 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["ai.toolBudget.stop", handleChatRequest],
 	["ai.chat", handleChatRequest],
 	["agent.run.retry", handleChatRequest],
+	["agent.subgraph.get", handleSubagentRequest],
+	["agent.subgraph.list", handleSubagentRequest],
+	["agent.subgraph.cancel", handleSubagentRequest],
+	["agent.subgraph.retry", handleSubagentRequest],
+	["agent.subgraph.merge.preview", handleSubagentRequest],
+	["agent.subgraph.merge.apply", handleSubagentRequest],
 	["agent.goal.current", handleGoalRequest],
 	["agent.goal.pause", handleGoalRequest],
 	["agent.goal.resume", handleGoalRequest],

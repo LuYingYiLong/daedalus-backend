@@ -94,6 +94,9 @@ export type AgentRunState = {
 	sessionId: string;
 	requestId: string;
 	rootRequestId: string;
+	parentRunId?: string | undefined;
+	subagentGraphId?: string | undefined;
+	subagentNodeId?: string | undefined;
 	retryOfRunId?: string | undefined;
 	goalId?: string | undefined;
 	goalCycle?: number | undefined;
@@ -193,6 +196,9 @@ export function createAgentRunState(params: {
 	sessionId: string;
 	requestId: string;
 	rootRequestId?: string | undefined;
+	parentRunId?: string | undefined;
+	subagentGraphId?: string | undefined;
+	subagentNodeId?: string | undefined;
 	retryOfRunId?: string | undefined;
 	goalId?: string | undefined;
 	goalCycle?: number | undefined;
@@ -210,6 +216,9 @@ export function createAgentRunState(params: {
 		sessionId: params.sessionId,
 		requestId: params.requestId,
 		rootRequestId: params.rootRequestId ?? params.requestId,
+		parentRunId: params.parentRunId,
+		subagentGraphId: params.subagentGraphId,
+		subagentNodeId: params.subagentNodeId,
 		retryOfRunId: params.retryOfRunId,
 		goalId: params.goalId,
 		goalCycle: params.goalCycle,

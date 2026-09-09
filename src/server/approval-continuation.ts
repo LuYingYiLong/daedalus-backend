@@ -57,7 +57,8 @@ export function createPendingAiContinuation(
 	lightweightActionState?: LightweightActionState | undefined,
 	executionControl?: PendingAiContinuation["executionControl"],
 	chatCompletion?: PendingAiContinuation["chatCompletion"],
-	agentLoopState?: AgentLoopState | undefined
+	agentLoopState?: AgentLoopState | undefined,
+	subagent?: PendingAiContinuation["subagent"]
 ): PendingAiContinuation {
 	if (workflowState !== undefined) {
 		throw new LegacyWorkflowRemovedError(
@@ -88,6 +89,9 @@ export function createPendingAiContinuation(
 	}
 	if (agentLoopState !== undefined) {
 		pendingContinuation.agentLoopState = cloneAgentLoopState(agentLoopState);
+	}
+	if (subagent !== undefined) {
+		pendingContinuation.subagent = { ...subagent };
 	}
 
 	return pendingContinuation;
@@ -499,7 +503,8 @@ export async function sendContinuedAgentResult(
 			pendingContinuation.lightweightActionState,
 			pendingContinuation.executionControl,
 			pendingContinuation.chatCompletion,
-			pendingContinuation.agentLoopState
+			pendingContinuation.agentLoopState,
+			pendingContinuation.subagent
 		);
 		await pauseRunForApproval({
 			socket,

@@ -7,6 +7,16 @@ const PARAMETER_TAG_PATTERN: RegExp = new RegExp(`<\\s*(${XML_NAME_PATTERN})\\s*
 const ATTRIBUTE_PATTERN: RegExp = new RegExp(`(${XML_NAME_PATTERN})\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "g");
 
 const RAW_TOOL_NAME_MAP: Readonly<Record<string, string>> = {
+	daedalus_subagent_spawn: "daedalus_subagent_spawn",
+	daedalus_subagent_wait: "daedalus_subagent_wait",
+	daedalus_subagent_status: "daedalus_subagent_status",
+	daedalus_subagent_cancel: "daedalus_subagent_cancel",
+	daedalus_subagent_merge_preview: "daedalus_subagent_merge_preview",
+	subagent_spawn: "daedalus_subagent_spawn",
+	subagent_wait: "daedalus_subagent_wait",
+	subagent_status: "daedalus_subagent_status",
+	subagent_cancel: "daedalus_subagent_cancel",
+	subagent_merge_preview: "daedalus_subagent_merge_preview",
 	computer_request_access: "mcp_computer_request_access",
 	computer_observe: "mcp_computer_observe",
 	computer_locate: "mcp_computer_locate",

@@ -196,6 +196,7 @@ import {
 	hydrateAgentRunRuntime,
 	serializeAgentRunRuntime
 } from "./agent-run-recovery.js";
+import { resumeSubagentGraphs } from "./subagent-runtime.js";
 import { getLatestAgentGoal } from "./goal-controller.js";
 import { bindConnectionToSessionRuntime, getClientConnection, getSessionRuntime, getSessionSubscriberInfos, isStudioSessionClientType, subscribeSocketToSession, unsubscribeSocketFromSession, updateClientConnection, updateClientConnectionsForSession } from "./client-connections.js";
 import { createSessionBrowserSnapshot } from "./session-browser-snapshot.js";
@@ -1294,6 +1295,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				if (!reusingRuntime && timeline.metadata.forkedFrom === undefined) {
 					await hydrateAgentRunRuntime(session, apiKey);
 					await loadHydratedPendingApprovalStates(session, apiKey);
+					await resumeSubagentGraphs({ socket, session, mcpHost });
 				}
 				subscribeSocketToSession(socket, timeline.metadata.id);
 				if (!reusingRuntime) {

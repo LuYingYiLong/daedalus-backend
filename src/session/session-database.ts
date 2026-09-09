@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 12;
+const DB_SCHEMA_VERSION: number = 13;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -254,6 +254,55 @@ function migrateSchema(db: DatabaseSync): void {
 			ON agent_runs (session_id, request_id);
 		CREATE INDEX IF NOT EXISTS idx_agent_runs_stage
 			ON agent_runs (stage, updated_at);
+		CREATE TABLE IF NOT EXISTS subagent_graphs (
+			graph_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			root_run_id TEXT NOT NULL,
+			revision INTEGER NOT NULL,
+			status TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_subagent_graphs_session_updated
+			ON subagent_graphs (session_id, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_subagent_graphs_root_run
+			ON subagent_graphs (root_run_id, updated_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_subagent_graphs_recovery
+			ON subagent_graphs (status, updated_at);
+		CREATE TABLE IF NOT EXISTS subagent_nodes (
+			graph_id TEXT NOT NULL REFERENCES subagent_graphs(graph_id) ON DELETE CASCADE,
+			node_id TEXT NOT NULL,
+			run_id TEXT NOT NULL UNIQUE,
+			role TEXT NOT NULL,
+			objective TEXT NOT NULL,
+			status TEXT NOT NULL,
+			context_refs_json TEXT NOT NULL,
+			tool_scope_json TEXT NOT NULL,
+			workspace_mode TEXT NOT NULL,
+			worktree_metadata_json TEXT,
+			result_json TEXT,
+			failure_json TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(graph_id, node_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_subagent_nodes_graph_status
+			ON subagent_nodes (graph_id, status, updated_at);
+		CREATE INDEX IF NOT EXISTS idx_subagent_nodes_run
+			ON subagent_nodes (run_id);
+		CREATE TABLE IF NOT EXISTS subagent_edges (
+			graph_id TEXT NOT NULL REFERENCES subagent_graphs(graph_id) ON DELETE CASCADE,
+			dependency_node_id TEXT NOT NULL,
+			dependent_node_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(graph_id, dependency_node_id, dependent_node_id),
+			FOREIGN KEY(graph_id, dependency_node_id)
+				REFERENCES subagent_nodes(graph_id, node_id) ON DELETE CASCADE,
+			FOREIGN KEY(graph_id, dependent_node_id)
+				REFERENCES subagent_nodes(graph_id, node_id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_subagent_edges_dependent
+			ON subagent_edges (graph_id, dependent_node_id);
 		CREATE TABLE IF NOT EXISTS agent_run_continuations (
 			run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id) ON DELETE CASCADE,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,

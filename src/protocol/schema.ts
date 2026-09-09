@@ -718,6 +718,235 @@ const pluginSourceSchema = z.discriminatedUnion("type", [
 	}).strict()
 ]);
 
+const subagentIdentifierSchema = z.string().trim().min(1).max(160);
+const subagentFingerprintSchema = z.string().regex(/^[0-9a-f]{64}$/iu);
+
+export const subagentGraphStatusSchema = z.enum([
+	"draft",
+	"running",
+	"blocked",
+	"completed",
+	"completed_with_warnings",
+	"failed",
+	"cancelled"
+]);
+
+export const subagentNodeStatusSchema = z.enum([
+	"pending",
+	"ready",
+	"running",
+	"waiting_approval",
+	"blocked",
+	"completed",
+	"failed",
+	"cancelled"
+]);
+
+export const subagentRoleSchema = z.enum([
+	"researcher",
+	"planner",
+	"implementer",
+	"tester",
+	"reviewer"
+]);
+
+export const subagentWorkspaceModeSchema = z.enum(["shared_read_only", "managed_worktree"]);
+
+export const subagentToolCapabilitySchema = z.enum([
+	"read",
+	"verify",
+	"propose",
+	"write",
+	"destructive",
+	"execute"
+]);
+
+export const subagentContextRefSchema = z.object({
+	kind: z.enum(["message", "context_block", "artifact", "source_folder"]),
+	id: z.string().trim().min(1).max(1_000)
+}).strict();
+
+export const subagentToolScopeSchema = z.object({
+	capabilities: z.array(subagentToolCapabilitySchema),
+	toolNames: z.array(z.string().trim().min(1).max(240)),
+	sourceFolderIds: z.array(subagentIdentifierSchema)
+}).strict();
+
+export const subagentResultSchema = z.object({
+	status: z.enum(["completed", "partial", "failed", "cancelled"]),
+	summary: z.string().trim().min(1).max(20_000),
+	findings: z.array(z.string().trim().min(1).max(8_000)),
+	changedFiles: z.array(z.string().min(1).max(2_000)),
+	tests: z.array(z.object({
+		name: z.string().min(1).max(500),
+		status: z.enum(["passed", "failed", "skipped"]),
+		summary: z.string().max(4_000).nullable()
+	}).strict()),
+	artifacts: z.array(z.object({
+		kind: z.string().min(1).max(120),
+		id: z.string().min(1).max(1_000),
+		label: z.string().min(1).max(500).nullable()
+	}).strict()),
+	needsParentDecision: z.boolean(),
+	recommendedNextAction: z.string().max(4_000).nullable()
+}).strict();
+
+const subagentWorktreeStartingStateSchema = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("head") }).strict(),
+	z.object({ type: z.literal("branch"), ref: z.string().min(1).max(500) }).strict(),
+	z.object({ type: z.literal("working-tree") }).strict()
+]);
+
+const subagentManagedWorktreeSourceSchema = z.object({
+	sourceFolderId: subagentIdentifierSchema,
+	sourcePath: z.string().min(1).max(4_000),
+	worktreePath: z.string().min(1).max(4_000),
+	baseCommit: z.string().min(1).max(160),
+	baseRef: z.string().min(1).max(500).nullable(),
+	startingState: subagentWorktreeStartingStateSchema.optional(),
+	environmentId: subagentIdentifierSchema.nullable().optional(),
+	environmentFingerprint: subagentFingerprintSchema.nullable().optional(),
+	setupState: z.enum(["not-required", "pending-trust", "running", "ready", "failed", "skipped", "interrupted"]).optional(),
+	setupSummary: z.object({
+		startedAt: z.string().datetime().optional(),
+		finishedAt: z.string().datetime().optional(),
+		exitCode: z.number().int().nullable().optional(),
+		durationMs: z.number().int().nonnegative().optional(),
+		message: z.string().max(8_000).optional(),
+		logPath: z.string().min(1).max(4_000).optional()
+	}).strict().optional(),
+	sensitiveIncludedPaths: z.array(z.string().min(1).max(4_000)).optional()
+}).strict();
+
+const subagentManagedWorktreeMetadataSchema = z.object({
+	id: subagentIdentifierSchema,
+	sourceWorkspaceId: subagentIdentifierSchema,
+	sourceWorkspaceName: z.string().trim().min(1).max(500),
+	runtimeWorkspaceId: subagentIdentifierSchema,
+	sources: z.array(subagentManagedWorktreeSourceSchema).min(1),
+	createdAt: z.string().datetime(),
+	location: z.enum(["local", "worktree"]).optional(),
+	status: z.enum(["creating", "setting-up", "ready", "setup-failed", "handoff", "unavailable", "recovery-required"]).optional(),
+	permanent: z.boolean().optional(),
+	displayName: z.string().min(1).max(500).optional()
+}).strict();
+
+const subagentWorktreeSourceStateSchema = z.object({
+	sourceFolderId: subagentIdentifierSchema,
+	headCommit: z.string().min(1).max(160).nullable(),
+	branch: z.string().min(1).max(500).nullable(),
+	detached: z.boolean()
+}).strict();
+
+export const subagentWorktreeMetadataSchema = z.object({
+	managedMetadata: subagentManagedWorktreeMetadataSchema,
+	sourceStates: z.array(subagentWorktreeSourceStateSchema),
+	mergeStatus: z.enum(["not_requested", "previewed", "pending", "merged", "conflict", "failed"]),
+	cleanupStatus: z.enum(["not_requested", "pending", "completed", "failed"])
+}).strict().superRefine((metadata, context): void => {
+	const sourceIds: Set<string> = new Set();
+	for (const [index, source] of metadata.managedMetadata.sources.entries()) {
+		if (sourceIds.has(source.sourceFolderId)) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Managed worktree source folder IDs must be unique.",
+				path: ["managedMetadata", "sources", index, "sourceFolderId"]
+			});
+		}
+		sourceIds.add(source.sourceFolderId);
+	}
+	const stateIds: Set<string> = new Set();
+	for (const [index, state] of metadata.sourceStates.entries()) {
+		if (!sourceIds.has(state.sourceFolderId)) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Worktree source state must reference a managed source.",
+				path: ["sourceStates", index, "sourceFolderId"]
+			});
+		}
+		if (stateIds.has(state.sourceFolderId)) {
+			context.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "Worktree source state folder IDs must be unique.",
+				path: ["sourceStates", index, "sourceFolderId"]
+			});
+		}
+		stateIds.add(state.sourceFolderId);
+	}
+});
+
+export const subagentFailureSchema = z.object({
+	code: z.string().min(1).max(160),
+	message: z.string().min(1).max(8_000),
+	retryable: z.boolean(),
+	failedAt: z.string().datetime()
+}).strict();
+
+export const subagentGraphSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	sessionId: subagentIdentifierSchema,
+	rootRunId: subagentIdentifierSchema,
+	status: subagentGraphStatusSchema,
+	revision: z.number().int().positive(),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime()
+}).strict();
+
+export const subagentNodeSchema = z.object({
+	nodeId: subagentIdentifierSchema,
+	graphId: subagentIdentifierSchema,
+	runId: subagentIdentifierSchema,
+	role: subagentRoleSchema,
+	objective: z.string().trim().min(1).max(20_000),
+	dependsOn: z.array(subagentIdentifierSchema),
+	status: subagentNodeStatusSchema,
+	contextRefs: z.array(subagentContextRefSchema),
+	toolScope: subagentToolScopeSchema,
+	workspaceMode: subagentWorkspaceModeSchema,
+	worktreeMetadata: subagentWorktreeMetadataSchema.nullable(),
+	result: subagentResultSchema.nullable(),
+	failure: subagentFailureSchema.nullable(),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime()
+}).strict();
+
+export const subagentGraphStateEventDataSchema = z.object({
+	graph: subagentGraphSchema
+}).strict();
+
+export const subagentNodeStateEventDataSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	revision: z.number().int().positive(),
+	node: subagentNodeSchema
+}).strict();
+
+export const subagentNodeResultEventDataSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	nodeId: subagentIdentifierSchema,
+	runId: subagentIdentifierSchema,
+	revision: z.number().int().positive(),
+	result: subagentResultSchema
+}).strict();
+
+export const subagentNodeApprovalEventDataSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	nodeId: subagentIdentifierSchema,
+	runId: subagentIdentifierSchema,
+	revision: z.number().int().positive(),
+	approvalId: subagentIdentifierSchema,
+	status: z.enum(["requested", "approved", "rejected", "cancelled"])
+}).strict();
+
+export const subagentMergeStateEventDataSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	nodeId: subagentIdentifierSchema,
+	runId: subagentIdentifierSchema,
+	revision: z.number().int().positive(),
+	status: z.enum(["preview_ready", "approval_required", "merging", "merged", "conflicted", "failed", "cancelled"]),
+	fingerprint: subagentFingerprintSchema.nullable().optional(),
+	message: z.string().max(8_000).optional()
+}).strict();
+
 export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
@@ -1043,6 +1272,61 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			runId: z.string().min(1)
 		}).strict()
 	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.get"),
+		params: z.object({ graphId: subagentIdentifierSchema }).strict()
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.list"),
+		params: z.object({
+			sessionId: subagentIdentifierSchema,
+			status: subagentGraphStatusSchema.optional(),
+			limit: z.number().int().min(1).max(200).optional(),
+			cursor: z.string().min(1).max(500).optional()
+		}).strict()
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.cancel"),
+		params: z.object({
+			graphId: subagentIdentifierSchema,
+			nodeId: subagentIdentifierSchema.optional(),
+			reason: z.string().trim().min(1).max(4_000).optional()
+		}).strict()
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.retry"),
+		params: z.object({
+			graphId: subagentIdentifierSchema,
+			nodeId: subagentIdentifierSchema
+		}).strict()
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.merge.preview"),
+		params: z.object({
+			graphId: subagentIdentifierSchema,
+			nodeId: subagentIdentifierSchema
+		}).strict()
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("agent.subgraph.merge.apply"),
+		params: z.object({
+			graphId: subagentIdentifierSchema,
+			nodeId: subagentIdentifierSchema,
+			fingerprint: subagentFingerprintSchema
+		}).strict()
+	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),

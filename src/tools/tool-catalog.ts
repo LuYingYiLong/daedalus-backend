@@ -47,6 +47,11 @@ import { SCHEDULED_TASK_MANAGEMENT_TOOL_NAMES, SCHEDULED_TASK_TOOL_NAMES, SCHEDU
 import { getPluginToolEntries, listPluginMcpTools } from "../plugins/runtime/registries.js";
 import type { PluginDevelopmentControlContext } from "../plugins/development/types.js";
 import type { GodotRuntimeControlContext } from "./godot-runtime-control.js";
+import {
+	SUBAGENT_TOOL_NAMES,
+	SUBAGENT_TOOL_NAME_SET,
+	type SubagentControlContext
+} from "./subagent-tools.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -82,6 +87,8 @@ export type ToolExecutionContext = {
 	scheduledTaskControl?: ScheduledTaskControlContext | undefined;
 	pluginDevelopmentControl?: PluginDevelopmentControlContext | undefined;
 	scheduledMonitorRun?: boolean | undefined;
+	/** Present only on parent Agent runs that are allowed to orchestrate child runs. */
+	subagentControl?: SubagentControlContext | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -299,6 +306,7 @@ function isGodotToolName(toolName: string | undefined): boolean {
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
 	if (toolName !== undefined && LEGACY_GODOT_PROCESS_TOOL_NAMES.has(toolName)) return false;
+	if (toolName !== undefined && SUBAGENT_TOOL_NAME_SET.has(toolName)) return context.subagentControl !== undefined;
 	if (toolName?.startsWith("mcp_godot_runtime_") === true) {
 		if (context.clientType !== "studio" || context.scheduledMonitorRun || context.hookContext?.chatMode === "goal") return false;
 		// Keep the Runtime Test tool surface stable for the whole provider loop.
@@ -550,6 +558,9 @@ export class WorkspaceToolCatalog {
 
 	getDefinitionsForNames(toolNames: readonly string[]): ChatCompletionTool[] {
 		const allowedNames: Set<string> = new Set(toolNames);
+		if (this.context.subagentControl !== undefined) {
+			for (const toolName of SUBAGENT_TOOL_NAMES) allowedNames.add(toolName);
+		}
 		if (this.context.executionControl !== undefined && this.context.executionControlAvailable !== false) {
 			allowedNames.add(EXECUTION_CONTROL_TOOL_NAME);
 		}

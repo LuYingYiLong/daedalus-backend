@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type WebSocket from "ws";
 import { createClientSession } from "../../../src/server/client-session.js";
-import { cancelAgentRunForRejectedApproval, createApprovedWorkflowToolObservation } from "../../../src/server/approval-continuation.js";
+import { cancelAgentRunForRejectedApproval, createApprovedWorkflowToolObservation, createPendingAiContinuation } from "../../../src/server/approval-continuation.js";
 import { serializeToolFailure } from "../../../src/tools/tool-failure.js";
 import { createAgentRunState, transitionAgentRunState } from "../../../src/workflow/agent-run-state.js";
 
@@ -67,4 +67,31 @@ test("an approved environment failure remains a failed tool observation", (): vo
 
 	assert.equal(observation.status, "failed");
 	assert.equal(observation.failure?.code, "mcp_request_timeout");
+});
+
+test("pending approval continuations clone their subagent identity", (): void => {
+	const subagent = {
+		graphId: "graph-test",
+		nodeId: "node-test",
+		workspaceId: "workspace-test"
+	};
+	const continuation = createPendingAiContinuation(
+		{ message: "continue the child run" },
+		{ provider: "deepseek", apiKey: "secret" },
+		{ messages: [], nextStep: 1, totalToolResultChars: 0 },
+		undefined,
+		"continue the child run",
+		"run-child",
+		"2026-09-09T00:00:00.000Z",
+		true,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		subagent
+	);
+
+	assert.deepEqual(continuation.subagent, subagent);
+	assert.notEqual(continuation.subagent, subagent);
 });

@@ -235,6 +235,19 @@ function createApprovalRejectedFailure(pending: PendingApproval): ToolFailure {
 	};
 }
 
+function getSubagentEventMetadata(pendingContinuation: PendingAiContinuation | undefined): Record<string, unknown> {
+	const subagent = pendingContinuation?.subagent;
+	return subagent === undefined ? {} : { graphId: subagent.graphId, nodeId: subagent.nodeId };
+}
+
+function getContinuationWorkspaceId(
+	session: ClientSession,
+	pending: PendingApproval,
+	pendingContinuation: PendingAiContinuation | undefined
+): string | undefined {
+	return pending.workspaceId ?? pendingContinuation?.subagent?.workspaceId ?? session.activeWorkspace?.id;
+}
+
 async function continueAfterRejectedApproval(params: {
 	socket: WebSocket;
 	requestId: string;
@@ -266,11 +279,13 @@ async function continueAfterRejectedApproval(params: {
 			updateAgentRun(socket, session, pendingContinuation.requestId, "executing", { pause: null });
 		}
 
-		setWorkbenchActiveRun(session, {
-			status: "streaming",
-			requestId: pendingContinuation.requestId,
-			queueItemId
-		});
+		if (pendingContinuation.subagent === undefined) {
+			setWorkbenchActiveRun(session, {
+				status: "streaming",
+				requestId: pendingContinuation.requestId,
+				queueItemId
+			});
+		}
 		const forwardToolEvent: OnToolEvent = createAgentToolEventForwarder(
 			socket,
 			pendingContinuation.requestId,
@@ -279,13 +294,20 @@ async function continueAfterRejectedApproval(params: {
 			stepRunId,
 			pendingContinuation.requestId,
 			mcpHost,
-			{},
+			getSubagentEventMetadata(pendingContinuation),
 			{ traceRequestId: pendingContinuation.options.traceRequestId }
 		);
 		if (pendingContinuation.lightweightActionState !== undefined) {
 			applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, failureEvent);
 		}
-		recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, failureEvent);
+		recordAgentRunToolEvent(
+			socket,
+			session,
+			pendingContinuation.requestId,
+			failureEvent,
+			false,
+			getContinuationWorkspaceId(session, pending, pendingContinuation)
+		);
 		forwardToolEvent(failureEvent);
 
 		session.pendingAiContinuations.delete(pending.approvalId);
@@ -298,13 +320,20 @@ async function continueAfterRejectedApproval(params: {
 			if (pendingContinuation.lightweightActionState !== undefined) {
 				applyToolEventToLightweightActionState(pendingContinuation.lightweightActionState, event);
 			}
-			recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, event);
+			recordAgentRunToolEvent(
+				socket,
+				session,
+				pendingContinuation.requestId,
+				event,
+				false,
+				getContinuationWorkspaceId(session, pending, pendingContinuation)
+			);
 			if (!(pendingContinuation.chatCompletion?.requireSubmission === true && event.type === "ai.delta")) {
 				forwardToolEvent(event);
 			}
 		};
 		const context = {
-			workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+			workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
 			editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 			sessionId: pending.sessionId ?? session.sessionId,
 			requestId: pendingContinuation.requestId,
@@ -351,6 +380,19 @@ async function continueAfterRejectedApproval(params: {
 				context
 			));
 
+		if (pendingContinuation.subagent !== undefined) {
+			const { handleSubagentContinuationResult } = await import("../subagent-runtime.js");
+			await handleSubagentContinuationResult({
+				socket,
+				session,
+				mcpHost,
+				pendingContinuation,
+				agentResult,
+				approvalId: pending.approvalId,
+				status: "rejected"
+			});
+			return;
+		}
 		await sendContinuedAgentResult(
 			socket,
 			pendingContinuation.requestId,
@@ -552,6 +594,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				type: "agent.tool.approved",
 				runId: approvalRunId,
 				stepRunId: approvalStepRunId,
+				...getSubagentEventMetadata(pendingContinuation),
 				approvalId: request.params.approvalId,
 				toolCallId: pending.toolCallId,
 				toolName: pending.llmToolName
@@ -565,7 +608,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				approvalStepRunId,
 				approvalPersistRequestId,
 				mcpHost,
-				{},
+				getSubagentEventMetadata(pendingContinuation),
 				{ traceRequestId: pendingContinuation?.options.traceRequestId }
 			);
 			const result = await awaitWithAbort(
@@ -630,11 +673,13 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			}
 
 			const { fileEditDraft: _fileEditDraft, ...publicApprovalResult } = result;
-			setWorkbenchActiveRun(session, {
-				status: pendingContinuation !== undefined ? "streaming" : "idle",
-				requestId: pendingContinuation?.requestId ?? request.id,
-				queueItemId
-			});
+			if (pendingContinuation?.subagent === undefined) {
+				setWorkbenchActiveRun(session, {
+					status: pendingContinuation !== undefined ? "streaming" : "idle",
+					requestId: pendingContinuation?.requestId ?? request.id,
+					queueItemId
+				});
+			}
 			sendJson(socket, {
 				type: "response",
 				id: request.id,
@@ -648,7 +693,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					workbench: serializeWorkbench(session)
 				}
 			});
-			emitWorkbenchUpdated(socket, request.id, session);
+			if (pendingContinuation?.subagent === undefined) {
+				emitWorkbenchUpdated(socket, request.id, session);
+			}
 			const continuationRunId: string = approvalRunId;
 			const continuationStepRunId: string = approvalStepRunId;
 			const resultPersistRequestId: string = pendingContinuation?.requestId ?? request.id;
@@ -664,6 +711,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					type: "agent.tool.result",
 					runId: continuationRunId,
 					stepRunId: continuationStepRunId,
+					...getSubagentEventMetadata(pendingContinuation),
 					step: pendingContinuation?.continuation.nextStep ?? 0,
 					toolCallId: pending.toolCallId,
 					toolName: pending.llmToolName,
@@ -699,7 +747,8 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					failure: effectiveApprovedFailure,
 					recovery: approvedRecovery,
 					writeCheckpointCovered: result.fileEditDraft !== undefined
-				}
+				},
+				getContinuationWorkspaceId(session, pending, pendingContinuation)
 			);
 			session.pendingAiContinuations.delete(request.params.approvalId);
 			await removeAgentRunContinuation(pendingContinuation.requestId);
@@ -717,7 +766,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				continuationStepRunId,
 				pendingContinuation.requestId,
 				mcpHost,
-				{},
+				getSubagentEventMetadata(pendingContinuation),
 				{ traceRequestId: pendingContinuation.options.traceRequestId }
 			);
 			const onToolEvent: OnToolEvent = (event: ToolEvent): void => {
@@ -727,7 +776,14 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						event
 					);
 				}
-				recordAgentRunToolEvent(socket, session, pendingContinuation.requestId, event);
+				recordAgentRunToolEvent(
+					socket,
+					session,
+					pendingContinuation.requestId,
+					event,
+					false,
+					getContinuationWorkspaceId(session, pending, pendingContinuation)
+				);
 				if (!(pendingContinuation.chatCompletion?.requireSubmission === true && event.type === "ai.delta")) {
 					forwardToolEvent(event);
 				}
@@ -758,7 +814,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					onToolEvent,
 					abortController.signal,
 					{
-						workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+						workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
@@ -789,7 +845,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					onToolEvent,
 					abortController.signal,
 					{
-						workspaceId: pending.workspaceId ?? session.activeWorkspace?.id,
+						workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
@@ -809,6 +865,19 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			const agentResult: ProviderAgentResult = await awaitWithAbort(agentResultPromise, abortController.signal);
 			throwIfAborted(abortController.signal);
 
+			if (pendingContinuation.subagent !== undefined) {
+				const { handleSubagentContinuationResult } = await import("../subagent-runtime.js");
+				await handleSubagentContinuationResult({
+					socket,
+					session,
+					mcpHost,
+					pendingContinuation,
+					agentResult,
+					approvalId: request.params.approvalId,
+					status: "approved"
+				});
+				break;
+			}
 			await sendContinuedAgentResult(
 				socket,
 				pendingContinuation.requestId,
@@ -832,16 +901,20 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				);
 			}
 			if (isCancellationError(error, abortController.signal)) {
-				setWorkbenchActiveRun(session, { status: "idle" });
-				const queueHelpers = await import("../chat-orchestrator.js");
-				await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "cancelled");
-				emitWorkbenchUpdated(socket, request.id, session);
+				if (pendingContinuationForRun?.subagent === undefined) {
+					setWorkbenchActiveRun(session, { status: "idle" });
+					const queueHelpers = await import("../chat-orchestrator.js");
+					await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "cancelled");
+					emitWorkbenchUpdated(socket, request.id, session);
+				}
 				sendAgentCancelled(socket, continuationRequestId, session);
 				break;
 			}
-			setWorkbenchActiveRun(session, { status: "idle" });
-			const queueHelpers = await import("../chat-orchestrator.js");
-			await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "failed");
+			if (pendingContinuationForRun?.subagent === undefined) {
+				setWorkbenchActiveRun(session, { status: "idle" });
+				const queueHelpers = await import("../chat-orchestrator.js");
+				await queueHelpers.finishQueueItemForRun(socket, continuationRequestId, session, queueItemId, "failed");
+			}
 			const errorMessage: string = error instanceof Error ? error.message : "Approval failed";
 			if (approvalDecisionEmitted && !approvedToolExecuted && approvedPending !== undefined) {
 				session.pendingAiContinuations.delete(request.params.approvalId);
@@ -889,7 +962,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 				}, continuationRequestId);
 			}
-			emitWorkbenchUpdated(socket, request.id, session);
+			if (pendingContinuationForRun?.subagent === undefined) {
+				emitWorkbenchUpdated(socket, request.id, session);
+			}
 			if (session.sessionId !== undefined) {
 				await appendApprovalEvent(session.sessionId, request.params.approvalId, continuationRequestId, "failed", {
 					message: errorMessage,
@@ -998,7 +1073,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					workbench: serializeWorkbench(session)
 				}
 			});
-			emitWorkbenchUpdated(socket, request.id, session);
+			if (pendingContinuation?.subagent === undefined) {
+				emitWorkbenchUpdated(socket, request.id, session);
+			}
 		} catch (error: unknown) {
 			sendJson(socket, {
 				type: "response",

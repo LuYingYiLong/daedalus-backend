@@ -224,6 +224,8 @@ import type { ContextBudgetSnapshot } from "../context/context-types.js";
 import { createSessionContextControl } from "./context-control-runtime.js";
 import { createAgentTodoControl } from "./todo-control-runtime.js";
 import { createSummaryPreparationControl } from "./summary-preparation-runtime.js";
+import { cancelSubagentGraphsForRootRun, createSubagentControl } from "./subagent-runtime.js";
+import type { SubagentControlContext } from "../tools/subagent-tools.js";
 import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
 import { consumeHookDeveloperContext, runUserPromptSubmitHooks } from "./hook-lifecycle.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
@@ -542,7 +544,8 @@ function createExecutionDecisionCompletionContract(
 export function getAllRuntimeToolNames(
 	session: ClientSession,
 	socket: WebSocket,
-	hookContext: NonNullable<ToolExecutionContext["hookContext"]>
+	hookContext: NonNullable<ToolExecutionContext["hookContext"]>,
+	subagentControl?: SubagentControlContext | undefined
 ): readonly string[] {
 	const availableNames: string[] = createWorkspaceToolCatalog({
 		workspaceId: session.activeWorkspace?.id,
@@ -553,6 +556,7 @@ export function getAllRuntimeToolNames(
 		computerControl: getStudioComputerControl(socket, session),
 		browserControl: getStudioBrowserControl(socket, session.sessionId),
 		godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
+		subagentControl,
 		hookContext
 	}).getEntries().map((entry): string => entry.id);
 
@@ -581,13 +585,14 @@ function resolveHiddenAnswerToolNames(
 	allowedToolNames: readonly string[] | undefined,
 	session: ClientSession,
 	socket: WebSocket,
-	hookContext: NonNullable<ToolExecutionContext["hookContext"]>
+	hookContext: NonNullable<ToolExecutionContext["hookContext"]>,
+	subagentControl?: SubagentControlContext | undefined
 ): readonly string[] {
 	if (routeDecision.lane === "direct") {
 		return [];
 	}
 
-	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, hookContext);
+	const sourceToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, hookContext, subagentControl);
 	if (routeDecision.lane === "lightweight") {
 		return sourceToolNames;
 	}
@@ -824,6 +829,7 @@ type HiddenAnswerExecutionParams = {
 	allowedToolNames: readonly string[];
 	mutationToolNames: readonly string[];
 	approvalGateway: ApprovalGateway;
+	subagentControl?: SubagentControlContext | undefined;
 	userCreatedAt: string;
 	abortSignal?: AbortSignal | undefined;
 };
@@ -918,6 +924,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			godotRuntimeControl: getStudioGodotRuntimeControl(params.socket, params.session.sessionId, params.session.activeWorkspace?.id),
 			scheduledTaskControl: getStudioScheduledTaskControl(params.socket, params.session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(params.socket, params.session.sessionId, params.session.activeWorkspace),
+			subagentControl: params.subagentControl,
 			scheduledMonitorRun: params.session.scheduledTaskOrigin?.kind === "monitor",
 			executionControl,
 			executionControlAvailable: params.routeDecision.lane !== "probe",
@@ -2391,6 +2398,14 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				cancelledApprovalIds.push(...await cancelPendingApprovalsForRequest(session, cancellationRequestId));
 				cancelledToolBudgetIds.push(...cancelPendingToolBudgetsForRequest(session, cancellationRequestId));
 			}
+			if (session.sessionId !== undefined) {
+				await cancelSubagentGraphsForRootRun({
+					socket,
+					session,
+					mcpHost,
+					rootRunId: targetRequestId
+				});
+			}
 			let forcedRunId: string | null = null;
 			if (controller === undefined && cancelledApprovalIds.length === 0 && cancelledToolBudgetIds.length === 0) {
 				const cancellableRun: AgentRunState | null = await findCancellableAgentRun(session, cancellationRequestIds);
@@ -2941,6 +2956,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					approvalMode: session.approvalGateway.getMode(),
 					chatMode: effectiveParams.mode
 				};
+				const subagentControl: SubagentControlContext | undefined = (
+					effectiveParams.mode === "agent" || effectiveParams.mode === "goal"
+				) ? createSubagentControl({ socket, session, mcpHost, parentRunId: request.id }) : undefined;
 				const budgetToolCatalog = createWorkspaceToolCatalog({
 					workspaceId: session.activeWorkspace?.id,
 					hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
@@ -2952,6 +2970,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
 					scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 					pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),
+					subagentControl,
 					scheduledMonitorRun: session.scheduledTaskOrigin?.kind === "monitor",
 					contextControl: budgetContextControl,
 					contextControlAvailable: effectiveParams.mode === "agent" || effectiveParams.mode === "goal",
@@ -3194,9 +3213,10 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					allowedToolNames,
 					session,
 					socket,
-					toolHookContext
+					toolHookContext,
+					subagentControl
 				);
-				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, toolHookContext);
+				const mutationToolNames: readonly string[] = allowedToolNames ?? getAllRuntimeToolNames(session, socket, toolHookContext, subagentControl);
 				const hiddenAnswerApprovalGateway: ApprovalGateway = (
 					routeDecision.lane !== "lightweight"
 					&& routeDecision.lane !== "tool_assisted"
@@ -3229,6 +3249,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						allowedToolNames: hiddenAnswerToolNames,
 						mutationToolNames,
 						approvalGateway: hiddenAnswerApprovalGateway,
+						subagentControl,
 						userCreatedAt: turnStartedAt,
 						abortSignal: abortController.signal,
 						planningContext,

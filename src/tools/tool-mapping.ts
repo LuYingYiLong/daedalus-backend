@@ -7,6 +7,11 @@ export type ToolMapping = {
 };
 
 export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
+	"daedalus_subagent_spawn": { serverId: "internal", toolName: "subagent_spawn" },
+	"daedalus_subagent_wait": { serverId: "internal", toolName: "subagent_wait" },
+	"daedalus_subagent_status": { serverId: "internal", toolName: "subagent_status" },
+	"daedalus_subagent_cancel": { serverId: "internal", toolName: "subagent_cancel" },
+	"daedalus_subagent_merge_preview": { serverId: "internal", toolName: "subagent_merge_preview" },
 	"mcp_computer_request_access": { serverId: "studio_computer", toolName: "request_access" },
 	"mcp_computer_observe": { serverId: "studio_computer", toolName: "observe" },
 	"mcp_computer_locate": { serverId: "studio_computer", toolName: "locate" },

@@ -1,6 +1,11 @@
 import type { ToolPolicy } from "./tool-policy.js";
 
 export const TOOL_POLICIES: Record<string, ToolPolicy> = {
+	"daedalus_subagent_spawn": { risk: "write" },
+	"daedalus_subagent_wait": { risk: "read" },
+	"daedalus_subagent_status": { risk: "read" },
+	"daedalus_subagent_cancel": { risk: "destructive" },
+	"daedalus_subagent_merge_preview": { risk: "propose" },
 	"mcp_computer_request_access": { risk: "read" },
 	"mcp_computer_observe": { risk: "read" },
 	"mcp_computer_locate": { risk: "read" },

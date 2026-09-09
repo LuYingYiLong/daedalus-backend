@@ -72,6 +72,34 @@ function createDisplay(
 }
 
 export function describeToolEvent(toolName: string, args: Record<string, unknown>, workspaceId?: string | undefined): ToolEventDisplay {
+	if (toolName.startsWith("daedalus_subagent_")) {
+		const action: string = toolName.slice("daedalus_subagent_".length);
+		const labels: Record<string, [ToolEventCategory, string]> = {
+			spawn: ["write", "Create subagent nodes"],
+			wait: ["read", "Wait for subagents"],
+			status: ["read", "Read subagent status"],
+			cancel: ["write", "Cancel subagents"],
+			merge_preview: ["propose", "Preview subagent merge"]
+		};
+		const [category, title] = labels[action] ?? ["unknown", "Operate subagent graph"];
+		const graphId: string | undefined = getStringArg(args, "graphId");
+		const nodeId: string | undefined = getStringArg(args, "nodeId");
+		const nodes: unknown = args.nodes;
+		const spawnedNodeIds: string[] = Array.isArray(nodes)
+			? nodes.flatMap((node: unknown): string[] => {
+				if (typeof node !== "object" || node === null || Array.isArray(node)) return [];
+				const value: unknown = (node as Record<string, unknown>).nodeId;
+				return typeof value === "string" && value.length > 0 ? [value] : [];
+			})
+			: [];
+		const targetLabel: string = nodeId
+			?? (spawnedNodeIds.length > 0 ? spawnedNodeIds.join(", ") : graphId)
+			?? "subagent graph";
+		return createDisplay("internal", "Daedalus Subagents", category, title, targetLabel, {
+			kind: "unknown",
+			label: targetLabel
+		});
+	}
 	if (toolName.startsWith("mcp_computer_")) {
 		const action = args.action && typeof args.action === "object" ? args.action as Record<string, unknown> : undefined;
 		const kind = typeof action?.type === "string" ? action.type : "";

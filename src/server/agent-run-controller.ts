@@ -74,6 +74,9 @@ export function beginAgentRun(params: {
 	lane?: AgentRunLane | undefined;
 	runId?: string | undefined;
 	rootRequestId?: string | undefined;
+	parentRunId?: string | undefined;
+	subagentGraphId?: string | undefined;
+	subagentNodeId?: string | undefined;
 	retryOfRunId?: string | undefined;
 	goalId?: string | undefined;
 	goalCycle?: number | undefined;
@@ -128,7 +131,8 @@ export function recordAgentRunToolEvent(
 	session: ClientSession,
 	runId: string,
 	event: ToolEvent,
-	writeCheckpointCovered: boolean = false
+	writeCheckpointCovered: boolean = false,
+	workspaceId: string | undefined = session.activeWorkspace?.id
 ): void {
 	const current: AgentRunState | undefined = session.agentRuns.get(runId);
 	if (current === undefined || current.terminal !== null) {
@@ -141,7 +145,7 @@ export function recordAgentRunToolEvent(
 		const risk: ToolRisk = getEffectiveToolPolicy(
 			event.toolName,
 			event.args,
-			session.activeWorkspace?.id
+			workspaceId
 		)?.risk ?? "read";
 		calls.set(event.toolCallId, {
 			toolName: event.toolName,
@@ -158,7 +162,7 @@ export function recordAgentRunToolEvent(
 	}
 
 	const call = calls.get(event.toolCallId);
-	const risk: ToolRisk = call?.risk ?? getEffectiveToolPolicy(event.toolName, {}, session.activeWorkspace?.id)?.risk ?? "read";
+	const risk: ToolRisk = call?.risk ?? getEffectiveToolPolicy(event.toolName, {}, workspaceId)?.risk ?? "read";
 	const eventRecord: Record<string, unknown> = event as unknown as Record<string, unknown>;
 	const semantics = getWorkflowToolSemantics(event.toolName, call?.args ?? {});
 	const failure: ToolFailure | undefined = event.type === "tool.error"
@@ -281,14 +285,15 @@ export function recordAgentRunApprovedToolResult(
 		failure?: ToolFailure | undefined;
 		recovery?: AgentLoopRecoveryStatus | undefined;
 		writeCheckpointCovered?: boolean | undefined;
-	}
+	},
+	workspaceId: string | undefined = session.activeWorkspace?.id
 ): void {
 	const calls: Map<string, { toolName: string; risk: ToolRisk; args: Record<string, unknown> }> =
 		session.agentRunToolCalls.get(runId) ?? new Map();
 	const risk: ToolRisk = getEffectiveToolPolicy(
 		params.toolName,
 		params.args,
-		session.activeWorkspace?.id
+		workspaceId
 	)?.risk ?? "read";
 	calls.set(params.toolCallId, {
 		toolName: params.toolName,
@@ -316,5 +321,5 @@ export function recordAgentRunApprovedToolResult(
 			message: params.summary ?? "Approved tool execution failed.",
 			failure: params.failure,
 			recovery: params.recovery
-		}, params.writeCheckpointCovered === true);
+		}, params.writeCheckpointCovered === true, workspaceId);
 }

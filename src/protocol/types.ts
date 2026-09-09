@@ -1,5 +1,30 @@
 import type { z } from "zod";
-import type { additionalContextItemSchema, aiChatParamsSchema, clientRequestSchema, messageTextAnchorSchema, promptIdSchema, skillIdSchema, skillRefSchema } from "./schema.js";
+import type {
+	additionalContextItemSchema,
+	aiChatParamsSchema,
+	clientRequestSchema,
+	messageTextAnchorSchema,
+	promptIdSchema,
+	skillIdSchema,
+	skillRefSchema,
+	subagentFailureSchema,
+	subagentContextRefSchema,
+	subagentGraphSchema,
+	subagentGraphStateEventDataSchema,
+	subagentGraphStatusSchema,
+	subagentMergeStateEventDataSchema,
+	subagentNodeApprovalEventDataSchema,
+	subagentNodeResultEventDataSchema,
+	subagentNodeSchema,
+	subagentNodeStateEventDataSchema,
+	subagentNodeStatusSchema,
+	subagentResultSchema,
+	subagentRoleSchema,
+	subagentToolCapabilitySchema,
+	subagentToolScopeSchema,
+	subagentWorkspaceModeSchema,
+	subagentWorktreeMetadataSchema
+} from "./schema.js";
 
 export type AiChatParams = z.infer<typeof aiChatParamsSchema>;
 
@@ -12,6 +37,29 @@ export type PromptId = z.infer<typeof promptIdSchema>;
 
 export type SkillId = z.infer<typeof skillIdSchema>;
 export type SkillRef = z.infer<typeof skillRefSchema>;
+
+export type SubagentGraphStatus = z.infer<typeof subagentGraphStatusSchema>;
+export type SubagentNodeStatus = z.infer<typeof subagentNodeStatusSchema>;
+export type SubagentRole = z.infer<typeof subagentRoleSchema>;
+export type SubagentWorkspaceMode = z.infer<typeof subagentWorkspaceModeSchema>;
+export type SubagentToolCapability = z.infer<typeof subagentToolCapabilitySchema>;
+export type SubagentContextRef = z.infer<typeof subagentContextRefSchema>;
+export type SubagentToolScope = z.infer<typeof subagentToolScopeSchema>;
+export type SubagentResult = z.infer<typeof subagentResultSchema>;
+export type SubagentWorktreeMetadata = z.infer<typeof subagentWorktreeMetadataSchema>;
+export type SubagentFailure = z.infer<typeof subagentFailureSchema>;
+export type SubagentGraph = z.infer<typeof subagentGraphSchema>;
+export type SubagentNode = z.infer<typeof subagentNodeSchema>;
+
+export type SubagentEventDataMap = {
+	"agent.subgraph.state": z.infer<typeof subagentGraphStateEventDataSchema>;
+	"agent.subgraph.node.state": z.infer<typeof subagentNodeStateEventDataSchema>;
+	"agent.subgraph.node.result": z.infer<typeof subagentNodeResultEventDataSchema>;
+	"agent.subgraph.node.approval": z.infer<typeof subagentNodeApprovalEventDataSchema>;
+	"agent.subgraph.merge.state": z.infer<typeof subagentMergeStateEventDataSchema>;
+};
+
+export type SubagentEventName = keyof SubagentEventDataMap;
 
 export type ProviderId = string;
 
@@ -50,6 +98,11 @@ export type ServerResponse =
 export type CanonicalServerEventName =
 	| "agent.run.state"
 	| "agent.goal.state"
+	| "agent.subgraph.state"
+	| "agent.subgraph.node.state"
+	| "agent.subgraph.node.result"
+	| "agent.subgraph.node.approval"
+	| "agent.subgraph.merge.state"
 	| "agent.run.started"
 	| "agent.run.snapshot"
 	| "agent.step.started"
@@ -172,6 +225,13 @@ export type ServerEvent = {
 	createdAt: string;
 	data?: unknown;
 };
+
+export type SubagentServerEvent = {
+	[K in SubagentEventName]: Omit<ServerEvent, "event" | "data"> & {
+		event: K;
+		data: SubagentEventDataMap[K];
+	}
+}[SubagentEventName];
 
 export type ModelProfile = {
 	provider: ProviderId;

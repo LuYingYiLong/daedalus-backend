@@ -58,6 +58,10 @@ import { executeComputerTool } from "./computer-tool-execution.js";
 import { SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskToolName } from "./scheduled-task-tools.js";
 import { PLUGIN_DEVELOPMENT_TOOL_NAME_SET, type PluginDevelopmentToolName } from "../plugins/development/types.js";
 import { GODOT_RUNTIME_START_TOOL_NAME } from "./godot-runtime-control.js";
+import {
+	SUBAGENT_TOOL_NAME_SET,
+	type SubagentToolName
+} from "./subagent-tools.js";
 
 export type ToolEvent =
 	| { type: "ai.delta"; text: string }
@@ -135,6 +139,20 @@ async function executeScheduledTaskTool(
 ): Promise<IdempotentToolExecutionResult> {
 	if (toolContext?.scheduledTaskControl === undefined) throw new Error("scheduled_task_runtime_unavailable");
 	const result = await toolContext.scheduledTaskControl.execute(toolName, args, abortSignal);
+	const content: string = JSON.stringify(result);
+	return { content, rawContentLength: content.length, truncated: false, reused: false };
+}
+
+async function executeSubagentTool(
+	toolName: SubagentToolName,
+	args: Record<string, unknown>,
+	toolContext: ToolExecutionContext | undefined,
+	abortSignal: AbortSignal | undefined
+): Promise<IdempotentToolExecutionResult> {
+	if (toolContext?.subagentControl === undefined) {
+		throw new Error("subagent_runtime_unavailable");
+	}
+	const result: Record<string, unknown> = await toolContext.subagentControl.execute(toolName, args, abortSignal);
 	const content: string = JSON.stringify(result);
 	return { content, rawContentLength: content.length, truncated: false, reused: false };
 }
@@ -805,6 +823,8 @@ async function executeSingleToolCall(
 			: undefined;
 		let rawResult: IdempotentToolExecutionResult = functionName === GODOT_RUNTIME_START_TOOL_NAME
 			? await executeGodotRuntimeStartTool(toolCall.id, executionArgs, toolContext, abortSignal)
+			: SUBAGENT_TOOL_NAME_SET.has(functionName)
+			? await executeSubagentTool(functionName as SubagentToolName, executionArgs, toolContext, abortSignal)
 			: PLUGIN_DEVELOPMENT_TOOL_NAME_SET.has(functionName)
 			? await executePluginDevelopmentTool(functionName as PluginDevelopmentToolName, executionArgs, toolContext, abortSignal)
 			: COMPUTER_TOOL_NAME_SET.has(functionName)

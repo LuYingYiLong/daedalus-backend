@@ -8,7 +8,7 @@ import {
 } from "../providers/provider-request-overrides.js";
 import { getProviderAdapterFamily, getProviderDefaultModel, getProviderEndpointTypeForModel } from "../providers/provider-registry.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
-import type { PendingAiContinuation } from "./pending-continuation.js";
+import type { PendingAiContinuation, PendingSubagentContinuation } from "./pending-continuation.js";
 import type { ExecutionControlContext } from "../tools/execution-control.js";
 import type { ChatCompletionContext } from "../tools/chat-completion-control.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
@@ -48,6 +48,7 @@ export type PersistedPendingAiContinuation = {
 	executionControl?: ExecutionControlContext | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
 	agentLoopState?: AgentLoopState | undefined;
+	subagent?: PendingSubagentContinuation | undefined;
 };
 
 export type PersistedApprovalRequestedData = {
@@ -147,6 +148,9 @@ export function createRuntimePendingContinuation(
 	}
 	if (isAgentLoopState(persisted.agentLoopState)) {
 		continuation.agentLoopState = cloneAgentLoopState(persisted.agentLoopState);
+	}
+	if (isPendingSubagentContinuation(persisted.subagent)) {
+		continuation.subagent = { ...persisted.subagent };
 	}
 
 	return continuation;
@@ -298,6 +302,9 @@ function createPersistedPendingContinuation(continuation: PendingAiContinuation)
 	if (continuation.agentLoopState !== undefined) {
 		persisted.agentLoopState = cloneAgentLoopState(continuation.agentLoopState);
 	}
+	if (continuation.subagent !== undefined) {
+		persisted.subagent = { ...continuation.subagent };
+	}
 
 	return persisted;
 }
@@ -367,6 +374,15 @@ function isPersistedContinuation(value: unknown): value is PersistedPendingAiCon
 		&& typeof value.requestId === "string"
 		&& typeof value.userCreatedAt === "string"
 		&& typeof value.stream === "boolean";
+}
+
+function isPendingSubagentContinuation(value: unknown): value is PendingSubagentContinuation {
+	return isRecord(value)
+		&& typeof value.graphId === "string"
+		&& value.graphId.length > 0
+		&& typeof value.nodeId === "string"
+		&& value.nodeId.length > 0
+		&& (value.workspaceId === undefined || typeof value.workspaceId === "string");
 }
 
 /** Restore only approval scopes explicitly recorded when a download was approved. */

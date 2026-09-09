@@ -7,6 +7,12 @@ import type { ExecutionControlContext } from "../tools/execution-control.js";
 import type { ChatCompletionContext } from "../tools/chat-completion-control.js";
 import type { AgentLoopState } from "../workflow/agent-loop-state.js";
 
+export type PendingSubagentContinuation = {
+	graphId: string;
+	nodeId: string;
+	workspaceId?: string | undefined;
+};
+
 export type PendingAiContinuation = {
 	params: AiChatParams;
 	options: ProviderChatOptions;
@@ -22,4 +28,5 @@ export type PendingAiContinuation = {
 	executionControl?: ExecutionControlContext | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;
 	agentLoopState?: AgentLoopState | undefined;
+	subagent?: PendingSubagentContinuation | undefined;
 };

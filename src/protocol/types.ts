@@ -10,6 +10,7 @@ import type {
 	subagentFailureSchema,
 	subagentContextRefSchema,
 	subagentGraphSchema,
+	subagentGraphCreatedEventDataSchema,
 	subagentGraphStateEventDataSchema,
 	subagentGraphStatusSchema,
 	subagentMergeStateEventDataSchema,
@@ -52,6 +53,7 @@ export type SubagentGraph = z.infer<typeof subagentGraphSchema>;
 export type SubagentNode = z.infer<typeof subagentNodeSchema>;
 
 export type SubagentEventDataMap = {
+	"agent.subgraph.created": z.infer<typeof subagentGraphCreatedEventDataSchema>;
 	"agent.subgraph.state": z.infer<typeof subagentGraphStateEventDataSchema>;
 	"agent.subgraph.node.state": z.infer<typeof subagentNodeStateEventDataSchema>;
 	"agent.subgraph.node.result": z.infer<typeof subagentNodeResultEventDataSchema>;
@@ -98,6 +100,7 @@ export type ServerResponse =
 export type CanonicalServerEventName =
 	| "agent.run.state"
 	| "agent.goal.state"
+	| "agent.subgraph.created"
 	| "agent.subgraph.state"
 	| "agent.subgraph.node.state"
 	| "agent.subgraph.node.result"

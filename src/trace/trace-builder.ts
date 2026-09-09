@@ -81,6 +81,9 @@ export function buildTraceRecordFromEvent(sessionId: string, event: TraceSourceE
 	const toolCallId: string | undefined = text(data, "toolCallId", "callId");
 	const approvalId: string | undefined = text(data, "approvalId");
 	const reconnectId: string | undefined = text(data, "reconnectId");
+	const subagentGraphId: string | undefined = text(data, "graphId", "subagentGraphId");
+	const subagentNodeId: string | undefined = text(data, "nodeId", "subagentNodeId");
+	const parentRunId: string | undefined = text(data, "parentRunId");
 	const groupingId: string = kind === "thinking" || kind === "final_response"
 		? `${sessionId}:${event.requestId}:${runId ?? ""}:${kind}`
 		: kind === "tool_call" || kind === "approval"
@@ -103,6 +106,9 @@ export function buildTraceRecordFromEvent(sessionId: string, event: TraceSourceE
 		...(approvalId === undefined ? {} : { approvalId }),
 		...(text(data, "retryOfRunId") === undefined ? {} : { retryOfRunId: text(data, "retryOfRunId") }),
 		...(text(data, "code", "errorCode") === undefined ? {} : { errorCode: text(data, "code", "errorCode") }),
+		...(subagentGraphId === undefined ? {} : { subagentGraphId }),
+		...(subagentNodeId === undefined ? {} : { subagentNodeId }),
+		...(parentRunId === undefined ? {} : { parentRunId }),
 		...(filePaths.length === 0 ? {} : { filePaths }),
 		...(typeof data.resultChars === "number" ? { resultChars: data.resultChars } : {}),
 		...(typeof data.truncated === "boolean" ? { truncated: data.truncated } : {})

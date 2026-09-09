@@ -95,6 +95,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/test-approval",
 			"/test-message-queue",
 			"/test-todo-list",
+			"/test-subagent",
 			"/ask",
 			"/agent",
 			"/workflow",
@@ -275,6 +276,44 @@ test("/test-todo-list sends a harmless workflow todo snapshot in development mod
 		assert.equal(Array.isArray(stateEvent?.data?.todo?.phases), true);
 		assert.equal(stateEvent?.data?.todo?.phases?.length, 4);
 		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.snapshot"), false);
+	});
+});
+
+test("/test-subagent sends a harmless DAG snapshot in development mode", async (): Promise<void> => {
+	await withBackendMode("development", async (): Promise<void> => {
+		const socket = createSocketMock();
+		const session: ClientSession = createClientSession(undefined);
+		session.sessionId = "session-test-subagent";
+		const request: ClientRequest = {
+			type: "request",
+			id: "slash-test-subagent",
+			method: "ai.chat",
+			params: {
+				message: "/test-subagent",
+				options: { stream: true }
+			}
+		} as ClientRequest;
+
+		const result = await handleSlashCommand({
+			socket,
+			request,
+			session,
+			mcpHost: {} as McpHost,
+			createSessionInfo: (): Record<string, unknown> => ({ ok: true })
+		});
+
+		assert.deepEqual(result, { type: "handled" });
+		const graphEvents = socket.sent.filter((message): boolean => (message as { event?: string }).event === "agent.subgraph.state");
+		const createdEvents = socket.sent.filter((message): boolean => (message as { event?: string }).event === "agent.subgraph.created");
+		const nodeEvents = socket.sent.filter((message): boolean => (message as { event?: string }).event === "agent.subgraph.node.state");
+		assert.equal(graphEvents.length, 2);
+		assert.equal(createdEvents.length, 1);
+		assert.equal(nodeEvents.length, 8);
+		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.subgraph.node.result"), true);
+		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.subgraph.node.approval"), true);
+		assert.equal(session.approvalGateway.listPending().length, 0);
+		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { result?: { text?: string } } | undefined;
+		assert.match(response?.result?.text ?? "", /No model, tool, worktree, or real approval was created/u);
 	});
 });
 

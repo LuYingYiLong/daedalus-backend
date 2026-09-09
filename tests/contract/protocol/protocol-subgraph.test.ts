@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	clientRequestSchema,
+	subagentGraphCreatedEventDataSchema,
 	subagentGraphStateEventDataSchema,
 	subagentMergeStateEventDataSchema,
 	subagentNodeApprovalEventDataSchema,
@@ -147,6 +148,7 @@ test("subgraph RPCs reject missing identities, stale-shaped merges, and unknown 
 });
 
 test("subgraph event payload schemas validate graph, node, result, approval, and merge updates", (): void => {
+	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ graph, nodes: [node] }).success, true);
 	assert.equal(subagentGraphStateEventDataSchema.safeParse({ graph }).success, true);
 	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", revision: 3, node }).success, true);
 	assert.equal(subagentNodeResultEventDataSchema.safeParse({
@@ -175,6 +177,7 @@ test("subgraph event payload schemas validate graph, node, result, approval, and
 });
 
 test("subgraph event payload schemas remain strict and event names are canonical", (): void => {
+	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ graph, nodes: [node], secret: "hidden" }).success, false);
 	assert.equal(subagentGraphStateEventDataSchema.safeParse({ graph, secret: "hidden" }).success, false);
 	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", revision: -1, node }).success, false);
 	assert.equal(subagentNodeResultEventDataSchema.safeParse({
@@ -225,6 +228,7 @@ test("subgraph event payload schemas remain strict and event names are canonical
 	}).success, false);
 
 	const names: readonly SubagentEventName[] = [
+		"agent.subgraph.created",
 		"agent.subgraph.state",
 		"agent.subgraph.node.state",
 		"agent.subgraph.node.result",
@@ -232,5 +236,5 @@ test("subgraph event payload schemas remain strict and event names are canonical
 		"agent.subgraph.merge.state"
 	];
 	const canonicalNames: readonly CanonicalServerEventName[] = names;
-	assert.equal(canonicalNames.length, 5);
+	assert.equal(canonicalNames.length, 6);
 });

@@ -70,6 +70,7 @@ type SubagentRuntimeBinding = {
 	mcpHost: McpHost;
 	sourceWorkspace: WorkspaceConfig | undefined;
 	parentRunId: string;
+	emitCreatedEvent: boolean;
 	lastEventSnapshot: SubagentGraphSnapshot | null;
 };
 
@@ -712,6 +713,13 @@ function emitApprovalEvent(
 
 function emitSnapshot(binding: SubagentRuntimeBinding, snapshot: SubagentGraphSnapshot): void {
 	const previous: SubagentGraphSnapshot | null = binding.lastEventSnapshot;
+	if (binding.emitCreatedEvent && previous === null) {
+		sendSessionEvent(binding.socket, binding.parentRunId, binding.session, "agent.subgraph.created", {
+			graph: snapshot.graph,
+			nodes: snapshot.nodes
+		}, binding.parentRunId, snapshot.graph.sessionId);
+		binding.emitCreatedEvent = false;
+	}
 	sendSessionEvent(binding.socket, binding.parentRunId, binding.session, "agent.subgraph.state", {
 		graph: snapshot.graph
 	}, binding.parentRunId, snapshot.graph.sessionId);
@@ -742,6 +750,7 @@ function createBinding(params: {
 	session: ClientSession;
 	mcpHost: McpHost;
 	sourceWorkspace?: WorkspaceConfig | undefined;
+	emitCreatedEvent?: boolean | undefined;
 }): SubagentRuntimeBinding {
 	let binding!: SubagentRuntimeBinding;
 	const scheduler = new SubagentGraphScheduler(params.snapshot, {
@@ -756,6 +765,7 @@ function createBinding(params: {
 		mcpHost: params.mcpHost,
 		sourceWorkspace: params.sourceWorkspace ?? params.session.activeWorkspace,
 		parentRunId: params.snapshot.graph.rootRunId,
+		emitCreatedEvent: params.emitCreatedEvent === true,
 		lastEventSnapshot: null
 	};
 	runtimeByGraphId.set(params.snapshot.graph.graphId, binding);
@@ -887,7 +897,8 @@ async function spawnNodes(params: {
 			snapshot: persistedInitial,
 			socket: params.socket,
 			session: params.session,
-			mcpHost: params.mcpHost
+			mcpHost: params.mcpHost,
+			emitCreatedEvent: true
 		});
 		snapshot = await binding.scheduler.start();
 	} else {

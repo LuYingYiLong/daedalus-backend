@@ -914,6 +914,11 @@ export const subagentGraphStateEventDataSchema = z.object({
 	graph: subagentGraphSchema
 }).strict();
 
+export const subagentGraphCreatedEventDataSchema = z.object({
+	graph: subagentGraphSchema,
+	nodes: z.array(subagentNodeSchema)
+}).strict();
+
 export const subagentNodeStateEventDataSchema = z.object({
 	graphId: subagentIdentifierSchema,
 	revision: z.number().int().positive(),

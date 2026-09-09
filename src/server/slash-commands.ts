@@ -17,6 +17,16 @@ import type { WorkflowTodoSnapshot } from "../workflow/types.js";
 import { getPluginP2Snapshot } from "../plugins/extensions/registry.js";
 import { getClientConnection } from "./client-connections.js";
 import { computerOverlayPreviewActionSchema, computerOverlayPreviewSchema, type ComputerOverlayPreview } from "../protocol/computer-overlay-preview.js";
+import {
+	assertValidSubagentGraphSnapshot,
+	createSubagentGraph,
+	createSubagentNode,
+	transitionSubagentGraph,
+	transitionSubagentNode,
+	type SubagentGraphSnapshot,
+	type SubagentNode,
+	type SubagentResult
+} from "../workflow/subagent-graph.js";
 
 export type SlashCommandDefinition = {
 	command: string;
@@ -184,6 +194,14 @@ const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		description: "Send a Studio Todo overlay test snapshot that does not execute tools.",
 		requiresArgument: false,
 		examples: ["/test-todo-list"]
+	},
+	{
+		command: "/test-subagent",
+		usage: "/test-subagent",
+		insertText: "/test-subagent",
+		description: "Send a temporary Subagent DAG test snapshot without starting a model, tool, worktree, or real approval.",
+		requiresArgument: false,
+		examples: ["/test-subagent"]
 	}
 ] as const;
 
@@ -387,6 +405,185 @@ async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientReques
 			completedAt: new Date().toISOString()
 		}
 	});
+	await waitForSessionEventPersistence(session);
+}
+
+function emitTestSubagentSnapshotEvents(
+	socket: WebSocket,
+	request: ClientRequest,
+	session: ClientSession,
+	snapshot: SubagentGraphSnapshot,
+	emitCreatedEvent: boolean = false
+): void {
+	if (emitCreatedEvent) {
+		sendSessionEvent(
+			socket,
+			request.id,
+			session,
+			"agent.subgraph.created",
+			{ graph: snapshot.graph, nodes: snapshot.nodes },
+			request.id,
+			session.sessionId
+		);
+	}
+	sendSessionEvent(
+		socket,
+		request.id,
+		session,
+		"agent.subgraph.state",
+		{ graph: snapshot.graph },
+		request.id,
+		session.sessionId
+	);
+	for (const node of snapshot.nodes) {
+		sendSessionEvent(
+			socket,
+			request.id,
+			session,
+			"agent.subgraph.node.state",
+			{
+				graphId: snapshot.graph.graphId,
+				revision: snapshot.graph.revision,
+				node
+			},
+			request.id,
+			session.sessionId
+		);
+	}
+}
+
+async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<void> {
+	if (session.sessionId === undefined) return;
+
+	const suffix: string = Date.now().toString(36);
+	const rootRunId: string = `slash-test-subagent-${suffix}`;
+	const graph: ReturnType<typeof createSubagentGraph> = createSubagentGraph({
+		graphId: rootRunId,
+		sessionId: session.sessionId,
+		rootRunId,
+		now: new Date().toISOString()
+	});
+	const createNode = (params: {
+		nodeId: string;
+		runId: string;
+		role: SubagentNode["role"];
+		objective: string;
+		dependsOn?: string[];
+		workspaceMode: SubagentNode["workspaceMode"];
+		capabilities: SubagentNode["toolScope"]["capabilities"];
+	}): SubagentNode => createSubagentNode({
+		graphId: graph.graphId,
+		nodeId: params.nodeId,
+		runId: params.runId,
+		role: params.role,
+		objective: params.objective,
+		dependsOn: params.dependsOn,
+		workspaceMode: params.workspaceMode,
+		toolScope: {
+			capabilities: params.capabilities,
+			toolNames: [],
+			sourceFolderIds: []
+		}
+	});
+	const researchPending: SubagentNode = createNode({
+		nodeId: "research",
+		runId: `${rootRunId}-research`,
+		role: "researcher",
+		objective: "Inspect the requested context and report findings.",
+		workspaceMode: "shared_read_only",
+		capabilities: ["read", "verify"]
+	});
+	const implementPending: SubagentNode = createNode({
+		nodeId: "implement",
+		runId: `${rootRunId}-implement`,
+		role: "implementer",
+		objective: "Prepare the approved implementation in an isolated worktree.",
+		dependsOn: ["research"],
+		workspaceMode: "managed_worktree",
+		capabilities: ["read", "verify", "propose", "write", "execute"]
+	});
+	const verifyPending: SubagentNode = createNode({
+		nodeId: "verify",
+		runId: `${rootRunId}-verify`,
+		role: "tester",
+		objective: "Run the focused verification checks independently.",
+		workspaceMode: "shared_read_only",
+		capabilities: ["read", "verify"]
+	});
+	const summarizePending: SubagentNode = createNode({
+		nodeId: "summarize",
+		runId: `${rootRunId}-summarize`,
+		role: "reviewer",
+		objective: "Review the research and verification results.",
+		dependsOn: ["implement", "verify"],
+		workspaceMode: "shared_read_only",
+		capabilities: ["read", "verify"]
+	});
+	const initialGraph = transitionSubagentGraph(graph, "running");
+	const initialNodes: SubagentNode[] = [
+		transitionSubagentNode(researchPending, "ready"),
+		implementPending,
+		transitionSubagentNode(verifyPending, "ready"),
+		summarizePending
+	];
+	const initialSnapshot: SubagentGraphSnapshot = { graph: initialGraph, nodes: initialNodes };
+	assertValidSubagentGraphSnapshot(initialSnapshot);
+	emitTestSubagentSnapshotEvents(socket, request, session, initialSnapshot, true);
+
+	const completedResult: SubagentResult = {
+		status: "completed",
+		summary: "Research findings are ready for parent review.",
+		findings: ["The test fixture demonstrates an independent branch and a dependent implementation branch."],
+		changedFiles: [],
+		tests: [],
+		artifacts: [],
+		needsParentDecision: true,
+		recommendedNextAction: "Review the implementation node approval card."
+	};
+	const researchRunning: SubagentNode = transitionSubagentNode(initialNodes[0]!, "running");
+	const researchCompleted: SubagentNode = transitionSubagentNode(researchRunning, "completed", { result: completedResult });
+	const implementReady: SubagentNode = transitionSubagentNode(initialNodes[1]!, "ready");
+	const implementRunning: SubagentNode = transitionSubagentNode(implementReady, "running");
+	const implementWaiting: SubagentNode = transitionSubagentNode(implementRunning, "waiting_approval");
+	const verifyRunning: SubagentNode = transitionSubagentNode(initialNodes[2]!, "running");
+	const finalGraph = transitionSubagentGraph(initialGraph, "running");
+	const finalSnapshot: SubagentGraphSnapshot = {
+		graph: finalGraph,
+		nodes: [researchCompleted, implementWaiting, verifyRunning, summarizePending]
+	};
+	assertValidSubagentGraphSnapshot(finalSnapshot);
+	emitTestSubagentSnapshotEvents(socket, request, session, finalSnapshot);
+	sendSessionEvent(
+		socket,
+		request.id,
+		session,
+		"agent.subgraph.node.result",
+		{
+			graphId: finalGraph.graphId,
+			nodeId: researchCompleted.nodeId,
+			runId: researchCompleted.runId,
+			revision: finalGraph.revision,
+			result: completedResult
+		},
+		request.id,
+		session.sessionId
+	);
+	sendSessionEvent(
+		socket,
+		request.id,
+		session,
+		"agent.subgraph.node.approval",
+		{
+			graphId: finalGraph.graphId,
+			nodeId: implementWaiting.nodeId,
+			runId: implementWaiting.runId,
+			revision: finalGraph.revision,
+			approvalId: `${rootRunId}-approval`,
+			status: "requested"
+		},
+		request.id,
+		session.sessionId
+	);
 	await waitForSessionEventPersistence(session);
 }
 
@@ -621,6 +818,20 @@ export async function handleSlashCommand(params: {
 		}
 		await sendChatText(socket, request, "Sent the Todo overlay UI test snapshot. No model or tool was called.", session, mcpHost, createSessionInfo);
 		await emitTestTodoListSnapshot(socket, request, session);
+		return { type: "handled" };
+	}
+
+	if (command === "/test-subagent") {
+		if (!isDevelopmentSlashCommandEnabled()) {
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		if (session.sessionId === undefined) {
+			await sendChatText(socket, request, "Open or create a Studio session before previewing the Subagent DAG.", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		await sendChatText(socket, request, "Sent the Subagent DAG UI test snapshot. No model, tool, worktree, or real approval was created.", session, mcpHost, createSessionInfo);
+		await emitTestSubagentSnapshot(socket, request, session);
 		return { type: "handled" };
 	}
 

@@ -421,7 +421,7 @@ function emitTestSubagentSnapshotEvents(
 			request.id,
 			session,
 			"agent.subgraph.created",
-			{ graph: snapshot.graph, nodes: snapshot.nodes },
+			{ parentRunId: snapshot.graph.rootRunId, graph: snapshot.graph, nodes: snapshot.nodes },
 			request.id,
 			session.sessionId
 		);
@@ -431,7 +431,7 @@ function emitTestSubagentSnapshotEvents(
 		request.id,
 		session,
 		"agent.subgraph.state",
-		{ graph: snapshot.graph },
+		{ parentRunId: snapshot.graph.rootRunId, graph: snapshot.graph },
 		request.id,
 		session.sessionId
 	);
@@ -443,6 +443,7 @@ function emitTestSubagentSnapshotEvents(
 			"agent.subgraph.node.state",
 			{
 				graphId: snapshot.graph.graphId,
+				parentRunId: snapshot.graph.rootRunId,
 				revision: snapshot.graph.revision,
 				node
 			},
@@ -466,6 +467,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 	const createNode = (params: {
 		nodeId: string;
 		runId: string;
+		name: string;
 		role: SubagentNode["role"];
 		objective: string;
 		dependsOn?: string[];
@@ -475,6 +477,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 		graphId: graph.graphId,
 		nodeId: params.nodeId,
 		runId: params.runId,
+		name: params.name,
 		role: params.role,
 		objective: params.objective,
 		dependsOn: params.dependsOn,
@@ -488,6 +491,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 	const researchPending: SubagentNode = createNode({
 		nodeId: "research",
 		runId: `${rootRunId}-research`,
+		name: "Research",
 		role: "researcher",
 		objective: "Inspect the requested context and report findings.",
 		workspaceMode: "shared_read_only",
@@ -496,6 +500,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 	const implementPending: SubagentNode = createNode({
 		nodeId: "implement",
 		runId: `${rootRunId}-implement`,
+		name: "Implement",
 		role: "implementer",
 		objective: "Prepare the approved implementation in an isolated worktree.",
 		dependsOn: ["research"],
@@ -505,6 +510,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 	const verifyPending: SubagentNode = createNode({
 		nodeId: "verify",
 		runId: `${rootRunId}-verify`,
+		name: "Verify",
 		role: "tester",
 		objective: "Run the focused verification checks independently.",
 		workspaceMode: "shared_read_only",
@@ -513,6 +519,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 	const summarizePending: SubagentNode = createNode({
 		nodeId: "summarize",
 		runId: `${rootRunId}-summarize`,
+		name: "Review",
 		role: "reviewer",
 		objective: "Review the research and verification results.",
 		dependsOn: ["implement", "verify"],
@@ -561,6 +568,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 		{
 			graphId: finalGraph.graphId,
 			nodeId: researchCompleted.nodeId,
+			parentRunId: finalGraph.rootRunId,
 			runId: researchCompleted.runId,
 			revision: finalGraph.revision,
 			result: completedResult
@@ -576,6 +584,7 @@ async function emitTestSubagentSnapshot(socket: WebSocket, request: ClientReques
 		{
 			graphId: finalGraph.graphId,
 			nodeId: implementWaiting.nodeId,
+			parentRunId: finalGraph.rootRunId,
 			runId: implementWaiting.runId,
 			revision: finalGraph.revision,
 			approvalId: `${rootRunId}-approval`,

@@ -46,7 +46,7 @@ test("subagent definitions expose strict graph orchestration schemas", (): void 
 	assert.equal(spawnParameters.additionalProperties, false);
 	const spawnProperties = spawnParameters.properties as Record<string, Record<string, unknown>>;
 	const nodeItems = spawnProperties.nodes?.items as Record<string, unknown>;
-	assert.deepEqual(nodeItems.required, ["nodeId", "role", "objective", "toolScope", "workspaceMode"]);
+	assert.deepEqual(nodeItems.required, ["nodeId", "name", "role", "objective", "toolScope", "workspaceMode"]);
 	assert.equal(nodeItems.additionalProperties, false);
 	const nodeProperties = nodeItems.properties as Record<string, Record<string, unknown>>;
 	assert.deepEqual(nodeProperties.workspaceMode?.enum, ["shared_read_only", "managed_worktree"]);
@@ -106,6 +106,7 @@ test("subagent event descriptions distinguish state changes from reads and previ
 	const spawn = describeToolEvent(SUBAGENT_SPAWN_TOOL_NAME, {
 		nodes: [{
 			nodeId: "research",
+			name: "Research",
 			role: "researcher",
 			objective: "Inspect",
 			contextRefs: [],

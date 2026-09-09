@@ -53,6 +53,23 @@ test("unstructured subagent output becomes a bounded partial result", () => {
 	assert.match(result.recommendedNextAction ?? "", /strict result/u);
 });
 
+test("subagent details markdown is bounded and redacts credentials and absolute paths", () => {
+	const result = parseSubagentResultForTest(JSON.stringify({
+		status: "completed",
+		summary: "done",
+		findings: [],
+		changedFiles: [],
+		tests: [],
+		artifacts: [],
+		needsParentDecision: false,
+		recommendedNextAction: null,
+		detailsMarkdown: "Authorization: Bearer top-secret\napi_key=secret-value\nC:\\Users\\Admin\\private.log\n/home/admin/private.log"
+	}), []);
+
+	assert.match(result.detailsMarkdown ?? "", /Authorization: \[REDACTED\]/u);
+	assert.doesNotMatch(result.detailsMarkdown ?? "", /top-secret|secret-value|Users\\Admin|\/home\/admin/u);
+});
+
 test("subagent result parsing rejects fields outside the strict result contract", () => {
 	const result = parseSubagentResultForTest(JSON.stringify({
 		status: "completed",

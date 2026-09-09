@@ -7,6 +7,7 @@ import {
 	subagentMergeStateEventDataSchema,
 	subagentNodeApprovalEventDataSchema,
 	subagentNodeResultEventDataSchema,
+	subagentNodeRetryEventDataSchema,
 	subagentNodeStateEventDataSchema
 } from "../../../src/protocol/schema.js";
 import type {
@@ -34,7 +35,8 @@ const result = {
 	tests: [{ name: "typecheck", status: "passed", summary: null }],
 	artifacts: [{ kind: "diff", id: "diff-one", label: "Implementation diff" }],
 	needsParentDecision: false,
-	recommendedNextAction: null
+	recommendedNextAction: null,
+	detailsMarkdown: null
 } as const;
 
 const graph = {
@@ -93,10 +95,17 @@ const node = {
 	nodeId: "node-one",
 	graphId: "graph-one",
 	runId: "run-child",
+	retryOfRunId: null,
+	name: "Implementation",
 	role: "implementer",
 	objective: "Implement the feature.",
 	dependsOn: ["node-research"],
 	status: "completed",
+	attempt: 1,
+	retryPolicy: { mode: "transient_only", maxRetries: 1 },
+	queueReason: null,
+	queuedAt: null,
+	nextRetryAt: null,
 	contextRefs: [{ kind: "message", id: "user-request" }],
 	toolScope: {
 		capabilities: ["read", "verify", "write"],
@@ -148,19 +157,33 @@ test("subgraph RPCs reject missing identities, stale-shaped merges, and unknown 
 });
 
 test("subgraph event payload schemas validate graph, node, result, approval, and merge updates", (): void => {
-	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ graph, nodes: [node] }).success, true);
-	assert.equal(subagentGraphStateEventDataSchema.safeParse({ graph }).success, true);
-	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", revision: 3, node }).success, true);
+	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ parentRunId: "run-root", graph, nodes: [node] }).success, true);
+	assert.equal(subagentGraphStateEventDataSchema.safeParse({ parentRunId: "run-root", graph }).success, true);
+	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", parentRunId: "run-root", revision: 3, node }).success, true);
 	assert.equal(subagentNodeResultEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 3,
 		result
 	}).success, true);
+	assert.equal(subagentNodeRetryEventDataSchema.safeParse({
+		graphId: "graph-one",
+		nodeId: "node-one",
+		parentRunId: "run-root",
+		revision: 4,
+		previousRunId: "run-old",
+		runId: "run-child",
+		attempt: 2,
+		automatic: true,
+		reason: "provider timeout",
+		nextRetryAt: "2026-09-09T00:02:00.000Z"
+	}).success, true);
 	assert.equal(subagentNodeApprovalEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 4,
 		approvalId: "approval-one",
@@ -169,6 +192,7 @@ test("subgraph event payload schemas validate graph, node, result, approval, and
 	assert.equal(subagentMergeStateEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 5,
 		status: "preview_ready",
@@ -177,12 +201,13 @@ test("subgraph event payload schemas validate graph, node, result, approval, and
 });
 
 test("subgraph event payload schemas remain strict and event names are canonical", (): void => {
-	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ graph, nodes: [node], secret: "hidden" }).success, false);
-	assert.equal(subagentGraphStateEventDataSchema.safeParse({ graph, secret: "hidden" }).success, false);
-	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", revision: -1, node }).success, false);
+	assert.equal(subagentGraphCreatedEventDataSchema.safeParse({ parentRunId: "run-root", graph, nodes: [node], secret: "hidden" }).success, false);
+	assert.equal(subagentGraphStateEventDataSchema.safeParse({ parentRunId: "run-root", graph, secret: "hidden" }).success, false);
+	assert.equal(subagentNodeStateEventDataSchema.safeParse({ graphId: "graph-one", parentRunId: "run-root", revision: -1, node }).success, false);
 	assert.equal(subagentNodeResultEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 3,
 		result: { ...result, needsParentDecision: "no" }
@@ -190,6 +215,7 @@ test("subgraph event payload schemas remain strict and event names are canonical
 	assert.equal(subagentNodeApprovalEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 4,
 		approvalId: "approval-one",
@@ -198,6 +224,7 @@ test("subgraph event payload schemas remain strict and event names are canonical
 	assert.equal(subagentMergeStateEventDataSchema.safeParse({
 		graphId: "graph-one",
 		nodeId: "node-one",
+		parentRunId: "run-root",
 		runId: "run-child",
 		revision: 5,
 		status: "preview_ready",
@@ -206,6 +233,7 @@ test("subgraph event payload schemas remain strict and event names are canonical
 	assert.equal(subagentNodeStateEventDataSchema.safeParse({
 		graphId: "graph-one",
 		revision: 5,
+		parentRunId: "run-root",
 		node: {
 			...node,
 			worktreeMetadata: {
@@ -232,9 +260,10 @@ test("subgraph event payload schemas remain strict and event names are canonical
 		"agent.subgraph.state",
 		"agent.subgraph.node.state",
 		"agent.subgraph.node.result",
+		"agent.subgraph.node.retry",
 		"agent.subgraph.node.approval",
 		"agent.subgraph.merge.state"
 	];
 	const canonicalNames: readonly CanonicalServerEventName[] = names;
-	assert.equal(canonicalNames.length, 6);
+	assert.equal(canonicalNames.length, 7);
 });

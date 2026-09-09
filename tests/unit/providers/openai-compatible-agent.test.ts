@@ -803,6 +803,34 @@ test("MiniMax streaming agent opens thinking when think tag arrives before text"
 	}, ["<", "think", ">", "先分析一下", "</", "think", ">", "最终答案。"]);
 });
 
+test("OpenAI-compatible agent extracts think tags into thinking events", async (): Promise<void> => {
+	await withMiniMaxThinkTagMockServer(true, async (baseUrl: string): Promise<void> => {
+		const deltas: string[] = [];
+		const thinking: string[] = [];
+		let thinkingDoneCount: number = 0;
+		const result = await runOpenAICompatibleAgentStreaming(
+			{ message: "回答一下", options: { stream: true } },
+			{ provider: "openai", apiKey: "test-key", baseUrl, model: "gpt-oss" },
+			[],
+			"System prompt",
+			createMockMcpHost(),
+			new ApprovalGateway(),
+			[],
+			(event): void => {
+				if (event.type === "ai.delta") deltas.push(event.text);
+				if (event.type === "ai.thinking.delta") thinking.push(event.text);
+				if (event.type === "ai.thinking.done") thinkingDoneCount += 1;
+			}
+		);
+
+		assert.equal(result.status, "completed");
+		assert.equal(result.text, "最终答案。");
+		assert.deepEqual(deltas, ["最终答案。"]);
+		assert.deepEqual(thinking, ["先分析一下"]);
+		assert.equal(thinkingDoneCount, 1);
+	});
+});
+
 test("MiniMax non-streaming agent strips think tags from visible text", async (): Promise<void> => {
 	await withMiniMaxThinkTagMockServer(false, async (baseUrl: string): Promise<void> => {
 		const thinking: string[] = [];

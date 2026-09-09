@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 13;
+const DB_SCHEMA_VERSION: number = 16;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -273,9 +273,16 @@ function migrateSchema(db: DatabaseSync): void {
 			graph_id TEXT NOT NULL REFERENCES subagent_graphs(graph_id) ON DELETE CASCADE,
 			node_id TEXT NOT NULL,
 			run_id TEXT NOT NULL UNIQUE,
+			retry_of_run_id TEXT,
+			name TEXT NOT NULL,
 			role TEXT NOT NULL,
 			objective TEXT NOT NULL,
 			status TEXT NOT NULL,
+			attempt INTEGER NOT NULL DEFAULT 1,
+			retry_policy_json TEXT NOT NULL DEFAULT '{"mode":"transient_only","maxRetries":1}',
+			queue_reason TEXT,
+			queued_at TEXT,
+			next_retry_at TEXT,
 			context_refs_json TEXT NOT NULL,
 			tool_scope_json TEXT NOT NULL,
 			workspace_mode TEXT NOT NULL,
@@ -443,6 +450,15 @@ function migrateSchema(db: DatabaseSync): void {
 	if (!agentGoalColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "dismissed_at")) {
 		db.exec("ALTER TABLE agent_goals ADD COLUMN dismissed_at TEXT");
 	}
+	const subagentNodeColumns = db.prepare("PRAGMA table_info(subagent_nodes)").all() as Record<string, unknown>[];
+	const subagentColumnNames = new Set(subagentNodeColumns.map((column): string => String(column.name)));
+	if (!subagentColumnNames.has("name")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN name TEXT NOT NULL DEFAULT 'Subagent'");
+	if (!subagentColumnNames.has("retry_of_run_id")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN retry_of_run_id TEXT");
+	if (!subagentColumnNames.has("attempt")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1");
+	if (!subagentColumnNames.has("retry_policy_json")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN retry_policy_json TEXT NOT NULL DEFAULT '{\"mode\":\"transient_only\",\"maxRetries\":1}'");
+	if (!subagentColumnNames.has("queue_reason")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queue_reason TEXT");
+	if (!subagentColumnNames.has("queued_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queued_at TEXT");
+	if (!subagentColumnNames.has("next_retry_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN next_retry_at TEXT");
 	runSessionTransaction(db, (): void => {
 		const observationColumns = db.prepare("PRAGMA table_info(computer_observations)").all();
 		if (!observationColumns.some((column): boolean => column.name === "groundings_json")) {

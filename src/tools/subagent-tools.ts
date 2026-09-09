@@ -44,7 +44,7 @@ export const SUBAGENT_TOOL_DEFINITIONS: readonly ChatCompletionTool[] = [
 		type: "function",
 		function: {
 			name: SUBAGENT_SPAWN_TOOL_NAME,
-			description: "Create a recoverable subagent graph or append new nodes to an existing graph. Dependencies must reference existing nodes or nodes in this request. This changes persisted execution state and remains subject to tool approval.",
+			description: "Create a recoverable subagent graph or append new nodes to an existing graph. Give every node a short human-readable name for the Subagent panel. Dependencies must reference existing nodes or nodes in this request. This changes persisted execution state and remains subject to tool approval.",
 			parameters: {
 				type: "object",
 				properties: {
@@ -60,6 +60,7 @@ export const SUBAGENT_TOOL_DEFINITIONS: readonly ChatCompletionTool[] = [
 							type: "object",
 							properties: {
 								nodeId: NODE_ID_SCHEMA,
+								name: { type: "string", minLength: 1, maxLength: 120, description: "Short human-readable name shown in the Subagent panel." },
 								role: {
 									type: "string",
 									enum: ["researcher", "planner", "implementer", "tester", "reviewer"]
@@ -112,9 +113,19 @@ export const SUBAGENT_TOOL_DEFINITIONS: readonly ChatCompletionTool[] = [
 									type: "string",
 									enum: ["shared_read_only", "managed_worktree"],
 									description: "Implementer nodes require managed_worktree; non-writing roles normally use shared_read_only."
+								},
+								retryPolicy: {
+									type: "object",
+									properties: {
+										mode: { type: "string", enum: ["transient_only"] },
+										maxRetries: { type: "integer", minimum: 0, maximum: 3, default: 1 }
+									},
+									required: ["mode", "maxRetries"],
+									additionalProperties: false,
+									description: "Optional automatic retry policy. Defaults to one retry for transient provider errors; writing nodes never auto-retry."
 								}
 							},
-							required: ["nodeId", "role", "objective", "toolScope", "workspaceMode"],
+							required: ["nodeId", "name", "role", "objective", "toolScope", "workspaceMode"],
 							additionalProperties: false
 						}
 					}

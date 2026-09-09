@@ -10,6 +10,7 @@ import {
 	type SubagentResult
 } from "../../../src/workflow/subagent-graph.js";
 import { SubagentGraphScheduler } from "../../../src/workflow/subagent-scheduler.js";
+import type { SubagentResourceCoordinator } from "../../../src/workflow/subagent-resources.js";
 
 const RESULT: SubagentResult = {
 	status: "completed",
@@ -27,6 +28,7 @@ function node(nodeId: string, dependsOn: string[] = [], runId: string = `run-${n
 		graphId: "graph-scheduler",
 		nodeId,
 		runId,
+		name: nodeId,
 		role: "researcher",
 		objective: `Execute ${nodeId}`,
 		dependsOn,
@@ -232,8 +234,86 @@ test("retry reopens a failed graph with a new run id", async (): Promise<void> =
 	await scheduler.retry("a");
 	const done = await scheduler.wait(undefined);
 	assert.equal(done.nodes[0]?.runId, "run-a-retry");
+	assert.equal(done.nodes[0]?.retryOfRunId, "run-a");
 	assert.equal(done.nodes[0]?.status, "completed");
 	assert.equal(attempts, 2);
+});
+
+test("transient provider failures automatically retry read-only nodes with a fresh run", async (): Promise<void> => {
+	let attempts: number = 0;
+	const runIds: string[] = [];
+	const scheduler = new SubagentGraphScheduler(snapshot([node("provider")]), {
+		persist: async (): Promise<void> => undefined,
+		createRunId: (candidate): string => `run-provider-${candidate.attempt + 1}`,
+		execute: async (candidate) => {
+			runIds.push(candidate.runId);
+			attempts += 1;
+			if (attempts === 1) throw Object.assign(new Error("provider timeout"), { code: "ETIMEDOUT" });
+			return { status: "completed", result: RESULT };
+		}
+	});
+
+	const done = await scheduler.start().then(() => scheduler.wait(undefined));
+	assert.equal(done.graph.status, "completed");
+	assert.equal(attempts, 2);
+	assert.deepEqual(runIds, ["run-provider-2", "run-provider-3"]);
+	assert.equal(done.nodes[0]?.attempt, 2);
+});
+
+test("write-capable nodes never use the automatic transient retry path", async (): Promise<void> => {
+	const writeNode = createSubagentNode({
+		...node("write"),
+		role: "implementer",
+		workspaceMode: "managed_worktree",
+		toolScope: { capabilities: ["read", "verify", "propose", "write", "destructive", "execute"], toolNames: [], sourceFolderIds: ["source-main"] }
+	});
+	let attempts: number = 0;
+	const scheduler = new SubagentGraphScheduler(snapshot([writeNode]), {
+		persist: async (): Promise<void> => undefined,
+		execute: async () => {
+			attempts += 1;
+			throw Object.assign(new Error("provider timeout"), { code: "ETIMEDOUT" });
+		}
+	});
+
+	const done = await scheduler.start().then(() => scheduler.wait(undefined));
+	assert.equal(done.nodes[0]?.status, "failed");
+	assert.equal(done.nodes[0]?.attempt, 1);
+	assert.equal(attempts, 1);
+});
+
+test("resource pressure queues a node and wakes it without a busy loop", async (): Promise<void> => {
+	let capacity: boolean = false;
+	let acquireCount: number = 0;
+	const wakeups: Array<() => void> = [];
+	const resources: SubagentResourceCoordinator = {
+		acquire: async () => {
+			acquireCount += 1;
+			if (!capacity) return { available: false, reason: "system_pressure" };
+			return { available: true, lease: { release: async (): Promise<void> => undefined } };
+		}
+	};
+	const scheduler = new SubagentGraphScheduler(snapshot([node("queued")]), {
+		persist: async (): Promise<void> => undefined,
+		resources,
+		setTimeout: (handler): NodeJS.Timeout => {
+			wakeups.push(handler);
+			return {} as NodeJS.Timeout;
+		},
+		clearTimeout: (): void => undefined,
+		execute: async () => ({ status: "completed", result: RESULT })
+	});
+
+	await scheduler.start();
+	await eventually((): boolean => scheduler.getSnapshot().nodes[0]?.status === "queued");
+	assert.equal(scheduler.getSnapshot().nodes[0]?.status, "queued");
+	assert.equal(acquireCount, 1);
+	assert.equal(wakeups.length, 1);
+	capacity = true;
+	wakeups.shift()!();
+	const done = await scheduler.wait(undefined);
+	assert.equal(done.nodes[0]?.status, "completed");
+	assert.equal(acquireCount, 2);
 });
 
 test("waiting approval stays resumable without re-running the executor", async (): Promise<void> => {

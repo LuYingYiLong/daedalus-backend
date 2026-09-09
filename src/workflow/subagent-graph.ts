@@ -13,6 +13,7 @@ export type SubagentGraphStatus =
 export type SubagentNodeStatus =
 	| "pending"
 	| "ready"
+	| "queued"
 	| "running"
 	| "waiting_approval"
 	| "blocked"
@@ -68,7 +69,20 @@ export type SubagentResult = {
 	artifacts: SubagentArtifactRef[];
 	needsParentDecision: boolean;
 	recommendedNextAction: string | null;
+	detailsMarkdown?: string | null;
 };
+
+export type SubagentRetryPolicy = {
+	mode: "transient_only";
+	maxRetries: number;
+};
+
+export type SubagentQueueReason =
+	| "provider_capacity"
+	| "worktree_capacity"
+	| "terminal_capacity"
+	| "system_pressure"
+	| "retry_backoff";
 
 export type SubagentFailure = {
 	code: string;
@@ -91,10 +105,17 @@ export type SubagentNode = {
 	nodeId: string;
 	graphId: string;
 	runId: string;
+	retryOfRunId?: string | null;
+	name: string;
 	role: SubagentRole;
 	objective: string;
 	dependsOn: string[];
 	status: SubagentNodeStatus;
+	attempt: number;
+	retryPolicy: SubagentRetryPolicy;
+	queueReason: SubagentQueueReason | null;
+	queuedAt: string | null;
+	nextRetryAt: string | null;
 	contextRefs: SubagentContextRef[];
 	toolScope: SubagentToolScope;
 	workspaceMode: SubagentWorkspaceMode;
@@ -135,9 +156,10 @@ const GRAPH_TRANSITIONS: Readonly<Record<SubagentGraphStatus, ReadonlySet<Subage
 };
 
 const NODE_TRANSITIONS: Readonly<Record<SubagentNodeStatus, ReadonlySet<SubagentNodeStatus>>> = {
-	pending: new Set(["ready", "blocked", "failed", "cancelled"]),
-	ready: new Set(["pending", "running", "blocked", "failed", "cancelled"]),
-	running: new Set(["ready", "waiting_approval", "completed", "failed", "cancelled"]),
+	pending: new Set(["ready", "queued", "blocked", "failed", "cancelled"]),
+	ready: new Set(["pending", "queued", "running", "blocked", "failed", "cancelled"]),
+	queued: new Set(["pending", "ready", "running", "blocked", "failed", "cancelled"]),
+	running: new Set(["ready", "queued", "waiting_approval", "completed", "failed", "cancelled"]),
 	waiting_approval: new Set(["running", "blocked", "completed", "failed", "cancelled"]),
 	blocked: new Set(["pending", "ready", "failed", "cancelled"]),
 	completed: new Set(),
@@ -224,6 +246,9 @@ function assertContextRefs(contextRefs: readonly SubagentContextRef[]): void {
 
 function assertResult(result: SubagentResult): void {
 	assertNonEmpty(result.summary, "result.summary");
+	if (result.detailsMarkdown !== undefined && result.detailsMarkdown !== null && result.detailsMarkdown.length > 20_000) {
+		throw new Error("Invalid subagent result.detailsMarkdown: maximum length is 20000 characters.");
+	}
 	assertUniqueNonEmpty(result.changedFiles, "result.changedFiles");
 	for (const finding of result.findings) assertNonEmpty(finding, "result.findings");
 	for (const test of result.tests) {
@@ -297,10 +322,13 @@ export function createSubagentGraph(params: {
 export function createSubagentNode(params: {
 	graphId: string;
 	runId: string;
+	retryOfRunId?: string | null;
+	name: string;
 	role: SubagentRole;
 	objective: string;
 	toolScope: SubagentToolScope;
 	workspaceMode: SubagentWorkspaceMode;
+	retryPolicy?: SubagentRetryPolicy | undefined;
 	nodeId?: string | undefined;
 	dependsOn?: string[] | undefined;
 	contextRefs?: SubagentContextRef[] | undefined;
@@ -308,14 +336,22 @@ export function createSubagentNode(params: {
 	now?: string | undefined;
 }): SubagentNode {
 	const now: string = params.now ?? new Date().toISOString();
+	const nodeId: string = params.nodeId ?? `subagent-${randomUUID()}`;
 	const node: SubagentNode = {
-		nodeId: params.nodeId ?? `subagent-${randomUUID()}`,
+		nodeId,
 		graphId: params.graphId,
 		runId: params.runId,
+		retryOfRunId: params.retryOfRunId ?? null,
+		name: params.name.trim(),
 		role: params.role,
 		objective: params.objective.trim(),
 		dependsOn: [...(params.dependsOn ?? [])],
 		status: "pending",
+		attempt: 1,
+		retryPolicy: params.retryPolicy === undefined ? { mode: "transient_only", maxRetries: 1 } : { ...params.retryPolicy },
+		queueReason: null,
+		queuedAt: null,
+		nextRetryAt: null,
 		contextRefs: structuredClone(params.contextRefs ?? []),
 		toolScope: structuredClone(params.toolScope),
 		workspaceMode: params.workspaceMode,
@@ -371,6 +407,11 @@ export function transitionSubagentNode(
 		...current,
 		...patch,
 		status: nextStatus,
+		attempt: patch.attempt === undefined ? current.attempt : patch.attempt,
+		retryPolicy: patch.retryPolicy === undefined ? { ...current.retryPolicy } : { ...patch.retryPolicy },
+		queueReason: patch.queueReason === undefined ? current.queueReason : patch.queueReason,
+		queuedAt: patch.queuedAt === undefined ? current.queuedAt : patch.queuedAt,
+		nextRetryAt: patch.nextRetryAt === undefined ? current.nextRetryAt : patch.nextRetryAt,
 		dependsOn: patch.dependsOn === undefined ? [...current.dependsOn] : [...patch.dependsOn],
 		contextRefs: patch.contextRefs === undefined ? structuredClone(current.contextRefs) : structuredClone(patch.contextRefs),
 		toolScope: patch.toolScope === undefined ? structuredClone(current.toolScope) : structuredClone(patch.toolScope),
@@ -436,9 +477,27 @@ export function assertValidSubagentNode(node: SubagentNode): void {
 	assertNonEmpty(node.nodeId, "nodeId");
 	assertNonEmpty(node.graphId, "graphId");
 	assertNonEmpty(node.runId, "runId");
+	if (node.retryOfRunId !== undefined && node.retryOfRunId !== null) assertNonEmpty(node.retryOfRunId, "retryOfRunId");
+	if (node.retryOfRunId === node.runId) throw new Error(`Invalid subagent retryOfRunId for ${node.nodeId}: it must reference a previous run.`);
+	assertNonEmpty(node.name, "name");
+	if (node.name.length > 120) throw new Error("Invalid subagent name: maximum length is 120 characters.");
 	assertNonEmpty(node.objective, "objective");
 	if (!ROLES.has(node.role)) throw new Error(`Invalid subagent role: ${String(node.role)}.`);
 	if (!NODE_STATUSES.has(node.status)) throw new Error(`Invalid subagent node status: ${String(node.status)}.`);
+	if (!Number.isSafeInteger(node.attempt) || node.attempt < 1) {
+		throw new Error("Invalid subagent attempt: expected a positive integer.");
+	}
+	if (node.retryPolicy.mode !== "transient_only") {
+		throw new Error(`Invalid subagent retry policy mode: ${String(node.retryPolicy.mode)}.`);
+	}
+	if (!Number.isSafeInteger(node.retryPolicy.maxRetries) || node.retryPolicy.maxRetries < 0 || node.retryPolicy.maxRetries > 3) {
+		throw new Error("Invalid subagent retry policy: maxRetries must be between 0 and 3.");
+	}
+	if (node.queueReason !== null && !["provider_capacity", "worktree_capacity", "terminal_capacity", "system_pressure", "retry_backoff"].includes(node.queueReason)) {
+		throw new Error(`Invalid subagent queue reason: ${String(node.queueReason)}.`);
+	}
+	if (node.queuedAt !== null) assertTimestamp(node.queuedAt, "queuedAt");
+	if (node.nextRetryAt !== null) assertTimestamp(node.nextRetryAt, "nextRetryAt");
 	if (!WORKSPACE_MODES.has(node.workspaceMode)) {
 		throw new Error(`Invalid subagent workspace mode: ${String(node.workspaceMode)}.`);
 	}
@@ -461,6 +520,9 @@ export function assertValidSubagentNode(node: SubagentNode): void {
 	}
 	if (node.status === "failed" && node.failure === null) {
 		throw new Error(`Failed subagent node ${node.nodeId} requires failure details.`);
+	}
+	if (node.status === "queued" && node.queueReason === null) {
+		throw new Error(`Queued subagent node ${node.nodeId} requires a queue reason.`);
 	}
 	if (node.status === "failed" && node.result !== null && node.result.status !== "failed") {
 		throw new Error(`Failed subagent node ${node.nodeId} has incompatible result status ${node.result.status}.`);

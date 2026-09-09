@@ -16,6 +16,7 @@ import type {
 	subagentMergeStateEventDataSchema,
 	subagentNodeApprovalEventDataSchema,
 	subagentNodeResultEventDataSchema,
+	subagentNodeRetryEventDataSchema,
 	subagentNodeSchema,
 	subagentNodeStateEventDataSchema,
 	subagentNodeStatusSchema,
@@ -57,6 +58,7 @@ export type SubagentEventDataMap = {
 	"agent.subgraph.state": z.infer<typeof subagentGraphStateEventDataSchema>;
 	"agent.subgraph.node.state": z.infer<typeof subagentNodeStateEventDataSchema>;
 	"agent.subgraph.node.result": z.infer<typeof subagentNodeResultEventDataSchema>;
+	"agent.subgraph.node.retry": z.infer<typeof subagentNodeRetryEventDataSchema>;
 	"agent.subgraph.node.approval": z.infer<typeof subagentNodeApprovalEventDataSchema>;
 	"agent.subgraph.merge.state": z.infer<typeof subagentMergeStateEventDataSchema>;
 };
@@ -104,6 +106,7 @@ export type CanonicalServerEventName =
 	| "agent.subgraph.state"
 	| "agent.subgraph.node.state"
 	| "agent.subgraph.node.result"
+	| "agent.subgraph.node.retry"
 	| "agent.subgraph.node.approval"
 	| "agent.subgraph.merge.state"
 	| "agent.run.started"

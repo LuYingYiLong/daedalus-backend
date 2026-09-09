@@ -13,6 +13,11 @@ import {
 	type SubagentResult,
 	type SubagentWorktreeMetadata
 } from "./subagent-graph.js";
+import {
+	alwaysAvailableSubagentResources,
+	type SubagentResourceCoordinator,
+	type SubagentResourceLease
+} from "./subagent-resources.js";
 
 export type SubagentNodeExecutor = (
 	node: SubagentNode,
@@ -31,6 +36,17 @@ export type SubagentSchedulerOptions = {
 	execute: SubagentNodeExecutor;
 	createRunId?: ((node: SubagentNode) => string) | undefined;
 	onSnapshot?: ((snapshot: SubagentGraphSnapshot) => void) | undefined;
+	resources?: SubagentResourceCoordinator | undefined;
+	onRetry?: ((params: {
+		node: SubagentNode;
+		previousRunId: string;
+		automatic: boolean;
+		reason: string;
+		nextRetryAt: string | null;
+	}) => void) | undefined;
+	now?: (() => Date) | undefined;
+	setTimeout?: ((handler: () => void, timeoutMs: number) => NodeJS.Timeout) | undefined;
+	clearTimeout?: ((timeout: NodeJS.Timeout) => void) | undefined;
 };
 
 type DependencyStatus = "ready" | "waiting" | "blocked";
@@ -54,7 +70,7 @@ function deriveGraphStatus(nodes: readonly SubagentNode[]): SubagentGraphStatus 
 	if (nodes.length === 0) return "draft";
 	if (nodes.every((node: SubagentNode): boolean => node.status === "completed")) return "completed";
 	if (nodes.some((node: SubagentNode): boolean => (
-		node.status === "pending" || node.status === "ready" || node.status === "running"
+		node.status === "pending" || node.status === "ready" || node.status === "queued" || node.status === "running"
 	))) return "running";
 	if (nodes.some((node: SubagentNode): boolean => node.status === "waiting_approval")) return "blocked";
 	if (nodes.some((node: SubagentNode): boolean => node.status === "completed")) return "completed_with_warnings";
@@ -88,7 +104,15 @@ export function refreshSubagentGraph(snapshot: SubagentGraphSnapshot): SubagentG
 		changed = false;
 		for (const node of snapshot.nodes) {
 			const current: SubagentNode["status"] = mutableStatuses.get(node.nodeId) ?? node.status;
-			if (current !== "pending" && current !== "ready" && current !== "blocked") continue;
+			if (current !== "pending" && current !== "ready" && current !== "queued" && current !== "blocked") continue;
+			if (current === "queued" && node.queueReason !== null) {
+				const dependency: DependencyStatus = dependencyStatus(node, mutableStatuses);
+				if (dependency === "blocked") {
+					mutableStatuses.set(node.nodeId, "blocked");
+					changed = true;
+				}
+				continue;
+			}
 			const dependency: DependencyStatus = dependencyStatus(node, mutableStatuses);
 			const next: SubagentNode["status"] = dependency === "ready"
 				? "ready"
@@ -159,9 +183,17 @@ export class SubagentGraphScheduler {
 	private readonly execute: SubagentNodeExecutor;
 	private readonly createRunId: (node: SubagentNode) => string;
 	private readonly onSnapshot: SubagentSchedulerOptions["onSnapshot"];
+	private readonly resources: SubagentResourceCoordinator;
+	private readonly onRetry: SubagentSchedulerOptions["onRetry"];
+	private readonly now: () => Date;
+	private readonly setTimer: (handler: () => void, timeoutMs: number) => NodeJS.Timeout;
+	private readonly clearTimer: (timeout: NodeJS.Timeout) => void;
 	private readonly controllers: Map<string, AbortController> = new Map();
+	private readonly leases: Map<string, SubagentResourceLease> = new Map();
+	private readonly queueTimers: Map<string, NodeJS.Timeout> = new Map();
 	private readonly executions: Map<string, Promise<void>> = new Map();
 	private readonly waiters: Set<() => void> = new Set();
+	private readonly pendingRetryEvents: Array<NonNullable<SubagentSchedulerOptions["onRetry"]> extends (params: infer P) => void ? P : never> = [];
 	private mutationTail: Promise<void> = Promise.resolve();
 	private started: boolean = false;
 
@@ -172,6 +204,11 @@ export class SubagentGraphScheduler {
 		this.execute = options.execute;
 		this.createRunId = options.createRunId ?? ((): string => `subagent-run-${randomUUID()}`);
 		this.onSnapshot = options.onSnapshot;
+		this.resources = options.resources ?? alwaysAvailableSubagentResources;
+		this.onRetry = options.onRetry;
+		this.now = options.now ?? (() => new Date());
+		this.setTimer = options.setTimeout ?? ((handler, timeoutMs): NodeJS.Timeout => setTimeout(handler, timeoutMs));
+		this.clearTimer = options.clearTimeout ?? ((timer): void => clearTimeout(timer));
 	}
 
 	getSnapshot(): SubagentGraphSnapshot {
@@ -217,6 +254,7 @@ export class SubagentGraphScheduler {
 			if (nodeId !== undefined) {
 				this.requireNode(nodeId);
 				this.controllers.get(nodeId)?.abort();
+				this.clearQueueWake(nodeId);
 				let changed: boolean = false;
 				this.snapshot = {
 					...this.snapshot,
@@ -236,6 +274,7 @@ export class SubagentGraphScheduler {
 					|| this.snapshot.graph.status === "cancelled"
 				) return this.getSnapshot();
 				for (const controller of this.controllers.values()) controller.abort();
+				for (const nodeId of this.queueTimers.keys()) this.clearQueueWake(nodeId);
 				this.snapshot = {
 					graph: updateGraphStatus(this.snapshot, "cancelled").graph,
 					nodes: this.snapshot.nodes.map((node: SubagentNode): SubagentNode => (
@@ -259,7 +298,18 @@ export class SubagentGraphScheduler {
 			if (this.snapshot.graph.status === "cancelled") throw new Error(`Cancelled subagent graph ${this.snapshot.graph.graphId} cannot be retried.`);
 			const runId: string = requestedRunId ?? this.createRunId(node);
 			if (runId.trim().length === 0 || runId === node.runId) throw new Error(`Retrying subagent node ${nodeId} requires a new run id.`);
-			this.replaceNode(transitionSubagentNode(node, "pending", { runId, result: null, failure: null }));
+			const next: SubagentNode = transitionSubagentNode(node, "pending", {
+				runId,
+				retryOfRunId: node.runId,
+				attempt: node.attempt + 1,
+				result: null,
+				failure: null,
+				queueReason: null,
+				queuedAt: null,
+				nextRetryAt: null
+			});
+			this.replaceNode(next);
+			this.queueRetryEvent({ node: next, previousRunId: node.runId, automatic: false, reason: "manual_retry", nextRetryAt: null });
 			this.snapshot = refreshSubagentGraph(this.snapshot);
 			await this.publish();
 			this.scheduleReadyNodes();
@@ -271,9 +321,10 @@ export class SubagentGraphScheduler {
 		return await this.enqueueMutation(async (): Promise<SubagentGraphSnapshot> => {
 			const node: SubagentNode = this.requireNode(nodeId);
 			if (node.status !== "waiting_approval") throw new Error(`Subagent node ${nodeId} is not waiting for approval.`);
-			this.replaceNode(transitionSubagentNode(node, "running"));
+			this.replaceNode(transitionSubagentNode(node, "running", { queueReason: null, queuedAt: null, nextRetryAt: null }));
 			this.snapshot = refreshSubagentGraph(this.snapshot);
 			await this.publish();
+			this.scheduleReadyNodes();
 			return this.getSnapshot();
 		});
 	}
@@ -391,8 +442,18 @@ export class SubagentGraphScheduler {
 	}
 
 	private scheduleReadyNodes(): void {
-		for (const node of this.snapshot.nodes) {
-			if (node.status !== "ready" || this.executions.has(node.nodeId)) continue;
+		const candidates: SubagentNode[] = this.snapshot.nodes
+			.filter((node: SubagentNode): boolean => node.status === "ready" || node.status === "queued")
+			.sort((left: SubagentNode, right: SubagentNode): number => left.createdAt.localeCompare(right.createdAt) || left.nodeId.localeCompare(right.nodeId));
+		for (const node of candidates) {
+			if (this.executions.has(node.nodeId)) continue;
+			if (node.status === "queued" && node.queueReason !== "retry_backoff" && this.queueTimers.has(node.nodeId)) continue;
+			if (node.status === "queued" && node.queueReason === "retry_backoff") {
+				const nextRetryAt: number = node.nextRetryAt === null ? 0 : Date.parse(node.nextRetryAt);
+				const delayMs: number = Math.max(0, nextRetryAt - this.now().getTime());
+				this.scheduleQueueWake(node.nodeId, delayMs);
+				if (delayMs > 0) continue;
+			}
 			const execution: Promise<void> = this.runNode(node.nodeId).finally((): void => {
 				if (this.executions.get(node.nodeId) === execution) this.executions.delete(node.nodeId);
 				this.controllers.delete(node.nodeId);
@@ -405,54 +466,135 @@ export class SubagentGraphScheduler {
 	private async runNode(nodeId: string): Promise<void> {
 		const controller: AbortController = new AbortController();
 		this.controllers.set(nodeId, controller);
-		const shouldExecute: boolean = await this.enqueueMutation(async (): Promise<boolean> => {
-			const node: SubagentNode = this.requireNode(nodeId);
-			if (node.status !== "ready") return false;
-			this.replaceNode(transitionSubagentNode(node, "running"));
-			this.snapshot = refreshSubagentGraph(this.snapshot);
-			await this.publish();
-			return true;
-		});
-		if (!shouldExecute) return;
-
-		let outcome: SubagentExecutionOutcome | null = null;
-		let executionFailure: SubagentFailure | null = null;
-		try {
-			outcome = await this.execute(this.requireNode(nodeId), this.getSnapshot(), controller.signal);
-		} catch (error: unknown) {
-			executionFailure = {
-				code: typeof (error as { code?: unknown }).code === "string"
-					? (error as { code: string }).code
-					: "subagent_execution_failed",
-				message: error instanceof Error ? error.message : String(error),
-				retryable: !controller.signal.aborted,
-				failedAt: new Date().toISOString()
-			};
+		const initialNode: SubagentNode = this.requireNode(nodeId);
+		const resourceDecision = await this.resources.acquire(initialNode, this.getSnapshot());
+		if (!resourceDecision.available) {
+			await this.enqueueMutation(async (): Promise<void> => {
+				const current: SubagentNode = this.requireNode(nodeId);
+				if (current.status === "ready") {
+					this.replaceNode(transitionSubagentNode(current, "queued", {
+						queueReason: resourceDecision.reason,
+						queuedAt: this.now().toISOString(),
+						nextRetryAt: null
+					}));
+					this.snapshot = refreshSubagentGraph(this.snapshot);
+					await this.publish();
+				}
+			});
+			if (this.requireNode(nodeId).status === "queued") this.scheduleQueueWake(nodeId, 250);
+			return;
 		}
+		this.leases.set(nodeId, resourceDecision.lease);
+		try {
+			const shouldExecute: boolean = await this.enqueueMutation(async (): Promise<boolean> => {
+				const node: SubagentNode = this.requireNode(nodeId);
+				if (node.status !== "ready" && node.status !== "queued") return false;
+				this.replaceNode(transitionSubagentNode(node, "running", { queueReason: null, queuedAt: null, nextRetryAt: null }));
+				this.snapshot = refreshSubagentGraph(this.snapshot);
+				await this.publish();
+				return true;
+			});
+			if (!shouldExecute) return;
 
-		await this.enqueueMutation(async (): Promise<void> => {
-			const node: SubagentNode = this.requireNode(nodeId);
-			if (node.status === "cancelled") return;
-			if (executionFailure !== null) {
-				this.replaceNode(transitionSubagentNode(node, controller.signal.aborted ? "cancelled" : "failed", {
-					failure: executionFailure,
-					result: controller.signal.aborted ? cancelledResult(executionFailure.message) : null
-				}));
-			} else if (outcome?.status === "waiting_approval") {
-				this.replaceNode(transitionSubagentNode(node, "waiting_approval"));
-			} else if (outcome?.status === "completed") {
-				this.replaceNode(transitionSubagentNode(node, "completed", { result: outcome.result, failure: null }));
-			} else if (outcome?.status === "failed") {
-				this.replaceNode(transitionSubagentNode(node, "failed", { result: outcome.result, failure: outcome.failure }));
-			} else if (outcome?.status === "cancelled") {
-				this.replaceNode(transitionSubagentNode(node, "cancelled", { result: outcome.result, failure: null }));
-			} else {
-				throw new Error(`Subagent node ${nodeId} returned no execution outcome.`);
+			let outcome: SubagentExecutionOutcome | null = null;
+			let executionFailure: SubagentFailure | null = null;
+			try {
+				outcome = await this.execute(this.requireNode(nodeId), this.getSnapshot(), controller.signal);
+			} catch (error: unknown) {
+				executionFailure = {
+					code: typeof (error as { code?: unknown }).code === "string"
+						? (error as { code: string }).code
+						: "subagent_execution_failed",
+					message: error instanceof Error ? error.message : String(error),
+					retryable: !controller.signal.aborted,
+					failedAt: new Date().toISOString()
+				};
 			}
-			this.snapshot = refreshSubagentGraph(this.snapshot);
-			await this.publish();
-			this.scheduleReadyNodes();
+
+			await this.enqueueMutation(async (): Promise<void> => {
+				const node: SubagentNode = this.requireNode(nodeId);
+				if (node.status === "cancelled") return;
+				if (executionFailure !== null) {
+					if (!controller.signal.aborted && this.shouldAutoRetry(node, executionFailure)) {
+						this.scheduleRetry(node, executionFailure.message, true);
+					} else this.replaceNode(transitionSubagentNode(node, controller.signal.aborted ? "cancelled" : "failed", {
+						failure: executionFailure,
+						result: controller.signal.aborted ? cancelledResult(executionFailure.message) : null
+					}));
+				} else if (outcome?.status === "waiting_approval") {
+					this.replaceNode(transitionSubagentNode(node, "waiting_approval"));
+				} else if (outcome?.status === "completed") {
+					this.replaceNode(transitionSubagentNode(node, "completed", { result: outcome.result, failure: null }));
+				} else if (outcome?.status === "failed") {
+					if (this.shouldAutoRetry(node, outcome.failure)) this.scheduleRetry(node, outcome.failure.message, true);
+					else this.replaceNode(transitionSubagentNode(node, "failed", { result: outcome.result, failure: outcome.failure }));
+				} else if (outcome?.status === "cancelled") {
+					this.replaceNode(transitionSubagentNode(node, "cancelled", { result: outcome.result, failure: null }));
+				} else {
+					throw new Error(`Subagent node ${nodeId} returned no execution outcome.`);
+				}
+				this.snapshot = refreshSubagentGraph(this.snapshot);
+				await this.publish();
+				this.scheduleReadyNodes();
+			});
+		} finally {
+			await this.releaseLease(nodeId);
+		}
+	}
+
+	private shouldAutoRetry(node: SubagentNode, failure: SubagentFailure): boolean {
+		if (node.retryPolicy.mode !== "transient_only" || node.attempt > node.retryPolicy.maxRetries) return false;
+		if (node.role === "implementer" || node.toolScope.capabilities.includes("write") || node.toolScope.capabilities.includes("destructive")) return false;
+		if (!failure.retryable) return false;
+		return /(?:timeout|timed_out|rate[_-]?limit|429|5\d\d|network|connection|econnreset|temporarily|unavailable)/iu.test(`${failure.code} ${failure.message}`);
+	}
+
+	private scheduleRetry(node: SubagentNode, reason: string, automatic: boolean): void {
+		const previousRunId: string = node.runId;
+		const runId: string = this.createRunId(node);
+		const delayMs: number = Math.min(30_000, 500 * (2 ** Math.max(0, node.attempt - 1)));
+		const nextRetryAt: string = new Date(this.now().getTime() + delayMs).toISOString();
+		const next: SubagentNode = transitionSubagentNode(node, "queued", {
+			runId,
+			attempt: node.attempt + 1,
+			queueReason: "retry_backoff",
+			queuedAt: this.now().toISOString(),
+			nextRetryAt,
+			retryOfRunId: previousRunId,
+			result: null,
+			failure: null
 		});
+		this.replaceNode(next);
+		this.queueRetryEvent({ node: next, previousRunId, automatic, reason, nextRetryAt });
+		this.scheduleQueueWake(node.nodeId, delayMs);
+	}
+
+	private scheduleQueueWake(nodeId: string, delayMs: number): void {
+		if (this.queueTimers.has(nodeId)) return;
+		const timer: NodeJS.Timeout = this.setTimer((): void => {
+			this.queueTimers.delete(nodeId);
+			this.scheduleReadyNodes();
+		}, Math.max(0, delayMs));
+		this.queueTimers.set(nodeId, timer);
+	}
+
+	private clearQueueWake(nodeId: string): void {
+		const timer: NodeJS.Timeout | undefined = this.queueTimers.get(nodeId);
+		if (timer !== undefined) {
+			this.clearTimer(timer);
+			this.queueTimers.delete(nodeId);
+		}
+	}
+
+	private async releaseLease(nodeId: string): Promise<void> {
+		const lease: SubagentResourceLease | undefined = this.leases.get(nodeId);
+		if (lease === undefined) return;
+		this.leases.delete(nodeId);
+		await lease.release();
+	}
+
+	private queueRetryEvent(event: Parameters<NonNullable<SubagentSchedulerOptions["onRetry"]>>[0]): void {
+		this.pendingRetryEvents.push(event);
 	}
 
 	private requireNode(nodeId: string): SubagentNode {
@@ -477,7 +619,16 @@ export class SubagentGraphScheduler {
 				const runId: string = this.createRunId(node);
 				if (runId === node.runId) throw new Error(`Recovered subagent node ${node.nodeId} requires a new run id.`);
 				recovered = true;
-				return transitionSubagentNode(node, "ready", { runId, result: null, failure: null });
+				return transitionSubagentNode(node, "ready", {
+					runId,
+					retryOfRunId: node.runId,
+					attempt: node.attempt + 1,
+					result: null,
+					failure: null,
+					queueReason: null,
+					queuedAt: null,
+					nextRetryAt: null
+				});
 			})
 		};
 		return recovered;
@@ -498,6 +649,8 @@ export class SubagentGraphScheduler {
 		const published: SubagentGraphSnapshot = this.getSnapshot();
 		await this.persist(published);
 		this.onSnapshot?.(cloneSubagentGraphSnapshot(published));
+		const retryEvents: Array<Parameters<NonNullable<SubagentSchedulerOptions["onRetry"]>>[0]> = this.pendingRetryEvents.splice(0);
+		for (const retryEvent of retryEvents) this.onRetry?.(retryEvent);
 		for (const waiter of [...this.waiters]) waiter();
 	}
 }

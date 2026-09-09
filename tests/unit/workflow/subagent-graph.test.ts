@@ -28,6 +28,7 @@ function createNode(params: {
 		graphId: "graph-domain",
 		nodeId: params.nodeId,
 		runId: params.runId,
+		name: params.nodeId,
 		role,
 		objective: `Run ${params.nodeId}`,
 		dependsOn: params.dependsOn,
@@ -80,6 +81,7 @@ test("subagent roles and workspace modes constrain tool capabilities", (): void 
 	assert.throws((): SubagentNode => createSubagentNode({
 		graphId: "graph-domain",
 		runId: "run-invalid-research",
+		name: "Invalid research",
 		role: "researcher",
 		objective: "Write from research",
 		workspaceMode: "managed_worktree",
@@ -89,6 +91,7 @@ test("subagent roles and workspace modes constrain tool capabilities", (): void 
 	assert.throws((): SubagentNode => createSubagentNode({
 		graphId: "graph-domain",
 		runId: "run-invalid-implementer",
+		name: "Invalid implementer",
 		role: "implementer",
 		objective: "Write without isolation",
 		workspaceMode: "shared_read_only",
@@ -98,6 +101,7 @@ test("subagent roles and workspace modes constrain tool capabilities", (): void 
 	assert.throws((): SubagentNode => createSubagentNode({
 		graphId: "graph-domain",
 		runId: "run-invalid-context",
+		name: "Invalid context",
 		role: "researcher",
 		objective: "Read duplicate context",
 		workspaceMode: "shared_read_only",

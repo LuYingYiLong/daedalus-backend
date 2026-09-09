@@ -690,22 +690,22 @@ type ThinkTagSplitResult = {
 };
 
 function shouldSplitThinkTags(options: DeepSeekChatOptions): boolean {
-	return options.provider === "minimax";
+	return options.provider === "minimax" || options.provider === "openai";
 }
 
-function isMiniMaxThinkOpeningFragment(text: string): boolean {
+function isThinkOpeningFragment(text: string): boolean {
 	return /^<\s*(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/iu.test(text);
 }
 
-function isMiniMaxThinkClosingFragment(text: string): boolean {
+function isThinkClosingFragment(text: string): boolean {
 	return /^<\s*\/\s*(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/iu.test(text);
 }
 
-function findMiniMaxThinkOpeningTag(text: string): RegExpExecArray | null {
+function findThinkOpeningTag(text: string): RegExpExecArray | null {
 	return /<\s*think(?:\s+[^<>]*?)?\s*>/iu.exec(text);
 }
 
-function findMiniMaxThinkClosingTag(text: string): RegExpExecArray | null {
+function findThinkClosingTag(text: string): RegExpExecArray | null {
 	return /<\/\s*think\s*>/iu.exec(text);
 }
 
@@ -719,7 +719,7 @@ function appendReasoningContent(existing: string, addition: string): string {
 	return `${existing}\n${addition}`;
 }
 
-class MiniMaxThinkTagStreamFilter {
+class ThinkTagStreamFilter {
 	private pendingText: string = "";
 	private insideThink: boolean = false;
 
@@ -740,7 +740,7 @@ class MiniMaxThinkTagStreamFilter {
 
 		while (this.pendingText.length > 0) {
 			if (this.insideThink) {
-				const closingTag: RegExpExecArray | null = findMiniMaxThinkClosingTag(this.pendingText);
+				const closingTag: RegExpExecArray | null = findThinkClosingTag(this.pendingText);
 				if (closingTag === null) {
 					if (flush) {
 						thinkingText += this.pendingText;
@@ -751,7 +751,7 @@ class MiniMaxThinkTagStreamFilter {
 					}
 
 					const lastTagStart: number = this.pendingText.lastIndexOf("<");
-					if (lastTagStart >= 0 && isMiniMaxThinkClosingFragment(this.pendingText.slice(lastTagStart))) {
+					if (lastTagStart >= 0 && isThinkClosingFragment(this.pendingText.slice(lastTagStart))) {
 						thinkingText += this.pendingText.slice(0, lastTagStart);
 						this.pendingText = this.pendingText.slice(lastTagStart);
 						break;
@@ -769,7 +769,7 @@ class MiniMaxThinkTagStreamFilter {
 				continue;
 			}
 
-			const openingTag: RegExpExecArray | null = findMiniMaxThinkOpeningTag(this.pendingText);
+			const openingTag: RegExpExecArray | null = findThinkOpeningTag(this.pendingText);
 			if (openingTag === null) {
 				if (flush) {
 					visibleText += this.pendingText;
@@ -778,7 +778,7 @@ class MiniMaxThinkTagStreamFilter {
 				}
 
 				const lastTagStart: number = this.pendingText.lastIndexOf("<");
-				if (lastTagStart >= 0 && isMiniMaxThinkOpeningFragment(this.pendingText.slice(lastTagStart))) {
+				if (lastTagStart >= 0 && isThinkOpeningFragment(this.pendingText.slice(lastTagStart))) {
 					visibleText += this.pendingText.slice(0, lastTagStart);
 					this.pendingText = this.pendingText.slice(lastTagStart);
 					break;
@@ -799,8 +799,8 @@ class MiniMaxThinkTagStreamFilter {
 	}
 }
 
-function splitMiniMaxThinkTags(text: string): ThinkTagSplitResult {
-	const filter = new MiniMaxThinkTagStreamFilter();
+function splitThinkTags(text: string): ThinkTagSplitResult {
+	const filter = new ThinkTagStreamFilter();
 	const first: ThinkTagSplitResult = filter.push(text);
 	const flushed: ThinkTagSplitResult = filter.flush();
 	return {
@@ -954,7 +954,7 @@ async function readStreamingAssistantMessageAttempt(
 	let finalUsage: NormalizedLlmUsage | null = null;
 	const toolCallAccumulators: Map<number, ToolCallAccumulator> = new Map();
 	const contentFilter: ToolSyntaxStreamFilter = new ToolSyntaxStreamFilter();
-	const thinkTagFilter: MiniMaxThinkTagStreamFilter | null = shouldSplitThinkTags(options) ? new MiniMaxThinkTagStreamFilter() : null;
+	const thinkTagFilter: ThinkTagStreamFilter | null = shouldSplitThinkTags(options) ? new ThinkTagStreamFilter() : null;
 	let contentText = "";
 	let reasoningContent = "";
 	let emittedReasoning = false;
@@ -1284,7 +1284,7 @@ async function createFinalAnswer(
 		return createToolResultLimitFallback(reason);
 	}
 
-	const visibleText: string = shouldSplitThinkTags(options) ? splitMiniMaxThinkTags(text).visibleText : text;
+	const visibleText: string = shouldSplitThinkTags(options) ? splitThinkTags(text).visibleText : text;
 	if (visibleText.length === 0 || containsKnownToolSyntax(visibleText)) {
 		return createToolResultLimitFallback(reason);
 	}
@@ -1476,7 +1476,7 @@ async function runAgentLoop(
 			toolCalls = message.tool_calls;
 			contentText = message.content;
 			if (shouldSplitThinkTags(options) && typeof contentText === "string") {
-				const splitContent: ThinkTagSplitResult = splitMiniMaxThinkTags(contentText);
+				const splitContent: ThinkTagSplitResult = splitThinkTags(contentText);
 				if (splitContent.thinkingText.length > 0) {
 					reasoningContent = appendReasoningContent(reasoningContent, splitContent.thinkingText);
 					onEvent?.({ type: "ai.thinking.delta", text: splitContent.thinkingText });

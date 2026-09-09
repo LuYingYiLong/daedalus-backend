@@ -31,9 +31,16 @@ type NodeRow = {
 	graph_id: string;
 	node_id: string;
 	run_id: string;
+	retry_of_run_id: string | null;
+	name: string;
 	role: SubagentNode["role"];
 	objective: string;
 	status: SubagentNodeStatus;
+	attempt: number;
+	retry_policy_json: unknown;
+	queue_reason: SubagentNode["queueReason"];
+	queued_at: string | null;
+	next_retry_at: string | null;
 	context_refs_json: unknown;
 	tool_scope_json: unknown;
 	workspace_mode: SubagentNode["workspaceMode"];
@@ -59,7 +66,8 @@ function readSnapshot(db: DatabaseSync, graphId: string): SubagentGraphSnapshot 
 	if (graphRow === undefined) return null;
 
 	const nodeRows = db.prepare(`
-		SELECT graph_id, node_id, run_id, role, objective, status,
+		SELECT graph_id, node_id, run_id, retry_of_run_id, name, role, objective, status,
+			attempt, retry_policy_json, queue_reason, queued_at, next_retry_at,
 			context_refs_json, tool_scope_json, workspace_mode,
 			worktree_metadata_json, result_json, failure_json, created_at, updated_at
 		FROM subagent_nodes
@@ -93,10 +101,17 @@ function readSnapshot(db: DatabaseSync, graphId: string): SubagentGraphSnapshot 
 			nodeId: row.node_id,
 			graphId: row.graph_id,
 			runId: row.run_id,
+			retryOfRunId: row.retry_of_run_id,
+			name: row.name,
 			role: row.role,
 			objective: row.objective,
 			dependsOn: dependenciesByNode.get(row.node_id) ?? [],
 			status: row.status,
+			attempt: Number(row.attempt),
+			retryPolicy: parseSqlJson<SubagentNode["retryPolicy"]>(row.retry_policy_json),
+			queueReason: row.queue_reason,
+			queuedAt: row.queued_at,
+			nextRetryAt: row.next_retry_at,
 			contextRefs: parseSqlJson<SubagentNode["contextRefs"]>(row.context_refs_json),
 			toolScope: parseSqlJson<SubagentNode["toolScope"]>(row.tool_scope_json),
 			workspaceMode: row.workspace_mode,
@@ -177,7 +192,7 @@ function assertSafeUpdate(current: SubagentGraphSnapshot, next: SubagentGraphSna
 		if (currentNode.runId !== nextNode.runId) {
 			const retrying: boolean = (currentNode.status === "failed" || currentNode.status === "cancelled" || currentNode.status === "blocked")
 				&& (nextNode.status === "pending" || nextNode.status === "ready");
-			const recovering: boolean = currentNode.status === "running" && nextNode.status === "ready";
+			const recovering: boolean = currentNode.status === "running" && (nextNode.status === "ready" || nextNode.status === "queued");
 			if (!retrying && !recovering) {
 				throw new Error(`Subagent node ${currentNode.nodeId} can only change run id when retried.`);
 			}
@@ -208,15 +223,23 @@ function writeGraph(db: DatabaseSync, graph: SubagentGraph): void {
 function writeNodes(db: DatabaseSync, nodes: readonly SubagentNode[]): void {
 	const writeNode = db.prepare(`
 		INSERT INTO subagent_nodes(
-			graph_id, node_id, run_id, role, objective, status,
+			graph_id, node_id, run_id, retry_of_run_id, name, role, objective, status,
+			attempt, retry_policy_json, queue_reason, queued_at, next_retry_at,
 			context_refs_json, tool_scope_json, workspace_mode,
 			worktree_metadata_json, result_json, failure_json, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(graph_id, node_id) DO UPDATE SET
 			run_id = excluded.run_id,
+			retry_of_run_id = excluded.retry_of_run_id,
+			name = excluded.name,
 			role = excluded.role,
 			objective = excluded.objective,
 			status = excluded.status,
+			attempt = excluded.attempt,
+			retry_policy_json = excluded.retry_policy_json,
+			queue_reason = excluded.queue_reason,
+			queued_at = excluded.queued_at,
+			next_retry_at = excluded.next_retry_at,
 			context_refs_json = excluded.context_refs_json,
 			tool_scope_json = excluded.tool_scope_json,
 			workspace_mode = excluded.workspace_mode,
@@ -230,9 +253,16 @@ function writeNodes(db: DatabaseSync, nodes: readonly SubagentNode[]): void {
 			node.graphId,
 			node.nodeId,
 			node.runId,
+			node.retryOfRunId ?? null,
+			node.name,
 			node.role,
 			node.objective,
 			node.status,
+			node.attempt,
+			sqlJson(node.retryPolicy),
+			node.queueReason,
+			node.queuedAt,
+			node.nextRetryAt,
 			sqlJson(node.contextRefs),
 			sqlJson(node.toolScope),
 			node.workspaceMode,

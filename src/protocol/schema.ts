@@ -734,6 +734,7 @@ export const subagentGraphStatusSchema = z.enum([
 export const subagentNodeStatusSchema = z.enum([
 	"pending",
 	"ready",
+	"queued",
 	"running",
 	"waiting_approval",
 	"blocked",
@@ -788,8 +789,22 @@ export const subagentResultSchema = z.object({
 		label: z.string().min(1).max(500).nullable()
 	}).strict()),
 	needsParentDecision: z.boolean(),
-	recommendedNextAction: z.string().max(4_000).nullable()
+	recommendedNextAction: z.string().max(4_000).nullable(),
+	detailsMarkdown: z.string().max(20_000).nullable().default(null)
 }).strict();
+
+export const subagentRetryPolicySchema = z.object({
+	mode: z.literal("transient_only"),
+	maxRetries: z.number().int().min(0).max(3)
+}).strict();
+
+export const subagentQueueReasonSchema = z.enum([
+	"provider_capacity",
+	"worktree_capacity",
+	"terminal_capacity",
+	"system_pressure",
+	"retry_backoff"
+]);
 
 const subagentWorktreeStartingStateSchema = z.discriminatedUnion("type", [
 	z.object({ type: z.literal("head") }).strict(),
@@ -896,10 +911,17 @@ export const subagentNodeSchema = z.object({
 	nodeId: subagentIdentifierSchema,
 	graphId: subagentIdentifierSchema,
 	runId: subagentIdentifierSchema,
+	retryOfRunId: subagentIdentifierSchema.nullable().default(null),
+	name: z.string().trim().min(1).max(120),
 	role: subagentRoleSchema,
 	objective: z.string().trim().min(1).max(20_000),
 	dependsOn: z.array(subagentIdentifierSchema),
 	status: subagentNodeStatusSchema,
+	attempt: z.number().int().positive(),
+	retryPolicy: subagentRetryPolicySchema,
+	queueReason: subagentQueueReasonSchema.nullable(),
+	queuedAt: z.string().datetime().nullable(),
+	nextRetryAt: z.string().datetime().nullable(),
 	contextRefs: z.array(subagentContextRefSchema),
 	toolScope: subagentToolScopeSchema,
 	workspaceMode: subagentWorkspaceModeSchema,
@@ -911,16 +933,19 @@ export const subagentNodeSchema = z.object({
 }).strict();
 
 export const subagentGraphStateEventDataSchema = z.object({
+	parentRunId: subagentIdentifierSchema,
 	graph: subagentGraphSchema
 }).strict();
 
 export const subagentGraphCreatedEventDataSchema = z.object({
+	parentRunId: subagentIdentifierSchema,
 	graph: subagentGraphSchema,
 	nodes: z.array(subagentNodeSchema)
 }).strict();
 
 export const subagentNodeStateEventDataSchema = z.object({
 	graphId: subagentIdentifierSchema,
+	parentRunId: subagentIdentifierSchema,
 	revision: z.number().int().positive(),
 	node: subagentNodeSchema
 }).strict();
@@ -928,14 +953,29 @@ export const subagentNodeStateEventDataSchema = z.object({
 export const subagentNodeResultEventDataSchema = z.object({
 	graphId: subagentIdentifierSchema,
 	nodeId: subagentIdentifierSchema,
+	parentRunId: subagentIdentifierSchema,
 	runId: subagentIdentifierSchema,
 	revision: z.number().int().positive(),
 	result: subagentResultSchema
 }).strict();
 
+export const subagentNodeRetryEventDataSchema = z.object({
+	graphId: subagentIdentifierSchema,
+	nodeId: subagentIdentifierSchema,
+	parentRunId: subagentIdentifierSchema,
+	revision: z.number().int().positive(),
+	previousRunId: subagentIdentifierSchema,
+	runId: subagentIdentifierSchema,
+	attempt: z.number().int().positive(),
+	automatic: z.boolean(),
+	reason: z.string().trim().min(1).max(8_000),
+	nextRetryAt: z.string().datetime().nullable()
+}).strict();
+
 export const subagentNodeApprovalEventDataSchema = z.object({
 	graphId: subagentIdentifierSchema,
 	nodeId: subagentIdentifierSchema,
+	parentRunId: subagentIdentifierSchema,
 	runId: subagentIdentifierSchema,
 	revision: z.number().int().positive(),
 	approvalId: subagentIdentifierSchema,
@@ -945,6 +985,7 @@ export const subagentNodeApprovalEventDataSchema = z.object({
 export const subagentMergeStateEventDataSchema = z.object({
 	graphId: subagentIdentifierSchema,
 	nodeId: subagentIdentifierSchema,
+	parentRunId: subagentIdentifierSchema,
 	runId: subagentIdentifierSchema,
 	revision: z.number().int().positive(),
 	status: z.enum(["preview_ready", "approval_required", "merging", "merged", "conflicted", "failed", "cancelled"]),

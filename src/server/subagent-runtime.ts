@@ -38,6 +38,7 @@ import {
 	type SubagentGraphSnapshot,
 	type SubagentNode,
 	type SubagentResult,
+	type SubagentRetryPolicy,
 	type SubagentRole,
 	type SubagentToolCapability,
 	type SubagentToolScope,
@@ -62,6 +63,7 @@ import { sendSessionEvent } from "./session-events.js";
 import { createSubagentWorktree, applySubagentMerge, previewSubagentMerge, type SubagentMergePreview } from "./subagent-worktree.js";
 import { getClientConnection } from "./client-connections.js";
 import { runGit } from "./git-utils.js";
+import { adaptiveSubagentResources } from "./subagent-resource-coordinator.js";
 
 type SubagentRuntimeBinding = {
 	scheduler: SubagentGraphScheduler;
@@ -76,12 +78,14 @@ type SubagentRuntimeBinding = {
 
 type SubagentNodeInput = {
 	nodeId: string;
+	name: string;
 	role: SubagentRole;
 	objective: string;
 	dependsOn: string[];
 	contextRefs: SubagentContextRef[];
 	toolScope: SubagentToolScope;
 	workspaceMode: SubagentWorkspaceMode;
+	retryPolicy: SubagentRetryPolicy;
 };
 
 const runtimeByGraphId: Map<string, SubagentRuntimeBinding> = new Map();
@@ -134,6 +138,18 @@ function optionalStringArray(value: unknown, label: string): string[] {
 	return value === undefined ? [] : stringArray(value, label);
 }
 
+function parseRetryPolicy(value: unknown): SubagentRetryPolicy {
+	if (value === undefined) return { mode: "transient_only", maxRetries: 1 };
+	const record: Record<string, unknown> = asRecord(value, "retryPolicy");
+	if (record.mode !== "transient_only") throw new Error("retryPolicy.mode must be transient_only.");
+	if (record.maxRetries !== undefined && typeof record.maxRetries !== "number") throw new Error("retryPolicy.maxRetries must be a number.");
+	const maxRetries: number = record.maxRetries === undefined ? 1 : record.maxRetries;
+	if (!Number.isSafeInteger(maxRetries) || maxRetries < 0 || maxRetries > 3) {
+		throw new Error("retryPolicy.maxRetries must be an integer between 0 and 3.");
+	}
+	return { mode: "transient_only", maxRetries };
+}
+
 function parseContextRefs(value: unknown): SubagentContextRef[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error("contextRefs must be an array.");
@@ -168,12 +184,14 @@ function parseNodeInputs(args: Record<string, unknown>): SubagentNodeInput[] {
 		if (!WORKSPACE_MODE_VALUES.has(workspaceMode)) throw new Error(`Unsupported workspace mode: ${workspaceMode}.`);
 		return {
 			nodeId: requiredString(record.nodeId, `nodes[${index}].nodeId`),
+			name: requiredString(record.name, `nodes[${index}].name`),
 			role: role as SubagentRole,
 			objective: requiredString(record.objective, `nodes[${index}].objective`),
 			dependsOn: optionalStringArray(record.dependsOn, `nodes[${index}].dependsOn`),
 			contextRefs: parseContextRefs(record.contextRefs),
 			toolScope: parseToolScope(record.toolScope),
-			workspaceMode: workspaceMode as SubagentWorkspaceMode
+			workspaceMode: workspaceMode as SubagentWorkspaceMode,
+			retryPolicy: parseRetryPolicy(record.retryPolicy)
 		};
 	});
 }
@@ -316,12 +334,14 @@ function createNodeSkeleton(
 		graphId,
 		runId: `subrun-${randomUUID()}`,
 		nodeId: input.nodeId,
+		name: input.name,
 		role: input.role,
 		objective: input.objective,
 		dependsOn: input.dependsOn,
 		contextRefs: input.contextRefs,
 		toolScope: input.toolScope,
 		workspaceMode: input.workspaceMode,
+		retryPolicy: input.retryPolicy,
 		worktreeMetadata: null
 	});
 }
@@ -350,12 +370,14 @@ async function materializeNodeWorktree(
 		graphId: node.graphId,
 		runId: node.runId,
 		nodeId: node.nodeId,
+		name: node.name,
 		role: node.role,
 		objective: node.objective,
 		dependsOn: node.dependsOn,
 		contextRefs: node.contextRefs,
 		toolScope: node.toolScope,
 		workspaceMode: node.workspaceMode,
+		retryPolicy: node.retryPolicy,
 		worktreeMetadata,
 		now: node.createdAt
 	});
@@ -465,12 +487,22 @@ function normalizeChangedFiles(changedFiles: readonly string[]): string[] {
 	)))].sort();
 }
 
+function sanitizeResultMarkdown(value: string | null | undefined): string | null {
+	if (value === null || value === undefined) return null;
+	return value
+		.slice(0, 20_000)
+		.replace(/((?:authorization|x-api-key)\s*[:=]\s*)[^\r\n]+/giu, "$1[REDACTED]")
+		.replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|bearer|secret|password|database[_-]?url)\s*[:=]\s*)[^\s\n]+/giu, "$1[REDACTED]")
+		.replace(/(?:\b[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|private|var|tmp)\/)[^\s\n\r`]+/gu, "[REDACTED_PATH]");
+}
+
 function parseSubagentResult(text: string, actualChangedFiles: readonly string[]): SubagentResult {
 	const normalizedActualChangedFiles: string[] = normalizeChangedFiles(actualChangedFiles);
 	try {
 		const parsed = subagentResultSchema.parse(parseJsonObjectFromLlm(text, "Subagent did not return a JSON result"));
 		return {
 			...parsed,
+			detailsMarkdown: sanitizeResultMarkdown(parsed.detailsMarkdown),
 			changedFiles: normalizeChangedFiles([...parsed.changedFiles, ...normalizedActualChangedFiles])
 		};
 	} catch {
@@ -483,7 +515,8 @@ function parseSubagentResult(text: string, actualChangedFiles: readonly string[]
 			tests: [],
 			artifacts: [],
 			needsParentDecision: true,
-			recommendedNextAction: "Review the unstructured child output and retry if a strict result is required."
+			recommendedNextAction: "Review the unstructured child output and retry if a strict result is required.",
+			detailsMarkdown: sanitizeResultMarkdown(summary)
 		};
 	}
 }
@@ -587,7 +620,7 @@ async function executeNode(
 		intent: node.role === "implementer" ? "mutate" : "inspect",
 		scope: "bounded",
 		lane: "agent_loop",
-		retryOfRunId: previousRun?.runId
+		retryOfRunId: node.retryOfRunId ?? previousRun?.runId
 	});
 	const agentLoopState = createAgentLoopState();
 	updateAgentRun(binding.socket, binding.session, node.runId, "executing", { agentLoopState });
@@ -607,12 +640,13 @@ async function executeNode(
 	};
 	const resultContract: string = [
 		"You are an isolated Daedalus subagent. Work only on the stated objective and within the supplied workspace and tool allowlist.",
+		`Name: ${node.name}`,
 		`Role: ${node.role}`,
 		`Objective: ${node.objective}`,
 		"You do not have the parent conversation. The only delegated context is below:",
 		buildContextSection(node, snapshot, binding.session),
 		"Return one JSON object with exactly these fields:",
-		'{"status":"completed|partial|failed|cancelled","summary":"string","findings":["string"],"changedFiles":["string"],"tests":[{"name":"string","status":"passed|failed|skipped","summary":"string|null"}],"artifacts":[{"kind":"string","id":"string","label":"string|null"}],"needsParentDecision":false,"recommendedNextAction":"string|null"}',
+		'{"status":"completed|partial|failed|cancelled","summary":"string","findings":["string"],"changedFiles":["string"],"tests":[{"name":"string","status":"passed|failed|skipped","summary":"string|null"}],"artifacts":[{"kind":"string","id":"string","label":"string|null"}],"needsParentDecision":false,"recommendedNextAction":"string|null","detailsMarkdown":"string|null"}',
 		"Do not include API keys, environment secrets, custom MCP headers, or other sensitive values."
 	].join("\n\n");
 	const systemPrompt: string = await composeSystemPrompt(undefined, resultContract, createProviderRuntimeContext(binding.session), "agent");
@@ -704,6 +738,7 @@ function emitApprovalEvent(
 	sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.node.approval", {
 		graphId: node.graphId,
 		nodeId: node.nodeId,
+		parentRunId: binding.parentRunId,
 		runId: node.runId,
 		revision: binding.scheduler.getSnapshot().graph.revision,
 		approvalId,
@@ -711,16 +746,39 @@ function emitApprovalEvent(
 	}, binding.parentRunId);
 }
 
+function emitRetryEvent(binding: SubagentRuntimeBinding, params: {
+	node: SubagentNode;
+	previousRunId: string;
+	automatic: boolean;
+	reason: string;
+	nextRetryAt: string | null;
+}): void {
+	sendSessionEvent(binding.socket, params.node.runId, binding.session, "agent.subgraph.node.retry", {
+		graphId: params.node.graphId,
+		nodeId: params.node.nodeId,
+		parentRunId: binding.parentRunId,
+		revision: binding.scheduler.getSnapshot().graph.revision,
+		previousRunId: params.previousRunId,
+		runId: params.node.runId,
+		attempt: params.node.attempt,
+		automatic: params.automatic,
+		reason: params.reason,
+		nextRetryAt: params.nextRetryAt
+	}, binding.parentRunId, binding.session.sessionId);
+}
+
 function emitSnapshot(binding: SubagentRuntimeBinding, snapshot: SubagentGraphSnapshot): void {
 	const previous: SubagentGraphSnapshot | null = binding.lastEventSnapshot;
 	if (binding.emitCreatedEvent && previous === null) {
 		sendSessionEvent(binding.socket, binding.parentRunId, binding.session, "agent.subgraph.created", {
+			parentRunId: binding.parentRunId,
 			graph: snapshot.graph,
 			nodes: snapshot.nodes
 		}, binding.parentRunId, snapshot.graph.sessionId);
 		binding.emitCreatedEvent = false;
 	}
 	sendSessionEvent(binding.socket, binding.parentRunId, binding.session, "agent.subgraph.state", {
+		parentRunId: binding.parentRunId,
 		graph: snapshot.graph
 	}, binding.parentRunId, snapshot.graph.sessionId);
 	for (const node of snapshot.nodes) {
@@ -728,6 +786,7 @@ function emitSnapshot(binding: SubagentRuntimeBinding, snapshot: SubagentGraphSn
 		if (oldNode !== undefined && JSON.stringify(oldNode) === JSON.stringify(node)) continue;
 		sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.node.state", {
 			graphId: snapshot.graph.graphId,
+			parentRunId: binding.parentRunId,
 			revision: snapshot.graph.revision,
 			node
 		}, binding.parentRunId, snapshot.graph.sessionId);
@@ -735,6 +794,7 @@ function emitSnapshot(binding: SubagentRuntimeBinding, snapshot: SubagentGraphSn
 			sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.node.result", {
 				graphId: snapshot.graph.graphId,
 				nodeId: node.nodeId,
+				parentRunId: binding.parentRunId,
 				runId: node.runId,
 				revision: snapshot.graph.revision,
 				result: node.result
@@ -756,7 +816,9 @@ function createBinding(params: {
 	const scheduler = new SubagentGraphScheduler(params.snapshot, {
 		persist: saveSubagentGraphSnapshot,
 		execute: (node, snapshot, signal) => executeNode(binding, node, snapshot, signal),
-		onSnapshot: (snapshot: SubagentGraphSnapshot): void => emitSnapshot(binding, snapshot)
+		onSnapshot: (snapshot: SubagentGraphSnapshot): void => emitSnapshot(binding, snapshot),
+		resources: adaptiveSubagentResources,
+		onRetry: (params): void => emitRetryEvent(binding, params)
 	});
 	binding = {
 		scheduler,
@@ -1076,7 +1138,7 @@ export async function previewSubagentNodeMerge(params: {
 		mergeStatus: preview.allowed ? "previewed" : "conflict"
 	});
 	sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.merge.state", {
-		graphId: params.graphId, nodeId: node.nodeId, runId: node.runId,
+		graphId: params.graphId, nodeId: node.nodeId, parentRunId: binding.parentRunId, runId: node.runId,
 		revision: binding.scheduler.getSnapshot().graph.revision,
 		status: preview.allowed ? "preview_ready" : "conflicted", fingerprint: preview.fingerprint,
 		message: preview.allowed ? "Merge preview is ready." : "Merge preview found a conflict or incompatible target state."
@@ -1094,7 +1156,7 @@ export async function applySubagentNodeMerge(params: {
 	if (node.worktreeMetadata === null || binding.sourceWorkspace === undefined) throw new Error("Subagent node has no managed worktree.");
 	await updateNodeWorktreeMetadata(binding, node, { ...node.worktreeMetadata, mergeStatus: "pending" });
 	sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.merge.state", {
-		graphId: params.graphId, nodeId: node.nodeId, runId: node.runId,
+		graphId: params.graphId, nodeId: node.nodeId, parentRunId: binding.parentRunId, runId: node.runId,
 		revision: binding.scheduler.getSnapshot().graph.revision, status: "merging", fingerprint: params.fingerprint
 	}, binding.parentRunId);
 	try {
@@ -1112,7 +1174,7 @@ export async function applySubagentNodeMerge(params: {
 		};
 		await updateNodeWorktreeMetadata(binding, node, metadata);
 		sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.merge.state", {
-			graphId: params.graphId, nodeId: node.nodeId, runId: node.runId,
+			graphId: params.graphId, nodeId: node.nodeId, parentRunId: binding.parentRunId, runId: node.runId,
 			revision: binding.scheduler.getSnapshot().graph.revision, status: "merged", fingerprint: params.fingerprint
 		}, binding.parentRunId);
 		return { merged: true, metadata, preview: applied.preview };
@@ -1126,7 +1188,7 @@ export async function applySubagentNodeMerge(params: {
 			mergeStatus: conflicted ? "conflict" : "failed"
 		});
 		sendSessionEvent(binding.socket, node.runId, binding.session, "agent.subgraph.merge.state", {
-			graphId: params.graphId, nodeId: node.nodeId, runId: node.runId,
+			graphId: params.graphId, nodeId: node.nodeId, parentRunId: binding.parentRunId, runId: node.runId,
 			revision: binding.scheduler.getSnapshot().graph.revision,
 			status: conflicted ? "conflicted" : "failed",
 			fingerprint: params.fingerprint,

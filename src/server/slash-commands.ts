@@ -1,4 +1,5 @@
 import type WebSocket from "ws";
+import { mascotPreviewStatusSchema, mascotPreviewSchema, type MascotPreview } from "../protocol/mascot-preview.js";
 import type { AiChatParams, ClientRequest } from "../protocol/types.js";
 import { listSkillSummaries } from "../skills/catalog.js";
 import type { SkillWorkspace } from "../skills/types.js";
@@ -163,6 +164,14 @@ function getChatModeForSlashCommand(command: string): AiChatParams["mode"] | nul
 }
 
 const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
+	{
+		command: "/test-mascot-status",
+		usage: "/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|auto]",
+		insertText: "/test-mascot-status ",
+		description: "Preview the Studio mascot state for this session; auto restores the live state.",
+		requiresArgument: false,
+		examples: ["/test-mascot-status thinking", "/test-mascot-status executing", "/test-mascot-status awaiting_approval", "/test-mascot-status completed", "/test-mascot-status idle", "/test-mascot-status auto"],
+	},
 	{
 		command: "/test-computer-overlay",
 		usage: "/test-computer-overlay [running|paused|click|stop]",
@@ -621,7 +630,8 @@ async function sendChatText(
 	session: ClientSession,
 	mcpHost: McpHost,
 	createSessionInfo: SessionInfoFactory,
-	computerOverlayPreview?: ComputerOverlayPreview
+	computerOverlayPreview?: ComputerOverlayPreview,
+	mascotPreview?: MascotPreview,
 ): Promise<void> {
 	if (request.method !== "ai.chat" || request.params.options?.stream !== true) {
 		sendJson(socket, {
@@ -707,7 +717,8 @@ async function sendChatText(
 		result: {
 			text,
 			context: createSessionInfo(session, mcpHost),
-			...(computerOverlayPreview ? { computerOverlayPreview } : {})
+			...(computerOverlayPreview ? { computerOverlayPreview } : {}),
+			...(mascotPreview ? { mascotPreview } : {}),
 		}
 	});
 }
@@ -770,6 +781,27 @@ export async function handleSlashCommand(params: {
 			return { type: "handled" };
 		}
 		await sendChatText(socket, request, "The legacy Workflow command has been removed. Submit this task in Agent mode instead.", session, mcpHost, createSessionInfo);
+		return { type: "handled" };
+	}
+
+	if (command === "/test-mascot-status") {
+		const status = mascotPreviewStatusSchema.safeParse(restText || "thinking");
+		let preview: MascotPreview | undefined;
+		let text: string;
+		if (!isDevelopmentSlashCommandEnabled()) {
+			text = `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`;
+		} else if (!status.success) {
+			text = "Usage: `/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|auto]`. Defaults to thinking.";
+		} else if (!session.sessionId) {
+			text = "Open a Studio session before previewing the mascot.";
+		} else {
+			preview = mascotPreviewSchema.parse({ requestId: request.id, sessionId: session.sessionId, status: status.data });
+			text = status.data === "auto"
+				? "Mascot restored to the live session state."
+				: `Mascot preview: ${status.data}. Use \`/test-mascot-status auto\` to restore the live state.`;
+		}
+		// 预览只随原请求响应返回，历史事件重放不改变界面状态
+		await sendChatText(socket, request, text, session, mcpHost, createSessionInfo, undefined, preview);
 		return { type: "handled" };
 	}
 

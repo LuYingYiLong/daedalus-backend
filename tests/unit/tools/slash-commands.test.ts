@@ -91,6 +91,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/help",
 			"/context",
 			"/approvals",
+			"/test-mascot-status",
 			"/test-computer-overlay",
 			"/test-approval",
 			"/test-message-queue",
@@ -418,4 +419,35 @@ test("overlay preview schema rejects control arguments and invalid scope", () =>
 	for (const value of [{ ...preview, hwnd: 123 }, { ...preview, action: "type" }, { ...preview, sessionId: "../session" }]) {
 		assert.equal(computerOverlayPreviewSchema.safeParse(value).success, false);
 	}
+});
+
+test("mascot preview validates status and stays in the development request response", async (): Promise<void> => {
+	await withTempUserProfile(async () => {
+		for (const scenario of [
+			{ mode: "development", arg: "", status: "thinking" },
+			{ mode: "development", arg: "thinking", status: "thinking" },
+			{ mode: "development", arg: "executing", status: "executing" },
+			{ mode: "development", arg: "awaiting_approval", status: "awaiting_approval" },
+			{ mode: "development", arg: "completed", status: "completed" },
+			{ mode: "development", arg: "idle", status: "idle" },
+			{ mode: "development", arg: "auto", status: "auto" },
+			{ mode: "development", arg: "invalid", status: undefined },
+			{ mode: "development", arg: "idle extra", status: undefined },
+			{ mode: "runtime", arg: "thinking", status: undefined },
+		] as const) {
+			await withBackendMode(scenario.mode, async () => {
+				const socket = createSocketMock();
+				const session = createClientSession(undefined);
+				session.sessionId = "mascot-preview-fixture";
+				const request: ClientRequest = { type: "request", id: "mascot-preview", method: "ai.chat", params: {
+					message: `/test-mascot-status ${scenario.arg}`, mode: "ask", options: { stream: true },
+				} };
+				assert.deepEqual(await handleSlashCommand({ socket, request, session, mcpHost: {} as McpHost, createSessionInfo: () => ({}) }), { type: "handled" });
+				const response = socket.sent.find(m => (m as { type: string }).type === "response") as { result: { mascotPreview?: unknown } };
+				assert.deepEqual(response.result.mascotPreview, scenario.status ? { requestId: request.id, sessionId: session.sessionId, status: scenario.status } : undefined);
+				assert.equal(socket.sent.some(m => (m as { type: string }).type === "event" && JSON.stringify(m).includes('"mascotPreview"')), false);
+				assert.equal(session.approvalGateway.listPending().length, 0);
+			});
+		}
+	});
 });

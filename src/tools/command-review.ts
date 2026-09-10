@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { AiChatParams } from "../protocol/types.js";
 import { chatWithDeepSeek } from "../providers/deepseek-client.js";
@@ -17,8 +18,57 @@ let commandReviewPromptCache: string | undefined;
 
 const commandReviewResponseSchema = z.object({
 	decision: z.enum(["allow", "ask_user", "deny"]),
-	reason: z.string().min(1).max(2000)
+	reason: z.string().min(1).max(2000),
+	scope: z.literal("this_call").default("this_call"),
+	sideEffects: z.array(z.string().trim().min(1).max(200)).max(32).default([]),
+	approvalText: z.string().trim().min(1).max(500).optional()
 }).strict();
+
+export type ActionReviewMessage = {
+	role: "user" | "assistant" | "tool";
+	content: string;
+	requestId?: string | undefined;
+	createdAt?: string | undefined;
+};
+
+export type ActionReviewContextSnapshot = {
+	messages: ActionReviewMessage[];
+	toolEvents: Record<string, unknown>[];
+	currentGoal?: string | undefined;
+	contextCompleteness: "complete" | "compressed";
+};
+
+export type ActionReviewContext = {
+	getSnapshot: () => ActionReviewContextSnapshot;
+	recordToolEvent: (event: Record<string, unknown>) => void;
+};
+
+export type ActionReviewPolicyFacts = {
+	risk?: string | undefined;
+	workspaceBounded?: boolean | undefined;
+	networkAccess?: boolean | undefined;
+	sandboxAvailable?: boolean | undefined;
+	terminalDownload?: boolean | undefined;
+	destructivePattern?: boolean | undefined;
+	absolutePath?: boolean | undefined;
+	[key: string]: unknown;
+};
+
+export type ActionReviewInput = {
+	toolName: string;
+	toolCallId: string;
+	requestId?: string | undefined;
+	sessionId?: string | undefined;
+	workspaceId?: string | undefined;
+	toolArgs: Record<string, unknown>;
+	commandLine?: string | undefined;
+	cwd?: string | undefined;
+	envKeys: string[];
+	reason?: string | undefined;
+	approvalMode: "auto-safe";
+	context?: ActionReviewContextSnapshot | undefined;
+	policyFacts?: ActionReviewPolicyFacts | undefined;
+};
 
 export type CommandReviewInput = {
 	toolCallId: string;
@@ -35,6 +85,15 @@ export type CommandReviewResult = {
 	decision: "allow" | "ask_user" | "deny";
 	reason: string;
 	audit: ToolReviewAudit;
+};
+
+export type ActionReviewResult = CommandReviewResult & {
+	scope: "this_call";
+	sideEffects: string[];
+	approvalText?: string | undefined;
+	contextHash?: string | undefined;
+	toolCallFingerprint?: string | undefined;
+	contextCompleteness?: "complete" | "compressed" | undefined;
 };
 
 const HARD_RISK_PATTERNS: readonly RegExp[] = [
@@ -138,18 +197,112 @@ function createSystemPrompt(basePrompt: string, supplementalPrompt: string): str
 	].join("\n\n");
 }
 
-function createReviewParams(input: CommandReviewInput): AiChatParams {
+const MAX_REVIEW_CONTEXT_MESSAGES: number = 256;
+const MAX_REVIEW_CONTEXT_CHARS: number = 80_000;
+const SENSITIVE_KEY_PATTERN: RegExp = /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|cookie|password|passwd|secret|credential|private[_-]?key)/iu;
+
+function redactReviewText(value: string): string {
+	return value
+		.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/giu, "Bearer [redacted]")
+		.replace(/((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|cookie|password|passwd|secret|credential)\s*[:=]\s*)([^\s,;]+)/giu, "$1[redacted]")
+		.replace(/([A-Za-z]:\\Users\\)[^\\\s]+/giu, "$1[redacted]")
+		.replace(/(\/Users\/|\/home\/)[^/\s]+/gu, "$1[redacted]");
+}
+
+function sanitizeReviewValue(value: unknown, depth: number = 0): unknown {
+	if (depth > 5) return "[truncated]";
+	if (typeof value === "string") return redactReviewText(value.slice(0, 12_000));
+	if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+	if (Array.isArray(value)) return value.slice(0, 64).map((entry: unknown): unknown => sanitizeReviewValue(entry, depth + 1));
+	if (typeof value !== "object") return String(value);
+	const output: Record<string, unknown> = {};
+	for (const [key, entry] of Object.entries(value as Record<string, unknown>).slice(0, 128)) {
+		output[key] = SENSITIVE_KEY_PATTERN.test(key) ? "[redacted]" : sanitizeReviewValue(entry, depth + 1);
+	}
+	return output;
+}
+
+function sanitizeReviewContext(context: ActionReviewContextSnapshot | undefined): ActionReviewContextSnapshot | undefined {
+	if (context === undefined) return undefined;
+	let totalChars: number = 0;
+	const selectedMessageIndexes: Set<number> = new Set<number>();
+	for (let index: number = Math.max(0, context.messages.length - MAX_REVIEW_CONTEXT_MESSAGES); index < context.messages.length; index += 1) {
+		selectedMessageIndexes.add(index);
+	}
+	context.messages.forEach((message: ActionReviewMessage, index: number): void => {
+		if (message.role === "user") selectedMessageIndexes.add(index);
+	});
+	const messages: ActionReviewMessage[] = context.messages.filter((_message: ActionReviewMessage, index: number): boolean => selectedMessageIndexes.has(index)).flatMap((message: ActionReviewMessage): ActionReviewMessage[] => {
+		if (totalChars >= MAX_REVIEW_CONTEXT_CHARS) return [];
+		const content: string = redactReviewText(message.content).slice(0, Math.min(12_000, MAX_REVIEW_CONTEXT_CHARS - totalChars));
+		totalChars += content.length;
+		return [{
+			role: message.role,
+			content,
+			...(message.requestId === undefined ? {} : { requestId: message.requestId }),
+			...(message.createdAt === undefined ? {} : { createdAt: message.createdAt })
+		}];
+	});
+	const toolEvents: Record<string, unknown>[] = context.toolEvents.slice(-128).map(
+		(event: Record<string, unknown>): Record<string, unknown> => sanitizeReviewValue(event) as Record<string, unknown>
+	);
+	return {
+		messages,
+		toolEvents,
+		...(context.currentGoal === undefined ? {} : { currentGoal: redactReviewText(context.currentGoal).slice(0, 8000) }),
+		contextCompleteness: context.contextCompleteness
+	};
+}
+
+function createReviewContextHash(input: ActionReviewInput): string {
+	return createHash("sha256").update(JSON.stringify({
+		toolName: input.toolName,
+		toolCallId: input.toolCallId,
+		requestId: input.requestId ?? null,
+		workspaceId: input.workspaceId ?? null,
+		approvalMode: input.approvalMode,
+		toolArgs: sanitizeReviewValue(input.toolArgs),
+		commandLine: input.commandLine ?? null,
+		cwd: input.cwd ?? null,
+		envKeys: input.envKeys,
+		reason: input.reason ?? null,
+		context: sanitizeReviewContext(input.context) ?? null,
+		policyFacts: sanitizeReviewValue(input.policyFacts ?? {})
+	})).digest("hex");
+}
+
+function createToolCallFingerprint(input: ActionReviewInput): string {
+	return createHash("sha256").update(JSON.stringify({
+		toolName: input.toolName,
+		toolArgs: sanitizeReviewValue(input.toolArgs),
+		commandLine: input.commandLine ?? null,
+		cwd: input.cwd ?? null,
+		envKeys: input.envKeys
+	})).digest("hex");
+}
+
+function createReviewParams(input: ActionReviewInput): AiChatParams {
+	const context: ActionReviewContextSnapshot | undefined = sanitizeReviewContext(input.context);
 	return {
 		message: JSON.stringify({
-			commandLine: input.commandLine,
-			cwd: input.cwd?.trim() || ".",
-			envKeys: input.envKeys,
-			reason: input.reason?.trim() || null,
-			workspaceId: input.workspaceId ?? null
+			action: {
+				toolName: input.toolName,
+				toolCallId: input.toolCallId,
+				args: sanitizeReviewValue(input.toolArgs),
+				commandLine: input.commandLine ?? null,
+				cwd: input.cwd?.trim() || ".",
+				envKeys: input.envKeys,
+				reason: input.reason?.trim() || null,
+				workspaceId: input.workspaceId ?? null
+			},
+			approvalMode: input.approvalMode,
+			context: context ?? null,
+			policyFacts: sanitizeReviewValue(input.policyFacts ?? {}),
+			contextHash: createReviewContextHash(input)
 		}),
 		options: {
 			temperature: 0,
-			maxTokens: 500,
+			maxTokens: 700,
 			responseFormat: "json",
 			workflow: "single"
 		}
@@ -163,12 +316,15 @@ export type CommandReviewDependencies = {
 	timeoutMs?: number | undefined;
 };
 
-export async function reviewWorkspaceCommand(
-	input: CommandReviewInput,
+export async function reviewAction(
+	input: ActionReviewInput,
 	dependencies: CommandReviewDependencies = {}
-): Promise<CommandReviewResult> {
+): Promise<ActionReviewResult> {
 	let provider: string | undefined;
 	let model: string | undefined;
+	const contextHash: string = createReviewContextHash(input);
+	const toolCallFingerprint: string = createToolCallFingerprint(input);
+	const contextCompleteness: "complete" | "compressed" = input.context?.contextCompleteness ?? "complete";
 	try {
 		const resolveTaskModel = dependencies.resolveTaskModel ?? resolveConfiguredProviderTaskModelOptions;
 		const getPromptConfig = dependencies.getPromptConfig ?? getUserPromptConfig;
@@ -196,7 +352,7 @@ export async function reviewWorkspaceCommand(
 							requestId: input.requestId ?? input.toolCallId,
 							sessionId: input.sessionId,
 							workspaceId: input.workspaceId,
-							operation: "command_review"
+							operation: "action_review"
 						}),
 						reasoningMode: "disabled"
 					},
@@ -205,15 +361,29 @@ export async function reviewWorkspaceCommand(
 						controller.signal
 					);
 					const parsed = commandReviewResponseSchema.parse(
-						parseJsonObjectFromLlm(text, "Command reviewer did not return valid JSON.")
+						parseJsonObjectFromLlm(text, "Action reviewer did not return valid JSON.")
 					);
+					const safeReason: string = redactReviewText(parsed.reason);
+					const safeSideEffects: string[] = parsed.sideEffects.map((effect: string): string => redactReviewText(effect));
 					return {
 						decision: parsed.decision,
-						reason: parsed.reason,
+						reason: safeReason,
+						scope: parsed.scope,
+						sideEffects: safeSideEffects,
+						...(parsed.approvalText === undefined ? {} : { approvalText: redactReviewText(parsed.approvalText) }),
+						contextHash,
+						toolCallFingerprint,
+						contextCompleteness,
 						audit: {
 							source: "model",
+							authorizationSource: "review_model",
 							decision: parsed.decision,
-							reason: parsed.reason,
+							reason: safeReason,
+							contextHash,
+							toolCallFingerprint,
+							contextCompleteness,
+							scope: parsed.scope,
+							sideEffects: safeSideEffects,
 							provider,
 							model
 						}
@@ -228,17 +398,58 @@ export async function reviewWorkspaceCommand(
 			clearTimeout(timeout);
 		}
 	} catch (error: unknown) {
-		const reason: string = `Command review is unavailable; user approval is required. ${error instanceof Error ? error.message : ""}`.trim();
+		const reason: string = redactReviewText(`Action review is unavailable; user approval is required. ${error instanceof Error ? error.message : ""}`).trim();
 		return {
 			decision: "ask_user",
 			reason,
+			scope: "this_call",
+			sideEffects: [],
+			contextHash,
+			toolCallFingerprint,
+			contextCompleteness,
 			audit: {
 				source: "model",
+				authorizationSource: "review_model",
 				decision: "ask_user",
 				reason,
+				contextHash,
+				toolCallFingerprint,
+				contextCompleteness,
+				scope: "this_call",
+				sideEffects: [],
 				provider,
 				model
 			}
 		};
 	}
+}
+
+export async function reviewWorkspaceCommand(
+	input: CommandReviewInput,
+	dependencies: CommandReviewDependencies = {}
+): Promise<CommandReviewResult> {
+	const result: ActionReviewResult = await reviewAction({
+		toolName: "mcp_terminal_run_command",
+		toolCallId: input.toolCallId,
+		requestId: input.requestId,
+		sessionId: input.sessionId,
+		workspaceId: input.workspaceId,
+		toolArgs: {
+			commandLine: input.commandLine,
+			cwd: input.cwd,
+			envKeys: input.envKeys,
+			reason: input.reason
+		},
+		commandLine: input.commandLine,
+		cwd: input.cwd,
+		envKeys: input.envKeys,
+		reason: input.reason,
+		approvalMode: "auto-safe"
+	}, dependencies);
+	return {
+		decision: result.decision,
+		reason: result.reason,
+		...(result.toolCallFingerprint === undefined ? {} : { toolCallFingerprint: result.toolCallFingerprint }),
+		audit: result.audit
+	};
 }

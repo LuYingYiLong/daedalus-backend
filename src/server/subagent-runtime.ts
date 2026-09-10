@@ -13,6 +13,7 @@ import {
 	saveSubagentGraphSnapshot
 } from "../session/subagent-graph-store.js";
 import type { PendingAiContinuation } from "../session/pending-continuation.js";
+import type { ActionReviewContext, ActionReviewContextSnapshot, ActionReviewMessage } from "../tools/command-review.js";
 import { ReadOnlyToolApprovalGateway, type ApprovalGateway } from "../tools/approval-gateway.js";
 import { createWorkspaceToolCatalog } from "../tools/tool-catalog.js";
 import { getToolPolicy, type ToolRisk } from "../tools/tool-policy.js";
@@ -665,6 +666,37 @@ async function executeNode(
 		recordAgentRunToolEvent(binding.socket, binding.session, node.runId, event, false, workspace?.id);
 		if (event.type !== "ai.delta" && event.type !== "ai.thinking.delta" && event.type !== "ai.thinking.done") forward(event);
 	};
+	const actionReviewEvents: Record<string, unknown>[] = Array.from(binding.session.agentRunToolCalls.values())
+		.flatMap((calls): Record<string, unknown>[] => Array.from(calls.entries()).map(([toolCallId, call]): Record<string, unknown> => ({
+			type: "tool.call",
+			toolCallId,
+			toolName: call.toolName,
+			risk: call.risk,
+			args: call.args
+		})))
+		.slice(-128);
+	const actionReviewContext: ActionReviewContext = {
+		getSnapshot: (): ActionReviewContextSnapshot => ({
+			messages: [
+				...binding.session.messages
+					.filter((message: ChatMessage): boolean => message.role === "user" || message.role === "assistant")
+					.map((message: ChatMessage): ActionReviewMessage => ({
+						role: message.role === "user" ? "user" : "assistant",
+						content: message.content,
+						...(message.requestId === undefined ? {} : { requestId: message.requestId }),
+						...(message.createdAt === undefined ? {} : { createdAt: message.createdAt })
+					})),
+				{ role: "user", content: node.objective, requestId: node.runId }
+			],
+			toolEvents: [...actionReviewEvents],
+			currentGoal: node.objective,
+			contextCompleteness: binding.session.summaryMessage === undefined ? "complete" : "compressed"
+		}),
+		recordToolEvent: (event: Record<string, unknown>): void => {
+			actionReviewEvents.push(event);
+			if (actionReviewEvents.length > 128) actionReviewEvents.shift();
+		}
+	};
 	try {
 		const agentResult: ProviderAgentResult = await runProviderAgentStreaming(
 			params,
@@ -679,6 +711,7 @@ async function executeNode(
 			undefined,
 			{
 				workspaceId: workspace?.id,
+				actionReviewContext,
 				hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(workspace),
 				sessionId,
 				requestId: node.runId,

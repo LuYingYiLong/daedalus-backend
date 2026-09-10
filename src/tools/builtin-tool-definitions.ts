@@ -463,7 +463,7 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	),
 	createSceneToolDefinition(
 		"mcp_workspace_download_file",
-		"下载一个 HTTPS 文件到当前 workspace。只下载到明确的相对路径，不会安装、执行或修改系统环境。manual 和 auto-safe 模式必须先获得用户的网络下载授权；需要多个下载时，在第一次调用的 downloadScope 中列出本轮所有明确依赖，之后不能新增 URL、路径或覆盖行为。",
+		"下载一个 HTTPS 文件到当前 workspace。只下载到明确的相对路径，不会安装、执行或修改系统环境。manual 模式需要用户网络下载授权，auto-safe 模式会结合当前会话交给动作审查模型；需要多个下载时，在第一次调用的 downloadScope 中列出本轮所有明确依赖，之后不能新增 URL、路径或覆盖行为。",
 		{
 			url: { type: "string", description: "要下载的 HTTPS URL，不能包含凭据。" },
 			relativePath: { type: "string", description: "目标 workspace 相对路径。" },

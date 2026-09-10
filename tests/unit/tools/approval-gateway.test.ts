@@ -66,7 +66,15 @@ test("download authorization rejects malformed, insecure, or credentialed URLs b
 });
 
 test("auto-safe download authorization only matches the approved request fingerprint", async (): Promise<void> => {
-	const gateway = new ApprovalGateway("auto-safe");
+	const gateway = new ApprovalGateway("auto-safe", {
+		reviewAction: async () => ({
+			decision: "ask_user",
+			reason: "The download needs user confirmation.",
+			scope: "this_call",
+			sideEffects: ["network_download"],
+			audit: { source: "model", authorizationSource: "review_model", decision: "ask_user", reason: "The download needs user confirmation." }
+		})
+	});
 	const first = await gateway.evaluate("mcp_workspace_download_file", DOWNLOAD_ARGS, "download-1", "workspace-a", {
 		requestId: "request-a"
 	});
@@ -89,7 +97,15 @@ test("auto-safe download authorization only matches the approved request fingerp
 });
 
 test("auto-safe approval can cover only the explicitly disclosed downloads in one request", async (): Promise<void> => {
-	const gateway = new ApprovalGateway("auto-safe");
+	const gateway = new ApprovalGateway("auto-safe", {
+		reviewAction: async () => ({
+			decision: "ask_user",
+			reason: "The downloads need user confirmation.",
+			scope: "this_call",
+			sideEffects: ["network_download"],
+			audit: { source: "model", authorizationSource: "review_model", decision: "ask_user", reason: "The downloads need user confirmation." }
+		})
+	});
 	const secondDownload = {
 		...DOWNLOAD_ARGS,
 		url: "https://downloads.example.test/tools/verifier-data.zip",
@@ -125,16 +141,30 @@ test("full-trust permits the structured downloader and terminal download syntax"
 	})).action, "allow");
 });
 
-test("manual and auto-safe terminal download syntax returns a structured policy denial", async (): Promise<void> => {
-	for (const mode of ["manual", "auto-safe"] as const) {
-		const decision = await new ApprovalGateway(mode).evaluate("mcp_terminal_run_command", {
-			commandLine: "Invoke-WebRequest https://downloads.example.test/tool.exe -OutFile tool.exe"
-		}, "terminal-download", "workspace-a", { requestId: "request-a" });
-		assert.equal(decision.action, "deny");
-		if (decision.action === "deny") {
-			assert.equal(decision.code, "network_access_required");
-		}
-	}
+test("manual and auto-safe terminal download syntax enters approval review", async (): Promise<void> => {
+	const manual = await new ApprovalGateway("manual").evaluate("mcp_terminal_run_command", {
+		commandLine: "Invoke-WebRequest https://downloads.example.test/tool.exe -OutFile tool.exe"
+	}, "terminal-download", "workspace-a", { requestId: "request-a" });
+	assert.equal(manual.action, "request_approval");
+	const autoSafe = await new ApprovalGateway("auto-safe", {
+		resolveSandboxAvailability: () => ({ available: true }),
+		reviewAction: async () => ({
+			decision: "ask_user",
+			reason: "The download needs user confirmation.",
+			scope: "this_call",
+			sideEffects: ["network_download"],
+			audit: {
+				source: "model",
+				authorizationSource: "review_model",
+				decision: "ask_user",
+				reason: "The download needs user confirmation."
+			}
+		})
+	}).evaluate("mcp_terminal_run_command", {
+		commandLine: "Invoke-WebRequest https://downloads.example.test/tool.exe -OutFile tool.exe"
+	}, "terminal-download", "workspace-a", { requestId: "request-a" });
+	assert.equal(autoSafe.action, "request_approval");
+	if (autoSafe.action === "request_approval") assert.equal(autoSafe.reason, "The download needs user confirmation.");
 });
 
 test("auto-safe command-review ask_user becomes a real approval instead of a denial", async (): Promise<void> => {
@@ -158,6 +188,41 @@ test("auto-safe command-review ask_user becomes a real approval instead of a den
 	if (decision.action === "request_approval") {
 		assert.equal(decision.reason, "The command needs user confirmation.");
 	}
+});
+
+test("auto-safe routes workspace writes through the contextual action reviewer", async (): Promise<void> => {
+	let reviewedTool: string | undefined;
+	const gateway = new ApprovalGateway("auto-safe", {
+		reviewAction: async (input) => {
+			reviewedTool = input.toolName;
+			return {
+				decision: "allow",
+				reason: "The current user asked for this workspace update.",
+				scope: "this_call",
+				sideEffects: ["workspace_write"],
+				audit: {
+					source: "model",
+					authorizationSource: "review_model",
+					decision: "allow",
+					reason: "The current user asked for this workspace update.",
+					contextHash: "context-hash",
+					toolCallFingerprint: "tool-fingerprint",
+					scope: "this_call",
+					sideEffects: ["workspace_write"]
+				}
+			};
+		}
+	});
+	const decision = await gateway.evaluate("mcp_workspace_overwrite_text_file", {
+		relativePath: "src/app.ts",
+		content: "export const answer = 42;"
+	}, "write-call", "workspace-a", {
+		requestId: "request-a",
+		sessionId: "session-a"
+	});
+	assert.equal(decision.action, "allow");
+	assert.equal(reviewedTool, "mcp_workspace_overwrite_text_file");
+	assert.equal(decision.review?.authorizationSource, "review_model");
 });
 
 test("process tools require exact one-shot consent when the OS sandbox is unavailable", async (): Promise<void> => {

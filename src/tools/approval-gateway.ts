@@ -5,7 +5,14 @@ import { isPlanSafeDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { executeLlmToolWithIdempotency, getLlmToolExecutionIdentity } from "./tool-idempotency.js";
 import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
-import { commandRequiresUserApproval, reviewWorkspaceCommand } from "./command-review.js";
+import {
+	commandRequiresUserApproval,
+	reviewAction,
+	reviewWorkspaceCommand,
+	type ActionReviewContext,
+	type ActionReviewInput,
+	type ActionReviewPolicyFacts
+} from "./command-review.js";
 import { createTerminalCommandAuthorization, type TerminalCommandAuthorization } from "../mcp/terminal/authorization.js";
 import type { McpProgressNotification } from "../mcp/terminal/progress.js";
 import { getGoalRunBinding } from "../server/goal-run-observer.js";
@@ -59,8 +66,18 @@ function collectApprovalArtifactRefs(args: Record<string, unknown>): string[] {
 }
 
 export type ApprovalGatewayOptions = {
+	reviewAction?: typeof reviewAction | undefined;
 	reviewCommand?: typeof reviewWorkspaceCommand | undefined;
 	resolveSandboxAvailability?: (() => SandboxAvailability) | undefined;
+};
+
+type ApprovalEvaluationContext = {
+	requestId?: string | undefined;
+	sessionId?: string | undefined;
+	activeScenePath?: string | undefined;
+	computerAuthorized?: boolean | undefined;
+	browserAuthorized?: boolean | undefined;
+	actionReviewContext?: ActionReviewContext | undefined;
 };
 
 export type ApprovalResult =
@@ -79,12 +96,32 @@ export class ApprovalGateway {
 	private pendingApprovals: Map<string, PendingApproval> = new Map();
 	private downloadAuthorizations: Map<string, Map<string, DownloadAuthorizationScope>> = new Map();
 	private mode: ApprovalMode;
-	private readonly reviewCommand: typeof reviewWorkspaceCommand;
+	private readonly reviewAction: typeof reviewAction;
 	private readonly resolveSandboxAvailability: () => SandboxAvailability;
 
 	constructor(mode: ApprovalMode = "manual", options: ApprovalGatewayOptions = {}) {
 		this.mode = mode;
-		this.reviewCommand = options.reviewCommand ?? reviewWorkspaceCommand;
+		this.reviewAction = options.reviewAction ?? (options.reviewCommand === undefined
+			? reviewAction
+			: async (input: ActionReviewInput): Promise<Awaited<ReturnType<typeof reviewAction>>> => {
+				const legacy = await options.reviewCommand!({
+					toolCallId: input.toolCallId,
+					requestId: input.requestId,
+					sessionId: input.sessionId,
+					workspaceId: input.workspaceId,
+					commandLine: input.commandLine ?? "",
+					cwd: input.cwd,
+					envKeys: input.envKeys,
+					reason: input.reason
+				});
+				return {
+					...legacy,
+					scope: "this_call",
+					sideEffects: legacy.audit.sideEffects ?? [],
+					contextHash: legacy.audit.contextHash,
+					toolCallFingerprint: legacy.audit.toolCallFingerprint
+				};
+			});
 		this.resolveSandboxAvailability = options.resolveSandboxAvailability ?? getSandboxAvailability;
 	}
 
@@ -94,6 +131,50 @@ export class ApprovalGateway {
 
 	getMode(): ApprovalMode {
 		return this.mode;
+	}
+
+	private async reviewActionCall(
+		llmToolName: string,
+		args: Record<string, unknown>,
+		toolCallId: string,
+		workspaceId: string | undefined,
+		context: ApprovalEvaluationContext,
+		policyFacts: ActionReviewPolicyFacts = {},
+		approvalOptions: ApprovalRequestOptions = {}
+	): Promise<ApprovalDecision> {
+		const commandLine: string | undefined = typeof args.commandLine === "string" ? args.commandLine : undefined;
+		const cwd: string | undefined = typeof args.cwd === "string" ? args.cwd : undefined;
+		const envKeys: string[] = args.env !== null && typeof args.env === "object" && !Array.isArray(args.env)
+			? Object.keys(args.env as Record<string, unknown>).sort()
+			: [];
+		const reviewInput: ActionReviewInput = {
+			toolName: llmToolName,
+			toolCallId,
+			requestId: context.requestId,
+			sessionId: context.sessionId,
+			workspaceId,
+			toolArgs: args,
+			...(commandLine === undefined ? {} : { commandLine }),
+			...(cwd === undefined ? {} : { cwd }),
+			envKeys,
+			reason: typeof args.reason === "string" ? args.reason : undefined,
+			approvalMode: "auto-safe",
+			context: context.actionReviewContext?.getSnapshot(),
+			policyFacts
+		};
+		const review = await this.reviewAction(reviewInput);
+		if (review.decision === "allow") {
+			return { action: "allow", review: review.audit };
+		}
+		if (review.decision === "deny") {
+			return { action: "deny", reason: review.reason, review: review.audit };
+		}
+		return {
+			action: "request_approval",
+			reason: review.reason,
+			review: review.audit,
+			...approvalOptions
+		};
 	}
 
 	listPending(): PendingApproval[] {
@@ -154,23 +235,36 @@ export class ApprovalGateway {
 		args: Record<string, unknown>,
 		toolCallId: string,
 		workspaceId?: string | undefined,
-		context: {
-			requestId?: string | undefined;
-			sessionId?: string | undefined;
-			activeScenePath?: string | undefined;
-			computerAuthorized?: boolean | undefined;
-			browserAuthorized?: boolean | undefined;
-		} = {}
+		context: ApprovalEvaluationContext = {}
 	): Promise<ApprovalDecision> {
 		const requestId: string | undefined = context.requestId;
 		const goalBinding = requestId === undefined ? undefined : getGoalRunBinding(requestId);
 		const effectiveMode: ApprovalMode = goalBinding?.approvalMode ?? this.mode;
-		if (llmToolName === "mcp_browser_execute_step") return context.browserAuthorized === true && goalBinding === undefined
-			? { action: "allow" } : { action: "deny", reason: "browser_consent_required", code: "browser_consent_required" };
+		if (llmToolName === "mcp_browser_execute_step") {
+			if (context.browserAuthorized !== true || goalBinding !== undefined) {
+				return { action: "deny", reason: "browser_consent_required", code: "browser_consent_required" };
+			}
+			if (effectiveMode === "auto-safe") {
+				return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
+					risk: "write",
+					externalState: true,
+					browserSession: true
+				});
+			}
+			return effectiveMode === "full-trust" ? { action: "allow" } : evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
+		}
 		if (llmToolName === "mcp_computer_action") {
-			return context.computerAuthorized === true && goalBinding === undefined
-				? { action: "allow" }
-				: { action: "deny", reason: "computer_consent_required", code: "computer_consent_required" };
+			if (context.computerAuthorized !== true || goalBinding !== undefined) {
+				return { action: "deny", reason: "computer_consent_required", code: "computer_consent_required" };
+			}
+			if (effectiveMode === "auto-safe") {
+				return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
+					risk: "write",
+					externalState: true,
+					computerSession: true
+				});
+			}
+			return effectiveMode === "full-trust" ? { action: "allow" } : evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 		}
 		if (llmToolName === "mcp_workspace_download_file") {
 			const download = getDownloadRequest(args);
@@ -184,6 +278,22 @@ export class ApprovalGateway {
 			if (effectiveMode === "auto-safe" && this.hasDownloadAuthorization(requestId, fingerprint)) {
 				return { action: "allow" };
 			}
+			if (effectiveMode === "auto-safe") {
+				return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
+					risk: "write",
+					networkAccess: true,
+					download: {
+						url: download.url,
+						target: `${download.sourceFolderId}/${download.relativePath}`,
+						overwrite: download.overwrite,
+						execution: "download_only"
+					}
+				}, {
+					approvalKind: "network_download",
+					downloadAuthorization: createDownloadAuthorizationScope(args, requestId, workspaceId),
+					...(workspaceId === undefined ? {} : { networkAccessRequired: createNetworkAccessRequired(download, workspaceId) })
+				});
+			}
 			return {
 				action: "request_approval",
 				reason: `Download ${download.dependency} to [${download.sourceFolderId}] ${download.relativePath}. This only downloads the file; it does not install or run it.`,
@@ -192,15 +302,12 @@ export class ApprovalGateway {
 				...(workspaceId === undefined ? {} : { networkAccessRequired: createNetworkAccessRequired(download, workspaceId) })
 			};
 		}
-		if (
-			llmToolName === "mcp_terminal_run_command"
-			&& effectiveMode !== "full-trust"
-			&& isTerminalDownloadCommand(args)
-		) {
+		const terminalDownload: boolean = llmToolName === "mcp_terminal_run_command" && isTerminalDownloadCommand(args);
+		if (terminalDownload && effectiveMode === "manual") {
 			return {
-				action: "deny",
-				code: "network_access_required",
-				reason: "Network downloads in terminal commands require explicit download approval. Use mcp_workspace_download_file with a structured URL and workspace target instead."
+				action: "request_approval",
+				reason: "Network download in a terminal command requires user approval.",
+				approvalKind: "network_download"
 			};
 		}
 		if (effectiveMode !== "full-trust" && isSandboxedProcessToolName(llmToolName)) {
@@ -252,7 +359,9 @@ export class ApprovalGateway {
 				reason: "This Goal write cannot be included in a complete file rollback checkpoint. Continuing will make full Goal rollback unavailable."
 			};
 		}
-		if (effectiveMode === "auto-safe" && llmToolName === "mcp_terminal_run_command") {
+		const policy = getEffectiveToolPolicy(llmToolName, args, workspaceId);
+		const hasSideEffects: boolean = policy?.risk === "write" || policy?.risk === "destructive";
+		if (effectiveMode === "auto-safe" && hasSideEffects) {
 			const deterministicDecision: ApprovalDecision = evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 			if (
 				deterministicDecision.action === "deny"
@@ -263,33 +372,25 @@ export class ApprovalGateway {
 			) {
 				return deterministicDecision;
 			}
-			const hardRiskReason: string | null = commandRequiresUserApproval(args, workspaceId);
-			if (hardRiskReason !== null) {
-				return { action: "request_approval", reason: hardRiskReason };
+			const commandLine: string = typeof args.commandLine === "string" ? args.commandLine.trim() : "";
+			if (llmToolName === "mcp_terminal_run_command" && commandLine.length === 0) {
+				return { action: "deny", reason: "Terminal command is empty or invalid." };
 			}
-			const reviewInput = {
-				toolCallId,
-				requestId: context.requestId,
-				sessionId: context.sessionId,
-				workspaceId,
-				commandLine: typeof args.commandLine === "string" ? args.commandLine : "",
-				cwd: typeof args.cwd === "string" ? args.cwd : undefined,
-				envKeys: args.env !== null && typeof args.env === "object" && !Array.isArray(args.env)
-					? Object.keys(args.env as Record<string, unknown>).sort()
-					: [],
-				reason: typeof args.reason === "string" ? args.reason : undefined
-			};
-			const review = await this.reviewCommand(reviewInput);
-			if (review.decision === "allow") {
-				return { action: "allow", review: review.audit };
-			}
-			if (review.decision === "ask_user") {
-				return { action: "request_approval", reason: review.reason, review: review.audit };
-			}
-			if (review.decision === "deny") {
-				return { action: "deny", reason: review.reason, review: review.audit };
-			}
-			return { action: "deny", reason: review.reason, review: review.audit };
+			const hardRiskReason: string | null = llmToolName === "mcp_terminal_run_command"
+				? commandRequiresUserApproval(args, workspaceId)
+				: null;
+			const cwd: string | undefined = typeof args.cwd === "string" ? args.cwd : undefined;
+			return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
+				risk: policy?.risk,
+				workspaceBounded: hardRiskReason === null,
+				sandboxAvailable: isSandboxedProcessToolName(llmToolName) ? this.resolveSandboxAvailability().available : undefined,
+				absolutePath: cwd !== undefined && /^(?:[A-Za-z]:[\\/]|\/)/u.test(cwd.trim()),
+				destructivePattern: hardRiskReason !== null,
+				terminalDownload,
+				networkAccess: terminalDownload,
+				staticPolicyDecision: deterministicDecision.action,
+				staticPolicyReason: "reason" in deterministicDecision ? deterministicDecision.reason : undefined
+			});
 		}
 		return evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
 	}
@@ -462,6 +563,8 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 			sessionId?: string | undefined;
 			activeScenePath?: string | undefined;
 			computerAuthorized?: boolean | undefined;
+			browserAuthorized?: boolean | undefined;
+			actionReviewContext?: ActionReviewContext | undefined;
 		} = {}
 	): Promise<ApprovalDecision> {
 		if (!this.allowedToolNames.has(llmToolName)) {

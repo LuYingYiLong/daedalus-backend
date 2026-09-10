@@ -74,7 +74,7 @@ export type ToolEvent =
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
 	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined; recovery?: AgentLoopRecoveryStatus | undefined; traceContent?: string | undefined } & ParsedToolResultSummary)
 	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined; recovery?: AgentLoopRecoveryStatus | undefined }
-	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"]; provider?: string | undefined; model?: string | undefined }
+	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"] | NonNullable<ToolReviewAudit["authorizationSource"]>; provider?: string | undefined; model?: string | undefined; contextHash?: string | undefined; contextCompleteness?: "complete" | "compressed" | undefined; toolCallFingerprint?: string | undefined; scope?: "this_call" | undefined; sideEffects?: string[] | undefined }
 	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined; approvalKind?: "network_download" | undefined; downloadAuthorization?: DownloadAuthorizationScope | undefined; networkAccessRequired?: NetworkAccessRequired | undefined } & ToolEventDisplay);
 
 export type OnToolEvent = (event: ToolEvent) => void;
@@ -582,20 +582,34 @@ async function executeSingleToolCall(
 		requestId: toolContext?.requestId,
 		sessionId: toolContext?.sessionId,
 		activeScenePath,
+		actionReviewContext: toolContext?.actionReviewContext,
 		computerAuthorized: toolContext?.computerControl?.inputAllowed === true && toolContext.requestId !== undefined && toolContext.computerControl.hasControl?.(toolContext.requestId) === true
 		,browserAuthorized: toolContext?.browserControl?.canExecute?.() === true
 	});
-	if (decision.review !== undefined) {
+	const reviewAudit: ToolReviewAudit | undefined = decision.review ?? (decision.action === "deny"
+		? {
+			source: "policy",
+			authorizationSource: "policy",
+			decision: "deny",
+			reason: decision.reason
+		}
+		: undefined);
+	if (reviewAudit !== undefined) {
 		onEvent?.({
 			type: "tool.reviewed",
 			step,
 			toolCallId: toolCall.id,
 			toolName: functionName,
-			decision: decision.review.decision,
-			reason: decision.review.reason,
-			authorizationSource: decision.review.source,
-			provider: decision.review.provider,
-			model: decision.review.model
+			decision: reviewAudit.decision,
+			reason: reviewAudit.reason,
+			authorizationSource: reviewAudit.authorizationSource ?? reviewAudit.source,
+			provider: reviewAudit.provider,
+			model: reviewAudit.model,
+			...(reviewAudit.contextHash === undefined ? {} : { contextHash: reviewAudit.contextHash }),
+			...(reviewAudit.contextCompleteness === undefined ? {} : { contextCompleteness: reviewAudit.contextCompleteness }),
+			...(reviewAudit.toolCallFingerprint === undefined ? {} : { toolCallFingerprint: reviewAudit.toolCallFingerprint }),
+			...(reviewAudit.scope === undefined ? {} : { scope: reviewAudit.scope }),
+			...(reviewAudit.sideEffects === undefined ? {} : { sideEffects: reviewAudit.sideEffects })
 		});
 	}
 	logger.debug("tool", "policy_evaluated", {
@@ -1166,9 +1180,15 @@ export async function dispatchToolCalls(
 	}
 
 	const results: DispatchedToolResult[] = [];
+	const eventHandler: OnToolEvent | undefined = onEvent === undefined && toolContext?.actionReviewContext === undefined
+		? undefined
+		: (event: ToolEvent): void => {
+			toolContext?.actionReviewContext?.recordToolEvent(event as unknown as Record<string, unknown>);
+			onEvent?.(event);
+		};
 
 	for (const toolCall of toolCalls) {
-		const result = await executeSingleToolCall(mcpHost, toolCall, step, gateway, onEvent, enricher, toolContext, abortSignal);
+		const result = await executeSingleToolCall(mcpHost, toolCall, step, gateway, eventHandler, enricher, toolContext, abortSignal);
 		let args: Record<string, unknown> = {};
 		if (toolCall.type === "function") {
 			try {

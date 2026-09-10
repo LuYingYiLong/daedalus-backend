@@ -112,8 +112,14 @@ export type ApprovalDecision =
 
 export type ToolReviewAudit = {
 	source: "model" | "policy";
+	authorizationSource?: "review_model" | "policy" | undefined;
 	decision: "allow" | "ask_user" | "deny";
 	reason: string;
+	contextHash?: string | undefined;
+	contextCompleteness?: "complete" | "compressed" | undefined;
+	toolCallFingerprint?: string | undefined;
+	scope?: "this_call" | undefined;
+	sideEffects?: string[] | undefined;
 	provider?: string | undefined;
 	model?: string | undefined;
 };

@@ -22,7 +22,6 @@ import { getWorkflowToolSemantics } from "../workflow/tool-semantics.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import { ExecutionContractUnresolvedError } from "../tools/execution-control.js";
 import { getLlmToolExecutionIdentity } from "../tools/tool-idempotency.js";
-import { isTerminalDownloadCommand } from "../tools/download-authorization.js";
 import { resolveToolMapping } from "../tools/tool-mapping.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { McpHost } from "../mcp/mcp-host.js";
@@ -396,13 +395,6 @@ export async function validatePendingApprovalBeforeExecution(
 	mcpHost: McpHost,
 	pendingApproval: PendingApproval
 ): Promise<string | null> {
-	if (
-		pendingApproval.llmToolName === "mcp_terminal_run_command"
-		&& session.approvalGateway.getMode() !== "full-trust"
-		&& isTerminalDownloadCommand(pendingApproval.args)
-	) {
-		return "Network downloads in terminal commands must use mcp_workspace_download_file and a structured download approval.";
-	}
 	const decision = evaluateToolCall(
 		session.approvalGateway.getMode(),
 		pendingApproval.llmToolName,

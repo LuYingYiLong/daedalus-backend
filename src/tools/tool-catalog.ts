@@ -24,6 +24,7 @@ import {
 import { isGodotDocumentationEnabled } from "../godot-documentation/store.js";
 import type { ProviderChatOptions } from "../providers/provider-types.js";
 import type { AgentLoopRecoveryController } from "../workflow/agent-loop-state.js";
+import type { ActionReviewContext } from "./command-review.js";
 import { findWorkspace } from "../workspace/registry.js";
 import { hasGodotWorkspaceCapability } from "../workspace/capabilities.js";
 import {
@@ -58,6 +59,7 @@ export type ToolExecutionContext = {
 	editorInstanceId?: string | undefined;
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
+	actionReviewContext?: ActionReviewContext | undefined;
 	executionControl?: ExecutionControlContext | undefined;
 	executionControlAvailable?: boolean | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;

@@ -9,6 +9,7 @@ import { getStudioPluginDevelopmentControl } from "./studio-plugin-development-c
 import { getStudioGodotRuntimeControl } from "./studio-godot-runtime.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
+import type { ActionReviewContext, ActionReviewContextSnapshot, ActionReviewMessage } from "../tools/command-review.js";
 import { parseToolResultSummary } from "../tools/tool-result-parser.js";
 import { chatWithDeepSeek, createDeepSeekClient, resolveChatModel, type ProviderChatOptions } from "../providers/deepseek-client.js";
 import type { ProviderAgentResult } from "../providers/agent-types.js";
@@ -704,7 +705,7 @@ export function createHiddenAnswerSystemPrompt(
 				"- This is a read-only discovery stage. It never grants mutation permission by itself.",
 				"- The execution-decision tool is intentionally unavailable during this first pass.",
 				"- Use the minimum read or verify tools when the answer depends on current workspace or runtime facts. For general knowledge that does not depend on this workspace, answer directly without inventing inspection results.",
-				"- mcp_terminal_run_command is available only for a needed general command. It follows the configured terminal approval policy: auto-safe commands are reviewed before execution; a denied or uncertain review is returned to you as a tool error. Do not use it when a read or verify tool can establish the answer. Do not use terminal download commands; use the structured workspace downloader only when a workspace file is genuinely needed.",
+				"- mcp_terminal_run_command is available only for a needed general command. It follows the configured terminal approval policy: auto-safe commands are reviewed before execution; a denied or uncertain review is returned to you as a tool error. Do not use it when a read or verify tool can establish the answer. Terminal downloads are also reviewed as actions; use the structured workspace downloader when a workspace file is genuinely needed.",
 				"- Do not write, propose a patch, or claim that a mutation path is authorized during this probe.",
 				"- After inspection, return concise factual findings only. Daedalus will open one control-only pass that records the execution decision from the evidence."
 			].join("\n")
@@ -895,6 +896,12 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const executionOptions: ProviderChatOptions = withProviderUsageContext(params.options, {
 		operation: params.routeDecision.lane === "direct" ? "direct_answer" : params.routeDecision.lane
 	});
+	const actionReviewContext: ActionReviewContext = createActionReviewContext(
+		params.session,
+		params.requestId,
+		chatParams.message,
+		params.session.workbenchComposer.text
+	);
 	const sceneViewEnricher = createSceneViewToolResultEnricher({
 		session: params.session,
 		options: executionOptions,
@@ -914,6 +921,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		sceneViewEnricher.enricher,
 		{
 			workspaceId: params.session.activeWorkspace?.id,
+			actionReviewContext,
 			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 			editorInstanceId: params.session.editorInstanceId,
 			sessionId: params.session.sessionId,
@@ -1009,6 +1017,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			undefined,
 			{
 				workspaceId: params.session.activeWorkspace?.id,
+				actionReviewContext,
 				hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 				editorInstanceId: params.session.editorInstanceId,
 				sessionId: params.session.sessionId,
@@ -1602,6 +1611,48 @@ function getFullContextHistoryMessages(session: ClientSession, excludeRequestId?
 	return [session.summaryMessage, ...filterRequest(filterSessionLlmContextMessages(session, recentSourceMessages))];
 }
 
+function createActionReviewContext(
+	session: ClientSession,
+	requestId: string,
+	currentUserMessage: string,
+	currentGoal?: string | undefined
+): ActionReviewContext {
+	const toolEvents: Record<string, unknown>[] = Array.from(session.agentRunToolCalls.values())
+		.flatMap((calls): Record<string, unknown>[] => Array.from(calls.entries()).map(([toolCallId, call]): Record<string, unknown> => ({
+			type: "tool.call",
+			toolCallId,
+			toolName: call.toolName,
+			risk: call.risk,
+			args: call.args
+		})))
+		.slice(-128);
+	return {
+		getSnapshot: (): ActionReviewContextSnapshot => {
+			const messages: ActionReviewMessage[] = getFullContextHistoryMessages(session, requestId)
+				.filter((message: ChatMessage): boolean => message.role === "user" || message.role === "assistant")
+				.map((message: ChatMessage): ActionReviewMessage => ({
+					role: message.role === "user" ? "user" : "assistant",
+					content: message.content,
+					...(message.requestId === undefined ? {} : { requestId: message.requestId }),
+					...(message.createdAt === undefined ? {} : { createdAt: message.createdAt })
+				}));
+			if (currentUserMessage.trim().length > 0) {
+				messages.push({ role: "user", content: currentUserMessage, requestId });
+			}
+			return {
+				messages,
+				toolEvents: [...toolEvents],
+				...(currentGoal === undefined ? {} : { currentGoal }),
+				contextCompleteness: session.summaryMessage === undefined ? "complete" : "compressed"
+			};
+		},
+		recordToolEvent: (event: Record<string, unknown>): void => {
+			toolEvents.push(event);
+			if (toolEvents.length > 128) toolEvents.shift();
+		}
+	};
+}
+
 async function estimateFullContextUsage(
 	session: ClientSession,
 	requestId: string,
@@ -2127,8 +2178,15 @@ async function runToolBudgetDecisionContinuation(params: {
 			}
 		};
 
+		const actionReviewContext: ActionReviewContext = createActionReviewContext(
+			session,
+			pending.requestId,
+			continuationParams.message,
+			session.workbenchComposer.text
+		);
 		const toolContext = {
 			workspaceId: session.activeWorkspace?.id,
+			actionReviewContext,
 			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 			editorInstanceId: session.editorInstanceId,
 			sessionId: session.sessionId,

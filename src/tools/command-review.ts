@@ -2,9 +2,10 @@ import { z } from "zod";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { AiChatParams } from "../protocol/types.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 import { chatWithDeepSeek } from "../providers/deepseek-client.js";
 import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
-import { resolveConfiguredProviderTaskModelOptions } from "../providers/task-model-routing.js";
+import { resolveConfiguredProviderTaskModelOptions, resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import { getUserPromptConfig } from "../user-prompt-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
 import type { ToolReviewAudit } from "./tool-policy.js";
@@ -66,6 +67,8 @@ export type ActionReviewInput = {
 	envKeys: string[];
 	reason?: string | undefined;
 	approvalMode: "auto-safe";
+	/** The active session model; used when no dedicated review model is configured. */
+	currentModelOptions?: ProviderChatOptions | undefined;
 	context?: ActionReviewContextSnapshot | undefined;
 	policyFacts?: ActionReviewPolicyFacts | undefined;
 };
@@ -75,6 +78,7 @@ export type CommandReviewInput = {
 	requestId?: string | undefined;
 	sessionId?: string | undefined;
 	workspaceId?: string | undefined;
+	currentModelOptions?: ProviderChatOptions | undefined;
 	commandLine: string;
 	cwd?: string | undefined;
 	envKeys: string[];
@@ -310,7 +314,7 @@ function createReviewParams(input: ActionReviewInput): AiChatParams {
 }
 
 export type CommandReviewDependencies = {
-	resolveTaskModel?: typeof resolveConfiguredProviderTaskModelOptions;
+	resolveTaskModel?: ((kind: "commandReview", currentOptions?: ProviderChatOptions | undefined) => ReturnType<typeof resolveConfiguredProviderTaskModelOptions>);
 	getPromptConfig?: typeof getUserPromptConfig;
 	chat?: typeof chatWithDeepSeek;
 	timeoutMs?: number | undefined;
@@ -326,11 +330,14 @@ export async function reviewAction(
 	const toolCallFingerprint: string = createToolCallFingerprint(input);
 	const contextCompleteness: "complete" | "compressed" = input.context?.contextCompleteness ?? "complete";
 	try {
-		const resolveTaskModel = dependencies.resolveTaskModel ?? resolveConfiguredProviderTaskModelOptions;
 		const getPromptConfig = dependencies.getPromptConfig ?? getUserPromptConfig;
 		const chat = dependencies.chat ?? chatWithDeepSeek;
 		const [resolved, promptConfig, basePrompt] = await Promise.all([
-			resolveTaskModel("commandReview"),
+			dependencies.resolveTaskModel !== undefined
+				? dependencies.resolveTaskModel("commandReview", input.currentModelOptions)
+				: input.currentModelOptions !== undefined
+					? resolveProviderTaskModelOptions("commandReview", input.currentModelOptions)
+					: resolveConfiguredProviderTaskModelOptions("commandReview"),
 			getPromptConfig(),
 			loadCommandReviewPrompt()
 		]);
@@ -434,6 +441,7 @@ export async function reviewWorkspaceCommand(
 		requestId: input.requestId,
 		sessionId: input.sessionId,
 		workspaceId: input.workspaceId,
+		currentModelOptions: input.currentModelOptions,
 		toolArgs: {
 			commandLine: input.commandLine,
 			cwd: input.cwd,

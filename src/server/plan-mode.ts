@@ -629,7 +629,8 @@ async function runPlanAgentDecision(
 			godotRuntimeControl: getStudioGodotRuntimeControl(runtime.socket, runtime.session.sessionId, runtime.session.activeWorkspace?.id),
 			scheduledTaskControl: getStudioScheduledTaskControl(runtime.socket, runtime.session.sessionId),
 			pluginDevelopmentControl: getStudioPluginDevelopmentControl(runtime.socket, runtime.session.sessionId, runtime.session.activeWorkspace),
-			scheduledMonitorRun: runtime.session.scheduledTaskOrigin?.kind === "monitor"
+			scheduledMonitorRun: runtime.session.scheduledTaskOrigin?.kind === "monitor",
+			actionReviewOptions: options
 		}
 	);
 	if (agentResult.status === "approval_required") {

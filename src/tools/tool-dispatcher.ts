@@ -583,6 +583,7 @@ async function executeSingleToolCall(
 		sessionId: toolContext?.sessionId,
 		activeScenePath,
 		actionReviewContext: toolContext?.actionReviewContext,
+		currentModelOptions: toolContext?.actionReviewOptions,
 		computerAuthorized: toolContext?.computerControl?.inputAllowed === true && toolContext.requestId !== undefined && toolContext.computerControl.hasControl?.(toolContext.requestId) === true
 		,browserAuthorized: toolContext?.browserControl?.canExecute?.() === true
 	});

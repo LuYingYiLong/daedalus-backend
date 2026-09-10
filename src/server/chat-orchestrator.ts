@@ -922,6 +922,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 		{
 			workspaceId: params.session.activeWorkspace?.id,
 			actionReviewContext,
+			actionReviewOptions: executionOptions,
 			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 			editorInstanceId: params.session.editorInstanceId,
 			sessionId: params.session.sessionId,
@@ -1018,6 +1019,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			{
 				workspaceId: params.session.activeWorkspace?.id,
 				actionReviewContext,
+				actionReviewOptions: executionOptions,
 				hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(params.session.activeWorkspace),
 				editorInstanceId: params.session.editorInstanceId,
 				sessionId: params.session.sessionId,
@@ -2187,6 +2189,7 @@ async function runToolBudgetDecisionContinuation(params: {
 		const toolContext = {
 			workspaceId: session.activeWorkspace?.id,
 			actionReviewContext,
+			actionReviewOptions: pendingContinuation.options,
 			hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
 			editorInstanceId: session.editorInstanceId,
 			sessionId: session.sessionId,

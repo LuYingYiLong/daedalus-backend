@@ -334,6 +334,7 @@ async function continueAfterRejectedApproval(params: {
 		};
 		const context = {
 			workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
+			actionReviewOptions: pendingContinuation.options,
 			editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 			sessionId: pending.sessionId ?? session.sessionId,
 			requestId: pendingContinuation.requestId,
@@ -815,6 +816,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					abortController.signal,
 					{
 						workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
+						actionReviewOptions: pendingContinuation.options,
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
@@ -846,6 +848,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 					abortController.signal,
 					{
 						workspaceId: getContinuationWorkspaceId(session, pending, pendingContinuation),
+						actionReviewOptions: pendingContinuation.options,
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,

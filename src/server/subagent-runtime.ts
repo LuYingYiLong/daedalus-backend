@@ -712,6 +712,7 @@ async function executeNode(
 			{
 				workspaceId: workspace?.id,
 				actionReviewContext,
+				actionReviewOptions: options,
 				hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(workspace),
 				sessionId,
 				requestId: node.runId,

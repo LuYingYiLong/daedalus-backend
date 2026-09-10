@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
+import type { ProviderChatOptions } from "../../../src/providers/provider-types.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
 const DOWNLOAD_ARGS: Record<string, unknown> = {
@@ -192,9 +193,11 @@ test("auto-safe command-review ask_user becomes a real approval instead of a den
 
 test("auto-safe routes workspace writes through the contextual action reviewer", async (): Promise<void> => {
 	let reviewedTool: string | undefined;
+	let reviewedModel: ProviderChatOptions | undefined;
 	const gateway = new ApprovalGateway("auto-safe", {
 		reviewAction: async (input) => {
 			reviewedTool = input.toolName;
+			reviewedModel = input.currentModelOptions;
 			return {
 				decision: "allow",
 				reason: "The current user asked for this workspace update.",
@@ -218,10 +221,16 @@ test("auto-safe routes workspace writes through the contextual action reviewer",
 		content: "export const answer = 42;"
 	}, "write-call", "workspace-a", {
 		requestId: "request-a",
-		sessionId: "session-a"
+		sessionId: "session-a",
+		currentModelOptions: {
+			provider: "deepseek",
+			apiKey: "main-key",
+			model: "deepseek-v4-flash"
+		}
 	});
 	assert.equal(decision.action, "allow");
 	assert.equal(reviewedTool, "mcp_workspace_overwrite_text_file");
+	assert.equal(reviewedModel?.model, "deepseek-v4-flash");
 	assert.equal(decision.review?.authorizationSource, "review_model");
 });
 

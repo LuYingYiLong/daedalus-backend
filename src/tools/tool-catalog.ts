@@ -60,6 +60,7 @@ export type ToolExecutionContext = {
 	sessionId?: string | undefined;
 	requestId?: string | undefined;
 	actionReviewContext?: ActionReviewContext | undefined;
+	actionReviewOptions?: ProviderChatOptions | undefined;
 	executionControl?: ExecutionControlContext | undefined;
 	executionControlAvailable?: boolean | undefined;
 	chatCompletion?: ChatCompletionContext | undefined;

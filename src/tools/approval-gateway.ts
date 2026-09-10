@@ -5,6 +5,7 @@ import { isPlanSafeDynamicMcpToolName } from "./dynamic-mcp-tools.js";
 import { executeLlmToolWithIdempotency, getLlmToolExecutionIdentity } from "./tool-idempotency.js";
 import type { FileEditBatchDraft } from "./file-edit-snapshots.js";
 import type { ImageGenerationResult } from "../providers/image-generation.js";
+import type { ProviderChatOptions } from "../providers/provider-types.js";
 import {
 	commandRequiresUserApproval,
 	reviewAction,
@@ -78,6 +79,7 @@ type ApprovalEvaluationContext = {
 	computerAuthorized?: boolean | undefined;
 	browserAuthorized?: boolean | undefined;
 	actionReviewContext?: ActionReviewContext | undefined;
+	currentModelOptions?: ProviderChatOptions | undefined;
 };
 
 export type ApprovalResult =
@@ -109,6 +111,7 @@ export class ApprovalGateway {
 					requestId: input.requestId,
 					sessionId: input.sessionId,
 					workspaceId: input.workspaceId,
+					currentModelOptions: input.currentModelOptions,
 					commandLine: input.commandLine ?? "",
 					cwd: input.cwd,
 					envKeys: input.envKeys,
@@ -159,6 +162,7 @@ export class ApprovalGateway {
 			envKeys,
 			reason: typeof args.reason === "string" ? args.reason : undefined,
 			approvalMode: "auto-safe",
+			currentModelOptions: context.currentModelOptions,
 			context: context.actionReviewContext?.getSnapshot(),
 			policyFacts
 		};
@@ -565,6 +569,7 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 			computerAuthorized?: boolean | undefined;
 			browserAuthorized?: boolean | undefined;
 			actionReviewContext?: ActionReviewContext | undefined;
+			currentModelOptions?: ProviderChatOptions | undefined;
 		} = {}
 	): Promise<ApprovalDecision> {
 		if (!this.allowedToolNames.has(llmToolName)) {

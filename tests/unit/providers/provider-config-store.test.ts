@@ -561,6 +561,15 @@ test("task model resolver falls back to current model or resolves configured pro
 		assert.equal(titleModel.provider, "deepseek");
 		assert.equal(titleModel.model, "deepseek-v4-flash");
 
+		const actionReviewModel = await resolveProviderTaskModelOptions("commandReview", {
+			provider: "deepseek",
+			apiKey: "deepseek-key",
+			model: "deepseek-v4-flash"
+		});
+		assert.equal(actionReviewModel.source, "current");
+		assert.equal(actionReviewModel.provider, "deepseek");
+		assert.equal(actionReviewModel.model, "deepseek-v4-flash");
+
 		const nextStepHints = await resolveProviderTaskModelOptions("nextStepHints", {
 			provider: "deepseek",
 			apiKey: "deepseek-key",

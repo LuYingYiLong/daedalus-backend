@@ -34,9 +34,25 @@ test("provider catalog exposes valid built-in providers and model references", (
 
 	assert.equal(getProviderDefaultEndpointType("deepseek"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("deepseek"), "openai-compatible");
+	assert.equal(getProviderDefaultModel("deepseek"), "deepseek-flash");
 	const deepseekModels = getProviderFallbackModels("deepseek");
+	const deepseekFlashModel = deepseekModels.find((model) => model.id === "deepseek-flash");
+	assert.equal(deepseekFlashModel?.displayName, "DeepSeek V4.1 Flash");
+	assert.equal(deepseekFlashModel?.contextWindowTokens, 1_000_000);
+	assert.equal(deepseekFlashModel?.maxOutputTokens, 384_000);
+	assert.equal(deepseekFlashModel?.capabilities.imageInput, true);
+	assert.equal(deepseekFlashModel?.capabilities.vision, true);
+	assert.equal(deepseekFlashModel?.capabilities.reasoning, true);
+	assert.deepEqual(deepseekFlashModel?.capabilities.reasoningEfforts, [
+		{ id: "low", fallback: "low" },
+		{ id: "high", fallback: "high", default: true },
+		{ id: "max", fallback: "max" }
+	]);
+	assert.equal(deepseekFlashModel?.capabilities.tools, true);
+	assert.equal(deepseekModels.some((model) => model.id === "deepseek-v4-pro"), false);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.contextWindowTokens, 1_000_000);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.maxOutputTokens, 384_000);
+	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.imageInput, true);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.reasoning, true);
 	assert.equal(deepseekModels.find((model) => model.id === "deepseek-v4-flash")?.capabilities.tools, true);
 	const deepseekVisionModel = deepseekModels.find((model) => model.id === "deepseek-v4-flash-vision-exp");

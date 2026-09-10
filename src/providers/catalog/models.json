@@ -1,15 +1,17 @@
 [
   {
-    "id": "deepseek-v4-flash",
-    "displayName": "DeepSeek V4 Flash",
+    "id": "deepseek-flash",
+    "displayName": "DeepSeek V4.1 Flash",
     "provider": "deepseek",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
     "maxOutputTokens": 384000,
     "capabilities": {
+      "imageInput": true,
       "reasoning": true,
 			"reasoningEfforts": [
-				{ "id": "high", "fallback": "high" },
+				{ "id": "low", "fallback": "low" },
+				{ "id": "high", "fallback": "high", "default": true },
 				{ "id": "max", "fallback": "max" }
 			],
       "tools": true
@@ -17,16 +19,18 @@
     "ownedBy": "deepseek"
   },
   {
-    "id": "deepseek-v4-pro",
-    "displayName": "DeepSeek V4 Pro",
+    "id": "deepseek-v4-flash",
+    "displayName": "DeepSeek V4 Flash",
     "provider": "deepseek",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
     "maxOutputTokens": 384000,
     "capabilities": {
+      "imageInput": true,
       "reasoning": true,
 			"reasoningEfforts": [
-				{ "id": "high", "fallback": "high" },
+				{ "id": "low", "fallback": "low" },
+				{ "id": "high", "fallback": "high", "default": true },
 				{ "id": "max", "fallback": "max" }
 			],
       "tools": true
@@ -44,7 +48,8 @@
       "imageInput": true,
       "reasoning": true,
 			"reasoningEfforts": [
-				{ "id": "high", "fallback": "high" },
+				{ "id": "low", "fallback": "low" },
+				{ "id": "high", "fallback": "high", "default": true },
 				{ "id": "max", "fallback": "max" }
 			],
       "tools": true

@@ -101,7 +101,7 @@ function shouldRequireToolCallOnStep(params: AiChatParams, step: number, startSt
 export function shouldSkipRequiredToolChoice(options: DeepSeekChatOptions): boolean {
 	const model: string = resolveChatModel(options).toLowerCase();
 	const configuredMode = getProviderEndpointConfig(options.provider, options.endpointType).requiredToolChoice;
-	return configuredMode === "omit" || (options.provider === "deepseek" && model.startsWith("deepseek-v4"));
+	return configuredMode === "omit" || (options.provider === "deepseek" && isDeepSeekThinkingModel(model));
 }
 
 export function resolveRequiredToolChoice(options: DeepSeekChatOptions): "required" | "auto" | undefined {
@@ -117,7 +117,11 @@ export function resolveRequiredToolChoice(options: DeepSeekChatOptions): "requir
 
 export function shouldDisableThinkingForToolCalls(options: DeepSeekChatOptions, tools: readonly ChatCompletionTool[]): boolean {
 	const model: string = resolveChatModel(options).toLowerCase();
-	return tools.length > 0 && options.provider === "deepseek" && model.startsWith("deepseek-v4");
+	return tools.length > 0 && options.provider === "deepseek" && isDeepSeekThinkingModel(model);
+}
+
+function isDeepSeekThinkingModel(model: string): boolean {
+	return model.startsWith("deepseek-v4") || model === "deepseek-flash";
 }
 
 function applyDeepSeekToolMode(

@@ -657,7 +657,7 @@ async function withApprovalContinuationMockServer(run: (baseUrl: string, request
 	}
 }
 
-test("DeepSeek V4 thinking models skip required tool_choice", (): void => {
+test("DeepSeek thinking models skip required tool_choice", (): void => {
 	const tools: ChatCompletionTool[] = [{
 		type: "function",
 		function: {
@@ -689,6 +689,16 @@ test("DeepSeek V4 thinking models skip required tool_choice", (): void => {
 		apiKey: "test-key",
 		model: "deepseek-v4-flash"
 	}), true);
+	assert.equal(shouldSkipRequiredToolChoice({
+		provider: "deepseek",
+		apiKey: "test-key",
+		model: "deepseek-flash"
+	}), true);
+	assert.equal(shouldDisableThinkingForToolCalls({
+		provider: "deepseek",
+		apiKey: "test-key",
+		model: "deepseek-flash"
+	}, tools), true);
 	assert.equal(shouldSkipRequiredToolChoice({
 		provider: "deepseek",
 		apiKey: "test-key",

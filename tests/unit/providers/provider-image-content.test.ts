@@ -173,9 +173,9 @@ test("image preprocessing requires recognition model when current model lacks im
 					additionalContext: [VALID_IMAGE_CONTEXT]
 				},
 				{
-					provider: "deepseek",
+					provider: "moonshot",
 					apiKey: "test-key",
-					model: "deepseek-v4-flash"
+					model: "moonshot-v1-8k"
 				}
 			),
 			(error: unknown): boolean => {

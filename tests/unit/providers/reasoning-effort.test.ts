@@ -21,9 +21,10 @@ test("reasoning efforts are exposed only for adjustable catalog models", (): voi
 		]
 	);
 	assert.deepEqual(
-		getProviderFallbackModels("deepseek").find((model) => model.id === "deepseek-v4-pro")?.capabilities.reasoningEfforts,
+		getProviderFallbackModels("deepseek").find((model) => model.id === "deepseek-flash")?.capabilities.reasoningEfforts,
 		[
-			{ id: "high", fallback: "high" },
+			{ id: "low", fallback: "low" },
+			{ id: "high", fallback: "high", default: true },
 			{ id: "max", fallback: "max" }
 		]
 	);
@@ -44,7 +45,7 @@ test("reasoning effort normalizes model-specific strength during a model switch"
 		"high"
 	);
 	assert.equal(
-		resolveReasoningEffortForModelChange("openai", "gpt-5.6-sol", "medium", "deepseek", "deepseek-v4-pro"),
+		resolveReasoningEffortForModelChange("openai", "gpt-5.6-sol", "medium", "deepseek", "deepseek-flash"),
 		"high"
 	);
 	assert.equal(resolveReasoningEffort("moonshot", "kimi-k3", "high"), "high");
@@ -65,13 +66,13 @@ test("provider request builders forward only supported reasoning parameters", ()
 	assert.deepEqual(openAIRequest.reasoning, { effort: "xhigh" });
 
 	const deepSeekRequest = {
-		model: "deepseek-v4-pro",
+		model: "deepseek-flash",
 		messages: []
 	} as unknown as ChatCompletionCreateParamsBase;
 	const deepSeekOptions: ProviderChatOptions = {
 		provider: "deepseek",
 		apiKey: "test",
-		model: "deepseek-v4-pro"
+		model: "deepseek-flash"
 	};
 	applyChatOptions(deepSeekRequest, params, deepSeekOptions);
 	assert.equal((deepSeekRequest as unknown as Record<string, unknown>).reasoning_effort, "high");
@@ -100,13 +101,13 @@ test("auxiliary provider requests can disable reasoning without changing model d
 		options: { reasoningEffort: "max", responseFormat: "json" }
 	});
 	const deepSeekRequest = {
-		model: "deepseek-v4-pro",
+		model: "deepseek-flash",
 		messages: []
 	} as unknown as ChatCompletionCreateParamsBase;
 	applyChatOptions(deepSeekRequest, params, {
 		provider: "deepseek",
 		apiKey: "test",
-		model: "deepseek-v4-pro",
+		model: "deepseek-flash",
 		reasoningMode: "disabled"
 	});
 	const deepSeekRecord = deepSeekRequest as unknown as Record<string, unknown>;

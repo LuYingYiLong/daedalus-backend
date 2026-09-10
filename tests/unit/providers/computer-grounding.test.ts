@@ -300,17 +300,16 @@ test("unavailable or text-only configured routes fail closed without current-mod
 	await withProviderFixture(t, async (): Promise<void> => {
 		const chat = t.mock.method(resolveProviderAdapter(CURRENT_OPTIONS), "chat", async (): Promise<string> => JSON.stringify(PIXEL_VISUAL));
 		await saveProviderConfig({ provider: "moonshot", apiKey: "fixture", model: "kimi-k2.6",
-			modelRouting: { imageRecognition: { provider: "deepseek", model: "deepseek-v4-flash" } } });
+			modelRouting: { imageRecognition: { provider: "moonshot", model: "moonshot-v1-8k" } } });
 		await assert.rejects(groundComputerFrame(request()), { code: "computer_grounding_model_unavailable", message: "computer_grounding_model_unavailable" });
-		await saveProviderConfig({ provider: "deepseek", apiKey: "fixture-text", model: "deepseek-v4-flash" });
-		await assert.rejects(groundComputerFrame(request()), /computer_grounding_model_unavailable/);
+		await assert.rejects(groundComputerFrame(request({ options: { ...CURRENT_OPTIONS, model: "moonshot-v1-8k" } })), /computer_grounding_model_unavailable/);
 		assert.equal(chat.mock.callCount(), 0);
 	});
 });
 
 test("an unconfigured text-only current route also fails before a model request", async (t): Promise<void> => {
 	await withProviderFixture(t, async (): Promise<void> => {
-		await assert.rejects(groundComputerFrame(request({ options: { provider: "deepseek", apiKey: "fixture", model: "deepseek-v4-flash" } })), /model_unavailable/);
+		await assert.rejects(groundComputerFrame(request({ options: { provider: "moonshot", apiKey: "fixture", model: "moonshot-v1-8k" } })), /model_unavailable/);
 	});
 });
 

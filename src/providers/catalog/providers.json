@@ -4,7 +4,7 @@
     "displayName": "DeepSeek",
     "websiteUrl": "https://www.deepseek.com",
     "authType": "api-key",
-    "defaultModel": "deepseek-v4-flash",
+    "defaultModel": "deepseek-flash",
     "defaultEndpointType": "openai-chat-completions",
     "endpointConfigs": {
       "openai-chat-completions": {

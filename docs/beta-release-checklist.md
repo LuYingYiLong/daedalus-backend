@@ -27,13 +27,13 @@ npm run smoke:beta
 
 ```powershell
 $env:DAEDALUS_DEEPSEEK_API_KEY = "<your key>" # 可选；已在 keytar 配好时不用传
-npm run smoke:llm -- use_llm provider=deepseek model_id=deepseek-v4-pro project=D:\GodotProjects\example
+npm run smoke:llm -- use_llm provider=deepseek model_id=deepseek-flash project=D:\GodotProjects\example
 ```
 
 开发时也可以用快捷入口：
 
 ```powershell
-npm run dev:llm -- model_id=deepseek-v4-pro
+npm run dev:llm -- model_id=deepseek-flash
 ```
 
 ## 手动验收

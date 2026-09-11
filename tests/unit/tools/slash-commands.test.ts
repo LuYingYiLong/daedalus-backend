@@ -426,6 +426,7 @@ test("mascot preview validates status and stays in the development request respo
 		for (const scenario of [
 			{ mode: "development", arg: "", status: "thinking" },
 			{ mode: "development", arg: "thinking", status: "thinking" },
+			{ mode: "development", arg: "enjoying", status: "enjoying" },
 			{ mode: "development", arg: "executing", status: "executing" },
 			{ mode: "development", arg: "waiting", status: "waiting" },
 			{ mode: "development", arg: "completed", status: "completed" },

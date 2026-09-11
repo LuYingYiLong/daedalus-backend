@@ -77,7 +77,20 @@ test("cancelled interpretation cannot return late approval", async (t) => {
 
 test("all approval modes require browser conversation authority and avoid modal approvals", async () => {
 	for (const mode of ["manual", "auto-safe", "full-trust"] as const) {
-		const gateway = new ApprovalGateway(mode);
+		const gateway = new ApprovalGateway(mode, {
+			reviewAction: async () => ({
+				decision: "allow",
+				reason: "The browser step matches the requested interaction.",
+				scope: "this_call",
+				sideEffects: ["browser_interaction"],
+				audit: {
+					source: "model",
+					authorizationSource: "review_model",
+					decision: "allow",
+					reason: "The browser step matches the requested interaction."
+				}
+			})
+		});
 		assert.equal(
 			(
 				await gateway.evaluate(

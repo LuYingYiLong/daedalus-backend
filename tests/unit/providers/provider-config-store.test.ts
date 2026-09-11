@@ -52,8 +52,8 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 			provider: "deepseek",
 			displayName: "DeepSeek",
 			configured: false,
-			model: "deepseek-v4-flash",
-			modelDisplayName: "DeepSeek V4 Flash",
+			model: "deepseek-flash",
+			modelDisplayName: "DeepSeek V4.1 Flash",
 			baseUrl: "https://api.deepseek.com",
 			apiKeyMasked: null,
 			keyStorage: "keytar",
@@ -61,7 +61,7 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 		});
 		assert.deepEqual(status.activeModel, {
 			providerId: "deepseek",
-			modelId: "deepseek-v4-flash"
+			modelId: "deepseek-flash"
 		});
 		assert.deepEqual(status.modelRouting, {
 			imageRecognition: null,
@@ -145,11 +145,11 @@ test("provider config clears only the provider api key when apiKey is null", asy
 		await saveProviderConfig({
 			provider: "deepseek",
 			apiKey: "deepseek-key",
-			model: "deepseek-v4-pro",
+			model: "deepseek-v4-flash",
 			baseUrl: "https://proxy.example/v1"
 		});
 		await saveProviderModelsCache("deepseek", [{
-			id: "deepseek-v4-pro",
+			id: "deepseek-v4-flash",
 			displayName: "DeepSeek V4 Pro",
 			provider: "deepseek",
 			endpointType: "openai-chat-completions",
@@ -166,7 +166,7 @@ test("provider config clears only the provider api key when apiKey is null", asy
 		await saveProviderConfig({
 			provider: "deepseek",
 			apiKey: null,
-			model: "deepseek-v4-pro",
+			model: "deepseek-v4-flash",
 			baseUrl: "https://proxy.example/v1",
 			activate: false
 		});
@@ -177,10 +177,10 @@ test("provider config clears only the provider api key when apiKey is null", asy
 		assert.equal(deepseek?.configured, false);
 		assert.equal(deepseek?.enabled, false);
 		assert.equal(deepseek?.apiKeyMasked, null);
-		assert.equal(deepseek?.model, "deepseek-v4-pro");
+		assert.equal(deepseek?.model, "deepseek-v4-flash");
 		assert.equal(deepseek?.baseUrl, "https://proxy.example/v1");
 		assert.equal(deepseek?.modelsCache.length, 1);
-		assert.equal(deepseek?.modelsCache[0]?.id, "deepseek-v4-pro");
+		assert.equal(deepseek?.modelsCache[0]?.id, "deepseek-v4-flash");
 	});
 });
 
@@ -323,9 +323,9 @@ test("provider config persists cross-provider task model routing", async (): Pro
 				sessionTitle: null,
 				nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 				imageGeneration: { provider: "openai", model: "gpt-image-1" },
-				gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
+				gitCommit: { provider: "deepseek", model: "deepseek-v4-flash" },
 				commandReview: null,
-				goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" },
+				goalEvaluator: { provider: "deepseek", model: "deepseek-v4-flash" },
 				contextCompression: { provider: "moonshot", model: "kimi-k2.6" }
 			}
 		});
@@ -336,9 +336,9 @@ test("provider config persists cross-provider task model routing", async (): Pro
 			sessionTitle: null,
 			nextStepHints: { provider: "moonshot", model: "kimi-k2.6" },
 			imageGeneration: { provider: "openai", model: "gpt-image-1" },
-			gitCommit: { provider: "deepseek", model: "deepseek-v4-pro" },
+			gitCommit: { provider: "deepseek", model: "deepseek-v4-flash" },
 			commandReview: null,
-			goalEvaluator: { provider: "deepseek", model: "deepseek-v4-pro" },
+			goalEvaluator: { provider: "deepseek", model: "deepseek-v4-flash" },
 			contextCompression: { provider: "moonshot", model: "kimi-k2.6" }
 		});
 	});

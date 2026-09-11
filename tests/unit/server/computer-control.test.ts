@@ -50,8 +50,21 @@ test("computer action contracts reject unsupported inputs and forged approval", 
   assert.equal(computerControlUpdateSchema.safeParse({ ...scope, generation: 1, state: "running", sequence: 0 }).success, false); // tool identity not accepted as control state
 });
 test("input remains write gated even under full trust without a verified grant", async () => {
-  for (const mode of ["manual", "auto-safe", "full-trust"] as const) {
-    const gateway = new ApprovalGateway(mode);
+	for (const mode of ["manual", "auto-safe", "full-trust"] as const) {
+		const gateway = new ApprovalGateway(mode, {
+			reviewAction: async () => ({
+				decision: "allow",
+				reason: "The authorized computer action matches the requested interaction.",
+				scope: "this_call",
+				sideEffects: ["computer_interaction"],
+				audit: {
+					source: "model",
+					authorizationSource: "review_model",
+					decision: "allow",
+					reason: "The authorized computer action matches the requested interaction."
+				}
+			})
+		});
     assert.equal((await gateway.evaluate("mcp_computer_action", {}, "tool")).action, "deny");
     assert.equal((await gateway.evaluate("mcp_computer_action", {}, "tool", undefined, { computerAuthorized: true })).action, "allow");
   }

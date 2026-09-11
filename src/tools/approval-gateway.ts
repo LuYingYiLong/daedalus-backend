@@ -255,7 +255,9 @@ export class ApprovalGateway {
 					browserSession: true
 				});
 			}
-			return effectiveMode === "full-trust" ? { action: "allow" } : evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
+			// Browser consent is already an explicit, scoped user authorization. Keep it
+			// effective in manual mode instead of asking for a second modal approval.
+			return { action: "allow" };
 		}
 		if (llmToolName === "mcp_computer_action") {
 			if (context.computerAuthorized !== true || goalBinding !== undefined) {
@@ -268,7 +270,9 @@ export class ApprovalGateway {
 					computerSession: true
 				});
 			}
-			return effectiveMode === "full-trust" ? { action: "allow" } : evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
+			// A verified computer-control grant is the explicit approval for this
+			// session, so manual mode must not add another approval prompt.
+			return { action: "allow" };
 		}
 		if (llmToolName === "mcp_workspace_download_file") {
 			const download = getDownloadRequest(args);
@@ -383,6 +387,9 @@ export class ApprovalGateway {
 			const hardRiskReason: string | null = llmToolName === "mcp_terminal_run_command"
 				? commandRequiresUserApproval(args, workspaceId)
 				: null;
+			if (hardRiskReason !== null) {
+				return { action: "request_approval", reason: hardRiskReason };
+			}
 			const cwd: string | undefined = typeof args.cwd === "string" ? args.cwd : undefined;
 			return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
 				risk: policy?.risk,

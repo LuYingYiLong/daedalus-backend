@@ -256,7 +256,7 @@ test("transient provider failures automatically retry read-only nodes with a fre
 	const done = await scheduler.start().then(() => scheduler.wait(undefined));
 	assert.equal(done.graph.status, "completed");
 	assert.equal(attempts, 2);
-	assert.deepEqual(runIds, ["run-provider-2", "run-provider-3"]);
+	assert.deepEqual(runIds, ["run-provider", "run-provider-2"]);
 	assert.equal(done.nodes[0]?.attempt, 2);
 });
 

@@ -477,11 +477,13 @@ export class SubagentGraphScheduler {
 						queuedAt: this.now().toISOString(),
 						nextRetryAt: null
 					}));
+					// Schedule the wake before publishing the queued snapshot so observers never see
+					// a queued node without a corresponding wakeup.
+					this.scheduleQueueWake(nodeId, 250);
 					this.snapshot = refreshSubagentGraph(this.snapshot);
 					await this.publish();
 				}
 			});
-			if (this.requireNode(nodeId).status === "queued") this.scheduleQueueWake(nodeId, 250);
 			return;
 		}
 		this.leases.set(nodeId, resourceDecision.lease);

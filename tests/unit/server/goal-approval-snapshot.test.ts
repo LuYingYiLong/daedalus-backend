@@ -3,6 +3,19 @@ import test from "node:test";
 import { bindGoalRun, releaseGoalRunBinding } from "../../../src/server/goal-run-observer.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 
+const allowReview = async () => ({
+	decision: "allow" as const,
+	reason: "The requested workspace action is within the current task.",
+	scope: "this_call" as const,
+	sideEffects: ["workspace_write"],
+	audit: {
+		source: "model" as const,
+		authorizationSource: "review_model" as const,
+		decision: "allow" as const,
+		reason: "The requested workspace action is within the current task."
+	}
+});
+
 test("Goal tool approval uses the mode captured when the Goal was created", async () => {
 	const gateway = new ApprovalGateway("full-trust");
 	const args = { relativePath: "notes.txt", content: "done" };
@@ -29,7 +42,7 @@ test("Goal tool approval uses the mode captured when the Goal was created", asyn
 });
 
 test("Auto Safe Goal accepts a saved Editor Bridge patch targeting the active scene", async () => {
-	const gateway = new ApprovalGateway("manual");
+	const gateway = new ApprovalGateway("manual", { reviewAction: allowReview });
 	bindGoalRun("goal-editor-request", {
 		goalId: "goal-editor",
 		cycle: 1,
@@ -81,6 +94,7 @@ test("Auto Safe Goal accepts a saved Editor Bridge patch targeting the active sc
 
 test("Auto Safe Goal does not replace runtime policy with a rollback-completeness approval", async () => {
 	const gateway = new ApprovalGateway("manual", {
+		reviewAction: allowReview,
 		resolveSandboxAvailability: () => ({ available: true })
 	});
 	bindGoalRun("goal-untracked-request", {

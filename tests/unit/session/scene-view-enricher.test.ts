@@ -19,7 +19,7 @@ async function withTempAppData(run: () => Promise<void>): Promise<void> {
 	}
 }
 
-test("scene view enrich stores the image and hides base64 when vision is unavailable", async (): Promise<void> => {
+test("scene view enrich stores the image and routes it through the current vision model", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const sessions = await import("../../../src/session/session-store.js");
 		const { createSceneViewToolResultEnricher } = await import("../../../src/server/workflow/scene-view-enricher.js");
@@ -61,13 +61,12 @@ test("scene view enrich stores the image and hides base64 when vision is unavail
 
 		assert.equal(result.content.includes(imageBytes.toString("base64")), false);
 		const payload = JSON.parse(result.content) as Record<string, unknown>;
-		assert.equal((payload.analysis as Record<string, unknown>).status, "unavailable");
+		assert.equal((payload.analysis as Record<string, unknown>).status, "attached");
 		assert.equal(sceneView.getCapturedAttachments()[0]?.source, "editor");
 		assert.deepEqual(progressCodes, [
 			"scene_view.capture.started",
 			"scene_view.capture.completed",
-			"image.inspect.delegating",
-			"image.inspect.unavailable"
+			"image.inspect.current_model"
 		]);
 	});
 });

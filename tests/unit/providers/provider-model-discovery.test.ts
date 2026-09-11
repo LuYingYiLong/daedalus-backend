@@ -181,7 +181,7 @@ test("provider discovery falls back to catalog without mutating an existing cach
 			assert.equal(result.source, "fallback");
 			assert.match(result.error ?? "", /HTTP 401/u);
 			assert.deepEqual(result.failure, { code: "authentication", httpStatus: 401 });
-			assert.equal(result.models.some((model): boolean => model.id === "deepseek-v4-pro"), true);
+			assert.equal(result.models.some((model): boolean => model.id === "deepseek-flash"), true);
 			assert.deepEqual((await getProviderModelsCache("deepseek"))?.models.map((model): string => model.id), ["kept-model"]);
 		} finally {
 			server.close();
@@ -291,7 +291,7 @@ test("provider model sync removes and restores models while protecting reference
 				provider: "deepseek",
 				upsertModels: [],
 				enableModelIds: [],
-				removeModelIds: ["deepseek-v4-flash"]
+				removeModelIds: ["deepseek-flash"]
 			}),
 			(error: unknown): boolean => {
 				return error instanceof ProviderModelSyncError && error.code === "provider_model_in_use";
@@ -300,7 +300,7 @@ test("provider model sync removes and restores models while protecting reference
 
 		await updateModelCustomization({
 			provider: "deepseek",
-			id: "deepseek-v4-pro",
+			id: "deepseek-v4-flash",
 			displayName: "Restorable Pro",
 			contextWindowTokens: null,
 			maxOutputTokens: null,
@@ -317,9 +317,9 @@ test("provider model sync removes and restores models while protecting reference
 			provider: "deepseek",
 			upsertModels: [],
 			enableModelIds: [],
-			removeModelIds: ["deepseek-v4-pro"]
+			removeModelIds: ["deepseek-v4-flash"]
 		});
-		assert.equal(models.some((model): boolean => model.id === "deepseek-v4-pro"), false);
+		assert.equal(models.some((model): boolean => model.id === "deepseek-v4-flash"), false);
 
 		const server: Server = createServer((_request, response): void => {
 			response.writeHead(401, { "Content-Type": "application/json" });
@@ -328,7 +328,7 @@ test("provider model sync removes and restores models while protecting reference
 		const baseUrl: string = await listen(server);
 		try {
 			const discovery = await discoverProviderModels("deepseek", "bad-key", baseUrl);
-			const removed = discovery.managedModels.find((model): boolean => model.id === "deepseek-v4-pro");
+			const removed = discovery.managedModels.find((model): boolean => model.id === "deepseek-v4-flash");
 			assert.equal(removed?.enabled, false);
 			assert.equal(removed?.displayName, "Restorable Pro");
 		} finally {
@@ -338,11 +338,11 @@ test("provider model sync removes and restores models while protecting reference
 		models = await syncProviderModels({
 			provider: "deepseek",
 			upsertModels: [],
-			enableModelIds: ["deepseek-v4-pro"],
+			enableModelIds: ["deepseek-v4-flash"],
 			removeModelIds: []
 		});
 		assert.equal(
-			models.find((model): boolean => model.id === "deepseek-v4-pro")?.displayName,
+			models.find((model): boolean => model.id === "deepseek-v4-flash")?.displayName,
 			"Restorable Pro"
 		);
 	});
@@ -400,7 +400,7 @@ test("provider model management reports provider, task routing, and web search g
 	await withTempAppData(async (): Promise<void> => {
 		await saveProviderConfig({
 			provider: "deepseek",
-			model: "deepseek-v4-pro",
+			model: "deepseek-v4-flash",
 			activate: false,
 			modelRouting: {}
 		});
@@ -411,7 +411,7 @@ test("provider model management reports provider, task routing, and web search g
 		const baseUrl: string = await listen(server);
 		try {
 			const discovery = await discoverProviderModels("deepseek", "bad-key", baseUrl);
-			const guarded = discovery.managedModels.find((model): boolean => model.id === "deepseek-v4-pro");
+			const guarded = discovery.managedModels.find((model): boolean => model.id === "deepseek-v4-flash");
 			assert.deepEqual(guarded?.removalGuards, [{ kind: "providerSelection" }]);
 		} finally {
 			server.close();

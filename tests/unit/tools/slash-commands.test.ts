@@ -427,7 +427,7 @@ test("mascot preview validates status and stays in the development request respo
 			{ mode: "development", arg: "", status: "thinking" },
 			{ mode: "development", arg: "thinking", status: "thinking" },
 			{ mode: "development", arg: "executing", status: "executing" },
-			{ mode: "development", arg: "awaiting_approval", status: "awaiting_approval" },
+			{ mode: "development", arg: "waiting", status: "waiting" },
 			{ mode: "development", arg: "completed", status: "completed" },
 			{ mode: "development", arg: "failed", status: "failed" },
 			{ mode: "development", arg: "sleeping", status: "sleeping" },
@@ -435,6 +435,7 @@ test("mascot preview validates status and stays in the development request respo
 			{ mode: "development", arg: "idle", status: "idle" },
 			{ mode: "development", arg: "auto", status: "auto" },
 			{ mode: "development", arg: "invalid", status: undefined },
+			{ mode: "development", arg: "awaiting_approval", status: undefined },
 			{ mode: "development", arg: "idle extra", status: undefined },
 			{ mode: "runtime", arg: "thinking", status: undefined },
 		] as const) {

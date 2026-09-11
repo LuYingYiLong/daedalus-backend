@@ -166,11 +166,11 @@ function getChatModeForSlashCommand(command: string): AiChatParams["mode"] | nul
 const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 	{
 		command: "/test-mascot-status",
-		usage: "/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|auto]",
+		usage: "/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|failed|auto]",
 		insertText: "/test-mascot-status ",
 		description: "Preview the Studio mascot state for this session; auto restores the live state.",
 		requiresArgument: false,
-		examples: ["/test-mascot-status thinking", "/test-mascot-status executing", "/test-mascot-status awaiting_approval", "/test-mascot-status completed", "/test-mascot-status idle", "/test-mascot-status auto"],
+		examples: ["/test-mascot-status thinking", "/test-mascot-status executing", "/test-mascot-status awaiting_approval", "/test-mascot-status completed", "/test-mascot-status failed", "/test-mascot-status idle", "/test-mascot-status auto"],
 	},
 	{
 		command: "/test-computer-overlay",
@@ -641,7 +641,8 @@ async function sendChatText(
 			result: {
 				text,
 				context: createSessionInfo(session, mcpHost),
-				...(computerOverlayPreview ? { computerOverlayPreview } : {})
+				...(computerOverlayPreview ? { computerOverlayPreview } : {}),
+				...(mascotPreview ? { mascotPreview } : {}),
 			}
 		});
 		return;
@@ -791,7 +792,7 @@ export async function handleSlashCommand(params: {
 		if (!isDevelopmentSlashCommandEnabled()) {
 			text = `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`;
 		} else if (!status.success) {
-			text = "Usage: `/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|auto]`. Defaults to thinking.";
+			text = "Usage: `/test-mascot-status [idle|thinking|executing|awaiting_approval|completed|failed|auto]`. Defaults to thinking.";
 		} else if (!session.sessionId) {
 			text = "Open a Studio session before previewing the mascot.";
 		} else {

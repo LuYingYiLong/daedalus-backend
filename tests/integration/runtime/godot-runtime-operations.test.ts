@@ -107,6 +107,16 @@ test("Godot runtime and headless operation tools keep commands scoped and shell-
 		const headlessServer: FakeMcpServer = createFakeServer();
 		headlessTools.registerHeadlessOperationTools(headlessServer as never);
 		await assert.rejects(
+			callTool(headlessServer, "get_uid", { resourcePath: "res://" }),
+			(error: unknown): boolean => (
+				typeof error === "object"
+				&& error !== null
+				&& "failure" in error
+				&& typeof (error as { failure?: unknown }).failure === "object"
+				&& (error as { failure: { code?: unknown } }).failure.code === "resource_path_not_file"
+			)
+		);
+		await assert.rejects(
 			callTool(headlessServer, "resave_resource", { resourcePath: "addons/plugin/data.tres" }),
 			/Writing to addons/u
 		);

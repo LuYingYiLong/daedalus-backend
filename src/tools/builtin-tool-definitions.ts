@@ -677,9 +677,9 @@ const GODOT_RUNTIME_TEST_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 const GODOT_HEADLESS_OPERATION_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 	createSceneToolDefinition(
 		"mcp_godot_get_uid",
-		"通过 Godot ResourceLoader 读取资源 UID，只读。",
+		"通过 Godot ResourceLoader 读取文件资源 UID，只读。resourcePath 必须指向文件；目录（包括 res:// 项目根目录）没有 ResourceUID。",
 		{
-			resourcePath: { type: "string", description: "资源路径，可用 res:// 或项目相对路径" }
+			resourcePath: { type: "string", description: "文件资源路径，可用 res:// 或项目相对路径；不要传目录或 res:// 项目根目录" }
 		},
 		["resourcePath"]
 	),

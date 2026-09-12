@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -16,6 +16,7 @@ import {
 	resolveGodotResourceProjectPath
 } from "../context.js";
 import { materializeRuntimeAsset } from "../../../runtime/runtime-assets.js";
+import { StructuredToolError } from "../../../tools/tool-failure.js";
 
 const HEADLESS_OPERATION_TIMEOUT_MS: number = 120_000;
 const HEADLESS_WRITE_EXTENSIONS: ReadonlySet<string> = new Set([".tscn", ".tres", ".res"]);
@@ -105,6 +106,21 @@ async function toProjectResPath(resourcePath: string): Promise<string> {
 async function assertReadableResourcePath(resourcePath: string): Promise<string> {
 	const absolutePath: string = await resolveGodotResourceProjectPath(resourcePath);
 	await access(absolutePath);
+	const fileStat = await stat(absolutePath);
+	if (!fileStat.isFile()) {
+		throw new StructuredToolError({
+			code: "resource_path_not_file",
+			category: "business",
+			message: "The Godot resource path must point to a file resource; directories such as res:// do not have a ResourceUID.",
+			retryable: false,
+			artifactRefs: [],
+			details: {
+				resourcePath,
+				resolvedPath: absolutePath,
+				expected: "file"
+			}
+		});
+	}
 	return `res://${path.relative(projectRoot, absolutePath).replaceAll(path.sep, "/")}`;
 }
 
@@ -251,7 +267,7 @@ export function registerHeadlessOperationTools(server: McpServer): void {
 		"get_uid",
 		{
 			title: "Get Godot Resource UID",
-			description: "通过 Godot ResourceLoader 读取资源 UID。",
+			description: "通过 Godot ResourceLoader 读取文件资源 UID。resourcePath 必须指向文件；目录（包括 res:// 项目根目录）没有 ResourceUID。",
 			inputSchema: z.object({
 				resourcePath: resourcePathSchema
 			}).passthrough()

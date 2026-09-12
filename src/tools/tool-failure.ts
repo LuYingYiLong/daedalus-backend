@@ -41,6 +41,7 @@ const BUSINESS_FAILURE_CODES: ReadonlySet<string> = new Set([
 	"node_already_exists",
 	"signal_already_connected",
 	"resource_uid_missing",
+	"resource_path_not_file",
 	"resource_not_found",
 	"target_not_found"
 ]);

@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { spawn } from "node:child_process";
 
-const GODOT_VERSION_TIMEOUT_MS: number = 5_000;
+export const GODOT_VERSION_TIMEOUT_MS: number = 15_000;
 
 export type GodotExecutableAvailability = {
 	status: "ready" | "unavailable";

@@ -24,7 +24,7 @@ import {
 	projectRoot,
 	redactSensitivePaths
 } from "../context.js";
-import type { GodotExecutableAvailability } from "../../../godot-executable.js";
+import { GODOT_VERSION_TIMEOUT_MS, type GodotExecutableAvailability } from "../../../godot-executable.js";
 
 const GODOT_RUNTIME_TAIL_LINES: number = 200;
 const PROJECT_DISCOVERY_LIMIT: number = 100;
@@ -60,7 +60,7 @@ async function getExecutableAvailability(
 		presetName: "godot.version",
 		invocation: resolution.invocation,
 		cwd: projectRoot,
-		timeoutMs: 5_000
+		timeoutMs: GODOT_VERSION_TIMEOUT_MS
 	});
 	const version: string = result.stdout.trim().split(/\r?\n/u)[0]?.trim() ?? "";
 	const value: GodotExecutableAvailability = result.ok && version.length > 0

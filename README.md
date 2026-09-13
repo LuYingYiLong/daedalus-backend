@@ -1,7 +1,7 @@
 <h1 align="center">Daedalus Backend</h1>
 
 <p align="center">
-  The local runtime and execution layer behind Daedalus Studio and the Godot Daedalus editor plugin.
+  The local runtime and execution layer behind Daedalus Studio and its optional integrations.
 </p>
 
 <p align="center">
@@ -32,18 +32,18 @@
   <a href="./docs/production-binary.md">Production binary</a>
 </p>
 
-Daedalus Backend is a TypeScript service for persistent AI-assisted software-development sessions. It owns model-provider routing, agent runs, tool policy, approvals, workspace isolation, Godot operations, MCP integrations, and durable session state. Clients communicate with it over a versioned WebSocket/RPC protocol.
+Daedalus Backend is a TypeScript service for persistent AI-assisted software-development sessions. It owns model-provider routing, agent runs, tool policy, approvals, workspace isolation, optional editor integrations, MCP integrations, and durable session state. Clients communicate with it over a versioned WebSocket/RPC protocol.
 
-Most users should install [Daedalus Studio](https://github.com/LuYingYiLong/daedalus-studio/releases/latest), which ships a pinned backend binary and manages installation, authentication, health checks, updates, rollback, and repair automatically. Run this repository directly when developing Daedalus, embedding its protocol, using the Godot plugin without Studio, or exposing Daedalus through MCP.
+Most users should install [Daedalus Studio](https://github.com/LuYingYiLong/daedalus-studio/releases/latest), which ships a pinned backend binary and manages installation, authentication, health checks, updates, rollback, and repair automatically. Run this repository directly when developing Daedalus, embedding its protocol, integrating another client, or exposing Daedalus through MCP.
 
 ## Highlights
 
-- **Multi-client local runtime** — serves Studio, the Godot editor plugin, CLI/smoke clients, and external MCP clients from one authenticated runtime.
+- **Multi-client local runtime** — serves Studio, optional editor clients, CLI/smoke clients, and external MCP clients from one authenticated runtime.
 - **Multi-provider model layer** — normalizes streaming, tool calls, reasoning content, multimodal inputs, token budgets, model discovery, and provider-specific request rules.
 - **Durable Agent Run state** — routes direct answers, inspections, probes, lightweight edits, and workflows through a single persisted state model.
 - **Approval-gated tools** — separates read, verify, propose, write, and destructive operations and preserves continuations without replaying successful writes.
-- **Godot-first tooling** — combines static project tools, terminal validation, Editor Bridge patches, LSP/diagnostics, and read-only DAP data.
-- **MCP host and servers** — connects external MCP servers and exposes Daedalus, workspace, Godot, terminal, and Skill capabilities over stdio MCP.
+- **Workspace and integration tooling** — combines project tools, terminal validation, optional editor bridge patches, diagnostics, and read-only debug data.
+- **MCP host and servers** — connects external MCP servers and exposes Daedalus, workspace, terminal, and Skill capabilities over stdio MCP.
 - **Local-first persistence** — stores sessions, events, approvals, run checkpoints, configuration, workspaces, and tool ledgers under `%USERPROFILE%\.daedalus`.
 - **Verifiable distribution** — publishes both the npm source runtime and a separately versioned Windows x64 single-executable application.
 
@@ -52,7 +52,7 @@ Most users should install [Daedalus Studio](https://github.com/LuYingYiLong/daed
 ```mermaid
 flowchart LR
     S["Daedalus Studio"] -->|RPC protocol v3| R["Backend runtime"]
-    G["Godot editor plugin"] -->|RPC protocol v3| R
+    G["Optional editor client"] -->|RPC protocol v3| R
     X["External MCP client"] -->|stdio MCP| M["Daedalus MCP facade"]
     M -->|authenticated RPC| R
     R --> A["Agent Run state machine"]
@@ -60,7 +60,7 @@ flowchart LR
     R --> T["Tool policy + approvals"]
     R --> D["Sessions + configuration"]
     T --> W["Workspace, Git, terminal"]
-    T --> E["Godot tools + Editor Bridge"]
+    T --> E["Optional editor tools + bridge"]
     T --> H["Custom MCP host"]
 ```
 
@@ -74,8 +74,8 @@ The current release line is coordinated through checked manifests:
 | --- | --- |
 | Backend RPC | Protocol v3 |
 | Daedalus Studio | 1.0.8 or newer for the current binary line |
-| Daedalus Bridge | Editor Bridge Protocol v4 |
-| Godot | 4.5 or newer for the current editor plugin |
+| Daedalus Bridge | Optional Editor Bridge Protocol v4 |
+| Godot | 4.5 or newer when using the Godot integration |
 | Source runtime | Node.js 24.18.0 or newer |
 | Production binary | Windows x64 SEA |
 
@@ -149,9 +149,9 @@ Run state records intent, scope, lane, stage, Todo, pause reason, warnings, veri
 
 Approvals and tool-budget pauses are recoverable after restart. Active execution is marked interrupted rather than replayed; retry creates a related Run and reuses evidence without automatically repeating successful writes.
 
-## Godot Integration
+## Optional editor integrations
 
-Daedalus exposes two complementary Godot surfaces:
+The backend works without an editor. Godot is one optional integration surface with two complementary capabilities:
 
 1. **Static project tools** operate on validated workspace paths and cover scenes, scripts, resources, project settings, Input Map, Autoloads, export presets, dependencies, references, and project analysis.
 2. **Editor Bridge tools** are routed to a connected Godot editor and use capability negotiation for typed inspection, scene/resource patches, animation, maps, audio, navigation, previews, reimport, and bake operations.
@@ -268,7 +268,7 @@ Daedalus Studio production builds use their own verified binary transaction and 
 
 - Node.js 24.18.0 or newer within Node 24 for the Windows SEA release binary
 - npm
-- Godot 4.5 or newer for the Windows integration smoke suite
+- Godot 4.5 or newer only when running the Godot integration smoke suite
 - Windows and the native build toolchain for the SEA release binary
 
 ### Install and run

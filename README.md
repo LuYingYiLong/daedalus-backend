@@ -44,7 +44,7 @@ Most users should install [Daedalus Studio](https://github.com/LuYingYiLong/daed
 - **Approval-gated tools** — separates read, verify, propose, write, and destructive operations and preserves continuations without replaying successful writes.
 - **Workspace and integration tooling** — combines project tools, terminal validation, optional editor bridge patches, diagnostics, and read-only debug data.
 - **MCP host and servers** — connects external MCP servers and exposes Daedalus, workspace, terminal, and Skill capabilities over stdio MCP.
-- **Local-first persistence** — stores sessions, events, approvals, run checkpoints, configuration, workspaces, and tool ledgers under `%USERPROFILE%\.daedalus`.
+- **Local-first persistence** — stores sessions, events, approvals, run checkpoints, configuration, workspaces, and tool ledgers under the platform user home (`%USERPROFILE%\.daedalus` on Windows, `$HOME/.daedalus` on Linux and macOS).
 - **Verifiable distribution** — publishes both the npm source runtime and a separately versioned Windows x64 single-executable application.
 
 ## Architecture
@@ -211,7 +211,7 @@ See [docs/automation-mcp.md](./docs/automation-mcp.md) for its tool set and appr
 Daedalus discovers Skills from:
 
 - Project: `<workspace>/.github/skills/<slug>/SKILL.md`
-- Personal: `%USERPROFILE%\.daedalus\skills\<slug>\SKILL.md`
+- Personal: `<user-home>/.daedalus/skills/<slug>/SKILL.md` (`%USERPROFILE%` on Windows, `$HOME` on Linux and macOS)
 - Built-in: trusted Skills shipped with the backend
 
 Project and personal Skills are parsed as instructions, not permissions. They cannot grant tools, change tool risk, escape a workspace, or bypass approval. Use `/create-skill <requirements>` for a project Skill or `/create-skill --personal <requirements>` for a personal Skill.
@@ -236,7 +236,10 @@ No agentic system removes the need for review. Use version control, inspect appr
 
 ## Runtime Data
 
-Daedalus-owned state is registered through `src/app-paths.ts` and stored under `%USERPROFILE%\.daedalus` by default:
+Daedalus-owned state is registered through `src/app-paths.ts` and stored under the platform user home by default:
+
+- Windows: `%USERPROFILE%\.daedalus`
+- Linux and macOS: `$HOME/.daedalus`
 
 ```text
 backend/       Managed binary versions, current marker, pending update
@@ -266,10 +269,17 @@ Daedalus Studio production builds use their own verified binary transaction and 
 
 ### Prerequisites
 
-- Node.js 24.18.0 or newer within Node 24 for the Windows SEA release binary
+- Node.js 24.18.0 or newer within Node 24
 - npm
 - Godot 4.5 or newer only when running the Godot integration smoke suite
-- Windows and the native build toolchain for the SEA release binary
+- Windows and the native build toolchain only when building the Windows SEA release binary
+
+Ubuntu also needs the native packages used by keytar and the command sandbox:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libsecret-1-dev bubblewrap
+```
 
 ### Install and run
 
@@ -279,6 +289,8 @@ cd daedalus-backend
 npm ci
 npm run dev
 ```
+
+On Ubuntu or another POSIX system, run the same npm commands from a shell after installing the packages above.
 
 Useful checks:
 

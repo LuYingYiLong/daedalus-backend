@@ -101,3 +101,29 @@ test("Daedalus state uses USERPROFILE without legacy appdata or v2 paths", (): v
 		}
 	}
 });
+
+test("Daedalus state falls back to HOME on POSIX when USERPROFILE is absent", (): void => {
+	if (process.platform === "win32") {
+		return;
+	}
+
+	const previousUserProfile: string | undefined = process.env.USERPROFILE;
+	const previousHome: string | undefined = process.env.HOME;
+	delete process.env.USERPROFILE;
+	process.env.HOME = "/home/TestUser";
+
+	try {
+		assert.equal(getDaedalusDir(), join("/home/TestUser", ".daedalus"));
+	} finally {
+		if (previousUserProfile === undefined) {
+			delete process.env.USERPROFILE;
+		} else {
+			process.env.USERPROFILE = previousUserProfile;
+		}
+		if (previousHome === undefined) {
+			delete process.env.HOME;
+		} else {
+			process.env.HOME = previousHome;
+		}
+	}
+});

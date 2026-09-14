@@ -179,6 +179,19 @@ async function startRuntimeJob(params: {
 		};
 	}
 
+	const availability: GodotExecutableAvailability = await getExecutableAvailability(params.input);
+	if (availability.status !== "ready") {
+		const sandboxUnavailable: boolean = availability.error?.startsWith("sandbox_unavailable:") ?? false;
+		return {
+			ok: false,
+			code: sandboxUnavailable ? "sandbox_unavailable" : "godot_executable_unavailable",
+			error: availability.error ?? "Godot executable is unavailable.",
+			environmentIssue: true,
+			godotExecutablePath: availability.path,
+			godotExecutableStatus: availability.status
+		};
+	}
+
 	const preset: CommandPreset = createRuntimePreset(params.name, params.description, params.command, "write");
 	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
 		input: params.input,

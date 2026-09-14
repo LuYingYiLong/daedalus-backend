@@ -61,12 +61,14 @@ export type DaedalusPathKey =
 type DaedalusPathRegistry = Record<DaedalusPathKey, string>;
 
 export function getDaedalusDir(): string {
-	const userProfile: string | undefined = process.env.USERPROFILE;
-	if (!userProfile || userProfile.trim().length === 0) {
-		throw new Error("USERPROFILE is not configured");
+	const userProfile: string | undefined = process.env.USERPROFILE?.trim();
+	const home: string | undefined = process.env.HOME?.trim();
+	const root: string | undefined = userProfile || (process.platform !== "win32" ? home : undefined);
+	if (!root) {
+		throw new Error("USERPROFILE or HOME is not configured");
 	}
 
-	return join(userProfile, DAEDALUS_DIR_NAME);
+	return join(root, DAEDALUS_DIR_NAME);
 }
 
 function buildDaedalusPathRegistry(): DaedalusPathRegistry {

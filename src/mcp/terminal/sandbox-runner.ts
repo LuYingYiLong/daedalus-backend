@@ -1,4 +1,5 @@
 import { accessSync, constants, existsSync, lstatSync, realpathSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 
 export const UNSANDBOXED_CONSENT_TEXT: string = "RUN WITHOUT SANDBOX";
@@ -32,6 +33,9 @@ export type SandboxRuntimeOptions = {
 	env?: NodeJS.ProcessEnv | undefined;
 };
 
+const LINUX_SANDBOX_PROBE_TIMEOUT_MS: number = 2_000;
+const linuxSandboxProbeResults: Map<string, SandboxAvailability> = new Map();
+
 function splitPathEnv(value: string | undefined): string[] {
 	return (value ?? "").split(path.delimiter).filter((entry: string): boolean => entry.length > 0);
 }
@@ -47,6 +51,39 @@ function findExecutable(name: string, env: NodeJS.ProcessEnv = process.env): str
 		}
 	}
 	return null;
+}
+
+function probeLinuxSandbox(executablePath: string): SandboxAvailability {
+	const cached: SandboxAvailability | undefined = linuxSandboxProbeResults.get(executablePath);
+	if (cached !== undefined) return cached;
+	const result = spawnSync(executablePath, [
+		"--unshare-all",
+		"--die-with-parent",
+		"--new-session",
+		"--ro-bind", "/bin", "/bin",
+		"--ro-bind", "/usr", "/usr",
+		"--proc", "/proc",
+		"--dev", "/dev",
+		"--tmpfs", "/tmp",
+		"--",
+		"/bin/true"
+	], {
+		encoding: "utf8",
+		stdio: ["ignore", "ignore", "pipe"],
+		timeout: LINUX_SANDBOX_PROBE_TIMEOUT_MS
+	});
+	if (result.error === undefined && result.status === 0) {
+		const available: SandboxAvailability = { available: true, helperPath: executablePath };
+		linuxSandboxProbeResults.set(executablePath, available);
+		return available;
+	}
+	const detail: string = typeof result.stderr === "string" ? result.stderr.trim() : "";
+	const unavailable: SandboxAvailability = {
+		available: false,
+		error: `sandbox_unavailable: bwrap cannot create a Linux sandbox${detail.length > 0 ? `: ${detail}` : "."}`
+	};
+	linuxSandboxProbeResults.set(executablePath, unavailable);
+	return unavailable;
 }
 
 function validateWindowsSandboxHelper(candidate: string): SandboxAvailability {
@@ -118,8 +155,14 @@ export function getSandboxAvailability(options: SandboxRuntimeOptions = {}): San
 	}
 	if (platform === "linux") {
 		const executablePath: string | null = findExecutable("bwrap", env);
-		return executablePath === null
-			? { available: false, error: "sandbox_unavailable: bwrap is not installed or not in PATH." }
+		if (executablePath === null) {
+			return {
+				available: false,
+				error: "sandbox_unavailable: bwrap is not installed or not in PATH."
+			};
+		}
+		return options.env === undefined
+			? probeLinuxSandbox(executablePath)
 			: { available: true, helperPath: executablePath };
 	}
 	if (platform === "darwin") {

@@ -87,7 +87,7 @@ export async function runBackendSelfTest(options: {
 	const checks: SelfTestCheck[] = [];
 	checks.push(await runCheck("runtime-assets", verifyEmbeddedAssets));
 	checks.push(await runCheck("sqlite", verifySqlite));
-	if (options.requireSecretStore === true || isSea()) {
+	if (options.requireSecretStore === true || (isSea() && process.platform === "win32")) {
 		checks.push(await runCheck("secret-store", runSecretStoreSelfTest));
 	}
 

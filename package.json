@@ -42,6 +42,8 @@
     "build:native:win": "npm rebuild keytar --build-from-source",
     "build:sandbox-helper:win": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-sandbox-helper.ps1",
     "build:sea:win": "tsx scripts/build-windows-sea.ts",
+    "build:sea:linux": "tsx scripts/build-linux-sea.ts",
+    "release:sea:linux": "npm run typecheck && npm run build:sea:linux",
     "release:sea:win": "npm run typecheck && npm run build:sea:win",
     "smoke:beta": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/beta-smoke.ps1",
     "smoke:llm": "tsx scripts/llm-inline-diff-smoke.ts",

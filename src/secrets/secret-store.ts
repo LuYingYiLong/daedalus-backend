@@ -56,12 +56,17 @@ async function importKeytarDriver(): Promise<SecretStoreDriver | null> {
 }
 
 async function loadEmbeddedKeytarDriver(): Promise<SecretStoreDriver | null> {
-	if (process.platform !== "win32" || process.arch !== "x64") {
+	if (process.arch !== "x64"
+				|| (process.platform !== "win32" && process.platform !== "linux")) {
 		return null;
 	}
 
 	try {
-		const nativeAsset = await materializeRuntimeAsset("native.keytar.win32-x64", {
+		const keytarAsset: "native.keytar.win32-x64" | "native.keytar.linux-x64" =
+				process.platform === "win32"
+						? "native.keytar.win32-x64"
+						: "native.keytar.linux-x64";
+		const nativeAsset = await materializeRuntimeAsset(keytarAsset, {
 			rootDir: getBackendNativeRoot(),
 			fileName: "keytar.node"
 		});

@@ -31,6 +31,7 @@ export const RUNTIME_ASSET_PATHS = {
 	"skill.imageGen": "src/skills/builtin/image-gen/SKILL.md",
 	"godot.operationsScript": "src/mcp/godot/scripts/godot_operations.gd",
 	"native.keytar.win32-x64": "node_modules/keytar/build/Release/keytar.node",
+        "native.keytar.linux-x64": "node_modules/keytar/build/Release/keytar.node",
 	"plugin.workerBootstrap": "src/plugins/runtime/worker-bootstrap.js",
 	"plugin.workerProtocol": "src/plugins/runtime/worker-protocol.js"
 } as const;

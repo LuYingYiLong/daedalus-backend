@@ -62,6 +62,8 @@ function probeLinuxSandbox(executablePath: string): SandboxAvailability {
 		"--new-session",
 		"--ro-bind", "/bin", "/bin",
 		"--ro-bind", "/usr", "/usr",
+		"--ro-bind-try", "/lib", "/lib",
+		"--ro-bind-try", "/lib64", "/lib64",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--tmpfs", "/tmp",

@@ -1,7 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "./tool-sentinels.js";
 import { getDynamicMcpToolDefinitions, isDynamicMcpToolName } from "./dynamic-mcp-tools.js";
-import { getToolPolicy } from "./tool-policy.js";
+import { getToolPolicy, isSandboxedProcessToolName } from "./tool-policy.js";
 import { APPROVAL_REASON_ARG, APPROVAL_REASON_SCHEMA_PROPERTY } from "./approval-reason.js";
 import { BROWSER_TOOL_DEFINITIONS } from "./browser-tools.js";
 import { COMPUTER_TOOL_DEFINITIONS } from "./computer-tools.js";
@@ -13,6 +13,28 @@ type ChatCompletionFunctionTool = Extract<ChatCompletionTool, { type: "function"
 const SOURCE_FOLDER_ID_SCHEMA_PROPERTY: Record<string, unknown> = {
 	type: "string",
 	description: "Source folder id. In a multi-source workspace, pass the exact id returned by mcp_workspace_list_source_folders when this operation targets one source folder."
+};
+
+const EXTERNAL_ACCESS_SCHEMA_PROPERTY: Record<string, unknown> = {
+	type: "object",
+	description: "Request temporary read or execute access to exact absolute paths outside the workspace. Auto-safe sends the complete execution to the action reviewer; the grant lasts only for the current request and matching calls.",
+	properties: {
+		targets: {
+			type: "array",
+			minItems: 1,
+			maxItems: 16,
+			items: {
+				type: "object",
+				properties: {
+					path: { type: "string", minLength: 1, description: "Existing absolute file or directory path." },
+					mode: { type: "string", enum: ["read", "execute"], description: "execute also permits read access but never write access." },
+				},
+				required: ["path", "mode"],
+			},
+		},
+		reason: { type: "string", minLength: 1, description: "Why this exact external access is needed for the current action." },
+	},
+	required: ["targets", "reason"],
 };
 
 function supportsSourceFolderParameter(name: string): boolean {
@@ -103,6 +125,30 @@ function withSourceFolderSchema(tool: ChatCompletionTool): ChatCompletionTool {
 
 function withSourceFolderSchemas(tools: ChatCompletionTool[]): ChatCompletionTool[] {
 	return tools.map(withSourceFolderSchema);
+}
+
+function withExternalAccessSchema(tool: ChatCompletionTool): ChatCompletionTool {
+	if (!isFunctionTool(tool) || !isSandboxedProcessToolName(tool.function.name)) return tool;
+	const parameters: unknown = tool.function.parameters;
+	if (!isRecord(parameters)) return tool;
+	const properties: Record<string, unknown> = isRecord(parameters.properties) ? parameters.properties : {};
+	return {
+		...tool,
+		function: {
+			...tool.function,
+			parameters: {
+				...parameters,
+				properties: {
+					...properties,
+					externalAccess: EXTERNAL_ACCESS_SCHEMA_PROPERTY,
+				},
+			},
+		},
+	};
+}
+
+function withExternalAccessSchemas(tools: ChatCompletionTool[]): ChatCompletionTool[] {
+	return tools.map(withExternalAccessSchema);
 }
 
 export function withApprovalReasonSchema(tool: ChatCompletionTool): ChatCompletionTool {
@@ -2187,7 +2233,9 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 ];
 
 export const BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = withApprovalReasonSchemas(
-	withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS, ...COMPUTER_TOOL_DEFINITIONS, ...SCHEDULED_TASK_TOOL_DEFINITIONS, ...SUBAGENT_TOOL_DEFINITIONS])
+	withExternalAccessSchemas(
+		withSourceFolderSchemas([...BASE_BUILTIN_TOOL_DEFINITIONS, ...BROWSER_TOOL_DEFINITIONS, ...COMPUTER_TOOL_DEFINITIONS, ...SCHEDULED_TASK_TOOL_DEFINITIONS, ...SUBAGENT_TOOL_DEFINITIONS])
+	)
 );
 
 export function getToolDefinitions(workspaceId?: string | undefined): ChatCompletionTool[] {

@@ -121,6 +121,25 @@ test("approval persistence folds pending, interrupted, and executed states", ():
 	assert.equal(pendingStates[0]?.status, "pending");
 	assert.equal(pendingStates[0]?.restored, true);
 
+	const crossSandboxApproval: PendingApproval = {
+		...pendingApproval,
+		crossSandboxFingerprint: "cross-sandbox-fingerprint",
+		crossSandboxAuthorization: {
+			fingerprint: "cross-sandbox-fingerprint",
+			boundary: "sandbox_external_read",
+			targets: [{ path: "C:\\Tools", mode: "execute" }],
+			networkAccess: false,
+			sensitiveTarget: false,
+		},
+	};
+	const persistedCrossSandboxApproval = createPersistedApprovalRequestedData(
+		crossSandboxApproval,
+		undefined,
+		"workspace-a"
+	).approval;
+	assert.equal(persistedCrossSandboxApproval.crossSandboxFingerprint, "cross-sandbox-fingerprint");
+	assert.equal(persistedCrossSandboxApproval.crossSandboxAuthorization, undefined);
+
 	const interruptedStates = foldPendingApprovalStates([
 		createApprovalEvent("requested", requestedData, "2026-07-03T00:00:00.000Z"),
 		createApprovalEvent("executing", { startedAt: "2026-07-03T00:00:02.000Z" }, "2026-07-03T00:00:02.000Z")
@@ -228,6 +247,21 @@ test("cancelling a request clears pending approval continuation and persistence"
 		session.sessionId = metadata.id;
 		const pendingApproval: PendingApproval = createPendingApproval();
 		const pendingContinuation: PendingAiContinuation = createPendingContinuation();
+		session.approvalGateway.grantCrossSandboxAuthorization(
+			pendingContinuation.requestId,
+			{
+				fingerprint: "cancelled-cross-sandbox-grant",
+				boundary: "approved_unsandboxed",
+				targets: [],
+				networkAccess: false,
+				sensitiveTarget: false,
+			},
+			{
+				source: "model",
+				decision: "allow",
+				reason: "Test request grant.",
+			}
+		);
 		session.approvalGateway.upsertPending(pendingApproval);
 		session.pendingAiContinuations.set(pendingApproval.approvalId, pendingContinuation);
 		await store.appendApprovalEvent(
@@ -242,6 +276,13 @@ test("cancelling a request clears pending approval continuation and persistence"
 		assert.deepEqual(cancelledIds, [pendingApproval.approvalId]);
 		assert.equal(session.approvalGateway.listPending().length, 0);
 		assert.equal(session.pendingAiContinuations.size, 0);
+		assert.equal(
+			session.approvalGateway.getCrossSandboxAuthorization(
+				pendingContinuation.requestId,
+				"cancelled-cross-sandbox-grant"
+			),
+			undefined
+		);
 
 		const events = await store.readApprovalEvents(metadata.id);
 		assert.equal(events.some((event: StoredApprovalEvent): boolean => event.event === "cancelled"), true);

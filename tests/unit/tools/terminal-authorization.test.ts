@@ -104,3 +104,19 @@ test("terminal authorization binds preset, scene operation, and Godot runtime ar
 		);
 	}
 });
+
+test("terminal command authorization expires after sixty seconds", (): void => {
+	const args: Record<string, unknown> = { commandLine: "node --version" };
+	const authorization = createTerminalCommandAuthorization({
+		source: "model",
+		requestId: "request-expired",
+		toolCallId: "call-expired",
+		workspaceId: "workspace-a",
+		args,
+	});
+	authorization.expiresAt = Date.now() - 1;
+	assert.match(
+		rejectionReason(consumeTerminalCommandAuthorization(authorization, args, "workspace-a")),
+		/expired/u
+	);
+});

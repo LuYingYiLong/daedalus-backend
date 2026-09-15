@@ -80,6 +80,7 @@ export type CreateSessionForkParams = {
 	sourceSessionId: string;
 	sourceRequestId?: string | undefined;
 	title: string;
+	cutoff?: "before_user" | "through_request" | "through_latest" | undefined;
 };
 
 export type CreateSessionForkResult = {
@@ -220,10 +221,18 @@ function rewriteAttachmentMetadata(
 	return metadata;
 }
 
-function findAnchorMessage(rows: readonly MessageRow[], requestId: string | undefined): MessageRow {
+function findAnchorMessage(
+	rows: readonly MessageRow[],
+	requestId: string | undefined,
+	requireCompleted: boolean = false,
+): MessageRow {
 	const userRows: MessageRow[] = rows.filter((row: MessageRow): boolean => row.role === "user");
 	const anchor: MessageRow | undefined = requestId === undefined
-		? userRows.at(-1)
+		? (requireCompleted
+			? userRows.filter((row: MessageRow): boolean => rows.some(
+				(candidate: MessageRow): boolean => candidate.role === "assistant" && candidate.request_id === row.request_id,
+			)).at(-1)
+			: userRows.at(-1))
 		: userRows.find((row: MessageRow): boolean => row.request_id === requestId);
 	if (anchor === undefined) {
 		throw forkError(
@@ -245,6 +254,21 @@ function readTimelinePrefix(db: DatabaseSync, sourceSessionId: string, anchor: M
 	return boundary === undefined
 		? rows.filter((row: EventRow): boolean => row.created_at < anchor.created_at)
 		: rows.filter((row: EventRow): boolean => row.sequence < boundary.sequence);
+}
+
+function readTimelineThroughRequest(db: DatabaseSync, sourceSessionId: string, requestId: string): EventRow[] {
+	const rows = db.prepare(`
+		SELECT sequence, request_id, event_name, data_json, approval_id, workflow_id, run_id, created_at
+		FROM session_events
+		WHERE session_id = ? AND channel = 'timeline'
+		ORDER BY sequence
+	`).all(sourceSessionId) as EventRow[];
+	const lastRequestEvent: EventRow | undefined = rows.filter(
+		(row: EventRow): boolean => row.request_id === requestId,
+	).at(-1);
+	return lastRequestEvent === undefined
+		? []
+		: rows.filter((row: EventRow): boolean => row.sequence <= lastRequestEvent.sequence);
 }
 
 async function stageAttachments(
@@ -321,7 +345,8 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 		SELECT sequence, request_id, role, payload_json, created_at
 		FROM messages WHERE session_id = ? ORDER BY sequence
 	`).all(params.sourceSessionId) as MessageRow[];
-	const anchorRow: MessageRow = findAnchorMessage(messageRows, params.sourceRequestId);
+	const cutoff: NonNullable<CreateSessionForkParams["cutoff"]> = params.cutoff ?? "before_user";
+	const anchorRow: MessageRow = findAnchorMessage(messageRows, params.sourceRequestId, cutoff === "through_latest");
 	const anchorMessage: StoredMessage = parseSqlJson<StoredMessage>(anchorRow.payload_json);
 	const sourceRequestId: string = anchorMessage.requestId ?? anchorRow.request_id ?? "";
 	if (sourceRequestId.length === 0) {
@@ -356,10 +381,18 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 	const targetDir: string = getSessionDir(targetSessionId);
 	const stagingDir: string = `${targetDir}.fork-staging-${randomUUID()}`;
 	try {
-		const prefixMessageRows: MessageRow[] = messageRows.filter((row: MessageRow): boolean => row.sequence < anchorRow.sequence);
-		const eventRows: EventRow[] = readTimelinePrefix(db, params.sourceSessionId, anchorRow);
+		const requestMessageRows: MessageRow[] = messageRows.filter(
+			(row: MessageRow): boolean => row.request_id === sourceRequestId,
+		);
+		const lastRequestSequence: number = requestMessageRows.at(-1)?.sequence ?? anchorRow.sequence;
+		const copiedMessageRows: MessageRow[] = cutoff === "before_user"
+			? messageRows.filter((row: MessageRow): boolean => row.sequence < anchorRow.sequence)
+			: messageRows.filter((row: MessageRow): boolean => row.sequence <= lastRequestSequence);
+		const eventRows: EventRow[] = cutoff === "before_user"
+			? readTimelinePrefix(db, params.sourceSessionId, anchorRow)
+			: readTimelineThroughRequest(db, params.sourceSessionId, sourceRequestId);
 		const requestIds: Set<string> = new Set([
-			...prefixMessageRows.map((row: MessageRow): string => row.request_id ?? ""),
+			...copiedMessageRows.map((row: MessageRow): string => row.request_id ?? ""),
 			...eventRows.map((row: EventRow): string => row.request_id),
 		].filter((requestId: string): boolean => requestId.length > 0));
 		const plans = db.prepare(`
@@ -378,7 +411,7 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 			FROM attachments WHERE session_id = ? ORDER BY created_at
 		`).all(params.sourceSessionId) as AttachmentRow[];
 		const references: Set<string> = new Set();
-		for (const row of [...prefixMessageRows, anchorRow]) {
+		for (const row of cutoff === "before_user" ? [...copiedMessageRows, anchorRow] : copiedMessageRows) {
 			collectStringReferences(parseSqlJson<unknown>(row.payload_json), references);
 		}
 		for (const row of eventRows) {
@@ -424,8 +457,10 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 			targetSessionId,
 		);
 		const draft: SessionForkDraft = {
-			text: anchorMessage.content,
-			additionalContext: (rewrite(anchorMessage.additionalContext ?? []) as AdditionalContextItem[]),
+			text: cutoff === "before_user" ? anchorMessage.content : "",
+			additionalContext: cutoff === "before_user"
+				? (rewrite(anchorMessage.additionalContext ?? []) as AdditionalContextItem[])
+				: [],
 		};
 
 		runSessionTransaction(db, (): void => {
@@ -433,7 +468,7 @@ export async function createSessionFork(params: CreateSessionForkParams): Promis
 				INSERT INTO messages(session_id, sequence, request_id, role, payload_json, created_at)
 				VALUES (?, ?, ?, ?, ?, ?)
 			`);
-			for (const row of prefixMessageRows) {
+			for (const row of copiedMessageRows) {
 				insertMessage.run(
 					targetSessionId,
 					row.sequence,

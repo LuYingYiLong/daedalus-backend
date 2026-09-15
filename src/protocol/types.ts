@@ -3,6 +3,12 @@ import type {
 	additionalContextItemSchema,
 	aiChatParamsSchema,
 	clientRequestSchema,
+	conversationFlowBranchSchema,
+	conversationFlowBranchStateEventDataSchema,
+	conversationFlowNodeSchema,
+	conversationFlowNodeStateEventDataSchema,
+	conversationFlowSchema,
+	conversationFlowUpdatedEventDataSchema,
 	messageTextAnchorSchema,
 	promptIdSchema,
 	skillIdSchema,
@@ -65,6 +71,15 @@ export type SubagentEventDataMap = {
 
 export type SubagentEventName = keyof SubagentEventDataMap;
 
+export type ConversationFlow = z.infer<typeof conversationFlowSchema>;
+export type ConversationFlowBranch = z.infer<typeof conversationFlowBranchSchema>;
+export type ConversationFlowNode = z.infer<typeof conversationFlowNodeSchema>;
+export type ConversationFlowEventDataMap = {
+	"flow.updated": z.infer<typeof conversationFlowUpdatedEventDataSchema>;
+	"flow.branch.state": z.infer<typeof conversationFlowBranchStateEventDataSchema>;
+	"flow.node.state": z.infer<typeof conversationFlowNodeStateEventDataSchema>;
+};
+
 export type ProviderId = string;
 
 export type ChatMessage = {
@@ -96,6 +111,7 @@ export type ServerResponse =
 		error: {
 			code: string;
 			message: string;
+			details?: Record<string, unknown> | undefined;
 		};
 	};
 
@@ -109,6 +125,9 @@ export type CanonicalServerEventName =
 	| "agent.subgraph.node.retry"
 	| "agent.subgraph.node.approval"
 	| "agent.subgraph.merge.state"
+	| "flow.updated"
+	| "flow.branch.state"
+	| "flow.node.state"
 	| "agent.run.started"
 	| "agent.run.snapshot"
 	| "agent.step.started"

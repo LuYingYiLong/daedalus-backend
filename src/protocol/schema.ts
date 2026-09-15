@@ -993,6 +993,65 @@ export const subagentMergeStateEventDataSchema = z.object({
 	message: z.string().max(8_000).optional()
 }).strict();
 
+const flowIdentifierSchema = z.string().trim().min(1).max(240);
+export const conversationFlowNodeRoleSchema = z.enum(["user", "assistant"]);
+export const conversationFlowNodeStatusSchema = z.enum(["completed", "streaming", "waiting", "failed", "stopped"]);
+export const conversationFlowSchema = z.object({
+	flowId: flowIdentifierSchema,
+	title: z.string().trim().min(1).max(200),
+	workspaceId: z.string().min(1).max(200).nullable(),
+	rootBranchId: flowIdentifierSchema,
+	revision: z.number().int().positive(),
+	activeBranchId: flowIdentifierSchema.nullable(),
+	activeRequestId: flowIdentifierSchema.nullable(),
+	archivedAt: z.string().datetime().nullable(),
+	createdFromSessionId: flowIdentifierSchema.nullable(),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime(),
+}).strict();
+export const conversationFlowBranchSchema = z.object({
+	branchId: flowIdentifierSchema,
+	flowId: flowIdentifierSchema,
+	sessionId: flowIdentifierSchema,
+	parentBranchId: flowIdentifierSchema.nullable(),
+	forkRequestId: flowIdentifierSchema.nullable(),
+	forkRole: conversationFlowNodeRoleSchema.nullable(),
+	seedRequestId: flowIdentifierSchema.nullable(),
+	headNodeId: flowIdentifierSchema.nullable(),
+	pendingRegenerate: z.boolean(),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime(),
+}).strict();
+export const conversationFlowNodeSchema = z.object({
+	nodeId: flowIdentifierSchema,
+	flowId: flowIdentifierSchema,
+	branchId: flowIdentifierSchema,
+	sessionId: flowIdentifierSchema,
+	requestId: flowIdentifierSchema,
+	role: conversationFlowNodeRoleSchema,
+	parentNodeId: flowIdentifierSchema.nullable(),
+	status: conversationFlowNodeStatusSchema,
+	contentPreview: z.string().max(1_200),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime(),
+}).strict();
+export const conversationFlowUpdatedEventDataSchema = z.object({
+	flowId: flowIdentifierSchema,
+	revision: z.number().int().positive(),
+}).strict();
+export const conversationFlowBranchStateEventDataSchema = z.object({
+	flowId: flowIdentifierSchema,
+	branchId: flowIdentifierSchema,
+	revision: z.number().int().positive(),
+	activeRequestId: flowIdentifierSchema.nullable(),
+}).strict();
+export const conversationFlowNodeStateEventDataSchema = z.object({
+	flowId: flowIdentifierSchema,
+	nodeId: flowIdentifierSchema,
+	revision: z.number().int().positive(),
+	status: conversationFlowNodeStatusSchema,
+}).strict();
+
 export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
@@ -1310,6 +1369,101 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("ai.chat"),
 		params: aiChatParamsSchema,
 	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.create"),
+		params: z.object({
+			title: z.string().trim().min(1).max(200),
+			workspaceId: z.string().min(1).max(200).optional(),
+			provider: providerIdSchema.optional(),
+			model: z.string().min(1).max(200).optional(),
+			reasoningEffort: z.string().min(1).max(32).optional(),
+			chatMode: z.enum(["agent", "ask", "plan", "goal"]).optional(),
+			approvalMode: z.enum(["manual", "auto-safe", "full-trust"]).optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.create.fromSession"),
+		params: z.object({
+			sourceSessionId: flowIdentifierSchema,
+			title: z.string().trim().min(1).max(200),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.list"),
+		params: z.object({
+			workspaceId: z.string().min(1).max(200).optional(),
+			archived: z.boolean().optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.get"),
+		params: z.object({ flowId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.node.get"),
+		params: z.object({ flowId: flowIdentifierSchema, nodeId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.rename"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			title: z.string().trim().min(1).max(200),
+			revision: z.number().int().positive(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.archive"),
+		params: z.object({ flowId: flowIdentifierSchema, revision: z.number().int().positive() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.branch.create"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			parentBranchId: flowIdentifierSchema,
+			sourceNodeId: flowIdentifierSchema,
+			title: z.string().trim().min(1).max(200).optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.branch.copyToChat"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			branchId: flowIdentifierSchema,
+			title: z.string().trim().min(1).max(200),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.layout.update"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			revision: z.number().int().positive(),
+			positions: z.array(z.object({
+				nodeId: flowIdentifierSchema,
+				x: z.number().finite().min(-10_000_000).max(10_000_000),
+				y: z.number().finite().min(-10_000_000).max(10_000_000),
+			}).strict()).max(2_000),
+		}).strict(),
+	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
@@ -2945,6 +3099,7 @@ export const serverResponseSchema = z.discriminatedUnion("ok", [
 		error: z.object({
 			code: z.string(),
 			message: z.string(),
+			details: z.record(z.string(), z.unknown()).optional(),
 		}),
 	}),
 ]);

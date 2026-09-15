@@ -76,8 +76,9 @@ export function createPersistedApprovalRequestedData(
 	continuation: PendingAiContinuation | undefined,
 	workspaceId: string | undefined
 ): PersistedApprovalRequestedData {
+	const { crossSandboxAuthorization: _crossSandboxAuthorization, ...persistedApproval } = approval;
 	const data: PersistedApprovalRequestedData = {
-		approval,
+		approval: persistedApproval,
 		createdAt: new Date(approval.createdAt).toISOString()
 	};
 

@@ -4,6 +4,8 @@ import type { ServerEvent } from "../protocol/types.js";
 import type { ClientSession } from "./client-session.js";
 import { sendJson } from "./send-json.js";
 import { sessionSearchService } from "../session-search/service.js";
+import { releaseConversationFlowRun } from "../session/conversation-flow-store.js";
+import { logger } from "../logger.js";
 
 export type ClientType = "godot_editor_bridge" | "godot_runtime_test_bridge" | "studio" | "studio_remote" | "studio_scheduler" | "cli" | "smoke" | "external_mcp" | "legacy";
 
@@ -405,5 +407,23 @@ export function finishSessionRun(sessionId: string | undefined, requestId: strin
 	if (activeSessionRuns.get(sessionId) === requestId) {
 		activeSessionRuns.delete(sessionId);
 		activeSessionRunControllers.delete(sessionId);
+	}
+	const runtime: ClientSession | undefined = sessionRuntimes.get(sessionId);
+	const approvalIsPending: boolean = (runtime?.approvalGateway.listPending().length ?? 0) > 0;
+	const toolBudgetIsPending: boolean = runtime === undefined
+		? false
+		: [...runtime.pendingToolBudgets.values()].some((pending): boolean => pending.requestId === requestId);
+	if (!approvalIsPending && !toolBudgetIsPending) {
+		void releaseConversationFlowRun(sessionId, requestId)
+			.then((flow): void => {
+				if (flow === null) return;
+				broadcastGlobalEvent(requestId, "flow.updated", {
+					flowId: flow.flowId,
+					revision: flow.revision,
+				});
+			})
+			.catch((error: unknown): void => {
+				logger.warn("flow", "run_lock_release_failed", { sessionId, requestId }, error instanceof Error ? error.message : String(error));
+			});
 	}
 }

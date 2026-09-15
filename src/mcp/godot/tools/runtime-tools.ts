@@ -45,7 +45,7 @@ async function getExecutableAvailability(
 		commandLine: describePresetCommand(command),
 		cwd: projectRoot,
 		workspaceRoot: projectRoot,
-		readOnlyPaths: path.isAbsolute(GODOT_EXECUTABLE) ? [path.dirname(GODOT_EXECUTABLE)] : [],
+		externalReadOnlyPaths: path.isAbsolute(GODOT_EXECUTABLE) ? [path.dirname(GODOT_EXECUTABLE)] : [],
 		workspaceId: typeof input.__daedalusWorkspaceId === "string" ? input.__daedalusWorkspaceId : undefined
 	});
 	if (!resolution.ok) {
@@ -199,7 +199,7 @@ async function startRuntimeJob(params: {
 		commandLine: describePresetCommand(params.command),
 		cwd: projectRoot,
 		workspaceRoot: projectRoot,
-		readOnlyPaths: path.isAbsolute(params.command[0]!) ? [path.dirname(params.command[0]!)] : [],
+		externalReadOnlyPaths: path.isAbsolute(params.command[0]!) ? [path.dirname(params.command[0]!)] : [],
 		workspaceId: typeof params.input.__daedalusWorkspaceId === "string"
 			? params.input.__daedalusWorkspaceId
 			: undefined

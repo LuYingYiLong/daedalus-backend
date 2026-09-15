@@ -13,9 +13,11 @@ export type SessionBrowserSnapshot = {
 };
 
 export async function createSessionBrowserSnapshot(session: ClientSession, mcpHost: McpHost): Promise<SessionBrowserSnapshot> {
-	const sessions: SessionMetadata[] = await listSessions();
-	const archivedSessions: SessionMetadata[] = await listArchivedSessions();
-	hydrateWorkspacesFromSessionMetadata([...sessions, ...archivedSessions]);
+	const allSessions: SessionMetadata[] = await listSessions();
+	const allArchivedSessions: SessionMetadata[] = await listArchivedSessions();
+	hydrateWorkspacesFromSessionMetadata([...allSessions, ...allArchivedSessions]);
+	const sessions: SessionMetadata[] = allSessions.filter((candidate: SessionMetadata): boolean => candidate.surface !== "flow_branch");
+	const archivedSessions: SessionMetadata[] = allArchivedSessions.filter((candidate: SessionMetadata): boolean => candidate.surface !== "flow_branch");
 
 	return {
 		sessions,

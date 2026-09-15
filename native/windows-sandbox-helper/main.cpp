@@ -604,10 +604,15 @@ int run(int argc, wchar_t** argv) {
     options.cwd = fullPath(options.cwd);
     requireAbsoluteExisting(options.workspace, true);
     requireAbsoluteExisting(options.cwd, true);
-    if (!isInside(options.workspace, options.cwd)) fail(L"cwd must remain inside workspace");
-    for (const std::wstring& path : options.readOnly) {
+    for (std::wstring& path : options.readOnly) {
+        path = fullPath(path);
         requireAbsoluteExisting(path, isDirectory(path));
     }
+    const bool cwdAllowed = isInside(options.workspace, options.cwd)
+        || std::any_of(options.readOnly.begin(), options.readOnly.end(), [&options](const std::wstring& readOnlyPath) {
+            return isDirectory(readOnlyPath) && isInside(readOnlyPath, options.cwd);
+        });
+    if (!cwdAllowed) fail(L"cwd must remain inside workspace or an authorized read-only directory");
     Profile profile = createProfile(options.network);
     std::vector<AclGrant> grants;
     DWORD exitCode = 1;

@@ -113,6 +113,10 @@ const handleSubagentRequest: RequestHandler = createLazyHandler(async (): Promis
 	return (await import("./handlers/subagent-handlers.js")).handleSubagentRequest;
 });
 
+const handleConversationFlowRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
+	return (await import("./handlers/conversation-flow-handlers.js")).handleConversationFlowRequest;
+});
+
 const handleHookRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
 	return (await import("./handlers/hook-handlers.js")).handleHookRequest;
 });
@@ -180,6 +184,16 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"provider.model.add",
 	"provider.model.update",
 	"ai.chat",
+	"flow.create",
+	"flow.create.fromSession",
+	"flow.list",
+	"flow.get",
+	"flow.node.get",
+	"flow.rename",
+	"flow.archive",
+	"flow.branch.create",
+	"flow.branch.copyToChat",
+	"flow.layout.update",
 	"agent.run.retry",
 	"agent.subgraph.get",
 	"agent.subgraph.list",
@@ -534,6 +548,16 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["ai.toolBudget.continue", handleChatRequest],
 	["ai.toolBudget.stop", handleChatRequest],
 	["ai.chat", handleChatRequest],
+	["flow.create", handleConversationFlowRequest],
+	["flow.create.fromSession", handleConversationFlowRequest],
+	["flow.list", handleConversationFlowRequest],
+	["flow.get", handleConversationFlowRequest],
+	["flow.node.get", handleConversationFlowRequest],
+	["flow.rename", handleConversationFlowRequest],
+	["flow.archive", handleConversationFlowRequest],
+	["flow.branch.create", handleConversationFlowRequest],
+	["flow.branch.copyToChat", handleConversationFlowRequest],
+	["flow.layout.update", handleConversationFlowRequest],
 	["agent.run.retry", handleChatRequest],
 	["agent.subgraph.get", handleSubagentRequest],
 	["agent.subgraph.list", handleSubagentRequest],

@@ -186,6 +186,20 @@ test("workspace tool catalog exposes approval reason schema for write tools", ()
 	}
 });
 
+test("sandboxed process tools expose bounded external access declarations", (): void => {
+	const catalog = createWorkspaceToolCatalog({ workspaceId: "workspace-external-access" });
+	const runCommand = catalog.getDefinitionsForNames(["mcp_terminal_run_command"])[0];
+	const readText = catalog.getDefinitionsForNames(["mcp_workspace_read_text_file"])[0];
+	const externalAccess = getFunctionToolProperties(runCommand!).externalAccess as Record<string, unknown> | undefined;
+	const targets = (externalAccess?.properties as Record<string, unknown> | undefined)?.targets as Record<string, unknown> | undefined;
+
+	assert.equal(externalAccess?.type, "object");
+	assert.deepEqual(externalAccess?.required, ["targets", "reason"]);
+	assert.equal(targets?.minItems, 1);
+	assert.equal(targets?.maxItems, 16);
+	assert.equal("externalAccess" in getFunctionToolProperties(readText!), false);
+});
+
 test("context controls are exposed only when the execution lane enables them", (): void => {
 	const contextControl: ContextControlContext = {
 		getState: () => ({ schemaVersion: 1, generation: 0, activeSummaryBlockIds: [], compactedToolResultBlockIds: [] }),

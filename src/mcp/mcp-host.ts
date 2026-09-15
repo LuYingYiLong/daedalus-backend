@@ -46,7 +46,11 @@ import {
 } from "../tools/dynamic-mcp-tools.js";
 import { getCurrentMcpWorkspaceId } from "./request-context.js";
 import { getApprovalMode } from "../approval-settings-store.js";
-import type { TerminalCommandAuthorization } from "./terminal/authorization.js";
+import {
+	getAuthorizedExternalAccessTargets,
+	type TerminalCommandAuthorization,
+} from "./terminal/authorization.js";
+import { isPathCoveredByExternalTargets } from "../tools/cross-sandbox-access.js";
 import type { McpProgressNotification } from "./terminal/progress.js";
 import { resolveEffectiveGodotExecutable } from "../godot-executable-resolver.js";
 import { readGodotProjectFeatureVersion } from "../godot-documentation/project-version.js";
@@ -859,6 +863,13 @@ export class McpHost {
 			: undefined;
 		if (workspace !== undefined) {
 			const requestedCwd: string | undefined = typeof args.cwd === "string" ? args.cwd.trim() : undefined;
+			const reviewedExternalCwd: boolean = requestedCwd !== undefined
+				&& requestedCwd.length > 0
+				&& path.isAbsolute(requestedCwd)
+				&& isPathCoveredByExternalTargets(
+					path.resolve(requestedCwd),
+					getAuthorizedExternalAccessTargets(commandAuthorization)
+				);
 			const requestedWorkingDirectory: string | undefined = typeof args.workingDirectory === "string"
 				? args.workingDirectory.trim()
 				: undefined;
@@ -869,7 +880,7 @@ export class McpHost {
 			const sourceSelection = requiresWorkspaceSource || sourceFolderId !== undefined
 				? resolveWorkspaceTerminalSource(workspace, {
 					sourceFolderId,
-					pathHint: requestedCwd ?? requestedWorkingDirectory,
+					pathHint: reviewedExternalCwd ? requestedWorkingDirectory : requestedCwd ?? requestedWorkingDirectory,
 					presetName: isPresetCall ? presetName : undefined
 				})
 				: undefined;
@@ -882,7 +893,7 @@ export class McpHost {
 					? path.resolve(requestedCwd)
 					: source === undefined ? requestedCwd : path.resolve(source.path, requestedCwd);
 				const cwdSource = findContainingWorkspaceSourceFolder(workspace, candidateCwd);
-				if (source !== undefined && (cwdSource === undefined || cwdSource.id !== source.id)) {
+				if (!reviewedExternalCwd && source !== undefined && (cwdSource === undefined || cwdSource.id !== source.id)) {
 					throw new WorkspaceSourceResolutionError(
 						"source_boundary",
 						workspace,

@@ -1,4 +1,10 @@
-import { consumeTerminalCommandAuthorization, type TerminalCommandAuthorization } from "./authorization.js";
+import { realpathSync } from "node:fs";
+import {
+	consumeTerminalCommandAuthorization,
+	getAuthorizedExternalAccessTargets,
+	type TerminalCommandAuthorization,
+} from "./authorization.js";
+import type { CrossSandboxExecutionBoundary, ExternalAccessTarget } from "../../tools/cross-sandbox-access.js";
 import type { CommandInvocation } from "./process-runner.js";
 import {
 	createSandboxEnvironment,
@@ -34,6 +40,7 @@ export function resolveSandboxedProcessInvocation(params: {
 	workspaceId?: string | undefined;
 	env?: Record<string, string> | undefined;
 	readOnlyPaths?: readonly string[] | undefined;
+	externalReadOnlyPaths?: readonly string[] | undefined;
 	runtime?: SandboxRuntimeOptions | undefined;
 }): ProcessInvocationResolution {
 	const trusted: boolean = params.input.__daedalusApprovalMode === "full-trust";
@@ -66,15 +73,73 @@ export function resolveSandboxedProcessInvocation(params: {
 		};
 	}
 
+	const authorizedTargets: readonly ExternalAccessTarget[] = getAuthorizedExternalAccessTargets(
+		params.input.__daedalusCommandAuthorization
+	);
+	const externalTargetKey = (value: string): string => process.platform === "win32" ? value.toLowerCase() : value;
+	const externalTargetsByPath: Map<string, ExternalAccessTarget> = new Map(
+		authorizedTargets.map((target: ExternalAccessTarget): [string, ExternalAccessTarget] => [externalTargetKey(target.path), target])
+	);
+	for (const candidate of params.externalReadOnlyPaths ?? []) {
+		try {
+			const resolvedPath: string = realpathSync(candidate);
+			const key: string = externalTargetKey(resolvedPath);
+			if (!externalTargetsByPath.has(key)) {
+				externalTargetsByPath.set(key, { path: resolvedPath, mode: "read" });
+			}
+		} catch {
+			return {
+				ok: false,
+				result: {
+					ok: false,
+					code: "cross_sandbox_access_invalid",
+					error: `External read-only path is unavailable: ${candidate}`,
+				},
+			};
+		}
+	}
+	const externalTargets: ExternalAccessTarget[] = [...externalTargetsByPath.values()].sort(
+		(left: ExternalAccessTarget, right: ExternalAccessTarget): number => externalTargetKey(left.path).localeCompare(externalTargetKey(right.path))
+	);
 	const sandboxInvocation = createSandboxInvocation({
 		command: params.command,
 		cwd: params.cwd,
 		workspaceRoot: params.workspaceRoot,
 		env: params.env,
-		readOnlyPaths: params.readOnlyPaths,
+		readOnlyPaths: [
+			...(params.readOnlyPaths ?? []),
+			...externalTargets.map((target: ExternalAccessTarget): string => target.path),
+		],
+		network: params.input.__daedalusCommandAuthorization?.crossSandbox?.networkAccess === true,
 		runtime: params.runtime
 	});
 	if (sandboxInvocation.available) {
+		if (params.input.__daedalusCommandAuthorization?.crossSandbox !== undefined) {
+			const boundary: CrossSandboxExecutionBoundary = "sandbox_external_read";
+			const authorization = consumeTerminalCommandAuthorization(
+				params.input.__daedalusCommandAuthorization,
+				params.input,
+				params.workspaceId,
+				{
+					boundary,
+					commandLine: params.commandLine,
+					cwd: params.cwd,
+					externalTargets,
+					networkAccess: sandboxInvocation.network,
+				}
+			);
+			if (!authorization.allowed) {
+				return {
+					ok: false,
+					result: {
+						ok: false,
+						code: "cross_sandbox_authorization_required",
+						error: authorization.reason,
+						sandboxMode: sandboxInvocation.sandboxMode,
+					},
+				};
+			}
+		}
 		return {
 			ok: true,
 			invocation: {
@@ -86,7 +151,8 @@ export function resolveSandboxedProcessInvocation(params: {
 			}
 		};
 	}
-	if (!isUnsandboxedConsentText(params.input.__daedalusConsentText)) {
+	const directAuthorization = params.input.__daedalusCommandAuthorization;
+	if (directAuthorization?.source === "user" && !isUnsandboxedConsentText(params.input.__daedalusConsentText)) {
 		return {
 			ok: false,
 			result: {
@@ -101,17 +167,24 @@ export function resolveSandboxedProcessInvocation(params: {
 		};
 	}
 
-	const directAuthorization = consumeTerminalCommandAuthorization(
-		params.input.__daedalusCommandAuthorization,
+	const authorization = consumeTerminalCommandAuthorization(
+		directAuthorization,
 		params.input,
-		params.workspaceId
+		params.workspaceId,
+		{
+			boundary: "approved_unsandboxed",
+			commandLine: params.commandLine,
+			cwd: params.cwd,
+			externalTargets,
+			networkAccess: directAuthorization?.crossSandbox?.networkAccess === true,
+		}
 	);
-	if (!directAuthorization.allowed) {
+	if (!authorization.allowed) {
 		return {
 			ok: false,
 			result: {
 				ok: false,
-				error: `${sandboxInvocation.error} ${directAuthorization.reason}`,
+				error: `${sandboxInvocation.error} ${authorization.reason}`,
 				code: "sandbox_unavailable",
 				sandboxMode: sandboxInvocation.sandboxMode,
 				workspaceId: params.workspaceId,
@@ -131,7 +204,7 @@ export function resolveSandboxedProcessInvocation(params: {
 				shell: true,
 				env: createSandboxEnvironment(params.env),
 				sandboxMode: "approved-unsandboxed",
-				authorizationSource: directAuthorization.source
+				authorizationSource: authorization.source
 			}
 			: {
 				...commonInvocation,
@@ -139,7 +212,7 @@ export function resolveSandboxedProcessInvocation(params: {
 				args: [...params.command.args],
 				env: createSandboxEnvironment(params.env),
 				sandboxMode: "approved-unsandboxed",
-				authorizationSource: directAuthorization.source
+				authorizationSource: authorization.source
 			}
 	};
 }

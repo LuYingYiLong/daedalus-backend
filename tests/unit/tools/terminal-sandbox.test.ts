@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -80,7 +81,14 @@ test("unsandboxed fallback consumes an exact, argument-bound one-shot authorizat
 		requestId: "request-a",
 		toolCallId: "call-a",
 		workspaceId: "workspace-a",
-		args
+		args,
+		crossSandbox: {
+			fingerprint: "host-fingerprint",
+			boundary: "approved_unsandboxed",
+			targets: [],
+			networkAccess: false,
+			sensitiveTarget: false
+		}
 	});
 	const result = resolveSandboxedProcessInvocation({
 		input: {
@@ -115,4 +123,98 @@ test("unsandboxed fallback consumes an exact, argument-bound one-shot authorizat
 	});
 	assert.equal(replay.ok, false);
 	if (!replay.ok) assert.match(String(replay.result.error), /already consumed/u);
+});
+
+test("a model authorization permits one reviewed host invocation without user consent text", (): void => {
+	const args: Record<string, unknown> = { presetName: "workspace.typecheck" };
+	const authorization = createTerminalCommandAuthorization({
+		source: "model",
+		requestId: "request-model",
+		toolCallId: "call-model",
+		toolName: "mcp_terminal_run_safe_preset",
+		workspaceId: "workspace-a",
+		args,
+		crossSandbox: {
+			fingerprint: "model-host-fingerprint",
+			boundary: "approved_unsandboxed",
+			targets: [],
+			networkAccess: false,
+			sensitiveTarget: false
+		}
+	});
+	const result = resolveSandboxedProcessInvocation({
+		input: {
+			...args,
+			__daedalusApprovalMode: "auto-safe",
+			__daedalusCommandAuthorization: authorization
+		},
+		command: { kind: "argv", command: "npm", args: ["run", "typecheck"] },
+		commandLine: "npm run typecheck",
+		cwd: "/workspace",
+		workspaceRoot: "/workspace",
+		workspaceId: "workspace-a",
+		runtime: { platform: "aix", env: { PATH: "/usr/bin" } }
+	});
+	assert.equal(result.ok, true);
+	if (result.ok) assert.equal(result.invocation.authorizationSource, "model");
+});
+
+test("reviewed external paths are mounted read-only in the Windows sandbox", async (): Promise<void> => {
+	const root: string = await mkdtemp(path.join(tmpdir(), "daedalus-external-access-"));
+	try {
+		const helperPath: string = path.join(root, "sandbox-helper.exe");
+		const workspaceRoot: string = path.join(root, "workspace");
+		const externalRoot: string = path.join(root, "external");
+		await writeFile(helperPath, "helper");
+		await mkdir(workspaceRoot);
+		await mkdir(externalRoot);
+		const args: Record<string, unknown> = {
+			commandLine: "tool.exe --version",
+			externalAccess: {
+				targets: [{ path: externalRoot, mode: "execute" }],
+				reason: "Run the installed verifier."
+			}
+		};
+		const targets = [{ path: realpathSync(externalRoot), mode: "execute" as const }];
+		const authorization = createTerminalCommandAuthorization({
+			source: "model",
+			requestId: "request-external",
+			toolCallId: "call-external",
+			toolName: "mcp_terminal_run_command",
+			workspaceId: "workspace-a",
+			args,
+			crossSandbox: {
+				fingerprint: "external-fingerprint",
+				boundary: "sandbox_external_read",
+				targets,
+				networkAccess: false,
+				sensitiveTarget: false
+			}
+		});
+		const result = resolveSandboxedProcessInvocation({
+			input: {
+				...args,
+				__daedalusApprovalMode: "auto-safe",
+				__daedalusCommandAuthorization: authorization
+			},
+			command: { kind: "shell", commandLine: "tool.exe --version" },
+			commandLine: "tool.exe --version",
+			cwd: workspaceRoot,
+			workspaceRoot,
+			externalReadOnlyPaths: [externalRoot],
+			workspaceId: "workspace-a",
+			runtime: {
+				platform: "win32",
+				env: { DAEDALUS_WINDOWS_SANDBOX_HELPER: helperPath }
+			}
+		});
+		assert.equal(result.ok, true);
+		if (result.ok) {
+			assert.equal(result.invocation.sandboxMode, "os-sandbox");
+			assert.equal(result.invocation.args.includes("--read-only"), true);
+			assert.equal(result.invocation.args.includes(realpathSync(externalRoot)), true);
+		}
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

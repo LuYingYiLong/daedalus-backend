@@ -115,13 +115,17 @@ const HARD_RISK_PATTERNS: readonly RegExp[] = [
 	/\b(?:cat|type|Get-Content|gc)\b[\s\S]*(?:\.ssh|id_rsa|credentials?|secrets?|tokens?|api[_-]?keys?)/iu
 ];
 
-export function commandRequiresUserApproval(args: Record<string, unknown>, workspaceId?: string | undefined): string | null {
+export function commandRequiresUserApproval(
+	args: Record<string, unknown>,
+	workspaceId?: string | undefined,
+	options: { allowCrossWorkspace?: boolean | undefined } = {}
+): string | null {
 	const commandLine: string = typeof args.commandLine === "string" ? args.commandLine.trim() : "";
 	if (commandLine.length === 0) {
 		return "The command line is empty or invalid.";
 	}
 	const cwd: string = typeof args.cwd === "string" ? args.cwd.trim() : "";
-	if (/^(?:[A-Za-z]:[\\/]|\/)/u.test(cwd)) {
+	if (options.allowCrossWorkspace !== true && /^(?:[A-Za-z]:[\\/]|\/)/u.test(cwd)) {
 		const workspace = workspaceId === undefined ? undefined : findWorkspace(workspaceId);
 		if (workspace === undefined || !isPathInsideWorkspaceSources(workspace, cwd)) {
 			return "Absolute or cross-workspace command paths require user approval.";

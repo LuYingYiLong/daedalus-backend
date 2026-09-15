@@ -34,6 +34,13 @@ import {
 	UNSANDBOXED_CONSENT_TEXT,
 	type SandboxAvailability
 } from "../mcp/terminal/sandbox-runner.js";
+import {
+	isGodotProcessTool,
+	resolveConfiguredGodotExecutablePath,
+	resolveCrossSandboxAccess,
+	type CrossSandboxAuthorizationScope,
+} from "./cross-sandbox-access.js";
+import type { ToolReviewAudit } from "./tool-policy.js";
 
 export type PendingApproval = {
 	approvalId: string;
@@ -52,12 +59,16 @@ export type PendingApproval = {
 	approvalKind?: "network_download" | undefined;
 	downloadAuthorization?: DownloadAuthorizationScope | undefined;
 	networkAccessRequired?: NetworkAccessRequired | undefined;
+	crossSandboxAuthorization?: CrossSandboxAuthorizationScope | undefined;
+	crossSandboxFingerprint?: string | undefined;
 };
 
 export type ApprovalRequestOptions = {
+	requiredConsent?: ToolRequiredConsent | undefined;
 	approvalKind?: "network_download" | undefined;
 	downloadAuthorization?: DownloadAuthorizationScope | undefined;
 	networkAccessRequired?: NetworkAccessRequired | undefined;
+	crossSandboxAuthorization?: CrossSandboxAuthorizationScope | undefined;
 };
 
 function collectApprovalArtifactRefs(args: Record<string, unknown>): string[] {
@@ -70,6 +81,7 @@ export type ApprovalGatewayOptions = {
 	reviewAction?: typeof reviewAction | undefined;
 	reviewCommand?: typeof reviewWorkspaceCommand | undefined;
 	resolveSandboxAvailability?: (() => SandboxAvailability) | undefined;
+	resolveGodotExecutablePath?: ((workspaceId?: string | undefined) => Promise<string | undefined>) | undefined;
 };
 
 type ApprovalEvaluationContext = {
@@ -97,9 +109,11 @@ export type ApprovalScope = {
 export class ApprovalGateway {
 	private pendingApprovals: Map<string, PendingApproval> = new Map();
 	private downloadAuthorizations: Map<string, Map<string, DownloadAuthorizationScope>> = new Map();
+	private crossSandboxAuthorizations: Map<string, Map<string, { scope: CrossSandboxAuthorizationScope; review: ToolReviewAudit }>> = new Map();
 	private mode: ApprovalMode;
 	private readonly reviewAction: typeof reviewAction;
 	private readonly resolveSandboxAvailability: () => SandboxAvailability;
+	private readonly resolveGodotExecutablePath: (workspaceId?: string | undefined) => Promise<string | undefined>;
 
 	constructor(mode: ApprovalMode = "manual", options: ApprovalGatewayOptions = {}) {
 		this.mode = mode;
@@ -126,6 +140,7 @@ export class ApprovalGateway {
 				};
 			});
 		this.resolveSandboxAvailability = options.resolveSandboxAvailability ?? getSandboxAvailability;
+		this.resolveGodotExecutablePath = options.resolveGodotExecutablePath ?? resolveConfiguredGodotExecutablePath;
 	}
 
 	setMode(mode: ApprovalMode): void {
@@ -167,16 +182,36 @@ export class ApprovalGateway {
 			policyFacts
 		};
 		const review = await this.reviewAction(reviewInput);
+		const crossSandboxAuthorization: CrossSandboxAuthorizationScope | undefined = approvalOptions.crossSandboxAuthorization;
+		const enrichedAudit: ToolReviewAudit = crossSandboxAuthorization === undefined
+			? review.audit
+			: {
+				...review.audit,
+				executionBoundary: crossSandboxAuthorization.boundary,
+				externalAccessModes: [...new Set(crossSandboxAuthorization.targets.map((target): "read" | "execute" => target.mode))],
+				externalTargetCount: crossSandboxAuthorization.targets.length,
+				sideEffects: [...new Set([
+					...(review.audit.sideEffects ?? []),
+					crossSandboxAuthorization.boundary,
+				])],
+			};
 		if (review.decision === "allow") {
-			return { action: "allow", review: review.audit };
+			if (crossSandboxAuthorization !== undefined && context.requestId !== undefined) {
+				this.grantCrossSandboxAuthorization(context.requestId, crossSandboxAuthorization, enrichedAudit);
+			}
+			return {
+				action: "allow",
+				review: enrichedAudit,
+				crossSandboxAuthorization,
+			};
 		}
 		if (review.decision === "deny") {
-			return { action: "deny", reason: review.reason, review: review.audit };
+			return { action: "deny", reason: review.reason, review: enrichedAudit };
 		}
 		return {
 			action: "request_approval",
 			reason: review.reason,
-			review: review.audit,
+			review: enrichedAudit,
 			...approvalOptions
 		};
 	}
@@ -232,6 +267,59 @@ export class ApprovalGateway {
 
 	clearDownloadAuthorizations(requestId: string): void {
 		this.downloadAuthorizations.delete(requestId);
+	}
+
+	getCrossSandboxAuthorization(
+		requestId: string | undefined,
+		fingerprint: string
+	): { scope: CrossSandboxAuthorizationScope; review: ToolReviewAudit } | undefined {
+		if (requestId === undefined) return undefined;
+		return this.crossSandboxAuthorizations.get(requestId)?.get(fingerprint);
+	}
+
+	grantCrossSandboxAuthorization(
+		requestId: string,
+		scope: CrossSandboxAuthorizationScope,
+		review: ToolReviewAudit
+	): void {
+		const grants = this.crossSandboxAuthorizations.get(requestId) ?? new Map();
+		grants.set(scope.fingerprint, { scope, review });
+		this.crossSandboxAuthorizations.set(requestId, grants);
+	}
+
+	clearCrossSandboxAuthorizations(requestId: string): void {
+		this.crossSandboxAuthorizations.delete(requestId);
+	}
+
+	async revalidatePendingCrossSandboxAuthorization(pending: PendingApproval): Promise<string | null> {
+		if (!isSandboxedProcessToolName(pending.llmToolName) || this.mode === "full-trust") {
+			pending.crossSandboxAuthorization = undefined;
+			return null;
+		}
+		const availability: SandboxAvailability = this.resolveSandboxAvailability();
+		const godotExecutablePath: string | undefined = isGodotProcessTool(pending.llmToolName, pending.args)
+			? await this.resolveGodotExecutablePath(pending.workspaceId)
+			: undefined;
+		const resolution = resolveCrossSandboxAccess({
+			toolName: pending.llmToolName,
+			args: pending.args,
+			workspaceId: pending.workspaceId,
+			sandboxAvailable: availability.available,
+			networkAccess: pending.llmToolName === "mcp_terminal_run_command" && isTerminalDownloadCommand(pending.args),
+			godotExecutablePath,
+		});
+		if (!resolution.ok) return resolution.reason;
+		const scope: CrossSandboxAuthorizationScope | undefined = resolution.scope;
+		if (pending.crossSandboxFingerprint === undefined && scope === undefined) {
+			pending.crossSandboxAuthorization = undefined;
+			return null;
+		}
+		if (scope === undefined || pending.crossSandboxFingerprint !== scope.fingerprint) {
+			pending.crossSandboxAuthorization = undefined;
+			return "The sandbox boundary or external access target changed after approval was requested. Review the action again.";
+		}
+		pending.crossSandboxAuthorization = scope;
+		return null;
 	}
 
 	async evaluate(
@@ -311,46 +399,91 @@ export class ApprovalGateway {
 			};
 		}
 		const terminalDownload: boolean = llmToolName === "mcp_terminal_run_command" && isTerminalDownloadCommand(args);
-		if (terminalDownload && effectiveMode === "manual") {
-			return {
-				action: "request_approval",
-				reason: "Network download in a terminal command requires user approval.",
-				approvalKind: "network_download"
-			};
-		}
 		if (effectiveMode !== "full-trust" && isSandboxedProcessToolName(llmToolName)) {
 			const availability: SandboxAvailability = this.resolveSandboxAvailability();
-			if (!availability.available) {
-				const deterministicDecision: ApprovalDecision = evaluateToolCall(
-					effectiveMode,
-					llmToolName,
-					args,
-					workspaceId
-				);
-				if (deterministicDecision.action === "deny") {
-					return deterministicDecision;
-				}
+			const godotExecutablePath: string | undefined = isGodotProcessTool(llmToolName, args)
+				? await this.resolveGodotExecutablePath(workspaceId)
+				: undefined;
+			const crossSandboxResolution = resolveCrossSandboxAccess({
+				toolName: llmToolName,
+				args,
+				workspaceId,
+				sandboxAvailable: availability.available,
+				networkAccess: terminalDownload,
+				godotExecutablePath,
+			});
+			if (!crossSandboxResolution.ok) {
+				return { action: "deny", reason: crossSandboxResolution.reason, code: "cross_sandbox_access_invalid" };
+			}
+			const crossSandboxAuthorization: CrossSandboxAuthorizationScope | undefined = crossSandboxResolution.scope;
+			if (crossSandboxAuthorization !== undefined) {
+				const deterministicDecision: ApprovalDecision = evaluateToolCall(effectiveMode, llmToolName, args, workspaceId);
+				if (deterministicDecision.action === "deny") return deterministicDecision;
 				const existingConsent: ToolRequiredConsent | undefined = deterministicDecision.action === "request_approval"
 					? deterministicDecision.requiredConsent
 					: undefined;
 				const crossWorkspaceTarget: string | undefined = existingConsent?.expectedText.startsWith("ALLOW CROSS-WORKSPACE: ") === true
 					? existingConsent.expectedText.slice("ALLOW CROSS-WORKSPACE: ".length)
 					: undefined;
-				const requiredConsent: ToolRequiredConsent = crossWorkspaceTarget === undefined
-					? {
-						prompt: `The OS sandbox is unavailable. Running this process directly can access files and system resources outside the workspace. ${availability.error}`,
-						expectedText: UNSANDBOXED_CONSENT_TEXT
-					}
-					: {
-						prompt: `${existingConsent!.prompt} The OS sandbox is also unavailable, so this process would run directly on the host. ${availability.error}`,
-						expectedText: `${CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX}${crossWorkspaceTarget}`
+				const requiredConsent: ToolRequiredConsent | undefined = crossSandboxAuthorization.boundary === "approved_unsandboxed"
+					? crossWorkspaceTarget === undefined
+						? {
+							prompt: `The OS sandbox is unavailable. Running this process directly can access files and system resources outside the workspace. ${availability.available ? "" : availability.error}`.trim(),
+							expectedText: UNSANDBOXED_CONSENT_TEXT,
+						}
+						: {
+							prompt: `${existingConsent!.prompt} The OS sandbox is also unavailable, so this process would run directly on the host. ${availability.available ? "" : availability.error}`.trim(),
+							expectedText: `${CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX}${crossWorkspaceTarget}`,
+						}
+					: existingConsent;
+				const hardRiskReason: string | null = llmToolName === "mcp_terminal_run_command"
+					? commandRequiresUserApproval(args, workspaceId, { allowCrossWorkspace: true })
+					: null;
+				if (effectiveMode === "manual" || hardRiskReason !== null || crossSandboxAuthorization.sensitiveTarget) {
+					return {
+						action: "request_approval",
+						reason: hardRiskReason
+							?? (crossSandboxAuthorization.sensitiveTarget
+								? "Access to a sensitive external path requires user approval."
+								: "Cross-sandbox process execution requires user approval in manual mode."),
+						requiredConsent,
+						...(terminalDownload ? { approvalKind: "network_download" as const } : {}),
+						crossSandboxAuthorization,
 					};
-				return {
-					action: "request_approval",
-					reason: "The OS sandbox is unavailable. Explicit one-shot consent is required before running this process without isolation.",
-					requiredConsent
-				};
+				}
+				const cachedAuthorization = this.getCrossSandboxAuthorization(requestId, crossSandboxAuthorization.fingerprint);
+				if (cachedAuthorization !== undefined) {
+					return {
+						action: "allow",
+						crossSandboxAuthorization: cachedAuthorization.scope,
+						review: { ...cachedAuthorization.review, cached: true },
+					};
+				}
+				const policy = getEffectiveToolPolicy(llmToolName, args, workspaceId);
+				return this.reviewActionCall(llmToolName, args, toolCallId, workspaceId, context, {
+					risk: policy?.risk,
+					workspaceBounded: false,
+					sandboxAvailable: availability.available,
+					executionBoundary: crossSandboxAuthorization.boundary,
+					externalAccessModes: [...new Set(crossSandboxAuthorization.targets.map((target): "read" | "execute" => target.mode))],
+					externalTargetCount: crossSandboxAuthorization.targets.length,
+					terminalDownload,
+					networkAccess: terminalDownload,
+					staticPolicyDecision: deterministicDecision.action,
+					staticPolicyReason: "reason" in deterministicDecision ? deterministicDecision.reason : undefined,
+				}, {
+					crossSandboxAuthorization,
+					requiredConsent,
+					...(terminalDownload ? { approvalKind: "network_download" as const } : {}),
+				});
 			}
+		}
+		if (terminalDownload && effectiveMode === "manual") {
+			return {
+				action: "request_approval",
+				reason: "Network download in a terminal command requires user approval.",
+				approvalKind: "network_download"
+			};
 		}
 		const risk = getEffectiveToolPolicy(llmToolName, args, workspaceId)?.risk;
 		if (
@@ -446,7 +579,9 @@ export class ApprovalGateway {
 			requiredConsent,
 			approvalKind: options.approvalKind,
 			downloadAuthorization: options.downloadAuthorization,
-			networkAccessRequired: options.networkAccessRequired
+			networkAccessRequired: options.networkAccessRequired,
+			crossSandboxAuthorization: options.crossSandboxAuthorization,
+			crossSandboxFingerprint: options.crossSandboxAuthorization?.fingerprint,
 		};
 
 		this.pendingApprovals.set(approvalId, pending);
@@ -471,8 +606,10 @@ export class ApprovalGateway {
 				source: "user",
 				requestId: pending.requestId ?? pending.toolCallId,
 				toolCallId: pending.toolCallId,
+				toolName: pending.llmToolName,
 				workspaceId: pending.workspaceId,
-				args: pending.args
+				args: pending.args,
+				crossSandbox: pending.crossSandboxAuthorization,
 			})
 			: undefined;
 		try {
@@ -646,5 +783,28 @@ export class ReadOnlyToolApprovalGateway extends ApprovalGateway {
 
 	override clearDownloadAuthorizations(requestId: string): void {
 		this.baseGateway.clearDownloadAuthorizations(requestId);
+	}
+
+	override getCrossSandboxAuthorization(
+		requestId: string | undefined,
+		fingerprint: string
+	): { scope: CrossSandboxAuthorizationScope; review: ToolReviewAudit } | undefined {
+		return this.baseGateway.getCrossSandboxAuthorization(requestId, fingerprint);
+	}
+
+	override grantCrossSandboxAuthorization(
+		requestId: string,
+		scope: CrossSandboxAuthorizationScope,
+		review: ToolReviewAudit
+	): void {
+		this.baseGateway.grantCrossSandboxAuthorization(requestId, scope, review);
+	}
+
+	override clearCrossSandboxAuthorizations(requestId: string): void {
+		this.baseGateway.clearCrossSandboxAuthorizations(requestId);
+	}
+
+	override async revalidatePendingCrossSandboxAuthorization(pending: PendingApproval): Promise<string | null> {
+		return this.baseGateway.revalidatePendingCrossSandboxAuthorization(pending);
 	}
 }

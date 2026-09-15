@@ -74,7 +74,7 @@ export type ToolEvent =
 	| ({ type: "tool.progress"; step: number; toolCallId: string; toolName: string } & ToolProgressUpdate)
 	| ({ type: "tool.result"; step: number; toolCallId: string; toolName: string; resultChars: number; truncated: boolean; cached?: boolean; fileEditDraft?: FileEditBatchDraft | undefined; imageGeneration?: ImageGenerationResult | undefined; recovery?: AgentLoopRecoveryStatus | undefined; traceContent?: string | undefined } & ParsedToolResultSummary)
 	| { type: "tool.error"; step: number; toolCallId: string; toolName: string; message: string; failure?: ToolFailure | undefined; recovery?: AgentLoopRecoveryStatus | undefined }
-	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"] | NonNullable<ToolReviewAudit["authorizationSource"]>; provider?: string | undefined; model?: string | undefined; contextHash?: string | undefined; contextCompleteness?: "complete" | "compressed" | undefined; toolCallFingerprint?: string | undefined; scope?: "this_call" | undefined; sideEffects?: string[] | undefined }
+	| { type: "tool.reviewed"; step: number; toolCallId: string; toolName: string; decision: "allow" | "ask_user" | "deny"; reason: string; authorizationSource: ToolReviewAudit["source"] | NonNullable<ToolReviewAudit["authorizationSource"]>; provider?: string | undefined; model?: string | undefined; contextHash?: string | undefined; contextCompleteness?: "complete" | "compressed" | undefined; toolCallFingerprint?: string | undefined; scope?: "this_call" | undefined; sideEffects?: string[] | undefined; executionBoundary?: ToolReviewAudit["executionBoundary"] | undefined; externalAccessModes?: ToolReviewAudit["externalAccessModes"] | undefined; externalTargetCount?: number | undefined; cached?: boolean | undefined }
 	| ({ type: "tool.approval_required"; step: number; toolCallId: string; toolName: string; approvalId: string; reason: string; args: Record<string, unknown>; requiredConsent?: ToolRequiredConsent | undefined; approvalKind?: "network_download" | undefined; downloadAuthorization?: DownloadAuthorizationScope | undefined; networkAccessRequired?: NetworkAccessRequired | undefined } & ToolEventDisplay);
 
 export type OnToolEvent = (event: ToolEvent) => void;
@@ -610,7 +610,11 @@ async function executeSingleToolCall(
 			...(reviewAudit.contextCompleteness === undefined ? {} : { contextCompleteness: reviewAudit.contextCompleteness }),
 			...(reviewAudit.toolCallFingerprint === undefined ? {} : { toolCallFingerprint: reviewAudit.toolCallFingerprint }),
 			...(reviewAudit.scope === undefined ? {} : { scope: reviewAudit.scope }),
-			...(reviewAudit.sideEffects === undefined ? {} : { sideEffects: reviewAudit.sideEffects })
+			...(reviewAudit.sideEffects === undefined ? {} : { sideEffects: reviewAudit.sideEffects }),
+			...(reviewAudit.executionBoundary === undefined ? {} : { executionBoundary: reviewAudit.executionBoundary }),
+			...(reviewAudit.externalAccessModes === undefined ? {} : { externalAccessModes: reviewAudit.externalAccessModes }),
+			...(reviewAudit.externalTargetCount === undefined ? {} : { externalTargetCount: reviewAudit.externalTargetCount }),
+			...(reviewAudit.cached === undefined ? {} : { cached: reviewAudit.cached })
 		});
 	}
 	logger.debug("tool", "policy_evaluated", {
@@ -698,7 +702,8 @@ async function executeSingleToolCall(
 					{
 						approvalKind: decision.approvalKind,
 						downloadAuthorization: decision.downloadAuthorization,
-						networkAccessRequired: decision.networkAccessRequired
+						networkAccessRequired: decision.networkAccessRequired,
+						crossSandboxAuthorization: decision.crossSandboxAuthorization
 					}
 				);
 				logger.info("tool", "approval_required", { toolCallId: toolCall.id, toolName: functionName, step, approvalId: pending.approvalId, workspaceId, reason, args: displayArgs });
@@ -725,7 +730,8 @@ async function executeSingleToolCall(
 				{
 					approvalKind: decision.approvalKind,
 					downloadAuthorization: decision.downloadAuthorization,
-					networkAccessRequired: decision.networkAccessRequired
+					networkAccessRequired: decision.networkAccessRequired,
+					crossSandboxAuthorization: decision.crossSandboxAuthorization
 				}
 			);
 			logger.info("tool", "approval_required", {
@@ -832,8 +838,10 @@ async function executeSingleToolCall(
 				source: decision.review.source,
 				requestId: toolContext?.requestId ?? toolCall.id,
 				toolCallId: toolCall.id,
+				toolName: functionName,
 				workspaceId,
-				args: displayArgs
+				args: displayArgs,
+				crossSandbox: decision.crossSandboxAuthorization
 			})
 			: undefined;
 		let rawResult: IdempotentToolExecutionResult = functionName === GODOT_RUNTIME_START_TOOL_NAME

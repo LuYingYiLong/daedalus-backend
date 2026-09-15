@@ -42,6 +42,7 @@ import { collectUnresolvedExecutionFailures, formatExecutionFailure } from "../w
 import { cloneAgentLoopState, type AgentLoopState } from "../workflow/agent-loop-state.js";
 import { isLegacyWorkflowContinuation, LegacyWorkflowRemovedError } from "./legacy-workflow-guard.js";
 import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
+import { updateConversationFlowNodeState } from "../session/conversation-flow-store.js";
 
 export function createPendingAiContinuation(
 	params: AiChatParams,
@@ -185,6 +186,17 @@ export async function pauseRunForApproval(params: {
 		await removeAgentRunContinuation(persistRequestId).catch((): void => undefined);
 		throw error;
 	}
+	if (params.session.sessionId !== undefined) {
+		const state = await updateConversationFlowNodeState(params.session.sessionId, persistRequestId, "waiting");
+		if (state !== null) {
+			sendSessionEvent(params.socket, params.requestId, params.session, "flow.node.state", {
+				flowId: state.flow.flowId,
+				nodeId: state.nodeId,
+				revision: state.flow.revision,
+				status: "waiting",
+			}, persistRequestId);
+		}
+	}
 	sendAgentPaused(
 		params.socket,
 		params.requestId,
@@ -228,6 +240,7 @@ export async function cancelPendingApprovalsForRequest(session: ClientSession, r
 		}
 	}
 	session.approvalGateway.clearDownloadAuthorizations(requestId);
+	session.approvalGateway.clearCrossSandboxAuthorizations(requestId);
 
 	return cancelledApprovalIds;
 }
@@ -395,6 +408,12 @@ export async function validatePendingApprovalBeforeExecution(
 	mcpHost: McpHost,
 	pendingApproval: PendingApproval
 ): Promise<string | null> {
+	const crossSandboxValidationError: string | null = await session.approvalGateway.revalidatePendingCrossSandboxAuthorization(
+		pendingApproval
+	);
+	if (crossSandboxValidationError !== null) {
+		return crossSandboxValidationError;
+	}
 	const decision = evaluateToolCall(
 		session.approvalGateway.getMode(),
 		pendingApproval.llmToolName,
@@ -480,6 +499,21 @@ export async function sendContinuedAgentResult(
 		updateAgentRun(socket, session, pendingContinuation.requestId, "executing", {
 			pause: null
 		});
+		if (session.sessionId !== undefined) {
+			const state = await updateConversationFlowNodeState(
+				session.sessionId,
+				pendingContinuation.requestId,
+				"streaming",
+			);
+			if (state !== null) {
+				sendSessionEvent(socket, requestId, session, "flow.node.state", {
+					flowId: state.flow.flowId,
+					nodeId: state.nodeId,
+					revision: state.flow.revision,
+					status: "streaming",
+				}, pendingContinuation.requestId);
+			}
+		}
 	}
 	if (agentResult.status === "approval_required") {
 		const nextPendingContinuation: PendingAiContinuation = createPendingAiContinuation(

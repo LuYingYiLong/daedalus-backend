@@ -17,6 +17,13 @@ const SESSION_ID_PATTERN: RegExp = /^session-[a-zA-Z0-9_-]+$/;
 
 export type SessionChatMode = "agent" | "ask" | "plan" | "goal";
 
+export type SessionSurface = "chat" | "flow_branch";
+
+export type SessionFlowBinding = {
+	flowId: string;
+	branchId: string;
+};
+
 export type SessionForkOrigin = {
 	sessionId: string;
 	requestId: string;
@@ -42,6 +49,8 @@ export type SessionMetadata = {
 	reasoningEffort?: string | undefined;
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
+	surface?: SessionSurface | undefined;
+	flow?: SessionFlowBinding | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
 	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
@@ -290,7 +299,18 @@ function rowMetadata(row: Record<string, unknown> | undefined, sessionId: string
 			code: "session_not_found"
 		});
 	}
-	return parseSqlJson<SessionMetadata>(row.metadata_json);
+	return normalizeSessionMetadata(parseSqlJson<SessionMetadata>(row.metadata_json));
+}
+
+export function normalizeSessionMetadata(metadata: SessionMetadata): SessionMetadata {
+	if (metadata.surface === "flow_branch" && metadata.flow !== undefined) {
+		return metadata;
+	}
+	return {
+		...metadata,
+		surface: "chat",
+		flow: undefined,
+	};
 }
 
 async function readSessionMetadata(sessionId: string, archived?: boolean): Promise<SessionMetadata> {
@@ -370,6 +390,7 @@ export async function createSession(
 	const id: string = `session-${dateStr}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 	const metadata: SessionMetadata = {
 		...initialMetadata,
+		surface: initialMetadata?.surface ?? "chat",
 		id,
 		title,
 		workspaceId,
@@ -1347,7 +1368,7 @@ export async function clearSessionEvents(sessionId: string): Promise<void> {
 }
 
 function listMetadataRows(rows: Record<string, unknown>[]): SessionMetadata[] {
-	return rows.map((row: Record<string, unknown>): SessionMetadata => parseSqlJson<SessionMetadata>(row.metadata_json));
+	return rows.map((row: Record<string, unknown>): SessionMetadata => normalizeSessionMetadata(parseSqlJson<SessionMetadata>(row.metadata_json)));
 }
 
 export async function listSessions(): Promise<SessionMetadata[]> {

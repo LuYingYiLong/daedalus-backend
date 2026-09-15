@@ -34,9 +34,13 @@ import { findWorkspace, getWorkspaceSourceFolder } from "../../workspace/registr
 import type { WorkspaceConfig } from "../../workspace/types.js";
 import type { CommandPreset, CommandRunInput, PresetRunInput, TerminalCommandResult, TerminalJobRecord } from "./types.js";
 import { logger } from "../../logger.js";
-import type { TerminalCommandAuthorization } from "./authorization.js";
+import {
+	getAuthorizedExternalAccessTargets,
+	type TerminalCommandAuthorization,
+} from "./authorization.js";
 import { resolvePresetApplicability } from "./applicability.js";
 import type { ToolApplicabilityCode } from "../../tools/tool-applicability.js";
+import { isPathCoveredByExternalTargets } from "../../tools/cross-sandbox-access.js";
 
 const TERMINAL_PROGRESS_FLUSH_MS: number = 80;
 const MAX_TERMINAL_PROGRESS_BATCH_CHARS: number = 8192;
@@ -374,6 +378,7 @@ async function runCommand(
 			input.__daedalusConsentText.startsWith("ALLOW CROSS-WORKSPACE: ")
 			|| input.__daedalusConsentText.startsWith(CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX)
 		);
+	const authorizedExternalTargets = getAuthorizedExternalAccessTargets(input.__daedalusCommandAuthorization);
 	const startedAtMs: number = Date.now();
 
 	if (input.commandLine.trim().length === 0) {
@@ -385,7 +390,11 @@ async function runCommand(
 
 	let cwd: string;
 	try {
-		cwd = resolveCommandCwd(input, context, trusted || hasCrossWorkspaceConsent);
+		const requestedCwd: string = input.cwd?.trim() ?? "";
+		const authorizedExternalCwd: boolean = requestedCwd.length > 0
+			&& path.isAbsolute(requestedCwd)
+			&& isPathCoveredByExternalTargets(path.resolve(requestedCwd), authorizedExternalTargets);
+		cwd = resolveCommandCwd(input, context, trusted || hasCrossWorkspaceConsent || authorizedExternalCwd);
 	} catch (error: unknown) {
 		return { ok: false, error: error instanceof Error ? error.message : "Invalid terminal cwd" };
 	}
@@ -409,7 +418,8 @@ async function runCommand(
 		cwd,
 		workspaceRoot: sandboxWorkspaceRoot,
 		workspaceId: context.workspace?.id ?? context.workspaceId,
-		env: input.env
+		env: input.env,
+		externalReadOnlyPaths: authorizedExternalTargets.map((target): string => target.path)
 	});
 	if (!invocationResolution.ok) {
 		return invocationResolution.result;
@@ -548,6 +558,9 @@ async function runPreset(input: PresetRunInput & TerminalInternalInput, allowedR
 		commandLine: describePresetCommand(command),
 		cwd,
 		workspaceRoot: path.resolve(cwd),
+		externalReadOnlyPaths: preset.requiresGodotProject && path.isAbsolute(command[0]!)
+			? [path.dirname(command[0]!)]
+			: [],
 		workspaceId: context.workspace?.id ?? context.workspaceId
 	});
 	if (!invocationResolution.ok) {
@@ -845,6 +858,7 @@ export function registerTerminalTools(server: McpServer): void {
 				commandLine: describePresetCommand(command),
 				cwd,
 				workspaceRoot: path.resolve(godotProject),
+				externalReadOnlyPaths: path.isAbsolute(godotExecutable) ? [path.dirname(godotExecutable)] : [],
 				workspaceId: context.workspace?.id ?? context.workspaceId
 			});
 			if (!invocationResolution.ok) {

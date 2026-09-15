@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 16;
+const DB_SCHEMA_VERSION: number = 19;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -310,6 +310,60 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_subagent_edges_dependent
 			ON subagent_edges (graph_id, dependent_node_id);
+		CREATE TABLE IF NOT EXISTS conversation_flows (
+			flow_id TEXT PRIMARY KEY,
+			title TEXT NOT NULL,
+			workspace_id TEXT,
+			root_branch_id TEXT NOT NULL,
+			revision INTEGER NOT NULL DEFAULT 1,
+			active_branch_id TEXT,
+			active_request_id TEXT,
+			archived_at TEXT,
+			created_from_session_id TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_conversation_flows_workspace
+			ON conversation_flows (workspace_id, archived_at, updated_at DESC);
+		CREATE TABLE IF NOT EXISTS conversation_flow_branches (
+			branch_id TEXT PRIMARY KEY,
+			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL UNIQUE REFERENCES sessions(session_id) ON DELETE RESTRICT,
+			parent_branch_id TEXT REFERENCES conversation_flow_branches(branch_id) ON DELETE RESTRICT,
+			fork_request_id TEXT,
+			fork_role TEXT CHECK(fork_role IS NULL OR fork_role IN ('user', 'assistant')),
+			seed_request_id TEXT,
+			head_node_id TEXT,
+			pending_regenerate INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_conversation_flow_branches_flow
+			ON conversation_flow_branches (flow_id, created_at, branch_id);
+		CREATE TABLE IF NOT EXISTS conversation_flow_nodes (
+			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
+			node_id TEXT NOT NULL,
+			branch_id TEXT NOT NULL REFERENCES conversation_flow_branches(branch_id) ON DELETE CASCADE,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,
+			request_id TEXT NOT NULL,
+			role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+			parent_node_id TEXT,
+			status TEXT NOT NULL,
+			content_preview TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(flow_id, node_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_conversation_flow_nodes_branch
+			ON conversation_flow_nodes (branch_id, created_at, node_id);
+		CREATE TABLE IF NOT EXISTS conversation_flow_layout (
+			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
+			node_id TEXT NOT NULL,
+			x REAL NOT NULL,
+			y REAL NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(flow_id, node_id)
+		);
 		CREATE TABLE IF NOT EXISTS agent_run_continuations (
 			run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id) ON DELETE CASCADE,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -459,6 +513,19 @@ function migrateSchema(db: DatabaseSync): void {
 	if (!subagentColumnNames.has("queue_reason")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queue_reason TEXT");
 	if (!subagentColumnNames.has("queued_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queued_at TEXT");
 	if (!subagentColumnNames.has("next_retry_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN next_retry_at TEXT");
+	const flowBranchColumnNames: Set<string> = new Set(
+		(db.prepare("PRAGMA table_info(conversation_flow_branches)").all() as Array<{ name: string }>).map(
+			(column): string => column.name,
+		),
+	);
+	if (!flowBranchColumnNames.has("head_node_id")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN head_node_id TEXT");
+	if (!flowBranchColumnNames.has("pending_regenerate")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN pending_regenerate INTEGER NOT NULL DEFAULT 0");
+	const flowNodeColumnNames: Set<string> = new Set(
+		(db.prepare("PRAGMA table_info(conversation_flow_nodes)").all() as Array<{ name: string }>).map(
+			(column): string => column.name,
+		),
+	);
+	if (!flowNodeColumnNames.has("content_preview")) db.exec("ALTER TABLE conversation_flow_nodes ADD COLUMN content_preview TEXT NOT NULL DEFAULT ''");
 	runSessionTransaction(db, (): void => {
 		const observationColumns = db.prepare("PRAGMA table_info(computer_observations)").all();
 		if (!observationColumns.some((column): boolean => column.name === "groundings_json")) {
@@ -470,6 +537,12 @@ function migrateSchema(db: DatabaseSync): void {
 			PRAGMA user_version = ${DB_SCHEMA_VERSION};
 		`);
 	});
+	// 运行锁只描述当前后端进程中的真实执行，进程重启后不能继续占用 Flow
+	db.exec(`
+		UPDATE conversation_flows
+		SET active_branch_id = NULL, active_request_id = NULL
+		WHERE active_request_id IS NOT NULL;
+	`);
 }
 
 async function openDatabase(): Promise<SessionDatabaseState> {

@@ -5,6 +5,7 @@ import { getPluginMcpToolByLlmName, getPluginTool } from "../plugins/runtime/reg
 import type { DownloadAuthorizationScope } from "./download-authorization.js";
 import type { NetworkAccessRequired } from "./download-authorization.js";
 import { godotRuntimeTestBridge } from "../mcp/godot/bridges/runtime-test-bridge.js";
+import type { CrossSandboxAuthorizationScope, CrossSandboxExecutionBoundary } from "./cross-sandbox-access.js";
 
 export type ApprovalMode = "manual" | "auto-safe" | "full-trust";
 
@@ -98,7 +99,11 @@ export function isHardBlocked(toolName: string): boolean {
 }
 
 export type ApprovalDecision =
-	| { action: "allow"; review?: ToolReviewAudit | undefined }
+	| {
+		action: "allow";
+		review?: ToolReviewAudit | undefined;
+		crossSandboxAuthorization?: CrossSandboxAuthorizationScope | undefined;
+	}
 	| {
 		action: "request_approval";
 		reason: string;
@@ -107,6 +112,7 @@ export type ApprovalDecision =
 		approvalKind?: "network_download" | undefined;
 		downloadAuthorization?: DownloadAuthorizationScope | undefined;
 		networkAccessRequired?: NetworkAccessRequired | undefined;
+		crossSandboxAuthorization?: CrossSandboxAuthorizationScope | undefined;
 	}
 	| { action: "deny"; reason: string; code?: string | undefined; review?: ToolReviewAudit | undefined };
 
@@ -122,6 +128,10 @@ export type ToolReviewAudit = {
 	sideEffects?: string[] | undefined;
 	provider?: string | undefined;
 	model?: string | undefined;
+	executionBoundary?: CrossSandboxExecutionBoundary | undefined;
+	externalAccessModes?: Array<"read" | "execute"> | undefined;
+	externalTargetCount?: number | undefined;
+	cached?: boolean | undefined;
 };
 
 function getRequiredConsentForToolCall(

@@ -213,6 +213,12 @@ import { cancelPendingToolBudgetsForRequest, createPendingToolBudget, createTool
 import { createAgentToolEventForwarder, shouldRequireWorkflowWriteTool, didWorkflowWritePhaseExecute, createWorkflowWriteGuardRetryMessage } from "./workflow/tool-events.js";
 import { ensureProviderConfigured } from "../application/provider-session-service.js";
 import { beginSessionRun, findSessionWithPendingToolBudget, finishSessionRun, getActiveSessionRunController, getClientConnection, registerSessionRunController } from "./client-connections.js";
+import {
+	acquireConversationFlowRun,
+	findConversationFlowBranchBySession,
+	releaseConversationFlowRun,
+	setConversationFlowBranchSeedRequest,
+} from "../session/conversation-flow-store.js";
 import { logger } from "../logger.js";
 import { synchronizeSessionApprovalMode } from "./approval-mode-sync.js";
 import { createInitialPlan } from "./plan-mode.js";
@@ -2072,6 +2078,23 @@ async function handleToolBudgetDecision(
 		});
 		return;
 	}
+	try {
+		await acquireConversationFlowRun(session.sessionId ?? "", pending.requestId);
+	} catch (error: unknown) {
+		finishSessionRun(session.sessionId, pending.requestId);
+		const candidate = error as Error & { code?: string; activeBranchId?: string | null };
+		sendJson(socket, {
+			type: "response",
+			id: responseId,
+			ok: false,
+			error: {
+				code: candidate.code ?? "flow_busy",
+				message: candidate.message,
+				details: { activeBranchId: candidate.activeBranchId ?? null },
+			},
+		});
+		return;
+	}
 
 	const abortController: AbortController = new AbortController();
 	const runId: string = pending.continuation.workflowState?.plan.id ?? pending.requestId;
@@ -2402,6 +2425,11 @@ async function runToolBudgetDecisionContinuation(params: {
 		session.activeAbortControllers.delete(pending.requestId);
 		if (session.activeRunRequestId === pending.requestId) {
 			session.activeRunRequestId = undefined;
+		}
+		if (session.approvalGateway.listPending().length === 0 && ![...session.pendingToolBudgets.values()].some(
+			(candidate): boolean => candidate.requestId === pending.requestId,
+		)) {
+			await releaseConversationFlowRun(session.sessionId ?? "", pending.requestId);
 		}
 		finishSessionRun(session.sessionId, pending.requestId);
 		if (shouldDrainQueueAfterRun) {
@@ -2853,6 +2881,58 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						code: "session_busy",
 						message: "This session already has an active AI run."
 					}
+				});
+				break;
+			}
+			try {
+				const flow = runSessionId === undefined
+					? null
+					: await acquireConversationFlowRun(
+						runSessionId,
+						request.id,
+						request.params.message || session.workbenchComposer.text,
+					);
+				if (flow !== null && runSessionId !== undefined) {
+					const branch = await findConversationFlowBranchBySession(runSessionId);
+					if (branch === null) {
+						throw Object.assign(new Error("The Flow branch metadata is unavailable."), {
+							code: "flow_branch_not_found",
+						});
+					}
+					if (branch.forkRole === "user" && branch.seedRequestId === null) {
+						await setConversationFlowBranchSeedRequest(branch.branchId, request.id);
+					}
+					sendSessionEvent(socket, request.id, session, "flow.branch.state", {
+						flowId: flow.flowId,
+						branchId: branch.branchId,
+						revision: flow.revision,
+						activeRequestId: request.id,
+					}, request.id);
+					sendSessionEvent(socket, request.id, session, "flow.node.state", {
+						flowId: flow.flowId,
+						nodeId: `assistant:${request.id}`,
+						revision: flow.revision,
+						status: "streaming",
+					}, request.id);
+				}
+			} catch (error: unknown) {
+				if (session.approvalGateway.listPending().length === 0 && ![...session.pendingToolBudgets.values()].some(
+					(candidate): boolean => candidate.requestId === request.id,
+				)) {
+					await releaseConversationFlowRun(runSessionId ?? "", request.id);
+				}
+				finishSessionRun(runSessionId, request.id);
+				const candidate = error as Error & { code?: string; activeBranchId?: string | null };
+				await finishQueueItemForRun(socket, request.id, session, queueItemId, "failed");
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: candidate.code ?? "flow_busy",
+						message: candidate.message,
+						details: { activeBranchId: candidate.activeBranchId ?? null },
+					},
 				});
 				break;
 			}

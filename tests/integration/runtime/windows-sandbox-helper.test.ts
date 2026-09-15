@@ -23,6 +23,7 @@ test("Windows helper preserves path isolation and ACLs through overlapping runs,
 	const workspace = join(root, "workspace");
 	const readOnly = join(root, "read-only");
 	const script = join(readOnly, "probe.cjs");
+	const externalCwdScript = join(readOnly, "external-cwd.cjs");
 	const children: ChildProcessWithoutNullStreams[] = [];
 	try {
 		await mkdir(workspace);
@@ -55,7 +56,16 @@ if (process.argv.includes('--wait')) {
   setInterval(() => {}, 1000);
 }
 `);
-		const paths = [root, workspace, readOnly, script];
+		await writeFile(externalCwdScript, `
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+assert.equal(fs.realpathSync(process.cwd()), fs.realpathSync(__dirname));
+assert.throws(() => fs.writeFileSync(path.join(process.cwd(), 'denied.txt'), 'no'), error => ['EACCES', 'EPERM'].includes(error.code));
+fs.writeFileSync(path.join(process.env.DAEDALUS_TEST_WORKSPACE, 'external-cwd-write.txt'), 'ok');
+console.log('external-cwd-ready');
+`);
+		const paths = [root, workspace, readOnly, script, externalCwdScript];
 		const before = snapshotAcls(paths);
 		function launch(wait: boolean, command: string = process.execPath): {
 			child: ChildProcessWithoutNullStreams;
@@ -85,6 +95,20 @@ if (process.argv.includes('--wait')) {
 		assert.equal(await second.line(), "ready");
 		second.child.stdin.end();
 		assert.equal(await second.closed, 1);
+		assert.deepEqual(snapshotAcls(paths), before);
+
+		const externalCwdArgs = ["--workspace", workspace, "--cwd", readOnly, "--read-only", readOnly, "--no-network", "--argv", "--", process.execPath, externalCwdScript];
+		const externalCwd = spawn(availability.available ? availability.helperPath! : "", externalCwdArgs, {
+			env: createSandboxEnvironment({ DAEDALUS_TEST_WORKSPACE: workspace }),
+			cwd: workspace,
+			stdio: "pipe",
+			windowsHide: true
+		});
+		children.push(externalCwd);
+		let externalCwdStdout: string = "";
+		externalCwd.stdout.on("data", (chunk: Buffer): void => { externalCwdStdout += chunk.toString(); });
+		assert.equal((await once(externalCwd, "close"))[0], 0);
+		assert.match(externalCwdStdout, /external-cwd-ready/u);
 		assert.deepEqual(snapshotAcls(paths), before);
 
 		// 普通一次性终端的 stdin EOF 不能被误当成取消。

@@ -166,8 +166,8 @@ export async function runGodotHeadlessOperation(
 		workspaceRoot: projectRoot,
 		readOnlyPaths: [
 			path.dirname(invocation.runtimeAssetPath),
-			...(path.isAbsolute(invocation.executable) ? [path.dirname(invocation.executable)] : [])
 		],
+		externalReadOnlyPaths: path.isAbsolute(invocation.executable) ? [path.dirname(invocation.executable)] : [],
 		workspaceId: typeof executionInput.__daedalusWorkspaceId === "string"
 			? executionInput.__daedalusWorkspaceId
 			: undefined

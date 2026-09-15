@@ -147,6 +147,7 @@ export function finishRequestExecution(request: ClientRequest, session: ClientSe
 	}
 
 	session.inFlightRequestIds.delete(request.id);
+	session.approvalGateway.clearCrossSandboxAuthorizations(request.id);
 	session.completedRequestIds.set(request.id, Date.now());
 	pruneCompletedRequestIds(session);
 }

@@ -1000,6 +1000,7 @@ export const conversationFlowSchema = z.object({
 	flowId: flowIdentifierSchema,
 	title: z.string().trim().min(1).max(200),
 	workspaceId: z.string().min(1).max(200).nullable(),
+	pinned: z.boolean(),
 	rootBranchId: flowIdentifierSchema,
 	revision: z.number().int().positive(),
 	activeBranchId: flowIdentifierSchema.nullable(),
@@ -1007,6 +1008,18 @@ export const conversationFlowSchema = z.object({
 	archivedAt: z.string().datetime().nullable(),
 	createdFromSessionId: flowIdentifierSchema.nullable(),
 	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime(),
+}).strict();
+const flowTreeSectionKeySchema = z.enum(["pinned", "projects", "recent"]);
+const flowTreeOrderUpdateSchema = z.object({
+	pinnedFlowIds: z.array(flowIdentifierSchema).max(100_000),
+	recentFlowIds: z.array(flowIdentifierSchema).max(100_000),
+	flowIdsByWorkspace: z.record(flowIdentifierSchema, z.array(flowIdentifierSchema).max(100_000)),
+	expandedSectionKeys: z.array(flowTreeSectionKeySchema).max(3),
+	expandedWorkspaceIds: z.array(flowIdentifierSchema).max(100_000),
+}).strict();
+export const flowTreeOrderSchema = flowTreeOrderUpdateSchema.extend({
+	schemaVersion: z.literal(1),
 	updatedAt: z.string().datetime(),
 }).strict();
 export const conversationFlowBranchSchema = z.object({
@@ -1400,6 +1413,18 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			workspaceId: z.string().min(1).max(200).optional(),
 			archived: z.boolean().optional(),
 		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.tree.order.get"),
+		params: z.object({}).strict().optional(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.tree.order.update"),
+		params: flowTreeOrderUpdateSchema,
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

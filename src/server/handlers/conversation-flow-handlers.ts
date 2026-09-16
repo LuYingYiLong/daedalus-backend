@@ -9,8 +9,14 @@ import {
 	getConversationFlowNode,
 	listConversationFlows,
 	renameConversationFlow,
+	updateConversationFlowPinnedStates,
 	updateConversationFlowLayout,
 } from "../../session/conversation-flow-store.js";
+import {
+	getFlowTreeOrder,
+	updateFlowTreeOrder,
+	type FlowTreeOrderInventory,
+} from "../../session/flow-tree-order-store.js";
 import { createSessionFork } from "../../session/session-fork.js";
 import {
 	createSession,
@@ -18,7 +24,7 @@ import {
 	getStoredSessionMetadata,
 	type SessionMetadata,
 } from "../../session/session-store.js";
-import { findWorkspace } from "../../workspace/registry.js";
+import { findWorkspace, loadWorkspaces } from "../../workspace/registry.js";
 import type { WorkspaceConfig } from "../../workspace/types.js";
 import { broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
@@ -28,6 +34,8 @@ type FlowRequestMethod =
 	| "flow.create"
 	| "flow.create.fromSession"
 	| "flow.list"
+	| "flow.tree.order.get"
+	| "flow.tree.order.update"
 	| "flow.get"
 	| "flow.node.get"
 	| "flow.rename"
@@ -37,6 +45,14 @@ type FlowRequestMethod =
 	| "flow.layout.update";
 
 type FlowRequest = Extract<ClientRequest, { method: FlowRequestMethod }>;
+
+async function loadFlowTreeOrderInventory(): Promise<FlowTreeOrderInventory> {
+	const flows = await listConversationFlows();
+	return {
+		workspaces: loadWorkspaces().map((workspace): { id: string } => ({ id: workspace.id })),
+		flows: flows.map((flow) => ({ id: flow.flowId, workspaceId: flow.workspaceId, pinned: flow.pinned })),
+	};
+}
 
 function flowError(code: string, message: string): Error & { code: string } {
 	return Object.assign(new Error(message), { code });
@@ -216,7 +232,27 @@ export async function handleConversationFlowRequest(
 			result = await createFlowFromSession(flowRequest.params);
 			break;
 		case "flow.list":
-			result = { flows: await listConversationFlows(flowRequest.params) };
+			{
+				const flows = await listConversationFlows(flowRequest.params);
+				const order = flowRequest.params.workspaceId === undefined && flowRequest.params.archived !== true
+					? await getFlowTreeOrder({
+						workspaces: loadWorkspaces().map((workspace): { id: string } => ({ id: workspace.id })),
+						flows: flows.map((flow) => ({ id: flow.flowId, workspaceId: flow.workspaceId, pinned: flow.pinned })),
+					})
+					: undefined;
+				result = order === undefined ? { flows } : { flows, order };
+			}
+			break;
+		case "flow.tree.order.get":
+			result = await getFlowTreeOrder(await loadFlowTreeOrderInventory());
+			break;
+		case "flow.tree.order.update":
+			{
+				const inventory = await loadFlowTreeOrderInventory();
+				const order = await updateFlowTreeOrder(flowRequest.params, inventory);
+				const updatedFlows = await updateConversationFlowPinnedStates(order.pinnedFlowIds);
+				result = { order, flows: updatedFlows };
+			}
 			break;
 		case "flow.get":
 			result = await getConversationFlow(flowRequest.params.flowId);
@@ -250,6 +286,10 @@ export async function handleConversationFlowRequest(
 		if (["flow.create", "flow.create.fromSession", "flow.rename", "flow.archive", "flow.branch.create", "flow.layout.update"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
+		}
+		if (flowRequest.method === "flow.tree.order.update" && typeof result === "object" && result !== null) {
+			const updatedFlows = (result as { flows?: Array<{ flowId: string; revision: number }> }).flows ?? [];
+			for (const flow of updatedFlows) broadcastGlobalEvent(request.id, "flow.updated", flow);
 		}
 	} catch (error: unknown) {
 		const candidate = error as Error & { activeBranchId?: string | null };

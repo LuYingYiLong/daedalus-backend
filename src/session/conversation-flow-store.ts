@@ -26,6 +26,7 @@ export type ConversationFlow = {
 	flowId: string;
 	title: string;
 	workspaceId: string | null;
+	pinned: boolean;
 	rootBranchId: string;
 	revision: number;
 	activeBranchId: string | null;
@@ -85,6 +86,7 @@ type FlowRow = {
 	flow_id: string;
 	title: string;
 	workspace_id: string | null;
+	pinned: number;
 	root_branch_id: string;
 	revision: number;
 	active_branch_id: string | null;
@@ -140,6 +142,7 @@ function mapFlow(row: FlowRow): ConversationFlow {
 		flowId: row.flow_id,
 		title: row.title,
 		workspaceId: row.workspace_id,
+		pinned: row.pinned === 1,
 		rootBranchId: row.root_branch_id,
 		revision: Number(row.revision),
 		activeBranchId: row.active_branch_id,
@@ -170,7 +173,7 @@ function mapBranch(row: BranchRow): ConversationFlowBranch {
 function requireFlow(db: DatabaseSync, flowId: string, includeArchived: boolean = false): ConversationFlow {
 	const archivedClause: string = includeArchived ? "" : " AND archived_at IS NULL";
 	const row = db.prepare(`
-		SELECT flow_id, title, workspace_id, root_branch_id, revision, active_branch_id,
+		SELECT flow_id, title, workspace_id, pinned, root_branch_id, revision, active_branch_id,
 			active_request_id, archived_at, created_from_session_id, created_at, updated_at
 		FROM conversation_flows WHERE flow_id = ?${archivedClause}
 	`).get(flowId) as FlowRow | undefined;
@@ -348,9 +351,9 @@ export async function createConversationFlow(params: {
 	runSessionTransaction(db, (): void => {
 		db.prepare(`
 			INSERT INTO conversation_flows(
-				flow_id, title, workspace_id, root_branch_id, revision, archived_at,
+				flow_id, title, workspace_id, pinned, root_branch_id, revision, archived_at,
 				created_from_session_id, created_at, updated_at
-			) VALUES (?, ?, ?, ?, 1, NULL, ?, ?, ?)
+			) VALUES (?, ?, ?, 0, ?, 1, NULL, ?, ?, ?)
 		`).run(
 			flowId,
 			title,
@@ -453,7 +456,7 @@ export async function listConversationFlows(params?: {
 	const archived: boolean = params?.archived === true;
 	const rows = (params?.workspaceId === undefined
 		? db.prepare(`
-			SELECT f.flow_id, f.title, f.workspace_id, f.root_branch_id, f.revision,
+			SELECT f.flow_id, f.title, f.workspace_id, f.pinned, f.root_branch_id, f.revision,
 				f.active_branch_id, f.active_request_id, f.archived_at, f.created_from_session_id,
 				f.created_at, f.updated_at, COUNT(b.branch_id) AS branch_count
 			FROM conversation_flows f
@@ -462,7 +465,7 @@ export async function listConversationFlows(params?: {
 			GROUP BY f.flow_id ORDER BY f.updated_at DESC
 		`).all()
 		: db.prepare(`
-			SELECT f.flow_id, f.title, f.workspace_id, f.root_branch_id, f.revision,
+			SELECT f.flow_id, f.title, f.workspace_id, f.pinned, f.root_branch_id, f.revision,
 				f.active_branch_id, f.active_request_id, f.archived_at, f.created_from_session_id,
 				f.created_at, f.updated_at, COUNT(b.branch_id) AS branch_count
 			FROM conversation_flows f
@@ -471,6 +474,29 @@ export async function listConversationFlows(params?: {
 			GROUP BY f.flow_id ORDER BY f.updated_at DESC
 		`).all(params.workspaceId)) as Array<FlowRow & { branch_count: number }>;
 	return rows.map((row): ConversationFlowSummary => ({ ...mapFlow(row), branchCount: Number(row.branch_count) }));
+}
+
+export async function updateConversationFlowPinnedStates(pinnedFlowIds: readonly string[]): Promise<ConversationFlow[]> {
+	const db: DatabaseSync = await getSessionDatabase();
+	const pinnedSet: ReadonlySet<string> = new Set(pinnedFlowIds);
+	const activeRows = db.prepare("SELECT flow_id, pinned FROM conversation_flows WHERE archived_at IS NULL").all() as Array<{
+		flow_id: string;
+		pinned: number;
+	}>;
+	const changed: string[] = activeRows
+		.filter((row): boolean => (row.pinned === 1) !== pinnedSet.has(row.flow_id))
+		.map((row): string => row.flow_id);
+	if (changed.length === 0) return [];
+	const timestamp: string = new Date().toISOString();
+	runSessionTransaction(db, (): void => {
+		const update = db.prepare(`
+			UPDATE conversation_flows
+			SET pinned = ?, revision = revision + 1, updated_at = ?
+			WHERE flow_id = ? AND archived_at IS NULL
+		`);
+		for (const flowId of changed) update.run(pinnedSet.has(flowId) ? 1 : 0, timestamp, flowId);
+	});
+	return changed.map((flowId): ConversationFlow => requireFlow(db, flowId));
 }
 
 export async function getConversationFlow(flowId: string): Promise<ConversationFlowSnapshot> {

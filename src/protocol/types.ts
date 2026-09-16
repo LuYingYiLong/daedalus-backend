@@ -9,6 +9,7 @@ import type {
 	conversationFlowNodeStateEventDataSchema,
 	conversationFlowSchema,
 	conversationFlowUpdatedEventDataSchema,
+	flowTreeOrderSchema,
 	messageTextAnchorSchema,
 	promptIdSchema,
 	skillIdSchema,
@@ -72,6 +73,7 @@ export type SubagentEventDataMap = {
 export type SubagentEventName = keyof SubagentEventDataMap;
 
 export type ConversationFlow = z.infer<typeof conversationFlowSchema>;
+export type FlowTreeOrder = z.infer<typeof flowTreeOrderSchema>;
 export type ConversationFlowBranch = z.infer<typeof conversationFlowBranchSchema>;
 export type ConversationFlowNode = z.infer<typeof conversationFlowNodeSchema>;
 export type ConversationFlowEventDataMap = {

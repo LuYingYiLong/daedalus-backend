@@ -5,6 +5,7 @@ const DAEDALUS_DIR_NAME: string = ".daedalus";
 export type DaedalusPathKey =
 	| "config.workspaces"
 	| "config.workspaceTreeOrder"
+	| "config.flowTreeOrder"
 	| "config.provider"
 	| "config.providerCustomizations"
 	| "config.mcpServers"
@@ -77,6 +78,7 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 	return {
 		"config.workspaces": join(configRoot, "workspaces.json"),
 		"config.workspaceTreeOrder": join(configRoot, "workspace-tree-order.json"),
+		"config.flowTreeOrder": join(configRoot, "flow-tree-order.json"),
 		"config.provider": join(configRoot, "provider.json"),
 		"config.providerCustomizations": join(configRoot, "provider-customizations.json"),
 		"config.mcpServers": join(configRoot, "mcp-servers.json"),
@@ -142,6 +144,10 @@ export function getDefaultWorkspaceConfigPath(): string {
 
 export function getWorkspaceTreeOrderConfigPath(): string {
 	return getDaedalusPath("config.workspaceTreeOrder");
+}
+
+export function getFlowTreeOrderConfigPath(): string {
+	return getDaedalusPath("config.flowTreeOrder");
 }
 
 export function getProviderConfigPath(): string {

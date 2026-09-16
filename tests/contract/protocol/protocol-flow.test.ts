@@ -7,6 +7,17 @@ test("Flow RPC payloads are strict and cover every v1 operation", (): void => {
 		{ method: "flow.create", params: { title: "Flow", workspaceId: "workspace-a" } },
 		{ method: "flow.create.fromSession", params: { sourceSessionId: "session-a", title: "Flow" } },
 		{ method: "flow.list", params: { archived: false } },
+		{ method: "flow.tree.order.get", params: {} },
+		{
+			method: "flow.tree.order.update",
+			params: {
+				pinnedFlowIds: ["flow-a"],
+				recentFlowIds: [],
+				flowIdsByWorkspace: {},
+				expandedSectionKeys: ["pinned", "projects", "recent"],
+				expandedWorkspaceIds: [],
+			},
+		},
 		{ method: "flow.get", params: { flowId: "flow-a" } },
 		{ method: "flow.node.get", params: { flowId: "flow-a", nodeId: "user:request-a" } },
 		{ method: "flow.rename", params: { flowId: "flow-a", title: "Renamed", revision: 1 } },

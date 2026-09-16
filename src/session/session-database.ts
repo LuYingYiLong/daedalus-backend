@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 19;
+const DB_SCHEMA_VERSION: number = 20;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -314,6 +314,7 @@ function migrateSchema(db: DatabaseSync): void {
 			flow_id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
 			workspace_id TEXT,
+			pinned INTEGER NOT NULL DEFAULT 0,
 			root_branch_id TEXT NOT NULL,
 			revision INTEGER NOT NULL DEFAULT 1,
 			active_branch_id TEXT,
@@ -518,6 +519,12 @@ function migrateSchema(db: DatabaseSync): void {
 			(column): string => column.name,
 		),
 	);
+	const flowColumnNames: Set<string> = new Set(
+		(db.prepare("PRAGMA table_info(conversation_flows)").all() as Array<{ name: string }>).map(
+			(column): string => column.name,
+		),
+	);
+	if (!flowColumnNames.has("pinned")) db.exec("ALTER TABLE conversation_flows ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
 	if (!flowBranchColumnNames.has("head_node_id")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN head_node_id TEXT");
 	if (!flowBranchColumnNames.has("pending_regenerate")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN pending_regenerate INTEGER NOT NULL DEFAULT 0");
 	const flowNodeColumnNames: Set<string> = new Set(

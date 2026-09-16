@@ -592,6 +592,7 @@ const workspaceTreeOrderUpdateParamsSchema = z
 		sessionIdsByWorkspace: z.record(workspaceTreeOrderIdSchema, z.array(workspaceTreeOrderIdSchema).max(100_000)),
 		pinnedSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
 		recentSessionIds: z.array(workspaceTreeOrderIdSchema).max(100_000),
+		sectionOrder: z.array(workspaceTreeSectionKeySchema).length(3),
 		expandedSectionKeys: z.array(workspaceTreeSectionKeySchema).max(3),
 		expandedWorkspaceIds: z.array(workspaceTreeOrderIdSchema).max(10_000)
 	})
@@ -602,6 +603,13 @@ const workspaceTreeOrderUpdateParamsSchema = z
 				code: "custom",
 				path: ["workspaceIds"],
 				message: "Workspace ids must be unique."
+			});
+		}
+		if (new Set(value.sectionOrder).size !== value.sectionOrder.length) {
+			context.addIssue({
+				code: "custom",
+				path: ["sectionOrder"],
+				message: "Section order must contain each section exactly once."
 			});
 		}
 		if (new Set(value.expandedSectionKeys).size !== value.expandedSectionKeys.length) {

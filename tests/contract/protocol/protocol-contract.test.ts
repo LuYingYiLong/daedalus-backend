@@ -329,10 +329,25 @@ test("workspace tree order accepts a complete unique order snapshot", (): void =
 			},
 			pinnedSessionIds: ["session-pinned"],
 			recentSessionIds: ["session-recent"],
+			sectionOrder: ["recent", "pinned", "projects"],
 			expandedSectionKeys: ["pinned", "projects"],
 			expandedWorkspaceIds: ["workspace-b"]
 		}
 	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "workspace-tree-order-duplicate-section",
+		method: "workspace.tree.order.update",
+		params: {
+			workspaceIds: [],
+			sessionIdsByWorkspace: {},
+			pinnedSessionIds: [],
+			recentSessionIds: [],
+			sectionOrder: ["pinned", "pinned", "recent"],
+			expandedSectionKeys: [],
+			expandedWorkspaceIds: []
+		}
+	}).success, false);
 });
 
 test("session.timeline.search.index accepts a paged Studio search request", (): void => {
@@ -397,6 +412,7 @@ test("workspace tree order rejects duplicate session ids across workspaces", ():
 			},
 			pinnedSessionIds: [],
 			recentSessionIds: [],
+			sectionOrder: ["pinned", "projects", "recent"],
 			expandedSectionKeys: ["pinned", "projects", "recent"],
 			expandedWorkspaceIds: ["workspace-a"]
 		}

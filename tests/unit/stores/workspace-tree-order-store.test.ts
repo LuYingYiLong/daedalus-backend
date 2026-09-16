@@ -32,6 +32,7 @@ test("workspace tree order reconciles visible ids and puts new entries first", (
 		},
 		pinnedSessionIds: ["session-pinned", "session-pinned-deleted"],
 		recentSessionIds: ["session-recent", "session-recent-deleted"],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["projects", "recent"],
 		expandedWorkspaceIds: ["workspace-b", "workspace-deleted"]
 	}, {
@@ -54,10 +55,21 @@ test("workspace tree order reconciles visible ids and puts new entries first", (
 
 test("workspace tree order rejects duplicates and cross-workspace known sessions", (): void => {
 	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
+		workspaceIds: [],
+		sessionIdsByWorkspace: {},
+		pinnedSessionIds: [],
+		recentSessionIds: [],
+		sectionOrder: ["pinned", "pinned", "recent"],
+		expandedSectionKeys: [],
+		expandedWorkspaceIds: []
+	}, BASE_INVENTORY), /invalid_section_order/u);
+
+	assert.throws((): void => validateWorkspaceTreeOrderUpdate({
 		workspaceIds: ["workspace-a", "workspace-a"],
 		sessionIdsByWorkspace: {},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["pinned", "projects", "recent"],
 		expandedWorkspaceIds: []
 	}, BASE_INVENTORY), /duplicate_workspace/u);
@@ -69,6 +81,7 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["pinned", "projects", "recent"],
 		expandedWorkspaceIds: []
 	}, BASE_INVENTORY), /session_workspace_mismatch/u);
@@ -81,6 +94,7 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["pinned", "projects", "recent"],
 		expandedWorkspaceIds: []
 	}, BASE_INVENTORY), /duplicate_session/u);
@@ -93,6 +107,7 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		},
 		pinnedSessionIds: ["session-recent"],
 		recentSessionIds: ["session-pinned"],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["pinned", "projects", "recent"],
 		expandedWorkspaceIds: []
 	}, BASE_INVENTORY), /session_section_mismatch/u);
@@ -102,6 +117,7 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		sessionIdsByWorkspace: {},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["projects", "projects"],
 		expandedWorkspaceIds: []
 	}, BASE_INVENTORY), /invalid_section/u);
@@ -111,6 +127,7 @@ test("workspace tree order rejects duplicates and cross-workspace known sessions
 		sessionIdsByWorkspace: {},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: ["pinned", "projects", "recent"],
 		expandedSectionKeys: ["projects"],
 		expandedWorkspaceIds: ["workspace-a", "workspace-a"]
 	}, BASE_INVENTORY), /duplicate_expanded_workspace/u);
@@ -126,6 +143,7 @@ test("workspace tree order store persists updates and serializes concurrent writ
 		assert.deepEqual(first.sessionIdsByWorkspace["workspace-a"], ["session-a-new", "session-a-old"]);
 		assert.deepEqual(first.pinnedSessionIds, ["session-pinned"]);
 		assert.deepEqual(first.recentSessionIds, ["session-recent"]);
+		assert.deepEqual(first.sectionOrder, ["pinned", "projects", "recent"]);
 		assert.deepEqual(first.expandedSectionKeys, ["pinned", "projects", "recent"]);
 		assert.deepEqual(first.expandedWorkspaceIds, ["workspace-a", "workspace-b"]);
 
@@ -137,6 +155,7 @@ test("workspace tree order store persists updates and serializes concurrent writ
 			},
 			pinnedSessionIds: ["session-pinned"],
 			recentSessionIds: ["session-recent"],
+			sectionOrder: ["pinned", "projects", "recent"],
 			expandedSectionKeys: ["pinned", "projects"],
 			expandedWorkspaceIds: ["workspace-b"]
 		}, BASE_INVENTORY);
@@ -148,6 +167,7 @@ test("workspace tree order store persists updates and serializes concurrent writ
 			},
 			pinnedSessionIds: ["session-pinned"],
 			recentSessionIds: ["session-recent"],
+			sectionOrder: ["recent", "projects", "pinned"],
 			expandedSectionKeys: ["projects"],
 			expandedWorkspaceIds: ["workspace-a"]
 		}, BASE_INVENTORY);
@@ -158,6 +178,7 @@ test("workspace tree order store persists updates and serializes concurrent writ
 		assert.deepEqual(reloaded.sessionIdsByWorkspace["workspace-a"], ["session-a-new", "session-a-old"]);
 		assert.deepEqual(reloaded.pinnedSessionIds, ["session-pinned"]);
 		assert.deepEqual(reloaded.recentSessionIds, ["session-recent"]);
+		assert.deepEqual(reloaded.sectionOrder, ["recent", "projects", "pinned"]);
 		assert.deepEqual(reloaded.expandedSectionKeys, ["projects"]);
 		assert.deepEqual(reloaded.expandedWorkspaceIds, ["workspace-a"]);
 	} finally {
@@ -180,7 +201,7 @@ test("workspace tree order store replaces invalid schema instead of migrating it
 		const result = await store.get(BASE_INVENTORY);
 		assert.deepEqual(result.workspaceIds, ["workspace-a", "workspace-b"]);
 		const stored = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number; workspaceIds: string[] };
-		assert.equal(stored.schemaVersion, 2);
+		assert.equal(stored.schemaVersion, 3);
 		assert.deepEqual(stored.workspaceIds, ["workspace-a", "workspace-b"]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
@@ -206,6 +227,10 @@ test("workspace tree order keeps legacy v2 workspaces expanded when the field is
 
 		const result = await new WorkspaceTreeOrderStore(filePath).get(BASE_INVENTORY);
 		assert.deepEqual(result.expandedWorkspaceIds, ["workspace-b", "workspace-a"]);
+		assert.deepEqual(result.sectionOrder, ["pinned", "projects", "recent"]);
+		const stored = JSON.parse(await readFile(filePath, "utf8")) as { schemaVersion: number; sectionOrder: string[] };
+		assert.equal(stored.schemaVersion, 3);
+		assert.deepEqual(stored.sectionOrder, ["pinned", "projects", "recent"]);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

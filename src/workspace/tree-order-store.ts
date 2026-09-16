@@ -2,17 +2,19 @@ import { readFile } from "node:fs/promises";
 import { getWorkspaceTreeOrderConfigPath } from "../app-paths.js";
 import { writeJsonFileAtomic } from "../json-file-store.js";
 
-const SCHEMA_VERSION: 2 = 2;
+const SCHEMA_VERSION: 3 = 3;
+const PREVIOUS_SCHEMA_VERSION: 2 = 2;
 
 export const WORKSPACE_TREE_SECTION_KEYS = ["pinned", "projects", "recent"] as const;
 export type WorkspaceTreeSectionKey = typeof WORKSPACE_TREE_SECTION_KEYS[number];
 
 export type WorkspaceTreeOrderPreferences = {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	workspaceIds: string[];
 	sessionIdsByWorkspace: Record<string, string[]>;
 	pinnedSessionIds: string[];
 	recentSessionIds: string[];
+	sectionOrder: WorkspaceTreeSectionKey[];
 	expandedSectionKeys: WorkspaceTreeSectionKey[];
 	expandedWorkspaceIds: string[];
 	updatedAt: string;
@@ -24,6 +26,7 @@ export type WorkspaceTreeOrderUpdate = Pick<
 	| "sessionIdsByWorkspace"
 	| "pinnedSessionIds"
 	| "recentSessionIds"
+	| "sectionOrder"
 	| "expandedSectionKeys"
 	| "expandedWorkspaceIds"
 >;
@@ -45,6 +48,7 @@ function createEmptyPreferences(): WorkspaceTreeOrderPreferences {
 		sessionIdsByWorkspace: {},
 		pinnedSessionIds: [],
 		recentSessionIds: [],
+		sectionOrder: [...WORKSPACE_TREE_SECTION_KEYS],
 		expandedSectionKeys: [...WORKSPACE_TREE_SECTION_KEYS],
 		expandedWorkspaceIds: [],
 		updatedAt: new Date(0).toISOString()
@@ -70,22 +74,27 @@ function isWorkspaceTreeSectionKey(value: unknown): value is WorkspaceTreeSectio
 function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences | null {
 	if (
 		!isRecord(value)
-		|| value.schemaVersion !== SCHEMA_VERSION
+		|| (value.schemaVersion !== SCHEMA_VERSION && value.schemaVersion !== PREVIOUS_SCHEMA_VERSION)
 		|| !Array.isArray(value.workspaceIds)
 		|| !isRecord(value.sessionIdsByWorkspace)
 		|| !Array.isArray(value.pinnedSessionIds)
 		|| !Array.isArray(value.recentSessionIds)
+		|| (value.schemaVersion === SCHEMA_VERSION && !Array.isArray(value.sectionOrder))
+		|| (value.sectionOrder !== undefined && !Array.isArray(value.sectionOrder))
 		|| !Array.isArray(value.expandedSectionKeys)
 		|| (value.expandedWorkspaceIds !== undefined && !Array.isArray(value.expandedWorkspaceIds))
 		|| typeof value.updatedAt !== "string"
 		|| !value.workspaceIds.every(isId)
 		|| !value.pinnedSessionIds.every(isId)
 		|| !value.recentSessionIds.every(isId)
+		|| (Array.isArray(value.sectionOrder) && !value.sectionOrder.every(isWorkspaceTreeSectionKey))
+		|| (value.schemaVersion === SCHEMA_VERSION && Array.isArray(value.sectionOrder) && value.sectionOrder.length !== WORKSPACE_TREE_SECTION_KEYS.length)
 		|| !value.expandedSectionKeys.every(isWorkspaceTreeSectionKey)
 		|| (Array.isArray(value.expandedWorkspaceIds) && !value.expandedWorkspaceIds.every(isId))
 		|| hasDuplicates(value.workspaceIds)
 		|| hasDuplicates(value.pinnedSessionIds)
 		|| hasDuplicates(value.recentSessionIds)
+		|| (Array.isArray(value.sectionOrder) && hasDuplicates(value.sectionOrder))
 		|| hasDuplicates(value.expandedSectionKeys)
 		|| (Array.isArray(value.expandedWorkspaceIds) && hasDuplicates(value.expandedWorkspaceIds))
 	) {
@@ -119,6 +128,9 @@ function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences |
 		sessionIdsByWorkspace,
 		pinnedSessionIds: [...value.pinnedSessionIds],
 		recentSessionIds: [...value.recentSessionIds],
+		sectionOrder: Array.isArray(value.sectionOrder)
+			? [...value.sectionOrder]
+			: [...WORKSPACE_TREE_SECTION_KEYS],
 		expandedSectionKeys: [...value.expandedSectionKeys],
 		// Older v2 snapshots predate per-workspace expansion persistence. Preserve
 		// their previous UI behavior by treating every saved workspace as expanded.
@@ -129,11 +141,11 @@ function parseStoredPreferences(value: unknown): WorkspaceTreeOrderPreferences |
 	};
 }
 
-function mergeSavedOrder(currentIds: readonly string[], savedIds: readonly string[]): string[] {
-	const currentIdSet: ReadonlySet<string> = new Set(currentIds);
-	const knownSavedIds: string[] = savedIds.filter((id: string): boolean => currentIdSet.has(id));
-	const knownSavedIdSet: ReadonlySet<string> = new Set(knownSavedIds);
-	const newIds: string[] = currentIds.filter((id: string): boolean => !knownSavedIdSet.has(id));
+function mergeSavedOrder<T extends string>(currentIds: readonly T[], savedIds: readonly T[]): T[] {
+	const currentIdSet: ReadonlySet<T> = new Set(currentIds);
+	const knownSavedIds: T[] = savedIds.filter((id: T): boolean => currentIdSet.has(id));
+	const knownSavedIdSet: ReadonlySet<T> = new Set(knownSavedIds);
+	const newIds: T[] = currentIds.filter((id: T): boolean => !knownSavedIdSet.has(id));
 	return [...newIds, ...knownSavedIds];
 }
 
@@ -213,6 +225,7 @@ export function reconcileWorkspaceTreeOrder(
 		sessionIdsByWorkspace,
 		pinnedSessionIds,
 		recentSessionIds,
+		sectionOrder: mergeSavedOrder([...WORKSPACE_TREE_SECTION_KEYS], preferences.sectionOrder),
 		expandedSectionKeys: preferences.expandedSectionKeys.filter(isWorkspaceTreeSectionKey),
 		expandedWorkspaceIds: workspaceIds.filter((workspaceId: string): boolean => {
 			return currentWorkspaceIdSet.has(workspaceId)
@@ -290,6 +303,13 @@ export function validateWorkspaceTreeOrderUpdate(
 		}
 	}
 	if (
+		update.sectionOrder.length !== WORKSPACE_TREE_SECTION_KEYS.length
+		|| hasDuplicates(update.sectionOrder)
+		|| !update.sectionOrder.every(isWorkspaceTreeSectionKey)
+	) {
+		throw new Error("workspace_tree_order_invalid_section_order");
+	}
+	if (
 		hasDuplicates(update.expandedSectionKeys)
 		|| !update.expandedSectionKeys.every(isWorkspaceTreeSectionKey)
 	) {
@@ -309,6 +329,7 @@ function hasSameOrder(
 		sessionIdsByWorkspace: left.sessionIdsByWorkspace,
 		pinnedSessionIds: left.pinnedSessionIds,
 		recentSessionIds: left.recentSessionIds,
+		sectionOrder: left.sectionOrder,
 		expandedSectionKeys: left.expandedSectionKeys,
 		expandedWorkspaceIds: left.expandedWorkspaceIds
 	}) === JSON.stringify({
@@ -316,6 +337,7 @@ function hasSameOrder(
 		sessionIdsByWorkspace: right.sessionIdsByWorkspace,
 		pinnedSessionIds: right.pinnedSessionIds,
 		recentSessionIds: right.recentSessionIds,
+		sectionOrder: right.sectionOrder,
 		expandedSectionKeys: right.expandedSectionKeys,
 		expandedWorkspaceIds: right.expandedWorkspaceIds
 	});
@@ -341,10 +363,12 @@ export class WorkspaceTreeOrderStore {
 		this.initializationPromise = (async (): Promise<void> => {
 			let parsed: WorkspaceTreeOrderPreferences | null = null;
 			let replaceInvalid: boolean = false;
+			let migrateSchema: boolean = false;
 			try {
 				const raw: unknown = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
 				parsed = parseStoredPreferences(raw);
 				replaceInvalid = parsed === null;
+				migrateSchema = parsed !== null && isRecord(raw) && raw.schemaVersion !== SCHEMA_VERSION;
 			} catch (error: unknown) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
 					replaceInvalid = true;
@@ -352,7 +376,7 @@ export class WorkspaceTreeOrderStore {
 			}
 			this.snapshot = parsed ?? createEmptyPreferences();
 			this.writeQueue = Promise.resolve();
-			if (replaceInvalid) {
+			if (replaceInvalid || migrateSchema) {
 				await writeJsonFileAtomic(this.filePath, this.snapshot);
 			}
 			this.initialized = true;

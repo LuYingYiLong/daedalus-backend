@@ -1922,6 +1922,10 @@ const BASE_BUILTIN_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 						additionalProperties: { type: "string" },
 						description: "可选附加环境变量。普通模式下只传入显式键值和必要系统环境。"
 					},
+					stdin: {
+						type: "string",
+						description: "可选标准输入文本，最大 1 MiB。"
+					},
 					executionMode: {
 						type: "string",
 						enum: ["wait", "job"],

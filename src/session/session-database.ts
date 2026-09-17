@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 20;
+const DB_SCHEMA_VERSION: number = 21;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -371,6 +371,9 @@ function migrateSchema(db: DatabaseSync): void {
 			workspace_id TEXT,
 			pinned INTEGER NOT NULL DEFAULT 0,
 			revision INTEGER NOT NULL DEFAULT 1,
+			graph_revision INTEGER NOT NULL DEFAULT 1,
+			layout_revision INTEGER NOT NULL DEFAULT 1,
+			approval_mode TEXT NOT NULL DEFAULT 'manual',
 			viewport_json TEXT NOT NULL,
 			archived_at TEXT,
 			created_at TEXT NOT NULL,
@@ -381,7 +384,7 @@ function migrateSchema(db: DatabaseSync): void {
 		CREATE TABLE IF NOT EXISTS flow_nodes (
 			node_id TEXT PRIMARY KEY,
 			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
-			type TEXT NOT NULL CHECK(type IN ('prompt', 'llm', 'output', 'note')),
+			type TEXT NOT NULL CHECK(type IN ('prompt', 'text', 'template', 'merge', 'json_extract', 'condition', 'file_input', 'llm', 'tool', 'command', 'output', 'note')),
 			title TEXT NOT NULL,
 			x REAL NOT NULL,
 			y REAL NOT NULL,
@@ -426,6 +429,29 @@ function migrateSchema(db: DatabaseSync): void {
 			PRIMARY KEY(run_id, node_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_flow_node_runs_cache ON flow_node_runs (node_id, input_fingerprint, status);
+		CREATE TABLE IF NOT EXISTS flow_approvals (
+			approval_id TEXT PRIMARY KEY,
+			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+			run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE,
+			node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+			tool_name TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			pending_json TEXT NOT NULL,
+			status TEXT NOT NULL,
+			required_consent_json TEXT,
+			created_at TEXT NOT NULL,
+			resolved_at TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_flow_approvals_run ON flow_approvals(flow_id, run_id, status, created_at);
+		CREATE TABLE IF NOT EXISTS flow_node_run_events (
+			run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE,
+			node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+			sequence INTEGER NOT NULL,
+			event_type TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(run_id, node_id, sequence)
+		);
 		CREATE TABLE IF NOT EXISTS agent_run_continuations (
 			run_id TEXT PRIMARY KEY REFERENCES agent_runs(run_id) ON DELETE CASCADE,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
@@ -558,6 +584,57 @@ function migrateSchema(db: DatabaseSync): void {
 		DROP TABLE IF EXISTS legacy_imports;
 		DROP TABLE IF EXISTS migration_issues;
 	`);
+	const flowDocumentColumns = new Set(
+		(db.prepare("PRAGMA table_info(flow_documents)").all() as Array<{ name: string }>).map((column): string => column.name),
+	);
+	if (!flowDocumentColumns.has("graph_revision")) db.exec("ALTER TABLE flow_documents ADD COLUMN graph_revision INTEGER NOT NULL DEFAULT 1");
+	if (!flowDocumentColumns.has("layout_revision")) db.exec("ALTER TABLE flow_documents ADD COLUMN layout_revision INTEGER NOT NULL DEFAULT 1");
+	if (!flowDocumentColumns.has("approval_mode")) db.exec("ALTER TABLE flow_documents ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'manual'");
+	db.exec("UPDATE flow_documents SET graph_revision = revision WHERE graph_revision = 1 AND revision <> 1");
+	db.exec("UPDATE flow_documents SET layout_revision = revision WHERE layout_revision = 1 AND revision <> 1");
+	const flowNodesSql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'flow_nodes'").get() as { sql?: string } | undefined)?.sql ?? "");
+	if (!flowNodesSql.includes("'command'")) {
+		db.exec("PRAGMA foreign_keys = OFF");
+		db.exec("PRAGMA legacy_alter_table = ON");
+		db.exec(`
+			DROP INDEX IF EXISTS idx_flow_edges_flow;
+			DROP INDEX IF EXISTS idx_flow_nodes_flow;
+			ALTER TABLE flow_edges RENAME TO flow_edges_legacy_v20;
+			ALTER TABLE flow_nodes RENAME TO flow_nodes_legacy_v20;
+			CREATE TABLE flow_nodes (
+				node_id TEXT PRIMARY KEY,
+				flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+				type TEXT NOT NULL CHECK(type IN ('prompt', 'text', 'template', 'merge', 'json_extract', 'condition', 'file_input', 'llm', 'tool', 'command', 'output', 'note')),
+				title TEXT NOT NULL,
+				x REAL NOT NULL,
+				y REAL NOT NULL,
+				width REAL NOT NULL,
+				height REAL NOT NULL,
+				config_json TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'idle',
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			INSERT INTO flow_nodes SELECT * FROM flow_nodes_legacy_v20;
+			CREATE INDEX idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
+			CREATE TABLE flow_edges (
+				edge_id TEXT PRIMARY KEY,
+				flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+				source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+				source_port TEXT NOT NULL,
+				target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+				target_port TEXT NOT NULL,
+				data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'artifact')),
+				UNIQUE(flow_id, target_node_id, target_port)
+			);
+			INSERT INTO flow_edges SELECT * FROM flow_edges_legacy_v20;
+			CREATE INDEX idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
+			DROP TABLE flow_edges_legacy_v20;
+			DROP TABLE flow_nodes_legacy_v20;
+		`);
+		db.exec("PRAGMA legacy_alter_table = OFF");
+		db.exec("PRAGMA foreign_keys = ON");
+	}
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
 		db.exec("ALTER TABLE selection_ask_messages ADD COLUMN error_message TEXT");

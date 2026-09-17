@@ -289,14 +289,14 @@ test("schema 10 upgrades to current schema without changing observation or scree
     db.exec("ALTER TABLE computer_observations DROP COLUMN groundings_json; DELETE FROM schema_migrations WHERE version=11; INSERT OR IGNORE INTO schema_migrations VALUES(10,datetime('now')); PRAGMA user_version=10;");
     await resetSessionDatabaseForTests();
     const migrated = await getSessionDatabase();
-	assert.equal(migrated.prepare("PRAGMA user_version").get()!.user_version, 20);
-	assert.equal(migrated.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version IN (10,20)").get()!.n, 2);
+	assert.equal(migrated.prepare("PRAGMA user_version").get()!.user_version, 21);
+	assert.equal(migrated.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version IN (10,21)").get()!.n, 2);
     assert.deepEqual(readRow(migrated, sessionId), before);
     assert.equal((await getComputerObservation(sessionId, "frame-1", true)).dataUrl, PNG);
     await saveComputerGrounding(sessionId, "turn-1", grounding());
     await resetSessionDatabaseForTests();
     const reopened = await getSessionDatabase();
-	assert.equal(reopened.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version=20").get()!.n, 1);
+	assert.equal(reopened.prepare("SELECT count(*) AS n FROM schema_migrations WHERE version=21").get()!.n, 1);
     assert.deepEqual((await getComputerObservation(sessionId, "frame-1", true)).groundings, [grounding()]);
   });
 });

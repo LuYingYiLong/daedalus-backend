@@ -451,6 +451,7 @@ async function runCommand(
 		invocation: executableInvocation,
 		cwd,
 		timeoutMs,
+		stdinText: input.stdin,
 		onOutput,
 		signal
 	});
@@ -643,6 +644,7 @@ const commandRunSchema = z.object({
 	sourceFolderId: z.string().min(1).optional().describe("源目录 ID；多源工作区的终端命令必须显式提供，并且 cwd 必须位于该源目录内。"),
 	cwd: z.string().optional().describe("workspace 相对工作目录；Full Trust 下可传绝对路径"),
 	env: z.record(z.string(), z.string()).optional().describe("附加环境变量"),
+	stdin: z.string().max(1_048_576).optional().describe("写入进程标准输入的文本，最大 1 MiB。"),
 	executionMode: z.enum(["wait", "job"]).optional().describe("wait 为默认同步等待；job 为长任务"),
 	wakeAfterMs: z.number().int().positive().optional().describe("job 模式下请求 backend 在指定毫秒后唤醒 AI。"),
 	timeoutMs: z.number().int().positive().optional().describe("命令超时毫秒。wait 默认 30000，job 默认 30 分钟。"),

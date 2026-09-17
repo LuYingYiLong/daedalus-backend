@@ -1004,17 +1004,133 @@ export const subagentMergeStateEventDataSchema = z.object({
 const flowIdentifierSchema = z.string().trim().min(1).max(240);
 
 // Flow uses a document graph instead of chat branches.
-export const flowDocumentNodeTypeSchema = z.enum(["prompt", "llm", "output", "note"]);
+export const flowDocumentNodeTypeSchema = z.enum([
+	"prompt",
+	"text",
+	"template",
+	"merge",
+	"json_extract",
+	"condition",
+	"file_input",
+	"llm",
+	"tool",
+	"command",
+	"output",
+	"note",
+]);
 export const flowDocumentNodeStatusSchema = z.enum(["idle", "queued", "running", "waiting", "completed", "cached", "failed", "cancelled", "skipped"]);
-export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
+export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled"]);
 export const flowDocumentPortTypeSchema = z.enum(["text", "json", "artifact"]);
+export const flowApprovalModeSchema = z.enum(["manual", "auto-safe", "full-trust"]);
+export const flowDynamicPortSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().trim().min(1).max(80),
+	dataType: flowDocumentPortTypeSchema.default("text"),
+}).strict();
+const flowPromptConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
+const flowTextConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
+const flowTemplateConfigSchema = z.object({
+	template: z.string().max(200_000).default("{{input}}"),
+	inputs: z.array(flowDynamicPortSchema).min(1).max(32).default([{ id: "input", label: "Input", dataType: "text" }]),
+}).strict();
+const flowMergeConfigSchema = z.object({
+	mode: z.enum(["concat", "array", "object"]).default("concat"),
+	separator: z.string().max(1_000).default("\n"),
+	inputs: z.array(flowDynamicPortSchema).min(2).max(32).default([
+		{ id: "input-1", label: "Input 1", dataType: "text" },
+		{ id: "input-2", label: "Input 2", dataType: "text" },
+	]),
+}).strict();
+const flowJsonExtractConfigSchema = z.object({
+	pointer: z.string().max(2_000).default("/"),
+}).strict();
+const flowConditionConfigSchema = z.object({
+	pointer: z.string().max(2_000).default("/"),
+	operator: z.enum(["equals", "not_equals", "contains", "matches", "gt", "gte", "lt", "lte", "exists"]).default("equals"),
+	value: z.unknown().optional(),
+}).strict();
+const flowFileInputConfigSchema = z.object({
+	path: z.string().max(4_000).default(""),
+	mode: z.enum(["text", "json", "artifact"]).default("text"),
+}).strict();
+const flowLlmConfigSchema = z.object({
+	provider: z.string().max(120).default(""),
+	model: z.string().max(240).default(""),
+	reasoningEffort: z.string().max(80).default(""),
+	systemPrompt: z.string().max(200_000).default(""),
+}).strict();
+const flowToolBindingSchema = z.object({
+	argumentPath: z.string().min(1).max(1_000),
+	inputPort: flowIdentifierSchema.default("input"),
+	valuePath: z.string().max(1_000).default(""),
+}).strict();
+const flowToolConfigSchema = z.object({
+	toolName: z.string().max(240).default(""),
+	args: z.record(z.string(), z.unknown()).default({}),
+	bindings: z.array(flowToolBindingSchema).max(64).default([]),
+}).strict();
+const flowCommandConfigSchema = z.object({
+	commandLine: z.string().max(32_000).default(""),
+	cwd: z.string().max(4_000).default(""),
+	env: z.record(z.string(), z.string()).default({}),
+	timeoutMs: z.number().int().min(1_000).max(1_800_000).default(30_000),
+}).strict();
+const flowOutputConfigSchema = z.object({ format: z.enum(["text", "json"]).default("text") }).strict();
+const flowNoteConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
+export const flowDocumentNodeConfigSchemas = {
+	prompt: flowPromptConfigSchema,
+	text: flowTextConfigSchema,
+	template: flowTemplateConfigSchema,
+	merge: flowMergeConfigSchema,
+	json_extract: flowJsonExtractConfigSchema,
+	condition: flowConditionConfigSchema,
+	file_input: flowFileInputConfigSchema,
+	llm: flowLlmConfigSchema,
+	tool: flowToolConfigSchema,
+	command: flowCommandConfigSchema,
+	output: flowOutputConfigSchema,
+	note: flowNoteConfigSchema,
+} as const;
 export const flowDocumentNodeConfigSchema = z.record(z.string(), z.unknown());
+export const flowNodePortDefinitionSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().min(1).max(120),
+	direction: z.enum(["input", "output"]),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	required: z.boolean(),
+	multiple: z.boolean(),
+	defaultConnect: z.boolean(),
+}).strict();
+export const flowNodeTypeDefinitionSchema = z.object({
+	type: flowDocumentNodeTypeSchema,
+	category: z.enum(["basic", "ai", "workspace"]),
+	workspaceRequired: z.boolean(),
+	sideEffecting: z.boolean(),
+	defaultTitle: z.string().min(1).max(120),
+	defaultConfig: flowDocumentNodeConfigSchema,
+	ports: z.array(flowNodePortDefinitionSchema).max(64),
+}).strict();
+export const flowApprovalSchema = z.object({
+	approvalId: flowIdentifierSchema,
+	flowId: flowIdentifierSchema,
+	runId: flowIdentifierSchema,
+	nodeId: flowIdentifierSchema,
+	toolName: z.string().min(1).max(240),
+	reason: z.string().max(8_000),
+	status: z.enum(["pending", "approved", "rejected", "cancelled"]),
+	requiredConsent: z.object({ prompt: z.string(), expectedText: z.string() }).strict().nullable(),
+	createdAt: z.string().datetime(),
+	resolvedAt: z.string().datetime().nullable(),
+}).strict();
 export const flowDocumentSchema = z.object({
 	flowId: flowIdentifierSchema,
 	title: z.string().trim().min(1).max(200),
 	workspaceId: z.string().min(1).max(200).nullable(),
 	pinned: z.boolean(),
 	revision: z.number().int().positive(),
+	graphRevision: z.number().int().positive(),
+	layoutRevision: z.number().int().positive(),
+	approvalMode: flowApprovalModeSchema,
 	viewport: z.object({ x: z.number().finite(), y: z.number().finite(), zoom: z.number().finite().positive() }).strict(),
 	archivedAt: z.string().datetime().nullable(),
 	createdAt: z.string().datetime(),
@@ -1595,6 +1711,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.node.types.list"),
+		params: z.object({ flowId: flowIdentifierSchema.optional(), workspaceId: z.string().min(1).max(200).optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.node.create"),
 		params: z.object({
 			flowId: flowIdentifierSchema,
@@ -1604,6 +1726,27 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			x: z.number().finite().min(-10_000_000).max(10_000_000),
 			y: z.number().finite().min(-10_000_000).max(10_000_000),
 			config: flowDocumentNodeConfigSchema.optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.node.createConnected"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			revision: z.number().int().positive(),
+			type: flowDocumentNodeTypeSchema,
+			title: z.string().trim().min(1).max(200).optional(),
+			x: z.number().finite().min(-10_000_000).max(10_000_000),
+			y: z.number().finite().min(-10_000_000).max(10_000_000),
+			config: flowDocumentNodeConfigSchema.optional(),
+			connection: z.object({
+				direction: z.enum(["from_existing", "to_existing"]),
+				existingNodeId: flowIdentifierSchema,
+				existingPort: flowIdentifierSchema,
+				newPort: flowIdentifierSchema,
+				dataType: flowDocumentPortTypeSchema,
+			}).strict(),
 		}).strict(),
 	}).strict(),
 	z.object({
@@ -1658,6 +1801,36 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			flowId: flowIdentifierSchema,
 			revision: z.number().int().positive(),
 			viewport: z.object({ x: z.number().finite(), y: z.number().finite(), zoom: z.number().finite().positive() }).strict(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.settings.update"),
+		params: z.object({ flowId: flowIdentifierSchema, revision: z.number().int().positive(), approvalMode: flowApprovalModeSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.tools.list"),
+		params: z.object({ flowId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.approval.list"),
+		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema.optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.approval.resolve"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			runId: flowIdentifierSchema,
+			approvalId: flowIdentifierSchema,
+			decision: z.enum(["approve", "reject"]),
+			consentText: z.string().max(2_000).optional(),
 		}).strict(),
 	}).strict(),
 	z.object({

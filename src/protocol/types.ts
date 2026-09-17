@@ -12,6 +12,7 @@ import type {
 	flowDocumentEdgeSchema,
 	flowDocumentEdgeUpdatedEventDataSchema,
 	flowDocumentNodeSchema,
+	flowDocumentNodeTypeSchema,
 	flowDocumentNodeRunSchema,
 	flowDocumentNodeStateEventDataSchema,
 	flowDocumentNodeUpdatedEventDataSchema,
@@ -20,6 +21,9 @@ import type {
 	flowDocumentSchema,
 	flowDocumentSnapshotSchema,
 	flowDocumentUpdatedEventDataSchema,
+	flowNodePortDefinitionSchema,
+	flowNodeTypeDefinitionSchema,
+	flowApprovalSchema,
 	flowTreeOrderSchema,
 	messageTextAnchorSchema,
 	promptIdSchema,
@@ -94,11 +98,15 @@ export type ConversationFlowEventDataMap = {
 };
 
 export type FlowDocument = z.infer<typeof flowDocumentSchema>;
+export type FlowDocumentNodeType = z.infer<typeof flowDocumentNodeTypeSchema>;
 export type FlowDocumentNode = z.infer<typeof flowDocumentNodeSchema>;
 export type FlowDocumentEdge = z.infer<typeof flowDocumentEdgeSchema>;
 export type FlowDocumentRun = z.infer<typeof flowDocumentRunSchema>;
 export type FlowDocumentNodeRun = z.infer<typeof flowDocumentNodeRunSchema>;
 export type FlowDocumentSnapshot = z.infer<typeof flowDocumentSnapshotSchema>;
+export type FlowNodePortDefinition = z.infer<typeof flowNodePortDefinitionSchema>;
+export type FlowNodeTypeDefinition = z.infer<typeof flowNodeTypeDefinitionSchema>;
+export type FlowApproval = z.infer<typeof flowApprovalSchema>;
 export type FlowDocumentEventDataMap = {
 	"flow.updated": z.infer<typeof flowDocumentUpdatedEventDataSchema>;
 	"flow.node.updated": z.infer<typeof flowDocumentNodeUpdatedEventDataSchema>;

@@ -1,6 +1,6 @@
 import type WebSocket from "ws";
 import type { McpHost } from "../../mcp/mcp-host.js";
-import type { ClientRequest } from "../../protocol/types.js";
+import type { ClientRequest, FlowDocumentRun } from "../../protocol/types.js";
 import {
 	addConversationFlowBranch,
 	archiveConversationFlow,
@@ -33,6 +33,7 @@ import type { ClientSession } from "../client-session.js";
 import { sendJson } from "../send-json.js";
 import {
 	archiveFlowDocument,
+	createConnectedFlowNodeDocument,
 	createFlowEdgeDocument,
 	createFlowNodeDocument,
 	createFlowRunDocument,
@@ -45,9 +46,13 @@ import {
 	renameFlowDocument,
 	updateFlowPinnedStatesDocument,
 	updateFlowNodeDocument,
+	updateFlowSettingsDocument,
 	updateFlowViewportDocument,
+	listFlowApprovalsDocument,
 } from "../../session/flow-document-store.js";
-import { getActiveFlowRunIdDocument, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
+import { getActiveFlowRunIdDocument, resolveFlowRunApproval, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
+import { listFlowNodeTypeDefinitions } from "../flow-node-registry.js";
+import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
 
 type FlowRequestMethod =
 	| "flow.create"
@@ -63,11 +68,17 @@ type FlowRequestMethod =
 	| "flow.branch.copyToChat"
 	| "flow.layout.update"
 	| "flow.node.create"
+	| "flow.node.createConnected"
+	| "flow.node.types.list"
 	| "flow.node.update"
 	| "flow.node.delete"
 	| "flow.edge.create"
 	| "flow.edge.delete"
 	| "flow.viewport.update"
+	| "flow.settings.update"
+	| "flow.tools.list"
+	| "flow.approval.list"
+	| "flow.approval.resolve"
 	| "flow.run.start"
 	| "flow.run.stop"
 	| "flow.run.retry"
@@ -102,7 +113,7 @@ function readFlowRevision(value: unknown): { flowId: string; revision: number } 
 	if (typeof record.flowId === "string" && typeof record.revision === "number") {
 		return { flowId: record.flowId, revision: record.revision };
 	}
-	return readFlowRevision(record.flow);
+	return readFlowRevision(record.flow) ?? readFlowRevision(record.snapshot);
 }
 
 function assertSessionConvertible(metadata: SessionMetadata): void {
@@ -294,7 +305,7 @@ export async function handleConversationFlowRequest(
 	socket: WebSocket,
 	request: ClientRequest,
 	_session: ClientSession,
-	_mcpHost: McpHost,
+	mcpHost: McpHost,
 ): Promise<void> {
 	if (!request.method.startsWith("flow.")) return;
 	const flowRequest: FlowRequest = request as FlowRequest;
@@ -374,6 +385,15 @@ export async function handleConversationFlowRequest(
 				...(flowRequest.params.config === undefined ? {} : { config: flowRequest.params.config }),
 			});
 			break;
+		case "flow.node.createConnected":
+			result = await createConnectedFlowNodeDocument(flowRequest.params);
+			break;
+		case "flow.node.types.list": {
+			const flow = flowRequest.params.flowId === undefined ? null : (await getFlowDocument(flowRequest.params.flowId)).flow;
+			const workspaceId = flow?.workspaceId ?? flowRequest.params.workspaceId;
+			result = { nodes: listFlowNodeTypeDefinitions(workspaceId !== undefined && workspaceId !== null) };
+			break;
+		}
 		case "flow.node.update":
 			result = await updateFlowNodeDocument({ flowId: flowRequest.params.flowId, nodeId: flowRequest.params.nodeId, revision: flowRequest.params.revision, patch: flowRequest.params.patch });
 			break;
@@ -389,6 +409,28 @@ export async function handleConversationFlowRequest(
 		case "flow.viewport.update":
 			result = await updateFlowViewportDocument(flowRequest.params);
 			break;
+		case "flow.settings.update":
+			result = await updateFlowSettingsDocument(flowRequest.params);
+			break;
+		case "flow.tools.list": {
+			const flow = (await getFlowDocument(flowRequest.params.flowId)).flow;
+			const catalog = createWorkspaceToolCatalog({ workspaceId: flow.workspaceId ?? undefined, clientType: "studio" });
+			result = {
+				tools: catalog.getEntries().flatMap((entry) => entry.definition.type === "function" ? [{
+					name: entry.id,
+					description: entry.definition.function.description ?? "",
+					inputSchema: entry.definition.function.parameters,
+					risk: entry.policy.risk,
+				}] : []),
+			};
+			break;
+		}
+		case "flow.approval.list":
+			result = { approvals: await listFlowApprovalsDocument(flowRequest.params.flowId, flowRequest.params.runId) };
+			break;
+		case "flow.approval.resolve":
+			result = await resolveFlowRunApproval({ ...flowRequest.params, mcpHost });
+			break;
 		case "flow.run.start":
 			{
 				const activeRunId = getActiveFlowRunIdDocument(flowRequest.params.flowId);
@@ -398,6 +440,7 @@ export async function handleConversationFlowRequest(
 				flowId: flowRequest.params.flowId,
 				revision: flowRequest.params.revision,
 				runId: (result as { runId: string }).runId,
+				mcpHost,
 				...(flowRequest.params.forceNodeIds === undefined ? {} : { forceNodeIds: flowRequest.params.forceNodeIds }),
 				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status }),
 				onNodeState: (run, nodeId): void => {
@@ -408,11 +451,11 @@ export async function handleConversationFlowRequest(
 			break;
 			}
 		case "flow.run.stop":
-			if (!stopFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId)) throw flowError("flow_run_not_running", "The Flow run is no longer active.");
+			if (!await stopFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId)) throw flowError("flow_run_not_running", "The Flow run is no longer active.");
 			result = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
 			break;
 		case "flow.run.retry":
-			result = await startFlowRunDocument({ flowId: flowRequest.params.flowId, revision: (await getFlowDocument(flowRequest.params.flowId)).flow.revision, ...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }) });
+			result = await startFlowRunDocument({ flowId: flowRequest.params.flowId, revision: (await getFlowDocument(flowRequest.params.flowId)).flow.graphRevision, mcpHost, ...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }) });
 			break;
 		case "flow.run.get":
 			result = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
@@ -430,7 +473,7 @@ export async function handleConversationFlowRequest(
 			throw flowError("flow_method_unsupported", `Unsupported Flow request: ${(flowRequest as { method: string }).method}`);
 		}
 		sendJson(socket, { type: "response", id: request.id, ok: true, result });
-		if (["flow.create", "flow.create.fromSession", "flow.rename", "flow.archive", "flow.branch.create", "flow.layout.update"].includes(flowRequest.method)) {
+		if (["flow.create", "flow.create.fromSession", "flow.rename", "flow.archive", "flow.branch.create", "flow.layout.update", "flow.settings.update"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
 		}
@@ -438,22 +481,27 @@ export async function handleConversationFlowRequest(
 			const updatedFlows = (result as { flows?: Array<{ flowId: string; revision: number }> }).flows ?? [];
 			for (const flow of updatedFlows) broadcastGlobalEvent(request.id, "flow.updated", flow);
 		}
-		if (["flow.node.create", "flow.node.update", "flow.node.delete"].includes(flowRequest.method)) {
+		if (["flow.node.create", "flow.node.createConnected", "flow.node.update", "flow.node.delete"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			const paramsRecord = flowRequest.params as Record<string, unknown>;
-			const nodeId = typeof paramsRecord.nodeId === "string" ? paramsRecord.nodeId : ((result as { nodes?: Array<{ nodeId: string }> }).nodes?.at(-1)?.nodeId ?? "");
+			const nodeId = typeof paramsRecord.nodeId === "string" ? paramsRecord.nodeId : (typeof (result as { nodeId?: unknown }).nodeId === "string" ? (result as { nodeId: string }).nodeId : ((result as { nodes?: Array<{ nodeId: string }> }).nodes?.at(-1)?.nodeId ?? ""));
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.node.updated", { ...updated, nodeId });
 		}
-		if (["flow.edge.create", "flow.edge.delete"].includes(flowRequest.method)) {
+		if (["flow.node.createConnected", "flow.edge.create", "flow.edge.delete"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			const paramsRecord = flowRequest.params as Record<string, unknown>;
 			const createdEdge = (result as { edges?: Array<{ edgeId: string; sourceNodeId: string; targetNodeId: string; targetPort: string }> }).edges?.find((edge): boolean => edge.sourceNodeId === paramsRecord.sourceNodeId && edge.targetNodeId === paramsRecord.targetNodeId && edge.targetPort === paramsRecord.targetPort);
-			const edgeId = typeof paramsRecord.edgeId === "string" ? paramsRecord.edgeId : (createdEdge?.edgeId ?? "");
+			const edgeId = typeof paramsRecord.edgeId === "string" ? paramsRecord.edgeId : (typeof (result as { edgeId?: unknown }).edgeId === "string" ? (result as { edgeId: string }).edgeId : (createdEdge?.edgeId ?? ""));
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.edge.updated", { ...updated, edgeId, ...(flowRequest.method === "flow.edge.delete" ? { deleted: true } : {}) });
 		}
 		if (flowRequest.method === "flow.viewport.update") {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
+		}
+		if (["flow.approval.resolve", "flow.run.stop", "flow.run.retry"].includes(flowRequest.method) && typeof result === "object" && result !== null) {
+			const run = result as FlowDocumentRun;
+			broadcastGlobalEvent(request.id, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status });
+			for (const node of run.nodes) broadcastGlobalEvent(request.id, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId: node.nodeId, revision: run.revision, status: node.status });
 		}
 	} catch (error: unknown) {
 		const candidate = error as Error & { activeBranchId?: string | null };

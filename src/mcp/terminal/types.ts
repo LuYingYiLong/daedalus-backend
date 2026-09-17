@@ -34,6 +34,7 @@ export type CommandRunInput = {
 	sourceFolderId?: string | undefined;
 	cwd?: string | undefined;
 	env?: Record<string, string> | undefined;
+	stdin?: string | undefined;
 	executionMode?: TerminalExecutionMode | undefined;
 	wakeAfterMs?: number | undefined;
 	timeoutMs?: number | undefined;

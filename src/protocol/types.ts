@@ -9,6 +9,17 @@ import type {
 	conversationFlowNodeStateEventDataSchema,
 	conversationFlowSchema,
 	conversationFlowUpdatedEventDataSchema,
+	flowDocumentEdgeSchema,
+	flowDocumentEdgeUpdatedEventDataSchema,
+	flowDocumentNodeSchema,
+	flowDocumentNodeRunSchema,
+	flowDocumentNodeStateEventDataSchema,
+	flowDocumentNodeUpdatedEventDataSchema,
+	flowDocumentRunSchema,
+	flowDocumentRunStateEventDataSchema,
+	flowDocumentSchema,
+	flowDocumentSnapshotSchema,
+	flowDocumentUpdatedEventDataSchema,
 	flowTreeOrderSchema,
 	messageTextAnchorSchema,
 	promptIdSchema,
@@ -82,6 +93,20 @@ export type ConversationFlowEventDataMap = {
 	"flow.node.state": z.infer<typeof conversationFlowNodeStateEventDataSchema>;
 };
 
+export type FlowDocument = z.infer<typeof flowDocumentSchema>;
+export type FlowDocumentNode = z.infer<typeof flowDocumentNodeSchema>;
+export type FlowDocumentEdge = z.infer<typeof flowDocumentEdgeSchema>;
+export type FlowDocumentRun = z.infer<typeof flowDocumentRunSchema>;
+export type FlowDocumentNodeRun = z.infer<typeof flowDocumentNodeRunSchema>;
+export type FlowDocumentSnapshot = z.infer<typeof flowDocumentSnapshotSchema>;
+export type FlowDocumentEventDataMap = {
+	"flow.updated": z.infer<typeof flowDocumentUpdatedEventDataSchema>;
+	"flow.node.updated": z.infer<typeof flowDocumentNodeUpdatedEventDataSchema>;
+	"flow.edge.updated": z.infer<typeof flowDocumentEdgeUpdatedEventDataSchema>;
+	"flow.run.state": z.infer<typeof flowDocumentRunStateEventDataSchema>;
+	"flow.node.state": z.infer<typeof flowDocumentNodeStateEventDataSchema>;
+};
+
 export type ProviderId = string;
 
 export type ChatMessage = {
@@ -130,6 +155,9 @@ export type CanonicalServerEventName =
 	| "flow.updated"
 	| "flow.branch.state"
 	| "flow.node.state"
+	| "flow.node.updated"
+	| "flow.edge.updated"
+	| "flow.run.state"
 	| "agent.run.started"
 	| "agent.run.snapshot"
 	| "agent.step.started"

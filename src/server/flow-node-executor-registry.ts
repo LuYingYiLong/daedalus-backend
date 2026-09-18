@@ -7,6 +7,7 @@ export type FlowNodeOutputs = Record<string, unknown>;
 export type FlowNodeExecutionContext = {
 	node: FlowDocumentNode;
 	inputs: FlowNodeInputs;
+	runInputs: Readonly<Record<string, unknown>>;
 	flow: FlowDocument;
 	runId: string;
 	gateway: ApprovalGateway;

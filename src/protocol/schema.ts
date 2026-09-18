@@ -1044,11 +1044,16 @@ const flowFileInputConfigSchema = z.object({
 	path: z.string().max(4_000).default(""),
 	mode: z.enum(["text", "json", "artifact"]).default("text"),
 }).strict();
+const flowInputConfigSchema = z.object({
+	label: z.string().trim().min(1).max(120).default("Input"),
+	dataType: z.enum(["text", "json"]).default("text"),
+	defaultValue: z.string().max(200_000).default(""),
+}).strict();
 const flowLlmConfigSchema = z.object({
 	provider: z.string().max(120).default(""),
 	model: z.string().max(240).default(""),
 	reasoningEffort: z.string().max(80).default(""),
-	prompt: z.string().max(200_000).default(""),
+	userPrompt: z.string().max(200_000).default(""),
 	systemPrompt: z.string().max(200_000).default(""),
 }).strict();
 const flowToolBindingSchema = z.object({
@@ -1071,13 +1076,15 @@ const flowCommandConfigSchema = z.object({
 const flowOutputConfigSchema = z.object({ format: z.enum(["text", "json"]).default("text") }).strict();
 const flowNoteConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
 export const flowDocumentNodeConfigSchemas = {
-	"builtin/prompt": flowPromptConfigSchema,
+	"builtin/user-prompt": flowPromptConfigSchema,
+	"builtin/system-prompt": flowPromptConfigSchema,
 	"builtin/text": flowTextConfigSchema,
 	"builtin/template": flowTemplateConfigSchema,
 	"builtin/merge": flowMergeConfigSchema,
 	"builtin/json-extract": flowJsonExtractConfigSchema,
 	"builtin/condition": flowConditionConfigSchema,
 	"builtin/file-input": flowFileInputConfigSchema,
+	"builtin/flow-input": flowInputConfigSchema,
 	"builtin/llm": flowLlmConfigSchema,
 	"builtin/tool": flowToolConfigSchema,
 	"builtin/command": flowCommandConfigSchema,
@@ -1236,6 +1243,9 @@ export const flowDocumentRunSchema = z.object({
 	runId: flowIdentifierSchema,
 	flowId: flowIdentifierSchema,
 	revision: z.number().int().positive(),
+	entryNodeIds: z.array(flowIdentifierSchema).max(2_000),
+	targetNodeIds: z.array(flowIdentifierSchema).max(2_000),
+	inputValues: z.record(flowIdentifierSchema, z.unknown()),
 	status: flowDocumentRunStatusSchema,
 	startedAt: z.string().datetime().nullable(),
 	finishedAt: z.string().datetime().nullable(),
@@ -1736,7 +1746,14 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.run.start"),
-		params: z.object({ flowId: flowIdentifierSchema, revision: z.number().int().positive(), forceNodeIds: z.array(flowIdentifierSchema).max(2000).optional() }).strict(),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			revision: z.number().int().positive(),
+			forceNodeIds: z.array(flowIdentifierSchema).max(2_000).optional(),
+			entryNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
+			targetNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
+			inputValues: z.record(flowIdentifierSchema, z.unknown()).optional(),
+		}).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

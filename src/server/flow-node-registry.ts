@@ -200,9 +200,9 @@ function registerBuiltin(
 	registerFlowNodeDefinition({
 		typeId,
 		pluginId: "builtin",
-		pluginVersion: "2.0.0",
-		pluginFingerprint: "builtin@2.0.0",
-		configVersion: 2,
+		pluginVersion: "3.0.0",
+		pluginFingerprint: "builtin@3.0.0",
+		configVersion: 3,
 		category,
 		workspaceRequired: options.workspaceRequired === true,
 		sideEffecting: options.sideEffecting === true,
@@ -233,14 +233,16 @@ const dynamicInputs = [{
 	defaultConnect: true,
 }];
 
-registerBuiltin("prompt", "basic", "Prompt", { text: "" }, [fixed("text", "Prompt")], [output("output", "Prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/prompt"], { summaryFields: ["text"] });
+registerBuiltin("user-prompt", "basic", "User Prompt", { text: "" }, [hybrid("input", "User prompt", "text", ["text", "json"], false, true)], [output("output", "User prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/user-prompt"], { summaryFields: ["text"] });
+registerBuiltin("system-prompt", "basic", "System Prompt", { text: "" }, [fixed("text", "System prompt")], [output("output", "System prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/system-prompt"], { summaryFields: ["text"] });
 registerBuiltin("text", "basic", "Text", { text: "" }, [fixed("text", "Text")], [output("output", "Text", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/text"], { summaryFields: ["text"] });
 registerBuiltin("template", "basic", "Template", { template: "{{input}}", inputs: [{ id: "input", label: "Input", dataType: "text" }] }, [fixed("template", "Template"), fixed("inputs", "Inputs")], [output("output", "Text", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/template"], { summaryFields: ["template"], dynamicParameters: dynamicInputs });
 registerBuiltin("merge", "basic", "Merge", { mode: "concat", separator: "\n", inputs: [{ id: "input-1", label: "Input 1", dataType: "text" }, { id: "input-2", label: "Input 2", dataType: "text" }] }, [fixed("mode", "Mode"), fixed("separator", "Separator"), fixed("inputs", "Inputs")], [output("output", "Merged", ALL_TYPES, true)], flowDocumentNodeConfigSchemas["builtin/merge"], { summaryFields: ["mode"], dynamicParameters: dynamicInputs });
 registerBuiltin("json-extract", "basic", "JSON Extract", { pointer: "/" }, [connection("input", "JSON", ["text", "json"], true, true), fixed("pointer", "Pointer")], [output("output", "Value", ["json"], true)], flowDocumentNodeConfigSchemas["builtin/json-extract"], { summaryFields: ["pointer"] });
 registerBuiltin("condition", "basic", "Condition", { pointer: "/", operator: "equals" }, [connection("input", "Value", ["text", "json"], true, true), fixed("pointer", "Pointer"), fixed("operator", "Operator"), fixed("value", "Expected value")], [output("true", "True", ["text", "json"], true), output("false", "False", ["text", "json"])], flowDocumentNodeConfigSchemas["builtin/condition"], { summaryFields: ["operator", "pointer"] });
 registerBuiltin("file-input", "workspace", "File Input", { path: "", mode: "text" }, [fixed("path", "Path"), fixed("mode", "Mode")], [output("output", "File", ALL_TYPES, true)], flowDocumentNodeConfigSchemas["builtin/file-input"], { workspaceRequired: true, summaryFields: ["path"] });
-registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", prompt: "", systemPrompt: "" }, [hybrid("input", "Prompt", "prompt", ["text", "json"], false, true), hybrid("system-prompt", "System prompt", "systemPrompt", ["text"], false), fixed("provider", "Provider"), fixed("model", "Model"), fixed("reasoningEffort", "Reasoning effort")], [output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model", reasoningEffort: "reasoning-effort" } });
+registerBuiltin("flow-input", "basic", "Flow Input", { label: "Input", dataType: "text", defaultValue: "" }, [fixed("label", "Name"), fixed("dataType", "Type"), fixed("defaultValue", "Default value")], [output("output", "Value", ["text", "json"], true)], flowDocumentNodeConfigSchemas["builtin/flow-input"], { cachePolicy: "never", summaryFields: ["label", "dataType"] });
+registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", userPrompt: "", systemPrompt: "" }, [hybrid("user-prompt", "User prompt", "userPrompt", ["text", "json"], false, true), hybrid("system-prompt", "System prompt", "systemPrompt", ["text"], false), fixed("provider", "Provider"), fixed("model", "Model"), fixed("reasoningEffort", "Reasoning effort")], [output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model", reasoningEffort: "reasoning-effort" } });
 registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings: [] }, [connection("input", "Arguments", ["text", "json"], false, true), fixed("toolName", "Tool"), fixed("args", "Arguments"), fixed("bindings", "Bindings")], [output("result", "Result", ["json"], true), output("text", "Text", ["text"]), output("artifact", "Artifact", ["artifact"])], flowDocumentNodeConfigSchemas["builtin/tool"], { sideEffecting: true, cachePolicy: "read-only", summaryFields: ["toolName"] });
 registerBuiltin("command", "workspace", "Command", { commandLine: "", cwd: "", env: {}, timeoutMs: 30_000, stdin: "" }, [hybrid("stdin", "stdin", "stdin", ["text"], false, true), fixed("commandLine", "Command"), fixed("cwd", "Working directory"), fixed("env", "Environment"), fixed("timeoutMs", "Timeout")], [output("result", "Result", ["json"], true), output("stdout", "stdout", ["text"]), output("stderr", "stderr", ["text"])], flowDocumentNodeConfigSchemas["builtin/command"], { workspaceRequired: true, sideEffecting: true, cachePolicy: "never", summaryFields: ["commandLine"] });
 registerBuiltin("output", "basic", "Output", { format: "text" }, [connection("input", "Value", ALL_TYPES, true, true), fixed("format", "Format")], [], flowDocumentNodeConfigSchemas["builtin/output"], { summaryFields: ["format"] });
@@ -266,7 +268,9 @@ export function normalizeFlowNodeConfig(typeId: FlowNodeTypeId, value: Record<st
 	const definition = definitions.get(typeId);
 	if (definition === undefined)
 		throw Object.assign(new Error(`Flow node type is unavailable: ${typeId}`), { code: "flow_node_type_unavailable" });
-	return definition.parseConfig({ ...structuredClone(definition.defaultConfig), ...(value ?? {}) });
+	const config = { ...structuredClone(definition.defaultConfig), ...(value ?? {}) };
+	if (typeId === "builtin/flow-input") delete config.required;
+	return definition.parseConfig(config);
 }
 
 export function resolveFlowNodeParameters(node: Pick<FlowDocumentNode, "typeId" | "config">): FlowNodeParameterDefinition[] {

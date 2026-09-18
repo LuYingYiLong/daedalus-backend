@@ -15,6 +15,7 @@ import {
 	listFlowRunsDocument,
 	listFlowsDocument,
 	renameFlowDocument,
+	updateFlowRunDocument,
 	updateFlowPinnedStatesDocument,
 	updateFlowSettingsDocument,
 } from "../../session/flow-document-store.js";
@@ -25,7 +26,7 @@ import { loadWorkspaces } from "../../workspace/registry.js";
 import { broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
 import { listFlowNodeTypeDefinitions } from "../flow-node-registry.js";
-import { getActiveFlowRunIdDocument, resolveFlowRunApproval, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
+import { getActiveFlowRunIdDocument, prepareFlowRunDocument, resolveFlowRunApproval, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
 import { sendJson } from "../send-json.js";
 
 type FlowRequestMethod =
@@ -97,16 +98,16 @@ async function importFlowFromSessionDocument(params: Extract<FlowRequest, { meth
 	const assistant = source.messages.find((message): boolean => message.role === "assistant");
 	let current = created;
 	if (user !== undefined) {
-		current = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: current.flow.graphRevision, typeId: "builtin/prompt", title: "Prompt", x: 0, y: 0, config: { text: user.content } });
+		current = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: current.flow.graphRevision, typeId: "builtin/user-prompt", title: "User Prompt", x: 0, y: 0, config: { text: user.content } });
 	}
 	if (assistant !== undefined) {
 		current = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: current.flow.graphRevision, typeId: "builtin/llm", title: "LLM", x: 360, y: 0, config: {} });
 	}
 	if (user !== undefined && assistant !== undefined) {
-		const promptNode = current.nodes.find((node): boolean => node.typeId === "builtin/prompt");
+		const promptNode = current.nodes.find((node): boolean => node.typeId === "builtin/user-prompt");
 		const llmNode = current.nodes.find((node): boolean => node.typeId === "builtin/llm");
 		if (promptNode !== undefined && llmNode !== undefined) {
-			current = await createFlowEdgeDocument({ flowId: created.flow.flowId, revision: current.flow.graphRevision, sourceNodeId: promptNode.nodeId, sourcePort: "output", targetNodeId: llmNode.nodeId, targetPort: "input", dataType: "text" });
+			current = await createFlowEdgeDocument({ flowId: created.flow.flowId, revision: current.flow.graphRevision, sourceNodeId: promptNode.nodeId, sourcePort: "output", targetNodeId: llmNode.nodeId, targetPort: "user-prompt", dataType: "text" });
 		}
 	}
 	if (assistant !== undefined) {
@@ -124,7 +125,7 @@ async function exportFlowToSessionDocument(params: Extract<FlowRequest, { method
 	const snapshot = await getFlowDocument(params.flowId);
 	const output = snapshot.runs.flatMap((run) => run.nodes).find((node): boolean => node.nodeId === params.outputNodeId && (node.status === "completed" || node.status === "cached"));
 	if (output === undefined || !("output" in output)) throw flowError("flow_output_not_ready", "The selected Output node has no completed result.");
-	const prompt = snapshot.nodes.find((node): boolean => node.typeId === "builtin/prompt");
+	const prompt = snapshot.nodes.find((node): boolean => node.typeId === "builtin/user-prompt");
 	const metadata = await createSession(params.title, snapshot.flow.workspaceId ?? undefined);
 	const requestId = `flow-export-${Date.now().toString(36)}`;
 	await saveSession(metadata.id, [
@@ -208,11 +209,27 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		case "flow.run.start": {
 			const activeRunId = getActiveFlowRunIdDocument(flowRequest.params.flowId);
 			if (activeRunId !== null) throw Object.assign(new Error("Another Flow run is active."), { code: "flow_busy", activeRunId });
-			result = await createFlowRunDocument(flowRequest.params.flowId, flowRequest.params.revision, (await getFlowDocument(flowRequest.params.flowId)).nodes.map((node): string => node.nodeId));
+			const plan = await prepareFlowRunDocument({
+				flowId: flowRequest.params.flowId,
+				revision: flowRequest.params.revision,
+				selection: {
+					...(flowRequest.params.entryNodeIds === undefined ? {} : { entryNodeIds: flowRequest.params.entryNodeIds }),
+					...(flowRequest.params.targetNodeIds === undefined ? {} : { targetNodeIds: flowRequest.params.targetNodeIds }),
+					...(flowRequest.params.inputValues === undefined ? {} : { inputValues: flowRequest.params.inputValues }),
+				},
+				requireOutputTargets: true,
+			});
+			result = await createFlowRunDocument(
+				flowRequest.params.flowId,
+				flowRequest.params.revision,
+				plan.nodes.map((node): string => node.nodeId),
+				{ entryNodeIds: plan.entryNodeIds, targetNodeIds: plan.targetNodeIds, inputValues: plan.inputValues },
+			);
+			const runId = (result as FlowDocumentRun).runId;
 			void startFlowRunDocument({
 				flowId: flowRequest.params.flowId,
 				revision: flowRequest.params.revision,
-				runId: (result as { runId: string }).runId,
+				runId,
 				mcpHost,
 				...(flowRequest.params.forceNodeIds === undefined ? {} : { forceNodeIds: flowRequest.params.forceNodeIds }),
 				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
@@ -220,6 +237,13 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
 					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status, nodeRun: node });
 				},
+			}).catch(async (runError: unknown): Promise<void> => {
+				const failed = await updateFlowRunDocument(flowRequest.params.flowId, runId, {
+					status: "failed",
+					error: runError instanceof Error ? runError.message : String(runError),
+					finishedAt: new Date().toISOString(),
+				});
+				broadcastGlobalEvent(failed.runId, "flow.run.state", { flowId: failed.flowId, runId: failed.runId, revision: failed.revision, status: failed.status, run: failed });
 			});
 			break;
 		}
@@ -227,9 +251,47 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			if (!await stopFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId)) throw flowError("flow_run_not_running", "The Flow run is no longer active.");
 			result = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
 			break;
-		case "flow.run.retry":
-			result = await startFlowRunDocument({ flowId: flowRequest.params.flowId, revision: (await getFlowDocument(flowRequest.params.flowId)).flow.graphRevision, mcpHost, ...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }) });
+		case "flow.run.retry": {
+			const previous = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
+			const revision = (await getFlowDocument(flowRequest.params.flowId)).flow.graphRevision;
+			const plan = await prepareFlowRunDocument({
+				flowId: flowRequest.params.flowId,
+				revision,
+				selection: {
+					...(previous.entryNodeIds.length === 0 ? {} : { entryNodeIds: previous.entryNodeIds }),
+					...(previous.targetNodeIds.length === 0 ? {} : { targetNodeIds: previous.targetNodeIds }),
+					inputValues: previous.inputValues,
+				},
+				requireOutputTargets: true,
+			});
+			result = await createFlowRunDocument(
+				flowRequest.params.flowId,
+				revision,
+				plan.nodes.map((node): string => node.nodeId),
+				{ entryNodeIds: plan.entryNodeIds, targetNodeIds: plan.targetNodeIds, inputValues: plan.inputValues },
+			);
+			const retryRunId = (result as FlowDocumentRun).runId;
+			void startFlowRunDocument({
+				flowId: flowRequest.params.flowId,
+				revision,
+				runId: retryRunId,
+				mcpHost,
+				...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }),
+				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
+				onNodeState: (run, nodeId): void => {
+					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
+					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status, nodeRun: node });
+				},
+			}).catch(async (runError: unknown): Promise<void> => {
+				const failed = await updateFlowRunDocument(flowRequest.params.flowId, retryRunId, {
+					status: "failed",
+					error: runError instanceof Error ? runError.message : String(runError),
+					finishedAt: new Date().toISOString(),
+				});
+				broadcastGlobalEvent(failed.runId, "flow.run.state", { flowId: failed.flowId, runId: failed.runId, revision: failed.revision, status: failed.status, run: failed });
+			});
 			break;
+		}
 		case "flow.run.get":
 			result = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
 			break;

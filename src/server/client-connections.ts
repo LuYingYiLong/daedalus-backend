@@ -49,6 +49,7 @@ const sessionSubscribers: Map<string, Set<WebSocket>> = new Map();
 const activeSessionRuns: Map<string, string> = new Map();
 const activeSessionRunControllers: Map<string, AbortController> = new Map();
 const sessionRuntimes: SessionRuntimeRegistry<ClientSession> = new SessionRuntimeRegistry<ClientSession>();
+let globalEventSequence = 0;
 
 function createConnectionId(): string {
 	return `conn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -307,22 +308,25 @@ export function broadcastToStudioSessionSubscribers(sessionId: string, envelope:
 }
 
 export function broadcastGlobalEvent(requestId: string, eventName: ServerEvent["event"], data: unknown): void {
+	const now = Date.now();
+	globalEventSequence = Math.max(globalEventSequence + 1, now * 1000);
+	const envelope: ServerEvent = {
+		protocolVersion: 3,
+		type: "event",
+		eventId: `global-${requestId}-${globalEventSequence.toString(36)}`,
+		event: eventName,
+		sessionId: "",
+		requestId,
+		runId: requestId,
+		sequence: globalEventSequence,
+		createdAt: new Date(now).toISOString(),
+		data
+	};
 	for (const record of socketConnections.values()) {
 		if (record.socket.readyState !== WebSocket.OPEN) {
 			continue;
 		}
-		sendJson(record.socket, {
-			protocolVersion: 3,
-			type: "event",
-			eventId: `global-${requestId}-${Date.now().toString(36)}`,
-			event: eventName,
-			sessionId: "",
-			requestId,
-			runId: requestId,
-			sequence: Date.now() * 1000,
-			createdAt: new Date().toISOString(),
-			data
-		});
+		sendJson(record.socket, envelope);
 	}
 }
 

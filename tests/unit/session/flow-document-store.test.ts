@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
+import type { FlowDocumentNode } from "../../../src/protocol/types.js";
 import { registerFlowNodeExecutor, unregisterPluginFlowNodeExecutors } from "../../../src/server/flow-node-executor-registry.js";
 import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
 import {
@@ -36,14 +37,14 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
 	const definitions = listFlowNodeTypeDefinitions(true);
-	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/command", "builtin/condition", "builtin/file-input", "builtin/json-extract", "builtin/llm", "builtin/merge", "builtin/note", "builtin/output", "builtin/prompt", "builtin/template", "builtin/text", "builtin/tool"]);
+	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/command", "builtin/condition", "builtin/file-input", "builtin/flow-input", "builtin/json-extract", "builtin/llm", "builtin/merge", "builtin/note", "builtin/output", "builtin/system-prompt", "builtin/template", "builtin/text", "builtin/tool", "builtin/user-prompt"]);
 	const llmProperties = definitions.find((definition): boolean => definition.typeId === "builtin/llm")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
 	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
 	const llm = definitions.find((definition): boolean => definition.typeId === "builtin/llm")!;
 	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
-		{ id: "input", mode: "hybrid" },
+		{ id: "user-prompt", mode: "hybrid" },
 		{ id: "system-prompt", mode: "hybrid" },
 		{ id: "provider", mode: "fixed" },
 		{ id: "model", mode: "fixed" },
@@ -53,15 +54,16 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal("ports" in llm, false);
 	const llmPorts = resolveFlowNodePorts({ typeId: "builtin/llm", config: llm.defaultConfig, ports: [] });
 	assert.deepEqual(llmPorts.map((port): [string, string] => [port.direction, port.id]), [
-		["input", "input"],
+		["input", "user-prompt"],
 		["input", "system-prompt"],
 		["output", "output"],
 	]);
 	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
 	assert.equal(normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok" }).timeoutMs, 30_000);
+	assert.deepEqual(normalizeFlowNodeConfig("builtin/flow-input", { label: "Input", dataType: "text", defaultValue: "", required: false }), { label: "Input", dataType: "text", defaultValue: "" });
 });
 
-test("Flow creation can atomically seed the Prompt to LLM to Output starter graph", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+test("Flow creation can atomically seed User and System Prompt nodes into LLM and Output", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	const created = await createFlowDocument({
 		title: "Starter",
 		workspaceId: "workspace-a",
@@ -74,26 +76,33 @@ test("Flow creation can atomically seed the Prompt to LLM to Output starter grap
 	});
 	assert.equal(created.flow.workspaceId, "workspace-a");
 	assert.equal(created.flow.approvalMode, "auto-safe");
-	assert.deepEqual([...created.nodes].sort((left, right): number => left.x - right.x).map((node): string => node.typeId), ["builtin/prompt", "builtin/llm", "builtin/output"]);
-	assert.equal(created.edges.length, 2);
-	const prompt = created.nodes.find((node): boolean => node.typeId === "builtin/prompt")!;
+	assert.equal(created.nodes.length, 5);
+	assert.equal(created.edges.length, 4);
+	const flowInput = created.nodes.find((node): boolean => node.typeId === "builtin/flow-input")!;
+	const userPrompt = created.nodes.find((node): boolean => node.typeId === "builtin/user-prompt")!;
+	const systemPrompt = created.nodes.find((node): boolean => node.typeId === "builtin/system-prompt")!;
 	const llm = created.nodes.find((node): boolean => node.typeId === "builtin/llm")!;
 	const output = created.nodes.find((node): boolean => node.typeId === "builtin/output")!;
 	assert.deepEqual(llm.config, {
 		provider: "deepseek",
 		model: "deepseek-chat",
 		reasoningEffort: "high",
-		prompt: "",
+		userPrompt: "",
 		systemPrompt: "",
 	});
+	assert.equal(userPrompt.y, -120);
+	assert.equal(systemPrompt.y, 120);
+	const expectedEdges: Array<[string, string, string, string]> = [
+		[flowInput.nodeId, "output", userPrompt.nodeId, "input"],
+		[userPrompt.nodeId, "output", llm.nodeId, "user-prompt"],
+		[systemPrompt.nodeId, "output", llm.nodeId, "system-prompt"],
+		[llm.nodeId, "output", output.nodeId, "input"],
+	];
 	assert.deepEqual(
 		created.edges
 			.map((edge): [string, string, string, string] => [edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort])
-			.sort((left, right): number => left[0] === prompt.nodeId ? -1 : right[0] === prompt.nodeId ? 1 : 0),
-		[
-			[prompt.nodeId, "output", llm.nodeId, "input"],
-			[llm.nodeId, "output", output.nodeId, "input"],
-		],
+			.sort((left, right): number => left[0].localeCompare(right[0])),
+		expectedEdges.sort((left, right): number => left[0].localeCompare(right[0])),
 	);
 }));
 
@@ -244,8 +253,61 @@ test("Flow runner passes values by port and caches pure nodes", async (): Promis
 	assert.equal(first.status, "completed");
 	assert.deepEqual(first.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.output, { output: "hello world" });
 	assert.deepEqual(nodeStates.findLast((state): boolean => state.nodeId === templateNode.nodeId)?.output, { output: "hello world" });
-	const second = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+	const cachedNodeStates: Array<{ nodeId: string; status: string | undefined }> = [];
+	const second = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+		onNodeState: (run, nodeId): void => {
+			cachedNodeStates.push({ nodeId, status: run.nodes.find((node): boolean => node.nodeId === nodeId)?.status });
+		},
+	});
 	assert.equal(second.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "cached");
+	assert.equal(cachedNodeStates.findLast((state): boolean => state.nodeId === templateNode.nodeId)?.status, "cached");
+	const repeated = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+		forceNodeIds: [textNode.nodeId],
+	});
+	assert.equal(repeated.status, "completed");
+	assert.equal(repeated.nodes.find((node): boolean => node.nodeId === textNode.nodeId)?.status, "completed");
+	assert.equal(repeated.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "completed");
+}));
+
+test("Flow runner starts same-name entries together and excludes unrelated entry branches", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	let snapshot = await createFlowDocument({ title: "Entry run" });
+	const addEntryBranch = async (label: string, value: string, y: number): Promise<{ input: FlowDocumentNode; output: FlowDocumentNode }> => {
+		snapshot = await createFlowNodeDocument({
+			flowId: snapshot.flow.flowId,
+			revision: snapshot.flow.graphRevision,
+			typeId: "builtin/flow-input",
+			x: 0,
+			y,
+			config: { label, dataType: "text", defaultValue: value },
+		});
+		const input = snapshot.nodes.find((node): boolean => node.typeId === "builtin/flow-input" && node.config.defaultValue === value)!;
+		snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/output", x: 320, y, config: { format: "text" } });
+		const output = snapshot.nodes.find((node): boolean => node.typeId === "builtin/output" && !snapshot.edges.some((edge): boolean => edge.targetNodeId === node.nodeId))!;
+		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: input.nodeId, sourcePort: "output", targetNodeId: output.nodeId, targetPort: "input", dataType: "text" });
+		return { input, output };
+	};
+	const first = await addEntryBranch("Generate", "alpha", 0);
+	const second = await addEntryBranch("Generate", "beta", 200);
+	const unrelated = await addEntryBranch("Preview", "ignored", 400);
+
+	const run = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		entryNodeIds: [first.input.nodeId, second.input.nodeId],
+		mcpHost: {} as McpHost,
+	});
+	assert.equal(run.status, "completed");
+	assert.deepEqual(run.entryNodeIds, [first.input.nodeId, second.input.nodeId]);
+	assert.deepEqual(new Set(run.targetNodeIds), new Set([first.output.nodeId, second.output.nodeId]));
+	assert.equal(run.nodes.some((node): boolean => node.nodeId === unrelated.input.nodeId || node.nodeId === unrelated.output.nodeId), false);
+	assert.deepEqual(run.nodes.find((node): boolean => node.nodeId === first.output.nodeId)?.output, { result: "alpha" });
+	assert.deepEqual(run.nodes.find((node): boolean => node.nodeId === second.output.nodeId)?.output, { result: "beta" });
 }));
 
 test("hybrid parameters use local fallback only while disconnected", async (): Promise<void> => {

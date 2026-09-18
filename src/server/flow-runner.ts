@@ -34,6 +34,19 @@ import {
 
 type PortOutputs = Record<string, unknown>;
 type NodeInputs = Record<string, unknown>;
+export type FlowRunSelection = {
+	entryNodeIds?: readonly string[];
+	targetNodeIds?: readonly string[];
+	inputValues?: Readonly<Record<string, unknown>>;
+};
+export type PreparedFlowRun = {
+	flow: FlowDocument;
+	nodes: FlowDocumentNode[];
+	edges: FlowDocumentEdge[];
+	entryNodeIds: string[];
+	targetNodeIds: string[];
+	inputValues: Record<string, unknown>;
+};
 
 const activeControllers = new Map<string, AbortController>();
 const activeRunsByFlow = new Map<string, string>();
@@ -57,7 +70,7 @@ export async function stopFlowRunDocument(flowId: string, runId: string): Promis
 	return true;
 }
 
-function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readonly FlowDocumentEdge[]): string {
+function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readonly FlowDocumentEdge[], runtimeInput: unknown): string {
 	const effectiveConfig = structuredClone(node.config);
 	const connectedInputIds = new Set(inbound.map((edge): string => edge.targetPort));
 	for (const parameter of resolveFlowNodeParameters(node)) {
@@ -69,11 +82,126 @@ function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readon
 		pluginFingerprint: node.pluginFingerprint,
 		config: effectiveConfig,
 		inputs,
+		runtimeInput,
 		ports: inbound.map((edge): string[] => [edge.sourcePort, edge.targetPort, edge.dataType]),
 		provider: node.config.provider,
 		model: node.config.model,
 		reasoningEffort: node.config.reasoningEffort,
 	})).digest("hex");
+}
+
+function selectedNodeIdsForTargets(
+	nodes: readonly FlowDocumentNode[],
+	edges: readonly FlowDocumentEdge[],
+	targetNodeIds: readonly string[],
+): Set<string> {
+	if (targetNodeIds.length === 0) return new Set(nodes.map((node): string => node.nodeId));
+	const selected = new Set(targetNodeIds);
+	const queue = [...targetNodeIds];
+	while (queue.length > 0) {
+		const targetNodeId = queue.shift()!;
+		for (const edge of edges.filter((candidate): boolean => candidate.targetNodeId === targetNodeId)) {
+			if (selected.has(edge.sourceNodeId)) continue;
+			selected.add(edge.sourceNodeId);
+			queue.push(edge.sourceNodeId);
+		}
+	}
+	return selected;
+}
+
+function reachableNodeIdsFromEntries(
+	edges: readonly FlowDocumentEdge[],
+	entryNodeIds: readonly string[],
+): Set<string> {
+	const reachable = new Set(entryNodeIds);
+	const queue = [...entryNodeIds];
+	while (queue.length > 0) {
+		const sourceNodeId = queue.shift()!;
+		for (const edge of edges.filter((candidate): boolean => candidate.sourceNodeId === sourceNodeId)) {
+			if (reachable.has(edge.targetNodeId)) continue;
+			reachable.add(edge.targetNodeId);
+			queue.push(edge.targetNodeId);
+		}
+	}
+	return reachable;
+}
+
+function normalizeRunInput(node: FlowDocumentNode, supplied: unknown, suppliedValue: boolean): unknown {
+	const fallback = typeof node.config.defaultValue === "string" ? node.config.defaultValue : "";
+	const value = suppliedValue ? supplied : fallback;
+	const label = typeof node.config.label === "string" ? node.config.label : node.title;
+	if (node.config.dataType === "json") {
+		if (typeof value === "string") {
+			if (value.trim().length === 0) return null;
+			try { return JSON.parse(value) as unknown; } catch {
+				throw Object.assign(new Error(`Flow input must contain valid JSON: ${label}.`), { code: "flow_input_json_invalid", nodeId: node.nodeId });
+			}
+		}
+		if (value === undefined || value === null) return null;
+		return structuredClone(value);
+	}
+	if (typeof value !== "string")
+		throw Object.assign(new Error(`Flow input must be text: ${label}.`), { code: "flow_input_type_invalid", nodeId: node.nodeId });
+	return value;
+}
+
+export async function prepareFlowRunDocument(params: {
+	flowId: string;
+	revision: number;
+	selection?: FlowRunSelection;
+	requireOutputTargets?: boolean;
+}): Promise<PreparedFlowRun> {
+	const graph = await readFlowGraphForScheduler(params.flowId);
+	if (graph.flow.graphRevision !== params.revision)
+		throw Object.assign(new Error("The Flow changed before execution started."), { code: "flow_revision_conflict" });
+	const flowInputNodes = graph.nodes.filter((node): boolean => node.typeId === "builtin/flow-input");
+	const entryNodeIds = [...new Set(params.selection?.entryNodeIds ?? [])];
+	for (const entryNodeId of entryNodeIds) {
+		if (!flowInputNodes.some((node): boolean => node.nodeId === entryNodeId))
+			throw Object.assign(new Error(`Flow run entry must be a Flow Input node: ${entryNodeId}.`), { code: "flow_input_entry_invalid", nodeId: entryNodeId });
+	}
+	const reachableFromSelectedEntries = reachableNodeIdsFromEntries(graph.edges, entryNodeIds);
+	const outputNodes = graph.nodes.filter((node): boolean => node.typeId === "builtin/output");
+	const requestedTargetIds = params.selection?.targetNodeIds;
+	const targetNodeIds = requestedTargetIds === undefined
+		? outputNodes.filter((node): boolean => entryNodeIds.length === 0 || reachableFromSelectedEntries.has(node.nodeId)).map((node): string => node.nodeId)
+		: [...new Set(requestedTargetIds)];
+	if (params.requireOutputTargets === true && targetNodeIds.length === 0)
+		throw Object.assign(new Error("Add an Output node before running this Flow."), { code: "flow_output_target_required" });
+	for (const targetNodeId of targetNodeIds) {
+		const target = graph.nodes.find((node): boolean => node.nodeId === targetNodeId);
+		if (target === undefined || target.typeId !== "builtin/output")
+			throw Object.assign(new Error(`Flow run target must be an Output node: ${targetNodeId}.`), { code: "flow_output_target_invalid", nodeId: targetNodeId });
+		if (entryNodeIds.length > 0 && !reachableFromSelectedEntries.has(targetNodeId))
+			throw Object.assign(new Error(`Output is not reachable from the selected Flow Input: ${targetNodeId}.`), { code: "flow_output_target_unreachable", nodeId: targetNodeId });
+	}
+	const selectedIds = selectedNodeIdsForTargets(graph.nodes, graph.edges, targetNodeIds);
+	if (entryNodeIds.length > 0) {
+		const selectedEntries = new Set(entryNodeIds);
+		const unselectedEntryNodeIds = flowInputNodes.filter((node): boolean => !selectedEntries.has(node.nodeId)).map((node): string => node.nodeId);
+		const reachableFromUnselectedEntries = reachableNodeIdsFromEntries(graph.edges, unselectedEntryNodeIds);
+		for (const nodeId of [...selectedIds]) {
+			if (unselectedEntryNodeIds.includes(nodeId) || reachableFromUnselectedEntries.has(nodeId) && !reachableFromSelectedEntries.has(nodeId)) selectedIds.delete(nodeId);
+		}
+	}
+	const nodes = graph.nodes.filter((node): boolean => selectedIds.has(node.nodeId));
+	const edges = graph.edges.filter((edge): boolean => selectedIds.has(edge.sourceNodeId) && selectedIds.has(edge.targetNodeId));
+	const unavailableTypes = [...new Set(nodes.filter((node): boolean => {
+		const definition = findFlowNodeTypeDefinition(node.typeId);
+		return definition === undefined
+			|| definition.pluginVersion !== node.pluginVersion
+			|| definition.pluginFingerprint !== node.pluginFingerprint
+			|| definition.configVersion !== node.configVersion;
+	}).map((node): string => node.typeId))];
+	if (unavailableTypes.length > 0)
+		throw Object.assign(new Error(`Flow contains unavailable node types: ${unavailableTypes.join(", ")}.`), { code: "flow_node_type_unavailable", typeIds: unavailableTypes });
+	const suppliedInputs = params.selection?.inputValues ?? {};
+	const inputValues: Record<string, unknown> = {};
+	for (const node of nodes.filter((candidate): boolean => candidate.typeId === "builtin/flow-input")) {
+		const supplied = Object.prototype.hasOwnProperty.call(suppliedInputs, node.nodeId);
+		inputValues[node.nodeId] = normalizeRunInput(node, suppliedInputs[node.nodeId], supplied);
+	}
+	return { flow: graph.flow, nodes, edges, entryNodeIds, targetNodeIds, inputValues };
 }
 
 function collectInputs(
@@ -149,7 +277,7 @@ async function runLlm(node: FlowDocumentNode, inputs: NodeInputs, signal: AbortS
 		...(config.requestOverrides === undefined ? {} : { requestOverrides: config.requestOverrides }),
 	};
 	const params: AiChatParams = {
-		message: asText(inputs.input ?? ""),
+		message: asText(inputs["user-prompt"] ?? ""),
 		mode: "ask",
 		options: { stream: false, ...(typeof node.config.reasoningEffort === "string" && node.config.reasoningEffort.length > 0 ? { reasoningEffort: node.config.reasoningEffort } : {}) },
 	};
@@ -255,7 +383,8 @@ async function readFileNode(node: FlowDocumentNode, flow: FlowDocument): Promise
 
 function registerBuiltinExecutors(): void {
 	const register = (typeId: string, execute: (context: FlowNodeExecutionContext) => Promise<PortOutputs>): void => registerFlowNodeExecutor(typeId, "builtin", execute);
-	register("builtin/prompt", async ({ node }): Promise<PortOutputs> => ({ output: typeof node.config.text === "string" ? node.config.text : "" }));
+	register("builtin/user-prompt", async ({ node, inputs }): Promise<PortOutputs> => ({ output: asText(inputs.input ?? node.config.text ?? "") }));
+	register("builtin/system-prompt", async ({ node }): Promise<PortOutputs> => ({ output: typeof node.config.text === "string" ? node.config.text : "" }));
 	register("builtin/text", async ({ node }): Promise<PortOutputs> => ({ output: typeof node.config.text === "string" ? node.config.text : "" }));
 	register("builtin/template", async ({ node, inputs }): Promise<PortOutputs> => {
 		let rendered = typeof node.config.template === "string" ? node.config.template : "";
@@ -278,6 +407,7 @@ function registerBuiltinExecutors(): void {
 	});
 	register("builtin/condition", async ({ node, inputs }): Promise<PortOutputs> => ({ [compareCondition(node, inputs.input) ? "true" : "false"]: inputs.input }));
 	register("builtin/file-input", async ({ node, flow }): Promise<PortOutputs> => readFileNode(node, flow));
+	register("builtin/flow-input", async ({ node, runInputs }): Promise<PortOutputs> => ({ output: runInputs[node.nodeId] }));
 	register("builtin/llm", async ({ node, inputs, signal }): Promise<PortOutputs> => ({ output: await runLlm(node, inputs, signal) }));
 	register("builtin/tool", executeToolNode);
 	register("builtin/command", executeCommandNode);
@@ -314,23 +444,38 @@ export async function startFlowRunDocument(params: {
 	mcpHost: McpHost;
 	runId?: string;
 	forceNodeIds?: readonly string[];
+	entryNodeIds?: readonly string[];
+	targetNodeIds?: readonly string[];
+	inputValues?: Readonly<Record<string, unknown>>;
 	onRunState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>) => void;
 	onNodeState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>, nodeId: string) => void;
 }): Promise<Awaited<ReturnType<typeof getFlowRunDocument>>> {
 	const activeRunId = activeRunsByFlow.get(params.flowId);
 	if (activeRunId !== undefined && activeRunId !== params.runId) throw Object.assign(new Error("Another Flow run is active."), { code: "flow_busy", activeRunId });
-	const graph = await readFlowGraphForScheduler(params.flowId);
-	if (graph.flow.graphRevision !== params.revision) throw Object.assign(new Error("The Flow changed before execution started."), { code: "flow_revision_conflict" });
-	const unavailableTypes = [...new Set(graph.nodes.filter((node): boolean => {
-		const definition = findFlowNodeTypeDefinition(node.typeId);
-		return definition === undefined
-			|| definition.pluginVersion !== node.pluginVersion
-			|| definition.pluginFingerprint !== node.pluginFingerprint
-			|| definition.configVersion !== node.configVersion;
-	}).map((node): string => node.typeId))];
-	if (unavailableTypes.length > 0) throw Object.assign(new Error(`Flow contains unavailable node types: ${unavailableTypes.join(", ")}.`), { code: "flow_node_type_unavailable", typeIds: unavailableTypes });
+	const existingRun = params.runId === undefined ? null : await getFlowRunDocument(params.flowId, params.runId);
+	const plan = await prepareFlowRunDocument({
+		flowId: params.flowId,
+		revision: params.revision,
+		selection: {
+			...((existingRun?.entryNodeIds ?? params.entryNodeIds) === undefined
+				? {}
+				: { entryNodeIds: existingRun?.entryNodeIds ?? params.entryNodeIds! }),
+			...((existingRun?.targetNodeIds ?? params.targetNodeIds) === undefined
+				? {}
+				: { targetNodeIds: existingRun?.targetNodeIds ?? params.targetNodeIds! }),
+			...((existingRun?.inputValues ?? params.inputValues) === undefined
+				? {}
+				: { inputValues: existingRun?.inputValues ?? params.inputValues! }),
+		},
+	});
+	const run = existingRun ?? await createFlowRunDocument(
+		params.flowId,
+		params.revision,
+		plan.nodes.map((node): string => node.nodeId),
+		{ entryNodeIds: plan.entryNodeIds, targetNodeIds: plan.targetNodeIds, inputValues: plan.inputValues },
+	);
+	const graph = { flow: plan.flow, nodes: plan.nodes, edges: plan.edges };
 	const executable = graph.nodes.filter((node): boolean => getFlowNodeTypeDefinition(node.typeId).executable);
-	const run = params.runId === undefined ? await createFlowRunDocument(params.flowId, params.revision, graph.nodes.map((node): string => node.nodeId)) : await getFlowRunDocument(params.flowId, params.runId);
 	const key = `${params.flowId}:${run.runId}`;
 	const controller = activeControllers.get(key) ?? new AbortController();
 	const gateway = gatewaysByRun.get(key) ?? new ApprovalGateway(graph.flow.approvalMode);
@@ -352,6 +497,7 @@ export async function startFlowRunDocument(params: {
 	for (const note of graph.nodes.filter((node): boolean => !getFlowNodeTypeDefinition(node.typeId).executable)) {
 		if (!skipped.has(note.nodeId)) await updateFlowNodeRunDocument(params.flowId, run.runId, note.nodeId, { status: "skipped", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
 		skipped.add(note.nodeId);
+		params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), note.nodeId);
 	}
 	try {
 		while (completed.size + failed.size + skipped.size + waiting.size < graph.nodes.length) {
@@ -361,12 +507,18 @@ export async function startFlowRunDocument(params: {
 			if (ready.length === 0) break;
 			for (const node of ready.filter((candidate): boolean => graph.edges.some((edge): boolean => edge.targetNodeId === candidate.nodeId && (failed.has(edge.sourceNodeId) || skipped.has(edge.sourceNodeId))))) {
 				await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "skipped", finishedAt: new Date().toISOString() }); skipped.add(node.nodeId);
+				params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 			}
 			for (let offset = 0; offset < ready.length; offset += 4) {
 				await Promise.all(ready.slice(offset, offset + 4).filter((node): boolean => !skipped.has(node.nodeId)).map(async (node): Promise<void> => {
 					const inbound = graph.edges.filter((edge): boolean => edge.targetNodeId === node.nodeId);
 					const collected = collectInputs(node, graph.edges, outputs);
-					if (collected.inactive) { await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "skipped", finishedAt: new Date().toISOString() }); skipped.add(node.nodeId); return; }
+					if (collected.inactive) {
+						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "skipped", finishedAt: new Date().toISOString() });
+						skipped.add(node.nodeId);
+						params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+						return;
+					}
 					if (collected.missing.length > 0) {
 						const timestamp = new Date().toISOString();
 						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, {
@@ -379,16 +531,23 @@ export async function startFlowRunDocument(params: {
 						params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 						return;
 					}
-					const fingerprintKey = fingerprint(node, collected.inputs, inbound);
+					const runtimeInput = node.typeId === "builtin/flow-input" ? run.inputValues[node.nodeId] : undefined;
+					const fingerprintKey = fingerprint(node, collected.inputs, inbound, runtimeInput);
 					if (!force.has(node.nodeId) && canUseCache(node, graph.flow)) {
 						const cached = await findCachedFlowNodeOutput(params.flowId, node.nodeId, fingerprintKey);
-						if (cached !== null && typeof cached === "object") { outputs.set(node.nodeId, cached as PortOutputs); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "cached", inputFingerprint: fingerprintKey, output: cached, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() }); completed.add(node.nodeId); return; }
+						if (cached !== null && typeof cached === "object") {
+							outputs.set(node.nodeId, cached as PortOutputs);
+							await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "cached", inputFingerprint: fingerprintKey, output: cached, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+							completed.add(node.nodeId);
+							params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+							return;
+						}
 					}
 					const startedAt = new Date().toISOString();
 					await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "running", inputFingerprint: fingerprintKey, startedAt });
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 					try {
-						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal });
+						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal });
 						outputs.set(node.nodeId, output);
 						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "completed", inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
 					} catch (nodeError: unknown) {

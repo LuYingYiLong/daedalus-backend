@@ -74,6 +74,9 @@ type RunRow = {
 	run_id: string;
 	flow_id: string;
 	revision: number;
+	entry_node_ids_json: string;
+	target_node_ids_json: string;
+	input_values_json: string;
 	status: FlowDocumentRunStatus;
 	started_at: string | null;
 	finished_at: string | null;
@@ -97,6 +100,7 @@ type NodeRunRow = {
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 const DEFAULT_NODE_SIZE = { width: 300, height: 180 };
 const NODE_COLUMNS = "node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at";
+const RUN_COLUMNS = "run_id, flow_id, revision, entry_node_ids_json, target_node_ids_json, input_values_json, status, started_at, finished_at, error";
 
 export type CreateFlowStarterGraph = {
 	provider?: string;
@@ -175,6 +179,9 @@ function mapRun(row: RunRow, nodes: FlowDocumentNodeRun[]): FlowDocumentRun {
 		runId: row.run_id,
 		flowId: row.flow_id,
 		revision: Number(row.revision),
+		entryNodeIds: parseSqlJson<string[]>(row.entry_node_ids_json),
+		targetNodeIds: parseSqlJson<string[]>(row.target_node_ids_json),
+		inputValues: parseSqlJson<Record<string, unknown>>(row.input_values_json),
 		status: row.status,
 		startedAt: row.started_at,
 		finishedAt: row.finished_at,
@@ -241,7 +248,7 @@ function readEdges(db: DatabaseSync, flowId: string): FlowDocumentEdge[] {
 }
 
 function readRuns(db: DatabaseSync, flowId: string, limit: number = 1): FlowDocumentRun[] {
-	const runs: RunRow[] = db.prepare("SELECT run_id, flow_id, revision, status, started_at, finished_at, error FROM flow_runs WHERE flow_id = ? ORDER BY COALESCE(started_at, '') DESC, run_id DESC LIMIT ?").all(flowId, limit) as RunRow[];
+	const runs: RunRow[] = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? ORDER BY COALESCE(started_at, '') DESC, run_id DESC LIMIT ?`).all(flowId, limit) as RunRow[];
 	return runs.map((run): FlowDocumentRun => {
 		const nodeRuns = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(run.run_id) as NodeRunRow[]).map(mapNodeRun);
 		return mapRun(run, nodeRuns);
@@ -291,24 +298,27 @@ export async function createFlowDocument(params: CreateFlowDocumentParams): Prom
 		if (params.starterGraph === undefined) return;
 
 		const insertNode = db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)");
-		const createStarterNode = (typeId: FlowNodeTypeId, x: number, configPatch: Record<string, unknown>): string => {
+		const createStarterNode = (typeId: FlowNodeTypeId, x: number, y: number, configPatch: Record<string, unknown>): string => {
 			const definition = getFlowNodeTypeDefinition(typeId);
 			const config = normalizeFlowNodeConfig(typeId, configPatch);
 			const ports = resolveFlowNodePorts({ typeId, config, ports: [] });
 			const nodeId = `node-${randomUUID()}`;
-			insertNode.run(nodeId, flowId, typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, definition.defaultTitle, x, 0, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
+			insertNode.run(nodeId, flowId, typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, definition.defaultTitle, x, y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
 			return nodeId;
 		};
-		const promptNodeId = createStarterNode("builtin/prompt", 0, { text: "" });
-		const llmNodeId = createStarterNode("builtin/llm", 360, {
+		const flowInputNodeId = createStarterNode("builtin/flow-input", -360, -120, { label: "User prompt", dataType: "text", defaultValue: "" });
+		const userPromptNodeId = createStarterNode("builtin/user-prompt", 0, -120, { text: "" });
+		const systemPromptNodeId = createStarterNode("builtin/system-prompt", 0, 120, { text: "" });
+		const llmNodeId = createStarterNode("builtin/llm", 360, 0, {
 			provider: params.starterGraph.provider ?? "",
 			model: params.starterGraph.model ?? "",
 			reasoningEffort: params.starterGraph.reasoningEffort ?? "",
-			systemPrompt: "",
 		});
-		const outputNodeId = createStarterNode("builtin/output", 720, { format: "text" });
+		const outputNodeId = createStarterNode("builtin/output", 720, 0, { format: "text" });
 		const insertEdge = db.prepare("INSERT INTO flow_edges(edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type) VALUES (?, ?, ?, ?, ?, ?, ?)");
-		insertEdge.run(`edge-${randomUUID()}`, flowId, promptNodeId, "output", llmNodeId, "input", "text");
+		insertEdge.run(`edge-${randomUUID()}`, flowId, flowInputNodeId, "output", userPromptNodeId, "input", "text");
+		insertEdge.run(`edge-${randomUUID()}`, flowId, userPromptNodeId, "output", llmNodeId, "user-prompt", "text");
+		insertEdge.run(`edge-${randomUUID()}`, flowId, systemPromptNodeId, "output", llmNodeId, "system-prompt", "text");
 		insertEdge.run(`edge-${randomUUID()}`, flowId, llmNodeId, "output", outputNodeId, "input", "text");
 	});
 	return getFlowDocument(flowId);
@@ -648,7 +658,12 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 	return { flowId: params.flowId, ...acknowledgedRevision, acceptedMutationIds, operations: structuredClone(appliedOperations) };
 }
 
-export async function createFlowRunDocument(flowId: string, revision: number, nodeIds: readonly string[]): Promise<FlowDocumentRun> {
+export async function createFlowRunDocument(
+	flowId: string,
+	revision: number,
+	nodeIds: readonly string[],
+	selection: { entryNodeIds?: readonly string[]; targetNodeIds?: readonly string[]; inputValues?: Readonly<Record<string, unknown>> } = {},
+): Promise<FlowDocumentRun> {
 	const db = await getSessionDatabase();
 	const runId = `run-${randomUUID()}`;
 	runSessionTransaction(db, (): void => {
@@ -657,7 +672,15 @@ export async function createFlowRunDocument(flowId: string, revision: number, no
 		const active = db.prepare("SELECT run_id FROM flow_runs WHERE flow_id = ? AND status IN ('queued', 'running', 'waiting') LIMIT 1").get(flowId) as { run_id: string } | undefined;
 		if (active !== undefined) throw Object.assign(flowDocumentError("flow_busy", "Another Flow run is active."), { activeRunId: active.run_id });
 		const timestamp = now();
-		db.prepare("INSERT INTO flow_runs(run_id, flow_id, revision, status, started_at) VALUES (?, ?, ?, 'running', ?)").run(runId, flowId, revision, timestamp);
+		db.prepare("INSERT INTO flow_runs(run_id, flow_id, revision, entry_node_ids_json, target_node_ids_json, input_values_json, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?)").run(
+			runId,
+			flowId,
+			revision,
+			sqlJson([...(selection.entryNodeIds ?? [])]),
+			sqlJson([...(selection.targetNodeIds ?? [])]),
+			sqlJson(selection.inputValues ?? {}),
+			timestamp,
+		);
 		const insert = db.prepare("INSERT INTO flow_node_runs(run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status) SELECT ?, node_id, type_id, plugin_version, plugin_fingerprint, config_version, 'queued' FROM flow_nodes WHERE flow_id = ? AND node_id = ?");
 		for (const nodeId of nodeIds) {
 			const inserted = insert.run(runId, flowId, nodeId);
@@ -669,7 +692,7 @@ export async function createFlowRunDocument(flowId: string, revision: number, no
 
 export async function getFlowRunDocument(flowId: string, runId: string): Promise<FlowDocumentRun> {
 	const db = await getSessionDatabase();
-	const row = db.prepare("SELECT run_id, flow_id, revision, status, started_at, finished_at, error FROM flow_runs WHERE flow_id = ? AND run_id = ?").get(flowId, runId) as RunRow | undefined;
+	const row = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? AND run_id = ?`).get(flowId, runId) as RunRow | undefined;
 	if (row === undefined) throw flowDocumentError("flow_run_not_found", `Flow run not found: ${runId}`);
 	const nodes = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
 	return mapRun(row, nodes);
@@ -770,4 +793,3 @@ export async function cancelPendingFlowApprovalsDocument(flowId: string, runId: 
 	const db = await getSessionDatabase();
 	db.prepare("UPDATE flow_approvals SET status = 'cancelled', resolved_at = ? WHERE flow_id = ? AND run_id = ? AND status = 'pending'").run(now(), flowId, runId);
 }
-

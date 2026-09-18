@@ -365,6 +365,9 @@ function migrateSchema(db: DatabaseSync): void {
 			run_id TEXT PRIMARY KEY,
 			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
 			revision INTEGER NOT NULL,
+			entry_node_ids_json TEXT NOT NULL DEFAULT '[]',
+			target_node_ids_json TEXT NOT NULL DEFAULT '[]',
+			input_values_json TEXT NOT NULL DEFAULT '{}',
 			status TEXT NOT NULL,
 			started_at TEXT,
 			finished_at TEXT,
@@ -592,7 +595,7 @@ function migrateSchema(db: DatabaseSync): void {
 			CREATE INDEX idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
 			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'artifact')), UNIQUE(flow_id, target_node_id, target_port));
 			CREATE INDEX idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
-			CREATE TABLE flow_runs (run_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, revision INTEGER NOT NULL, status TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT);
+			CREATE TABLE flow_runs (run_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, revision INTEGER NOT NULL, entry_node_ids_json TEXT NOT NULL DEFAULT '[]', target_node_ids_json TEXT NOT NULL DEFAULT '[]', input_values_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT);
 			CREATE INDEX idx_flow_runs_flow ON flow_runs (flow_id, started_at DESC);
 			CREATE TABLE flow_node_runs (run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, type_id TEXT NOT NULL, plugin_version TEXT NOT NULL, plugin_fingerprint TEXT NOT NULL, config_version INTEGER NOT NULL, status TEXT NOT NULL, input_fingerprint TEXT, output_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, PRIMARY KEY(run_id, node_id));
 			CREATE INDEX idx_flow_node_runs_cache ON flow_node_runs (node_id, input_fingerprint, status);
@@ -606,6 +609,20 @@ function migrateSchema(db: DatabaseSync): void {
 		const deleteLegacySession = db.prepare("DELETE FROM sessions WHERE session_id = ?");
 		for (const sessionId of legacyFlowBranchSessionIds) deleteLegacySession.run(sessionId);
 	}
+	const flowRunColumns = new Set((db.prepare("PRAGMA table_info(flow_runs)").all() as Array<{ name: string }>).map((column): string => column.name));
+	if (!flowRunColumns.has("entry_node_ids_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN entry_node_ids_json TEXT NOT NULL DEFAULT '[]'");
+	if (!flowRunColumns.has("target_node_ids_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN target_node_ids_json TEXT NOT NULL DEFAULT '[]'");
+	if (!flowRunColumns.has("input_values_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN input_values_json TEXT NOT NULL DEFAULT '{}'");
+	db.exec("UPDATE flow_nodes SET config_json = json_remove(config_json, '$.required') WHERE type_id = 'builtin/flow-input' AND json_type(config_json, '$.required') IS NOT NULL");
+	db.exec(`
+		UPDATE flow_node_runs
+		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		WHERE status IN ('queued', 'running', 'waiting')
+			AND run_id IN (SELECT run_id FROM flow_runs WHERE status IN ('queued', 'running', 'waiting'));
+		UPDATE flow_runs
+		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		WHERE status IN ('queued', 'running', 'waiting');
+	`);
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
 		db.exec("ALTER TABLE selection_ask_messages ADD COLUMN error_message TEXT");

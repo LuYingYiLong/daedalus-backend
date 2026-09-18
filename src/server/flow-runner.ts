@@ -25,7 +25,7 @@ import {
 	updateFlowNodeRunDocument,
 	updateFlowRunDocument,
 } from "../session/flow-document-store.js";
-import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition } from "./flow-node-registry.js";
+import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition, resolveFlowNodeParameters } from "./flow-node-registry.js";
 import {
 	executeRegisteredFlowNode,
 	registerFlowNodeExecutor,
@@ -58,11 +58,16 @@ export async function stopFlowRunDocument(flowId: string, runId: string): Promis
 }
 
 function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readonly FlowDocumentEdge[]): string {
+	const effectiveConfig = structuredClone(node.config);
+	const connectedInputIds = new Set(inbound.map((edge): string => edge.targetPort));
+	for (const parameter of resolveFlowNodeParameters(node)) {
+		if (parameter.mode === "hybrid" && connectedInputIds.has(parameter.id)) delete effectiveConfig[parameter.configField];
+	}
 	return createHash("sha256").update(JSON.stringify({
 		typeId: node.typeId,
 		pluginVersion: node.pluginVersion,
 		pluginFingerprint: node.pluginFingerprint,
-		config: node.config,
+		config: effectiveConfig,
 		inputs,
 		ports: inbound.map((edge): string[] => [edge.sourcePort, edge.targetPort, edge.dataType]),
 		provider: node.config.provider,
@@ -71,18 +76,41 @@ function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readon
 	})).digest("hex");
 }
 
-function collectInputs(node: FlowDocumentNode, edges: readonly FlowDocumentEdge[], outputs: ReadonlyMap<string, PortOutputs>): { inputs: NodeInputs; inactive: boolean } {
+function collectInputs(
+	node: FlowDocumentNode,
+	edges: readonly FlowDocumentEdge[],
+	outputs: ReadonlyMap<string, PortOutputs>,
+): { inputs: NodeInputs; inactive: boolean; missing: string[] } {
 	const inputs: NodeInputs = {};
 	let inactive = false;
-	for (const edge of edges.filter((candidate): boolean => candidate.targetNodeId === node.nodeId).sort((left, right): number => left.targetPort.localeCompare(right.targetPort))) {
+	const inbound = edges
+		.filter((candidate): boolean => candidate.targetNodeId === node.nodeId)
+		.sort((left, right): number => left.targetPort.localeCompare(right.targetPort) || left.edgeId.localeCompare(right.edgeId));
+	const connectedInputIds = new Set(inbound.map((edge): string => edge.targetPort));
+	const parameters = resolveFlowNodeParameters(node);
+	for (const edge of inbound) {
 		const sourceOutputs = outputs.get(edge.sourceNodeId);
 		if (sourceOutputs === undefined || !Object.prototype.hasOwnProperty.call(sourceOutputs, edge.sourcePort)) {
 			inactive = true;
 			continue;
 		}
-		inputs[edge.targetPort] = sourceOutputs[edge.sourcePort];
+		const parameter = parameters.find((candidate): boolean => candidate.id === edge.targetPort);
+		if (parameter?.mode !== "fixed" && parameter?.multiple === true) {
+			const values = Array.isArray(inputs[edge.targetPort]) ? inputs[edge.targetPort] as unknown[] : [];
+			inputs[edge.targetPort] = [...values, sourceOutputs[edge.sourcePort]];
+		} else inputs[edge.targetPort] = sourceOutputs[edge.sourcePort];
 	}
-	return { inputs, inactive };
+	for (const parameter of parameters) {
+		if (parameter.mode !== "hybrid" || connectedInputIds.has(parameter.id)) continue;
+		if (Object.prototype.hasOwnProperty.call(node.config, parameter.configField))
+			inputs[parameter.id] = node.config[parameter.configField];
+	}
+	const missing = parameters.flatMap((parameter): string[] =>
+		parameter.mode !== "fixed" && parameter.required && !Object.prototype.hasOwnProperty.call(inputs, parameter.id)
+			? [parameter.label]
+			: [],
+	);
+	return { inputs, inactive, missing };
 }
 
 function asText(value: unknown): string {
@@ -121,11 +149,14 @@ async function runLlm(node: FlowDocumentNode, inputs: NodeInputs, signal: AbortS
 		...(config.requestOverrides === undefined ? {} : { requestOverrides: config.requestOverrides }),
 	};
 	const params: AiChatParams = {
-		message: Object.values(inputs).map(asText).join("\n\n"),
+		message: asText(inputs.input ?? ""),
 		mode: "ask",
 		options: { stream: false, ...(typeof node.config.reasoningEffort === "string" && node.config.reasoningEffort.length > 0 ? { reasoningEffort: node.config.reasoningEffort } : {}) },
 	};
-	const systemPrompt = typeof node.config.systemPrompt === "string" && node.config.systemPrompt.length > 0 ? node.config.systemPrompt : "You are a helpful assistant.";
+	const systemPromptValue = inputs["system-prompt"];
+	const systemPrompt = typeof systemPromptValue === "string" && systemPromptValue.length > 0
+		? systemPromptValue
+		: "You are a helpful assistant.";
 	return chatWithProvider(params, options, [], systemPrompt, signal);
 }
 
@@ -336,6 +367,18 @@ export async function startFlowRunDocument(params: {
 					const inbound = graph.edges.filter((edge): boolean => edge.targetNodeId === node.nodeId);
 					const collected = collectInputs(node, graph.edges, outputs);
 					if (collected.inactive) { await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "skipped", finishedAt: new Date().toISOString() }); skipped.add(node.nodeId); return; }
+					if (collected.missing.length > 0) {
+						const timestamp = new Date().toISOString();
+						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, {
+							status: "failed",
+							error: `Missing required parameter(s): ${collected.missing.join(", ")}.`,
+							startedAt: timestamp,
+							finishedAt: timestamp,
+						});
+						failed.add(node.nodeId);
+						params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+						return;
+					}
 					const fingerprintKey = fingerprint(node, collected.inputs, inbound);
 					if (!force.has(node.nodeId) && canUseCache(node, graph.flow)) {
 						const cached = await findCachedFlowNodeOutput(params.flowId, node.nodeId, fingerprintKey);

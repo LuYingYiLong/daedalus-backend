@@ -71,7 +71,8 @@ test("community Flow nodes use host schema validation and package fingerprints",
 		configSchema: { type: "object", properties: { prefix: { type: "string" } }, required: ["prefix"], additionalProperties: false },
 		summaryFields: ["prefix"],
 		ui: { kind: "schema" },
-		ports: [{ id: "output", label: "Output", direction: "output", dataTypes: ["text"], required: false, multiple: true, defaultConnect: true }],
+		parameters: [{ id: "prefix", label: "Prefix", mode: "fixed", configField: "prefix" }],
+		outputs: [{ id: "output", label: "Output", dataTypes: ["text"], defaultConnect: true }],
 		handlerName: "uppercase",
 	});
 	try {

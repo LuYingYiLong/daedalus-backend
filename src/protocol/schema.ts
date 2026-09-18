@@ -1013,7 +1013,7 @@ export const flowDocumentNodeStatusSchema = z.enum(["idle", "queued", "running",
 export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled"]);
 export const flowDocumentPortTypeSchema = z.enum(["text", "json", "artifact"]);
 export const flowApprovalModeSchema = z.enum(["manual", "auto-safe", "full-trust"]);
-export const flowDynamicPortSchema = z.object({
+export const flowDynamicParameterValueSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().trim().min(1).max(80),
 	dataType: flowDocumentPortTypeSchema.default("text"),
@@ -1022,12 +1022,12 @@ const flowPromptConfigSchema = z.object({ text: z.string().max(200_000).default(
 const flowTextConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
 const flowTemplateConfigSchema = z.object({
 	template: z.string().max(200_000).default("{{input}}"),
-	inputs: z.array(flowDynamicPortSchema).min(1).max(32).default([{ id: "input", label: "Input", dataType: "text" }]),
+	inputs: z.array(flowDynamicParameterValueSchema).min(1).max(32).default([{ id: "input", label: "Input", dataType: "text" }]),
 }).strict();
 const flowMergeConfigSchema = z.object({
 	mode: z.enum(["concat", "array", "object"]).default("concat"),
 	separator: z.string().max(1_000).default("\n"),
-	inputs: z.array(flowDynamicPortSchema).min(2).max(32).default([
+	inputs: z.array(flowDynamicParameterValueSchema).min(2).max(32).default([
 		{ id: "input-1", label: "Input 1", dataType: "text" },
 		{ id: "input-2", label: "Input 2", dataType: "text" },
 	]),
@@ -1048,6 +1048,7 @@ const flowLlmConfigSchema = z.object({
 	provider: z.string().max(120).default(""),
 	model: z.string().max(240).default(""),
 	reasoningEffort: z.string().max(80).default(""),
+	prompt: z.string().max(200_000).default(""),
 	systemPrompt: z.string().max(200_000).default(""),
 }).strict();
 const flowToolBindingSchema = z.object({
@@ -1065,6 +1066,7 @@ const flowCommandConfigSchema = z.object({
 	cwd: z.string().max(4_000).default(""),
 	env: z.record(z.string(), z.string()).default({}),
 	timeoutMs: z.number().int().min(1_000).max(1_800_000).default(30_000),
+	stdin: z.string().max(2_000_000).default(""),
 }).strict();
 const flowOutputConfigSchema = z.object({ format: z.enum(["text", "json"]).default("text") }).strict();
 const flowNoteConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
@@ -1092,9 +1094,45 @@ export const flowNodePortDefinitionSchema = z.object({
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
 }).strict();
-export const flowDynamicPortDefinitionSchema = z.object({
+const flowFixedParameterDefinitionSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().min(1).max(120),
+	mode: z.literal("fixed"),
 	configField: z.string().trim().min(1).max(120),
-	direction: z.enum(["input", "output"]),
+}).strict();
+const flowConnectionParameterDefinitionSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().min(1).max(120),
+	mode: z.literal("connection"),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	required: z.boolean(),
+	multiple: z.boolean(),
+	defaultConnect: z.boolean(),
+}).strict();
+const flowHybridParameterDefinitionSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().min(1).max(120),
+	mode: z.literal("hybrid"),
+	configField: z.string().trim().min(1).max(120),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	required: z.boolean(),
+	multiple: z.boolean(),
+	defaultConnect: z.boolean(),
+	hideControlWhenConnected: z.boolean().default(true),
+}).strict();
+export const flowNodeParameterDefinitionSchema = z.discriminatedUnion("mode", [
+	flowFixedParameterDefinitionSchema,
+	flowConnectionParameterDefinitionSchema,
+	flowHybridParameterDefinitionSchema,
+]);
+export const flowNodeOutputDefinitionSchema = z.object({
+	id: flowIdentifierSchema,
+	label: z.string().min(1).max(120),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	defaultConnect: z.boolean(),
+}).strict();
+export const flowDynamicParameterDefinitionSchema = z.object({
+	configField: z.string().trim().min(1).max(120),
 	idField: z.string().trim().min(1).max(120).default("id"),
 	labelField: z.string().trim().min(1).max(120).default("label"),
 	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
@@ -1122,8 +1160,9 @@ export const flowNodeTypeDefinitionSchema = z.object({
 		z.object({ kind: z.literal("schema") }).strict(),
 		z.object({ kind: z.literal("sandbox"), entry: z.string().min(1).max(1_000), actions: z.array(z.string().trim().min(1).max(80)).max(16).default([]) }).strict(),
 	]),
-	ports: z.array(flowNodePortDefinitionSchema).max(64),
-	dynamicPorts: z.array(flowDynamicPortDefinitionSchema).max(8).optional(),
+	parameters: z.array(flowNodeParameterDefinitionSchema).max(64),
+	outputs: z.array(flowNodeOutputDefinitionSchema).max(64),
+	dynamicParameters: z.array(flowDynamicParameterDefinitionSchema).max(8).optional(),
 }).strict();
 export const flowApprovalSchema = z.object({
 	approvalId: flowIdentifierSchema,

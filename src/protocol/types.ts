@@ -17,6 +17,8 @@ import type {
 	flowPatchAckSchema,
 	flowPatchAppliedEventDataSchema,
 	flowNodePortDefinitionSchema,
+	flowNodeParameterDefinitionSchema,
+	flowNodeOutputDefinitionSchema,
 	flowNodeTypeDefinitionSchema,
 	flowApprovalSchema,
 	flowTreeOrderSchema,
@@ -92,6 +94,8 @@ export type FlowDocumentRun = z.infer<typeof flowDocumentRunSchema>;
 export type FlowDocumentNodeRun = z.infer<typeof flowDocumentNodeRunSchema>;
 export type FlowDocumentSnapshot = z.infer<typeof flowDocumentSnapshotSchema>;
 export type FlowNodePortDefinition = z.infer<typeof flowNodePortDefinitionSchema>;
+export type FlowNodeParameterDefinition = z.infer<typeof flowNodeParameterDefinitionSchema>;
+export type FlowNodeOutputDefinition = z.infer<typeof flowNodeOutputDefinitionSchema>;
 export type FlowNodeTypeDefinition = z.infer<typeof flowNodeTypeDefinitionSchema>;
 export type FlowApproval = z.infer<typeof flowApprovalSchema>;
 export type FlowOperation = z.infer<typeof flowOperationSchema>;

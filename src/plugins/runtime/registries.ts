@@ -98,7 +98,7 @@ export function registerPluginFlowNode(pluginId: string, pluginFingerprint: stri
 		);
 		if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Plugin Flow node returned a non-object output.");
 		const outputs = value as Record<string, unknown>;
-		const outputPorts = new Map(registration.ports.filter((port): boolean => port.direction === "output").map((port) => [port.id, port]));
+		const outputPorts = new Map(registration.outputs.map((port) => [port.id, port]));
 		for (const [portId, outputValue] of Object.entries(outputs)) {
 			const port = outputPorts.get(portId);
 			if (port === undefined) throw Object.assign(new Error(`Plugin Flow node returned an undeclared output port: ${portId}.`), { code: "plugin_flow_node_output_invalid" });

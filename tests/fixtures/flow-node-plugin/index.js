@@ -14,7 +14,8 @@ export function register(api) {
 		configSchema: { type: "object", additionalProperties: false },
 		summaryFields: [],
 		ui: { kind: "schema" },
-		ports: [{ id: "output", label: "Output", direction: "output", dataTypes: ["text"], required: false, multiple: true, defaultConnect: true }],
+		parameters: [],
+		outputs: [{ id: "output", label: "Output", dataTypes: ["text"], defaultConnect: true }],
 	}, async ({ config, signal, host }) => {
 		if (typeof config.hostTool === "string") return { output: await host.callTool(config.hostTool, config.hostArgs ?? {}) };
 		return await new Promise((resolve, reject) => {

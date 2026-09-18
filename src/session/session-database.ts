@@ -4,7 +4,8 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 22;
+const DB_SCHEMA_VERSION: number = 23;
+const FLOW_PARAMETER_SCHEMA_VERSION: number = 23;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -561,9 +562,9 @@ function migrateSchema(db: DatabaseSync): void {
 	db.exec("UPDATE flow_documents SET graph_revision = revision WHERE graph_revision = 1 AND revision <> 1");
 	db.exec("UPDATE flow_documents SET layout_revision = revision WHERE layout_revision = 1 AND revision <> 1");
 	const flowNodeColumns = new Set((db.prepare("PRAGMA table_info(flow_nodes)").all() as Array<{ name: string }>).map((column): string => column.name));
-	if (previousSchemaVersion < DB_SCHEMA_VERSION || !flowNodeColumns.has("type_id") || !flowNodeColumns.has("plugin_fingerprint")) {
-		// Flow is still pre-release. Reset the old closed node model rather than
-		// retaining a permanent compatibility layer for its fixed type enum.
+	if (previousSchemaVersion < FLOW_PARAMETER_SCHEMA_VERSION || !flowNodeColumns.has("type_id") || !flowNodeColumns.has("plugin_fingerprint")) {
+		// Flow is still pre-release. Parameter definitions replace the old port
+		// contract, so reset its snapshots instead of carrying a compatibility layer.
 		const legacyFlowBranchSessionIds: string[] = db.prepare(
 			"SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'conversation_flow_branches'",
 		).get() === undefined

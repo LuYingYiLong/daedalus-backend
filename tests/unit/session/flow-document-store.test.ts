@@ -5,8 +5,15 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
+import { registerFlowNodeExecutor, unregisterPluginFlowNodeExecutors } from "../../../src/server/flow-node-executor-registry.js";
 import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
-import { listFlowNodeTypeDefinitions, normalizeFlowNodeConfig } from "../../../src/server/flow-node-registry.js";
+import {
+	listFlowNodeTypeDefinitions,
+	normalizeFlowNodeConfig,
+	registerFlowNodeDefinition,
+	resolveFlowNodePorts,
+	unregisterPluginFlowNodeDefinitions,
+} from "../../../src/server/flow-node-registry.js";
 import {
 	createConnectedFlowNodeDocument,
 	commitFlowOperationsDocument,
@@ -34,6 +41,22 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
 	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
+	const llm = definitions.find((definition): boolean => definition.typeId === "builtin/llm")!;
+	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
+		{ id: "input", mode: "hybrid" },
+		{ id: "system-prompt", mode: "hybrid" },
+		{ id: "provider", mode: "fixed" },
+		{ id: "model", mode: "fixed" },
+		{ id: "reasoningEffort", mode: "fixed" },
+	]);
+	assert.deepEqual(llm.outputs.map((output): string => output.id), ["output"]);
+	assert.equal("ports" in llm, false);
+	const llmPorts = resolveFlowNodePorts({ typeId: "builtin/llm", config: llm.defaultConfig, ports: [] });
+	assert.deepEqual(llmPorts.map((port): [string, string] => [port.direction, port.id]), [
+		["input", "input"],
+		["input", "system-prompt"],
+		["output", "output"],
+	]);
 	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
 	assert.equal(normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok" }).timeoutMs, 30_000);
 });
@@ -60,6 +83,7 @@ test("Flow creation can atomically seed the Prompt to LLM to Output starter grap
 		provider: "deepseek",
 		model: "deepseek-chat",
 		reasoningEffort: "high",
+		prompt: "",
 		systemPrompt: "",
 	});
 	assert.deepEqual(
@@ -153,6 +177,54 @@ test("createConnected is atomic and replaces a single-input edge", async (): Pro
 	assert.equal(next.edges[0]!.sourceNodeId, secondNodeId);
 }));
 
+test("Flow patch can reconnect an edge with one atomic delete-create batch", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	let snapshot = await createFlowDocument({
+		title: "Reconnect",
+		starterGraph: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" },
+	});
+	snapshot = await createFlowNodeDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		typeId: "builtin/text",
+		x: 0,
+		y: 240,
+		config: { text: "replacement" },
+	});
+	const source = snapshot.nodes.find((node): boolean => node.typeId === "builtin/text")!;
+	const output = snapshot.nodes.find((node): boolean => node.typeId === "builtin/output")!;
+	const edge = snapshot.edges.find((candidate): boolean => candidate.targetNodeId === output.nodeId)!;
+	const committed = await commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-reconnect",
+		operations: [
+			{
+				mutationId: "mutation-reconnect-delete",
+				kind: "edge.delete",
+				baseGraphRevision: snapshot.flow.graphRevision,
+				payload: { edgeId: edge.edgeId },
+			},
+			{
+				mutationId: "mutation-reconnect-create",
+				kind: "edge.create",
+				baseGraphRevision: snapshot.flow.graphRevision,
+				payload: {
+					edgeId: edge.edgeId,
+					sourceNodeId: source.nodeId,
+					sourcePort: "output",
+					targetNodeId: output.nodeId,
+					targetPort: "input",
+					dataType: "text",
+				},
+			},
+		],
+	});
+	assert.equal(committed.graphRevision, snapshot.flow.graphRevision + 1);
+	const reloaded = await getFlowDocument(snapshot.flow.flowId);
+	const reconnected = reloaded.edges.find((candidate): boolean => candidate.edgeId === edge.edgeId)!;
+	assert.equal(reconnected.sourceNodeId, source.nodeId);
+	assert.equal(reconnected.targetNodeId, output.nodeId);
+}));
+
 test("Flow runner passes values by port and caches pure nodes", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Run" });
 	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "hello" } });
@@ -175,6 +247,99 @@ test("Flow runner passes values by port and caches pure nodes", async (): Promis
 	const second = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
 	assert.equal(second.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "cached");
 }));
+
+test("hybrid parameters use local fallback only while disconnected", async (): Promise<void> => {
+	const pluginId = "fixture-hybrid-parameter";
+	registerFlowNodeDefinition({
+		typeId: `${pluginId}/echo`,
+		pluginId,
+		pluginVersion: "1.0.0",
+		pluginFingerprint: "sha256:fixture-hybrid-parameter",
+		configVersion: 1,
+		category: "test",
+		workspaceRequired: false,
+		sideEffecting: false,
+		executable: true,
+		cachePolicy: "always",
+		defaultTitle: "Hybrid echo",
+		defaultConfig: { fallback: "local" },
+		configSchema: {
+			type: "object",
+			properties: { fallback: { type: "string" } },
+			required: ["fallback"],
+			additionalProperties: false,
+		},
+		summaryFields: ["fallback"],
+		ui: { kind: "schema" },
+		parameters: [{
+			id: "input",
+			label: "Value",
+			mode: "hybrid",
+			configField: "fallback",
+			dataTypes: ["text"],
+			required: true,
+			multiple: false,
+			defaultConnect: true,
+			hideControlWhenConnected: true,
+		}],
+		outputs: [{ id: "output", label: "Value", dataTypes: ["text"], defaultConnect: true }],
+		parseConfig(value): Record<string, unknown> {
+			if (typeof value.fallback !== "string") throw new Error("fallback must be a string");
+			return { fallback: value.fallback };
+		},
+	});
+	registerFlowNodeExecutor(`${pluginId}/echo`, pluginId, async ({ inputs }) => ({ output: inputs.input }));
+	try {
+		await withDatabase(async (): Promise<void> => {
+			let snapshot = await createFlowDocument({ title: "Hybrid" });
+			snapshot = await createFlowNodeDocument({
+				flowId: snapshot.flow.flowId,
+				revision: snapshot.flow.graphRevision,
+				typeId: `${pluginId}/echo`,
+				x: 320,
+				y: 0,
+				config: { fallback: "local" },
+			});
+			const hybridNode = snapshot.nodes[0]!;
+			const localRun = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+			assert.deepEqual(localRun.nodes.find((node): boolean => node.nodeId === hybridNode.nodeId)?.output, { output: "local" });
+
+			snapshot = await createFlowNodeDocument({
+				flowId: snapshot.flow.flowId,
+				revision: snapshot.flow.graphRevision,
+				typeId: "builtin/text",
+				x: 0,
+				y: 0,
+				config: { text: "connected" },
+			});
+			const textNode = snapshot.nodes.find((node): boolean => node.typeId === "builtin/text")!;
+			snapshot = await createFlowEdgeDocument({
+				flowId: snapshot.flow.flowId,
+				revision: snapshot.flow.graphRevision,
+				sourceNodeId: textNode.nodeId,
+				sourcePort: "output",
+				targetNodeId: hybridNode.nodeId,
+				targetPort: "input",
+				dataType: "text",
+			});
+			const connectedRun = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+			assert.deepEqual(connectedRun.nodes.find((node): boolean => node.nodeId === hybridNode.nodeId)?.output, { output: "connected" });
+
+			snapshot = await updateFlowNodeDocument({
+				flowId: snapshot.flow.flowId,
+				nodeId: hybridNode.nodeId,
+				revision: snapshot.flow.graphRevision,
+				patch: { config: { fallback: "ignored while connected" } },
+			});
+			const cachedRun = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+			assert.equal(cachedRun.nodes.find((node): boolean => node.nodeId === hybridNode.nodeId)?.status, "cached");
+			assert.deepEqual(cachedRun.nodes.find((node): boolean => node.nodeId === hybridNode.nodeId)?.output, { output: "connected" });
+		});
+	} finally {
+		unregisterPluginFlowNodeExecutors(pluginId);
+		unregisterPluginFlowNodeDefinitions(pluginId);
+	}
+});
 
 test("an active run locks semantic edits but keeps layout editable", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Locked graph" });

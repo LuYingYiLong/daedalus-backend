@@ -59,12 +59,12 @@ function parseWorkerMessage(line) {
 }
 function assertRegistration(value, kind) {
   if (kind === "flowNode") {
-    assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "ports", "dynamicPorts", "handlerName"]);
+    assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "parameters", "outputs", "dynamicParameters", "handlerName"]);
     assertString(value.typeId, "Flow node type ID", 256);
     assertString(value.pluginId, "Flow node plugin ID", 128);
     assertString(value.pluginVersion, "Flow node plugin version", 80);
     assertString(value.handlerName, "Flow node handler", 160);
-    if (!isRecord(value.defaultConfig) || !isRecord(value.configSchema) || !Array.isArray(value.ports) || value.ports.length > 64 || !Array.isArray(value.summaryFields)) throw new Error("Invalid plugin Flow node registration.");
+    if (!isRecord(value.defaultConfig) || !isRecord(value.configSchema) || !Array.isArray(value.parameters) || value.parameters.length > 64 || !Array.isArray(value.outputs) || value.outputs.length > 64 || !Array.isArray(value.summaryFields)) throw new Error("Invalid plugin Flow node registration.");
     return;
   }
   if (kind === "command") {

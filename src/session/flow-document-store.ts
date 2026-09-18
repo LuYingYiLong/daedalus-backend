@@ -294,7 +294,7 @@ export async function createFlowDocument(params: CreateFlowDocumentParams): Prom
 		const createStarterNode = (typeId: FlowNodeTypeId, x: number, configPatch: Record<string, unknown>): string => {
 			const definition = getFlowNodeTypeDefinition(typeId);
 			const config = normalizeFlowNodeConfig(typeId, configPatch);
-			const ports = resolveFlowNodePorts({ typeId, config, ports: definition.ports });
+			const ports = resolveFlowNodePorts({ typeId, config, ports: [] });
 			const nodeId = `node-${randomUUID()}`;
 			insertNode.run(nodeId, flowId, typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, definition.defaultTitle, x, 0, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
 			return nodeId;
@@ -341,7 +341,7 @@ export async function createFlowNodeDocument(params: { flowId: string; revision:
 	assertNodeType(params.typeId);
 	const config = normalizeFlowNodeConfig(params.typeId, params.config);
 	const definition = getFlowNodeTypeDefinition(params.typeId);
-	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: definition.ports });
+	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: [] });
 	const nodeId = `node-${randomUUID()}`;
 	const timestamp = now();
 	runSessionTransaction(db, (): void => {
@@ -456,7 +456,7 @@ export async function createConnectedFlowNodeDocument(params: {
 	assertNodeType(params.typeId);
 	const config = normalizeFlowNodeConfig(params.typeId, params.config);
 	const definition = getFlowNodeTypeDefinition(params.typeId);
-	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: definition.ports });
+	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: [] });
 	const nodeId = `node-${randomUUID()}`;
 	const edgeId = `edge-${randomUUID()}`;
 	const timestamp = now();
@@ -580,7 +580,7 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 			if (operation.kind === "node.create") {
 				const definition = getFlowNodeTypeDefinition(operation.payload.typeId);
 				const config = normalizeFlowNodeConfig(operation.payload.typeId, operation.payload.config);
-				const ports = resolveFlowNodePorts({ typeId: operation.payload.typeId, config, ports: definition.ports });
+				const ports = resolveFlowNodePorts({ typeId: operation.payload.typeId, config, ports: [] });
 				const timestamp = now();
 				db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(operation.payload.nodeId, params.flowId, operation.payload.typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, operation.payload.title ?? definition.defaultTitle, operation.payload.x, operation.payload.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
 			} else if (operation.kind === "node.update") {

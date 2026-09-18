@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { clientRequestSchema } from "../../../src/protocol/schema.js";
+import { clientRequestSchema, flowDocumentNodeStateEventDataSchema, flowDocumentRunStateEventDataSchema } from "../../../src/protocol/schema.js";
 
 test("Flow graph requests validate", (): void => {
 	const methods = [
@@ -28,6 +28,35 @@ test("Flow graph accepts namespaced node IDs only through batched patches", (): 
 	for (const method of ["flow.node.create", "flow.node.createConnected", "flow.node.update", "flow.node.delete", "flow.edge.create", "flow.edge.delete", "flow.viewport.update"]) {
 		assert.equal(clientRequestSchema.safeParse({ type: "request", id: `removed-${method}`, method, params: {} }).success, false, method);
 	}
+});
+
+test("Flow state events can carry complete incremental run results", (): void => {
+	const nodeRun = {
+		runId: "run-a",
+		nodeId: "node-output",
+		typeId: "builtin/output",
+		pluginVersion: "1.0.0",
+		pluginFingerprint: "builtin@1.0.0",
+		configVersion: 1,
+		status: "completed",
+		inputFingerprint: "fingerprint-a",
+		output: { result: "hello" },
+		error: null,
+		startedAt: "2026-09-18T00:00:00.000Z",
+		finishedAt: "2026-09-18T00:00:01.000Z",
+	} as const;
+	const run = {
+		runId: "run-a",
+		flowId: "flow-a",
+		revision: 3,
+		status: "completed",
+		startedAt: "2026-09-18T00:00:00.000Z",
+		finishedAt: "2026-09-18T00:00:01.000Z",
+		error: null,
+		nodes: [nodeRun],
+	} as const;
+	assert.equal(flowDocumentNodeStateEventDataSchema.safeParse({ flowId: "flow-a", runId: "run-a", nodeId: "node-output", revision: 3, status: "completed", nodeRun }).success, true);
+	assert.equal(flowDocumentRunStateEventDataSchema.safeParse({ flowId: "flow-a", runId: "run-a", revision: 3, status: "completed", run }).success, true);
 });
 
 

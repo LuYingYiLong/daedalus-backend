@@ -215,10 +215,10 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				runId: (result as { runId: string }).runId,
 				mcpHost,
 				...(flowRequest.params.forceNodeIds === undefined ? {} : { forceNodeIds: flowRequest.params.forceNodeIds }),
-				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status }),
+				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
 				onNodeState: (run, nodeId): void => {
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
-					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status });
+					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status, nodeRun: node });
 				},
 			});
 			break;
@@ -261,8 +261,8 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		}
 		if (["flow.approval.resolve", "flow.run.stop", "flow.run.retry"].includes(flowRequest.method) && typeof result === "object" && result !== null) {
 			const run = result as FlowDocumentRun;
-			broadcastGlobalEvent(request.id, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status });
-			for (const node of run.nodes) broadcastGlobalEvent(request.id, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId: node.nodeId, revision: run.revision, status: node.status });
+			broadcastGlobalEvent(request.id, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run });
+			for (const node of run.nodes) broadcastGlobalEvent(request.id, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId: node.nodeId, revision: run.revision, status: node.status, nodeRun: node });
 		}
 	} catch (error: unknown) {
 		sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: errorCode(error), message: error instanceof Error ? error.message : String(error) } });

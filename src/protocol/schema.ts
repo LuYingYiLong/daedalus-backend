@@ -1251,6 +1251,7 @@ export const flowDocumentRunStateEventDataSchema = z.object({
 	runId: flowIdentifierSchema,
 	revision: z.number().int().positive(),
 	status: flowDocumentRunStatusSchema,
+	run: flowDocumentRunSchema.optional(),
 }).strict();
 export const flowDocumentNodeStateEventDataSchema = z.object({
 	flowId: flowIdentifierSchema,
@@ -1258,6 +1259,7 @@ export const flowDocumentNodeStateEventDataSchema = z.object({
 	nodeId: flowIdentifierSchema,
 	revision: z.number().int().positive(),
 	status: flowDocumentNodeStatusSchema,
+	nodeRun: flowDocumentNodeRunSchema.optional(),
 }).strict();
 const flowTreeSectionKeySchema = z.enum(["pinned", "projects", "recent"]);
 const flowTreeOrderUpdateSchema = z.object({

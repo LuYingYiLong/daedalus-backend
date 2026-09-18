@@ -28,7 +28,12 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 }
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
-	assert.deepEqual(listFlowNodeTypeDefinitions(true).map((definition): string => definition.typeId), ["builtin/command", "builtin/condition", "builtin/file-input", "builtin/json-extract", "builtin/llm", "builtin/merge", "builtin/note", "builtin/output", "builtin/prompt", "builtin/template", "builtin/text", "builtin/tool"]);
+	const definitions = listFlowNodeTypeDefinitions(true);
+	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/command", "builtin/condition", "builtin/file-input", "builtin/json-extract", "builtin/llm", "builtin/merge", "builtin/note", "builtin/output", "builtin/prompt", "builtin/template", "builtin/text", "builtin/tool"]);
+	const llmProperties = definitions.find((definition): boolean => definition.typeId === "builtin/llm")?.configSchema.properties as Record<string, Record<string, unknown>>;
+	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
+	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
+	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
 	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
 	assert.equal(normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok" }).timeoutMs, 30_000);
 });
@@ -155,9 +160,18 @@ test("Flow runner passes values by port and caches pure nodes", async (): Promis
 	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/template", x: 320, y: 0, config: { template: "{{input}} world", inputs: [{ id: "input", label: "Input", dataType: "text" }] } });
 	const templateNode = snapshot.nodes.find((node): boolean => node.typeId === "builtin/template")!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: textNode.nodeId, sourcePort: "output", targetNodeId: templateNode.nodeId, targetPort: "input", dataType: "text" });
-	const first = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+	const nodeStates: Array<{ nodeId: string; output: unknown }> = [];
+	const first = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+		onNodeState: (run, nodeId): void => {
+			nodeStates.push({ nodeId, output: run.nodes.find((node): boolean => node.nodeId === nodeId)?.output });
+		},
+	});
 	assert.equal(first.status, "completed");
 	assert.deepEqual(first.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.output, { output: "hello world" });
+	assert.deepEqual(nodeStates.findLast((state): boolean => state.nodeId === templateNode.nodeId)?.output, { output: "hello world" });
 	const second = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
 	assert.equal(second.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "cached");
 }));

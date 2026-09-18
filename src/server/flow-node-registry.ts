@@ -87,9 +87,25 @@ function registerBuiltin(
 		summaryFields?: string[];
 		dynamicPorts?: FlowNodeTypeDefinition["dynamicPorts"];
 		resolvePorts?: (config: Record<string, unknown>) => FlowNodePortDefinition[];
+		fieldControls?: Record<string, "provider" | "model" | "reasoning-effort">;
 	} = {},
 ): void {
 	const typeId = `builtin/${name}`;
+	const configSchemaDefinition = schemaRecord(configSchema);
+	if (options.fieldControls !== undefined) {
+		const properties = configSchemaDefinition.properties;
+		if (properties !== null && typeof properties === "object" && !Array.isArray(properties)) {
+			for (const [field, control] of Object.entries(options.fieldControls)) {
+				const property = (properties as Record<string, unknown>)[field];
+				if (property !== null && typeof property === "object" && !Array.isArray(property)) {
+					(properties as Record<string, unknown>)[field] = {
+						...(property as Record<string, unknown>),
+						"x-daedalus-control": control,
+					};
+				}
+			}
+		}
+	}
 	registerFlowNodeDefinition({
 		typeId,
 		pluginId: "builtin",
@@ -103,7 +119,7 @@ function registerBuiltin(
 		cachePolicy: options.cachePolicy ?? "always",
 		defaultTitle,
 		defaultConfig,
-		configSchema: schemaRecord(configSchema),
+		configSchema: configSchemaDefinition,
 		summaryFields: options.summaryFields ?? [],
 		ui: { kind: "schema" },
 		ports,
@@ -146,7 +162,14 @@ registerBuiltin("file-input", "workspace", "File Input", { path: "", mode: "text
 	summaryFields: ["path"],
 	resolvePorts: (config): FlowNodePortDefinition[] => [output("output", "File", [config.mode === "json" || config.mode === "artifact" ? config.mode : "text"], true)],
 });
-registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", systemPrompt: "" }, [input("input", "Prompt", ["text", "json"], false, true), output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"] });
+registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", systemPrompt: "" }, [input("input", "Prompt", ["text", "json"], false, true), output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], {
+	summaryFields: ["provider", "model"],
+	fieldControls: {
+		provider: "provider",
+		model: "model",
+		reasoningEffort: "reasoning-effort",
+	},
+});
 registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings: [] }, [input("input", "Arguments", ["text", "json"], false, true), output("result", "Result", ["json"], true), output("text", "Text", ["text"]), output("artifact", "Artifact", ["artifact"])], flowDocumentNodeConfigSchemas["builtin/tool"], { sideEffecting: true, cachePolicy: "read-only", summaryFields: ["toolName"] });
 registerBuiltin("command", "workspace", "Command", { commandLine: "", cwd: "", env: {}, timeoutMs: 30_000 }, [input("stdin", "stdin", ["text"], false, true), output("result", "Result", ["json"], true), output("stdout", "stdout", ["text"]), output("stderr", "stderr", ["text"])], flowDocumentNodeConfigSchemas["builtin/command"], { workspaceRequired: true, sideEffecting: true, cachePolicy: "never", summaryFields: ["commandLine"] });
 registerBuiltin("output", "basic", "Output", { format: "text" }, [input("input", "Value", ALL_TYPES, true, true)], flowDocumentNodeConfigSchemas["builtin/output"], { summaryFields: ["format"] });

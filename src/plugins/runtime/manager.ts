@@ -10,7 +10,7 @@ import { terminateProcess } from "../../mcp/terminal/process-runner.js";
 import { materializeRuntimeAsset } from "../../runtime/runtime-assets.js";
 import { getPluginCatalog, pluginFingerprint } from "../manager.js";
 import { readPluginRecords } from "../store.js";
-import type { PluginRecord, PluginRuntimeSnapshot } from "../types.js";
+import type { NativeFlowNodeDeclaration, PluginRecord, PluginRuntimeSnapshot } from "../types.js";
 import {
 	ensureHarnessRuntime,
 	clearHarnessPluginQuarantine,
@@ -27,6 +27,7 @@ import type { HarnessHandle } from "../harness/runner.js";
 import {
 	clearPluginRegistrations,
 	registerPluginCommand,
+	registerPluginFlowNode,
 	registerPluginHook,
 	registerPluginMcp,
 	registerPluginSkill,
@@ -69,23 +70,42 @@ import {
 	type PluginSkillRegistration,
 	type PluginHookRegistration,
 	type PluginMcpRegistration,
-	type PluginCommandRegistration
+	type PluginCommandRegistration,
+	type PluginFlowNodeRegistration
 } from "./worker-protocol.js";
 
-type PendingCall = { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; started: boolean; startedAt: number; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command"; name: string; args: Record<string, unknown> };
-type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[] };
+type PluginInvocationKind = "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "flow_node";
+export type PluginHostRequest = Extract<PluginWorkerEvent, { type: "host.request" }>;
+export type PluginHostRequestHandler = (request: PluginHostRequest) => Promise<unknown>;
+type PendingCall = {
+	resolve: (value: unknown) => void;
+	reject: (error: Error) => void;
+	timer: NodeJS.Timeout;
+	started: boolean;
+	startedAt: number;
+	kind: PluginInvocationKind;
+	name: string;
+	args: Record<string, unknown>;
+	hostRequest?: PluginHostRequestHandler | undefined;
+	hostRequestIds: Set<string>;
+	hostFailure?: Error | undefined;
+	cleanupAbort?: (() => void) | undefined;
+};
+type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[]; flowNodes: PluginFlowNodeRegistration[] };
 
 export type WorkerHandle = {
 	pluginId: string;
+	pluginFingerprint: string;
 	sessionId: string;
 	child: ChildProcessWithoutNullStreams;
 	pending: Map<string, PendingCall>;
+	ignoredResultIds: Set<string>;
 	ready: Promise<void>;
 	resolveReady: () => void;
 	rejectReady: (error: Error) => void;
 	buffer: string;
 	stderrTail: string;
-	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number };
+	registrationCounts: { tools: number; skills: number; hooks: number; mcps: number; commands: number; flowNodes: number };
 	context: PluginRuntimeContext;
 	activeCalls: number;
 	lastUsedAt: number;
@@ -94,6 +114,7 @@ export type WorkerHandle = {
 	idleTimer?: NodeJS.Timeout | undefined;
 	resourceTimer?: NodeJS.Timeout | undefined;
 	stagedRegistrations: StagedRegistrations;
+	declaredFlowNodes: NativeFlowNodeDeclaration[];
 };
 
 const handles = new Map<string, WorkerHandle>();
@@ -121,14 +142,33 @@ function updateResourceSnapshot(handle: WorkerHandle): void {
 	setSnapshot(handle.pluginId, { resourceUsage: { activeCalls: handle.activeCalls, pendingCalls: handle.pending.size, lastMeasuredAt: new Date().toISOString() } });
 }
 
+function canonicalize(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(canonicalize);
+	if (typeof value !== "object" || value === null) return value;
+	return Object.fromEntries(Object.entries(value).sort(([left], [right]): number => left.localeCompare(right)).map(([key, child]): [string, unknown] => [key, canonicalize(child)]));
+}
+
+function validateFlowNodeDeclarations(handle: WorkerHandle): void {
+	const declaredByType = new Map(handle.declaredFlowNodes.map((node): [string, NativeFlowNodeDeclaration] => [node.typeId, node]));
+	if (declaredByType.size !== handle.stagedRegistrations.flowNodes.length) throw Object.assign(new Error("Plugin Flow node registrations do not match the static manifest."), { code: "plugin_flow_nodes_manifest_mismatch" });
+	for (const registration of handle.stagedRegistrations.flowNodes) {
+		const declaration = declaredByType.get(registration.typeId);
+		if (declaration === undefined || JSON.stringify(canonicalize(declaration)) !== JSON.stringify(canonicalize(registration))) {
+			throw Object.assign(new Error(`Plugin Flow node registration differs from its manifest: ${registration.typeId}.`), { code: "plugin_flow_nodes_manifest_mismatch" });
+		}
+	}
+}
+
 function commitWorkerRegistrations(handle: WorkerHandle): void {
 	try {
+		validateFlowNodeDeclarations(handle);
 		clearPluginRegistrations(handle.pluginId);
 		for (const registration of handle.stagedRegistrations.tools) registerPluginTool(handle.pluginId, registration);
 		for (const registration of handle.stagedRegistrations.skills) registerPluginSkill(handle.pluginId, registration);
 		for (const { registration, handlerName } of handle.stagedRegistrations.hooks) registerPluginHook(handle.pluginId, registration, handlerName);
 		for (const registration of handle.stagedRegistrations.mcps) registerPluginMcp(handle.pluginId, registration);
 		for (const registration of handle.stagedRegistrations.commands) registerPluginCommand(handle.pluginId, registration);
+		for (const registration of handle.stagedRegistrations.flowNodes) registerPluginFlowNode(handle.pluginId, handle.pluginFingerprint, registration);
 	} catch (error: unknown) {
 		clearPluginRegistrations(handle.pluginId);
 		throw error;
@@ -156,6 +196,7 @@ function dispatchQueued(handle: WorkerHandle): void {
 function rejectPending(handle: WorkerHandle, error: Error): void {
 	for (const [id, pending] of handle.pending) {
 		clearTimeout(pending.timer);
+		pending.cleanupAbort?.();
 		pending.reject(error);
 		handle.pending.delete(id);
 	}
@@ -177,13 +218,48 @@ async function validateRecord(record: PluginRecord, sessionId?: string): Promise
 function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 	if (event.type === "ready") { commitWorkerRegistrations(handle); handle.resolveReady(); return; }
 	if (event.type === "error") { handle.rejectReady(new Error(event.message)); return; }
+	if (event.type === "host.request") {
+		const pending = handle.pending.get(event.invocationId);
+		if (pending === undefined || !pending.started) throw new Error("Plugin worker requested a host capability for an unknown invocation.");
+		if (pending.hostRequestIds.has(event.requestId) || pending.hostRequestIds.size >= 32) throw new Error("Plugin worker host request limit exceeded.");
+		pending.hostRequestIds.add(event.requestId);
+		const handler = handle.context.capabilities.includes("flowHostTools") ? pending.hostRequest : undefined;
+		void (handler === undefined ? Promise.reject(new Error("Plugin host tool access is not declared or available.")) : handler(event)).then(
+			(value: unknown): void => {
+				const active = handle.pending.get(event.invocationId);
+				if (active !== pending || !active.hostRequestIds.delete(event.requestId)) return;
+				let size = 0;
+				try { size = Buffer.byteLength(JSON.stringify(value) ?? "null", "utf8"); } catch { size = MAX_PLUGIN_RESULT_CHARS + 1; }
+				if (size > MAX_PLUGIN_RESULT_CHARS) {
+					const error = new Error("Plugin host tool result exceeded the size limit.");
+					active.hostFailure ??= error;
+					handle.child.stdin.write(encodeWorkerMessage({ type: "host.response", requestId: event.requestId, ok: false, error: error.message }));
+					return;
+				}
+				handle.child.stdin.write(encodeWorkerMessage({ type: "host.response", requestId: event.requestId, ok: true, value }));
+			},
+			(error: unknown): void => {
+				const active = handle.pending.get(event.invocationId);
+				if (active !== pending || !active.hostRequestIds.delete(event.requestId)) return;
+				const failure = error instanceof Error ? error : new Error(String(error));
+				active.hostFailure ??= failure;
+				handle.child.stdin.write(encodeWorkerMessage({ type: "host.response", requestId: event.requestId, ok: false, error: redactRuntimeText(failure.message) }));
+			},
+		);
+		return;
+	}
 	if (event.type === "result") {
 		const pending = handle.pending.get(event.id);
-		if (pending === undefined) throw new Error("Plugin worker returned an unknown response ID.");
+		if (pending === undefined) {
+			if (handle.ignoredResultIds.delete(event.id)) return;
+			throw new Error("Plugin worker returned an unknown response ID.");
+		}
 		clearTimeout(pending.timer);
+		pending.cleanupAbort?.();
 		handle.pending.delete(event.id);
 		if (pending.started) handle.activeCalls = Math.max(0, handle.activeCalls - 1);
-		if (event.ok) {
+		if (pending.hostFailure !== undefined) pending.reject(pending.hostFailure);
+		else if (event.ok) {
 			let size = 0;
 			try { size = Buffer.byteLength(JSON.stringify(event.value) ?? "null", "utf8"); } catch { size = MAX_PLUGIN_RESULT_CHARS + 1; }
 			if (size > MAX_PLUGIN_RESULT_CHARS) pending.reject(new Error("Plugin result exceeded the size limit."));
@@ -229,6 +305,15 @@ function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 		if (!(handle.context.p2Capabilities ?? []).includes("commands")) throw new Error("Plugin registered an undeclared P2 command capability.");
 		if (++handle.registrationCounts.commands > 128) throw new Error("Plugin command registration limit exceeded.");
 		handle.stagedRegistrations.commands.push(event.registration);
+		return;
+	}
+	if (event.type === "register.flowNode") {
+		if (!handle.context.capabilities.includes("flowNodes")) throw new Error("Plugin registered a capability that was not declared.");
+		if (++handle.registrationCounts.flowNodes > 128) throw new Error("Plugin Flow node registration limit exceeded.");
+		const registration = event.registration.ui.kind === "sandbox" && !Array.isArray(event.registration.ui.actions)
+			? { ...event.registration, ui: { ...event.registration.ui, actions: [] } }
+			: event.registration;
+		handle.stagedRegistrations.flowNodes.push(registration);
 		return;
 	}
 }
@@ -282,7 +367,7 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
-	const handle: WorkerHandle = { pluginId: record.id, sessionId: context.sessionId, child, pending: new Map(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [] } };
+	const handle: WorkerHandle = { pluginId: record.id, pluginFingerprint: record.fingerprint, sessionId: context.sessionId, child, pending: new Map(), ignoredResultIds: new Set(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, flowNodes: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], flowNodes: [] }, declaredFlowNodes: structuredClone(record.nativePlugin?.flowNodes ?? []) };
 	handles.set(key(record.id, context.sessionId), handle);
 	setSnapshot(record.id, { status: "starting", activeSessions: [...handles.values()].filter((item): boolean => item.pluginId === record.id).length });
 	child.stdout.setEncoding("utf8");
@@ -392,6 +477,18 @@ export async function ensurePluginRuntime(pluginId: string, context: Omit<Plugin
 	}
 }
 
+/** Starts trusted Flow-capable plugins so their validated node definitions are
+ * available to the catalog. A broken plugin remains absent and its persisted
+ * nodes are exposed as unavailable rather than blocking the whole catalog. */
+export async function ensureFlowNodePluginRuntimes(context: { sessionId: string; workspaceId?: string | undefined }): Promise<void> {
+	const records = await readPluginRecords();
+	await Promise.allSettled(records
+		.filter((record): boolean => record.enabled && record.trust === "trusted" && record.nativePlugin?.capabilities.includes("flowNodes") === true)
+		.map(async (record): Promise<void> => {
+			await ensurePluginRuntime(record.id, context);
+		}));
+}
+
 export async function installPluginRuntimeDependencies(pluginId: string, allowNetwork: boolean): Promise<PluginRuntimeSnapshot> {
 	const record = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw new Error("Plugin not found.");
@@ -404,13 +501,15 @@ export async function installPluginRuntimeDependencies(pluginId: string, allowNe
 	return getPluginRuntimeSnapshot(pluginId)!;
 }
 
-export async function invokePlugin(pluginId: string, sessionId: string, kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command", name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS): Promise<unknown> {
+export async function invokePlugin(pluginId: string, sessionId: string, kind: PluginInvocationKind, name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS, signal?: AbortSignal, hostRequest?: PluginHostRequestHandler): Promise<unknown> {
 	if (hasHarnessHandle(pluginId, sessionId)) {
+		if (kind === "flow_node") throw new Error("Harness plugins cannot execute Flow nodes.");
 		return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
 	}
 	const handle = handles.get(key(pluginId, sessionId));
 	if (handle === undefined) throw new Error("Plugin runtime is not running.");
 	const id = randomUUID();
+	if (signal?.aborted === true) throw Object.assign(new Error("Plugin call was cancelled."), { code: "plugin_call_cancelled" });
 	handle.lastUsedAt = Date.now();
 	if (handle.pending.size >= MAX_PLUGIN_PENDING_CALLS) throw Object.assign(new Error("Plugin runtime call queue is full."), { code: "plugin_runtime_queue_full" });
 	return new Promise((resolve, reject): void => {
@@ -418,14 +517,35 @@ export async function invokePlugin(pluginId: string, sessionId: string, kind: "t
 			const pending = handle.pending.get(id);
 			if (pending === undefined) return;
 			handle.pending.delete(id);
+			pending.cleanupAbort?.();
 			if (pending.started) handle.activeCalls = Math.max(0, handle.activeCalls - 1);
+			if (pending.started) {
+				handle.ignoredResultIds.add(id);
+				handle.child.stdin.write(encodeWorkerMessage({ type: "cancel", id }));
+			}
 			reject(new Error("Plugin call timed out."));
 			void recordPluginFailure(pluginId, sessionId, "Plugin call timed out.").then((isolation): void => {
 				if (isolation.status === "quarantined") { handle.stopping = true; clearPluginRegistrations(pluginId); terminateProcess(handle.child, true); setSnapshot(pluginId, { status: "quarantined", isolation }); }
 			});
 			dispatchQueued(handle);
 		}, Math.min(PLUGIN_CALL_TIMEOUT_MS, timeoutMs));
-		handle.pending.set(id, { resolve, reject, timer, started: false, startedAt: Date.now(), kind, name, args });
+		const pending: PendingCall = { resolve, reject, timer, started: false, startedAt: Date.now(), kind, name, args, hostRequest, hostRequestIds: new Set() };
+		if (signal !== undefined) {
+			const cancel = (): void => {
+				if (!handle.pending.delete(id)) return;
+				clearTimeout(timer);
+				if (pending.started) {
+					handle.activeCalls = Math.max(0, handle.activeCalls - 1);
+					handle.ignoredResultIds.add(id);
+					handle.child.stdin.write(encodeWorkerMessage({ type: "cancel", id }));
+				}
+				reject(Object.assign(new Error("Plugin call was cancelled."), { code: "plugin_call_cancelled" }));
+				dispatchQueued(handle);
+			};
+			signal.addEventListener("abort", cancel, { once: true });
+			pending.cleanupAbort = (): void => signal.removeEventListener("abort", cancel);
+		}
+		handle.pending.set(id, pending);
 		dispatchQueued(handle);
 	});
 }

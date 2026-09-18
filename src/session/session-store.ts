@@ -17,12 +17,7 @@ const SESSION_ID_PATTERN: RegExp = /^session-[a-zA-Z0-9_-]+$/;
 
 export type SessionChatMode = "agent" | "ask" | "plan" | "goal";
 
-export type SessionSurface = "chat" | "flow_branch";
-
-export type SessionFlowBinding = {
-	flowId: string;
-	branchId: string;
-};
+export type SessionSurface = "chat";
 
 export type SessionForkOrigin = {
 	sessionId: string;
@@ -50,7 +45,6 @@ export type SessionMetadata = {
 	chatMode?: SessionChatMode | undefined;
 	approvalMode?: "manual" | "auto-safe" | "full-trust" | undefined;
 	surface?: SessionSurface | undefined;
-	flow?: SessionFlowBinding | undefined;
 	workflowTodoCollapsed?: boolean | undefined;
 	workflowTodoDismissedKey?: string | null | undefined;
 	workspaceLaunch?: WorkspaceLaunchTargetId | undefined;
@@ -303,13 +297,9 @@ function rowMetadata(row: Record<string, unknown> | undefined, sessionId: string
 }
 
 export function normalizeSessionMetadata(metadata: SessionMetadata): SessionMetadata {
-	if (metadata.surface === "flow_branch" && metadata.flow !== undefined) {
-		return metadata;
-	}
 	return {
 		...metadata,
 		surface: "chat",
-		flow: undefined,
 	};
 }
 

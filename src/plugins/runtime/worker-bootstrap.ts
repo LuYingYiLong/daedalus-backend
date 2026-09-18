@@ -4,6 +4,7 @@ import {
 	parseWorkerMessage,
 	type PluginCommandRegistration,
 	type PluginHookRegistration,
+	type PluginFlowNodeRegistration,
 	type PluginMcpRegistration,
 	type PluginRuntimeContext,
 	type PluginSkillRegistration,
@@ -12,6 +13,7 @@ import {
 } from "./worker-protocol.js";
 
 type Handler = (args: Record<string, unknown>) => unknown | Promise<unknown>;
+type HostRequestState = { resolve: (value: unknown) => void; reject: (error: Error) => void; invocationId: string };
 
 type PluginApi = {
 	commands: { register(registration: Omit<PluginCommandRegistration, "handlerName"> & { handlerName?: string }, handler: Handler): void };
@@ -19,10 +21,13 @@ type PluginApi = {
 	skills: { register(registration: PluginSkillRegistration): void };
 	hooks: { register(registration: PluginHookRegistration, handler: Handler): void };
 	mcp: { register(registration: PluginMcpRegistration, handlers?: { tools?: Record<string, Handler>; resources?: Record<string, Handler> }): void };
+	flowNodes: { register(registration: Omit<PluginFlowNodeRegistration, "handlerName"> & { handlerName?: string }, handler: Handler): void };
 	context: PluginRuntimeContext;
 };
 
 const handlers = new Map<string, Handler>();
+const invocationControllers = new Map<string, AbortController>();
+const hostRequests = new Map<string, HostRequestState>();
 let sequence = 0;
 
 for (const method of ["log", "info", "warn", "error", "debug"] as const) {
@@ -91,8 +96,25 @@ function createApi(context: PluginRuntimeContext): PluginApi {
 				for (const [uri, handler] of Object.entries(handlersByName.resources ?? {})) registerHandler("mcp_resource", `${registration.serverId}:${uri}`, handler);
 				send({ type: "register.mcp", registration });
 			}
-		}
+		},
+		flowNodes: {
+			register(registration, handler): void {
+				const handlerName = registration.handlerName ?? `flow-node:${registration.typeId}:${sequence++}`;
+				registerHandler("flow_node", handlerName, handler);
+				send({ type: "register.flowNode", registration: { ...registration, handlerName } });
+			}
+		},
 	};
+}
+
+function callHostTool(context: PluginRuntimeContext, invocationId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
+	if (!context.capabilities.includes("flowHostTools")) throw new Error("Plugin did not declare the flowHostTools capability.");
+	if (hostRequests.size >= 64) throw new Error("Plugin host request limit reached.");
+	const requestId = `host-${invocationId}-${sequence++}`;
+	return new Promise((resolve, reject): void => {
+		hostRequests.set(requestId, { resolve, reject, invocationId });
+		send({ type: "host.request", requestId, invocationId, method: "tool.call", params: { name, args } });
+	});
 }
 
 async function handle(message: PluginWorkerMessage, context: PluginRuntimeContext): Promise<void> {
@@ -105,7 +127,26 @@ async function handle(message: PluginWorkerMessage, context: PluginRuntimeContex
 		return;
 	}
 	if (message.type === "shutdown") {
+		for (const controller of invocationControllers.values()) controller.abort();
+		for (const request of hostRequests.values()) request.reject(new Error("Plugin worker is shutting down."));
+		hostRequests.clear();
 		process.exitCode = 0;
+		return;
+	}
+	if (message.type === "cancel") {
+		invocationControllers.get(message.id)?.abort();
+		for (const [requestId, request] of hostRequests) if (request.invocationId === message.id) {
+			request.reject(new Error("Plugin call was cancelled."));
+			hostRequests.delete(requestId);
+		}
+		return;
+	}
+	if (message.type === "host.response") {
+		const request = hostRequests.get(message.requestId);
+		if (request === undefined) throw new Error("Plugin worker received an unknown host response ID.");
+		hostRequests.delete(message.requestId);
+		if (message.ok) request.resolve(message.value);
+		else request.reject(new Error(message.error ?? "Host capability request failed."));
 		return;
 	}
 	if (message.type === "invoke") {
@@ -114,10 +155,19 @@ async function handle(message: PluginWorkerMessage, context: PluginRuntimeContex
 			send({ type: "result", id: message.id, ok: false, error: "Plugin handler not found." });
 			return;
 		}
+		const controller = new AbortController();
+		invocationControllers.set(message.id, controller);
 		try {
-			send({ type: "result", id: message.id, ok: true, value: await handler(message.args) });
+			const args = message.kind === "flow_node" ? {
+				...message.args,
+				signal: controller.signal,
+				host: { callTool: (name: string, toolArgs: Record<string, unknown>): Promise<unknown> => callHostTool(context, message.id, name, toolArgs) },
+			} : message.args;
+			send({ type: "result", id: message.id, ok: true, value: await handler(args) });
 		} catch (error: unknown) {
 			send({ type: "result", id: message.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+		} finally {
+			invocationControllers.delete(message.id);
 		}
 	}
 }
@@ -151,6 +201,15 @@ process.stdin.on("data", (chunk: string): void => {
 				if (!initialized && message.type !== "initialize") throw new Error("Plugin worker must be initialized before use.");
 				if (initializedContext === undefined) throw new Error("Plugin worker context is unavailable.");
 				const context: PluginRuntimeContext = initializedContext;
+				if (message.type === "invoke") {
+					// Invocation work runs concurrently so a later cancel message is not
+					// blocked behind the handler it needs to abort.
+					void handle(message, context).then(
+						(): void => debugWorker(`handled ${message.type}`),
+						(error: unknown): void => send({ type: "error", message: error instanceof Error ? error.message : String(error) }),
+					);
+					return;
+				}
 				await handle(message, context);
 				debugWorker(`handled ${message.type}`);
 				if (message.type === "shutdown") shuttingDown = true;

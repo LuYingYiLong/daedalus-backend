@@ -1,6 +1,7 @@
 import type { PluginCapability } from "../types.js";
+import type { FlowNodeTypeDefinition } from "../../protocol/types.js";
 
-export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 2 as const;
+export const PLUGIN_RUNTIME_PROTOCOL_VERSION = 3 as const;
 
 export type PluginToolRisk = "read" | "verify" | "propose" | "write" | "destructive";
 
@@ -55,6 +56,7 @@ export type PluginCommandRegistration = {
 	handlerName: string;
 	arguments?: Array<{ name: string; required: boolean; description?: string | undefined }> | undefined;
 };
+export type PluginFlowNodeRegistration = Omit<FlowNodeTypeDefinition, "pluginFingerprint"> & { handlerName: string };
 
 export type PluginRuntimeContext = {
 	pluginId: string;
@@ -66,17 +68,21 @@ export type PluginRuntimeContext = {
 };
 
 export type PluginWorkerMessage =
-	| { type: "initialize"; protocolVersion: 2; entry: string; context: PluginRuntimeContext }
-	| { type: "invoke"; id: string; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command"; name: string; args: Record<string, unknown> }
+	| { type: "initialize"; protocolVersion: 3; entry: string; context: PluginRuntimeContext }
+	| { type: "invoke"; id: string; kind: "tool" | "hook" | "mcp_tool" | "mcp_resource" | "command" | "flow_node"; name: string; args: Record<string, unknown> }
+	| { type: "cancel"; id: string }
+	| { type: "host.response"; requestId: string; ok: boolean; value?: unknown; error?: string }
 	| { type: "shutdown" };
 
 export type PluginWorkerEvent =
-	| { type: "ready"; protocolVersion: 2 }
+	| { type: "ready"; protocolVersion: 3 }
 	| { type: "register.tool"; registration: PluginToolRegistration }
 	| { type: "register.skill"; registration: PluginSkillRegistration }
 	| { type: "register.hook"; registration: PluginHookRegistration }
 	| { type: "register.mcp"; registration: PluginMcpRegistration }
 	| { type: "register.command"; registration: PluginCommandRegistration }
+	| { type: "register.flowNode"; registration: PluginFlowNodeRegistration }
+	| { type: "host.request"; requestId: string; invocationId: string; method: "tool.call"; params: { name: string; args: Record<string, unknown> } }
 	| { type: "result"; id: string; ok: boolean; value?: unknown; error?: string }
 	| { type: "error"; message: string };
 
@@ -103,7 +109,7 @@ function assertRuntimeContext(value: unknown): asserts value is PluginRuntimeCon
 	assertString(value.sessionId, "session ID", 256);
 	if (value.workspaceId !== undefined && (typeof value.workspaceId !== "string" || value.workspaceId.length > 256)) throw new Error("Invalid plugin worker workspace ID.");
 	if (value.workspaceRoot !== undefined && (typeof value.workspaceRoot !== "string" || value.workspaceRoot.length > 4096)) throw new Error("Invalid plugin worker workspace root.");
-	if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability): boolean => ["tools", "skills", "hooks", "mcp"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
+	if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability): boolean => ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
 	if (value.p2Capabilities !== undefined && (!Array.isArray(value.p2Capabilities) || value.p2Capabilities.length > 16 || !value.p2Capabilities.every((capability): boolean => typeof capability === "string" && capability.length <= 64))) throw new Error("Invalid plugin worker P2 capabilities.");
 }
 
@@ -121,8 +127,19 @@ export function parseWorkerMessage(line: string): PluginWorkerMessage {
 		assertKeys(value, ["type", "id", "kind", "name", "args"]);
 		assertString(value.id, "call ID", 128);
 		assertString(value.name, "handler name", 256);
-		if (!["tool", "hook", "mcp_tool", "mcp_resource", "command"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
+		if (!["tool", "hook", "mcp_tool", "mcp_resource", "command", "flow_node"].includes(String(value.kind)) || !isRecord(value.args)) throw new Error("Invalid plugin worker invocation.");
 		if (Buffer.byteLength(JSON.stringify(value.args), "utf8") > 200_000) throw new Error("Plugin worker invocation arguments exceed the size limit.");
+		return value as PluginWorkerMessage;
+	case "cancel":
+		assertKeys(value, ["type", "id"]);
+		assertString(value.id, "call ID", 128);
+		return value as PluginWorkerMessage;
+	case "host.response":
+		assertKeys(value, ["type", "requestId", "ok", "value", "error"]);
+		assertString(value.requestId, "host request ID", 128);
+		if (typeof value.ok !== "boolean") throw new Error("Invalid plugin host response status.");
+		if (value.ok && value.error !== undefined || !value.ok && value.value !== undefined) throw new Error("Invalid plugin host response payload.");
+		if (!value.ok && (typeof value.error !== "string" || value.error.length > 4_000)) throw new Error("Invalid plugin host response error.");
 		return value as PluginWorkerMessage;
 	case "shutdown":
 		assertKeys(value, ["type"]);
@@ -132,7 +149,16 @@ export function parseWorkerMessage(line: string): PluginWorkerMessage {
 	}
 }
 
-function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skill" | "hook" | "mcp" | "command"): void {
+function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skill" | "hook" | "mcp" | "command" | "flowNode"): void {
+	if (kind === "flowNode") {
+		assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "ports", "dynamicPorts", "handlerName"]);
+		assertString(value.typeId, "Flow node type ID", 256);
+		assertString(value.pluginId, "Flow node plugin ID", 128);
+		assertString(value.pluginVersion, "Flow node plugin version", 80);
+		assertString(value.handlerName, "Flow node handler", 160);
+		if (!isRecord(value.defaultConfig) || !isRecord(value.configSchema) || !Array.isArray(value.ports) || value.ports.length > 64 || !Array.isArray(value.summaryFields)) throw new Error("Invalid plugin Flow node registration.");
+		return;
+	}
 	if (kind === "command") {
 		assertKeys(value, ["id", "command", "description", "usage", "handlerName", "arguments"]);
 		assertString(value.id, "command ID", 128);
@@ -209,14 +235,24 @@ export function parseWorkerEvent(line: string): PluginWorkerEvent {
 		if (value.ok && value.error !== undefined || !value.ok && value.value !== undefined) throw new Error("Invalid plugin worker result payload.");
 		if (!value.ok && (typeof value.error !== "string" || value.error.length > 4000)) throw new Error("Invalid plugin worker result error.");
 		break;
+	case "host.request":
+		assertKeys(value, ["type", "requestId", "invocationId", "method", "params"]);
+		assertString(value.requestId, "host request ID", 128);
+		assertString(value.invocationId, "host invocation ID", 128);
+		if (value.method !== "tool.call" || !isRecord(value.params)) throw new Error("Invalid plugin host request.");
+		assertKeys(value.params, ["name", "args"]);
+		assertString(value.params.name, "host tool name", 240);
+		if (!isRecord(value.params.args) || Buffer.byteLength(JSON.stringify(value.params.args), "utf8") > 200_000) throw new Error("Invalid plugin host tool arguments.");
+		break;
 	case "register.tool":
 	case "register.skill":
 	case "register.hook":
 	case "register.mcp":
 	case "register.command":
+	case "register.flowNode":
 		assertKeys(value, ["type", "registration"]);
 		if (!isRecord(value.registration)) throw new Error("Invalid plugin worker registration payload.");
-		assertRegistration(value.registration, value.type.slice("register.".length) as "tool" | "skill" | "hook" | "mcp" | "command");
+		assertRegistration(value.registration, value.type.slice("register.".length) as "tool" | "skill" | "hook" | "mcp" | "command" | "flowNode");
 		break;
 	default:
 		throw new Error(`Unknown plugin worker event type: ${value.type}.`);

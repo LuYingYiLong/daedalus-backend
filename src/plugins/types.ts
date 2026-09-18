@@ -1,4 +1,5 @@
 import type { PluginP2Manifest } from "./extensions/protocol.js";
+import type { FlowNodeTypeDefinition } from "../protocol/types.js";
 
 export const PLUGIN_TRUST_STATUSES = ["review_required", "trusted", "disabled"] as const;
 export type PluginTrustStatus = typeof PLUGIN_TRUST_STATUSES[number];
@@ -21,13 +22,18 @@ export type PluginCompatibility = {
 	classification: "native" | "harness-bundle" | "harness-client" | "both" | "metadata-only" | "unsupported";
 };
 
-export const PLUGIN_CAPABILITIES = ["tools", "skills", "hooks", "mcp"] as const;
+export const PLUGIN_CAPABILITIES = ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools"] as const;
 export type PluginCapability = typeof PLUGIN_CAPABILITIES[number];
 
 export type NativePluginDeclaration = {
 	apiVersion: number;
 	entry: string;
 	capabilities: PluginCapability[];
+	flowNodes?: NativeFlowNodeDeclaration[] | undefined;
+};
+
+export type NativeFlowNodeDeclaration = Omit<FlowNodeTypeDefinition, "pluginFingerprint"> & {
+	handlerName: string;
 };
 
 export type PluginPresentation = {

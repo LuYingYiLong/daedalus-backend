@@ -3,24 +3,19 @@ import type {
 	additionalContextItemSchema,
 	aiChatParamsSchema,
 	clientRequestSchema,
-	conversationFlowBranchSchema,
-	conversationFlowBranchStateEventDataSchema,
-	conversationFlowNodeSchema,
-	conversationFlowNodeStateEventDataSchema,
-	conversationFlowSchema,
-	conversationFlowUpdatedEventDataSchema,
 	flowDocumentEdgeSchema,
-	flowDocumentEdgeUpdatedEventDataSchema,
 	flowDocumentNodeSchema,
-	flowDocumentNodeTypeSchema,
+	flowNodeTypeIdSchema,
 	flowDocumentNodeRunSchema,
 	flowDocumentNodeStateEventDataSchema,
-	flowDocumentNodeUpdatedEventDataSchema,
 	flowDocumentRunSchema,
 	flowDocumentRunStateEventDataSchema,
 	flowDocumentSchema,
 	flowDocumentSnapshotSchema,
 	flowDocumentUpdatedEventDataSchema,
+	flowOperationSchema,
+	flowPatchAckSchema,
+	flowPatchAppliedEventDataSchema,
 	flowNodePortDefinitionSchema,
 	flowNodeTypeDefinitionSchema,
 	flowApprovalSchema,
@@ -87,18 +82,10 @@ export type SubagentEventDataMap = {
 
 export type SubagentEventName = keyof SubagentEventDataMap;
 
-export type ConversationFlow = z.infer<typeof conversationFlowSchema>;
 export type FlowTreeOrder = z.infer<typeof flowTreeOrderSchema>;
-export type ConversationFlowBranch = z.infer<typeof conversationFlowBranchSchema>;
-export type ConversationFlowNode = z.infer<typeof conversationFlowNodeSchema>;
-export type ConversationFlowEventDataMap = {
-	"flow.updated": z.infer<typeof conversationFlowUpdatedEventDataSchema>;
-	"flow.branch.state": z.infer<typeof conversationFlowBranchStateEventDataSchema>;
-	"flow.node.state": z.infer<typeof conversationFlowNodeStateEventDataSchema>;
-};
 
 export type FlowDocument = z.infer<typeof flowDocumentSchema>;
-export type FlowDocumentNodeType = z.infer<typeof flowDocumentNodeTypeSchema>;
+export type FlowNodeTypeId = z.infer<typeof flowNodeTypeIdSchema>;
 export type FlowDocumentNode = z.infer<typeof flowDocumentNodeSchema>;
 export type FlowDocumentEdge = z.infer<typeof flowDocumentEdgeSchema>;
 export type FlowDocumentRun = z.infer<typeof flowDocumentRunSchema>;
@@ -107,12 +94,13 @@ export type FlowDocumentSnapshot = z.infer<typeof flowDocumentSnapshotSchema>;
 export type FlowNodePortDefinition = z.infer<typeof flowNodePortDefinitionSchema>;
 export type FlowNodeTypeDefinition = z.infer<typeof flowNodeTypeDefinitionSchema>;
 export type FlowApproval = z.infer<typeof flowApprovalSchema>;
+export type FlowOperation = z.infer<typeof flowOperationSchema>;
+export type FlowPatchAck = z.infer<typeof flowPatchAckSchema>;
 export type FlowDocumentEventDataMap = {
 	"flow.updated": z.infer<typeof flowDocumentUpdatedEventDataSchema>;
-	"flow.node.updated": z.infer<typeof flowDocumentNodeUpdatedEventDataSchema>;
-	"flow.edge.updated": z.infer<typeof flowDocumentEdgeUpdatedEventDataSchema>;
 	"flow.run.state": z.infer<typeof flowDocumentRunStateEventDataSchema>;
 	"flow.node.state": z.infer<typeof flowDocumentNodeStateEventDataSchema>;
+	"flow.patch.applied": z.infer<typeof flowPatchAppliedEventDataSchema>;
 };
 
 export type ProviderId = string;
@@ -161,10 +149,8 @@ export type CanonicalServerEventName =
 	| "agent.subgraph.node.approval"
 	| "agent.subgraph.merge.state"
 	| "flow.updated"
-	| "flow.branch.state"
 	| "flow.node.state"
-	| "flow.node.updated"
-	| "flow.edge.updated"
+	| "flow.patch.applied"
 	| "flow.run.state"
 	| "agent.run.started"
 	| "agent.run.snapshot"

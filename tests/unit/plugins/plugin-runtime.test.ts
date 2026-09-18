@@ -4,11 +4,13 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { resolve } from "node:path";
-import { clearPluginRegistrations, getPluginTool, listPluginMcpTools, listPluginSkills, registerPluginMcp, registerPluginSkill, registerPluginTool } from "../../../src/plugins/runtime/registries.js";
-import { encodeWorkerMessage, parseWorkerEvent } from "../../../src/plugins/runtime/worker-protocol.js";
+import { clearPluginRegistrations, getPluginTool, listPluginMcpTools, listPluginSkills, registerPluginFlowNode, registerPluginMcp, registerPluginSkill, registerPluginTool } from "../../../src/plugins/runtime/registries.js";
+import { findFlowNodeTypeDefinition } from "../../../src/server/flow-node-registry.js";
+import { encodeWorkerMessage, parseWorkerEvent, parseWorkerMessage } from "../../../src/plugins/runtime/worker-protocol.js";
 import { getRuntimeRecoveryFields } from "../../../src/plugins/runtime/runtime-snapshot.js";
 
 const fixturePath: string = fileURLToPath(new URL("../../fixtures/native-plugin", import.meta.url));
+const flowFixturePath: string = fileURLToPath(new URL("../../fixtures/flow-node-plugin", import.meta.url));
 
 async function readWorkerEvents(child: ChildProcessWithoutNullStreams, count: number): Promise<Array<Record<string, unknown>>> {
 	const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -52,10 +54,41 @@ test("native plugin registrations use stable namespaces and can be cleared", ():
 	assert.equal(getPluginTool("mcp_plugin_fixture_runtime_plugin_read_status"), undefined);
 });
 
+test("community Flow nodes use host schema validation and package fingerprints", (): void => {
+	const ownerPluginId = "fixture-flow";
+	registerPluginFlowNode(ownerPluginId, "sha256:fixture", {
+		typeId: "fixture-flow/uppercase",
+		pluginId: "fixture-flow",
+		pluginVersion: "1.0.0",
+		configVersion: 1,
+		category: "text",
+		workspaceRequired: false,
+		sideEffecting: false,
+		executable: true,
+		cachePolicy: "always",
+		defaultTitle: "Uppercase",
+		defaultConfig: { prefix: "" },
+		configSchema: { type: "object", properties: { prefix: { type: "string" } }, required: ["prefix"], additionalProperties: false },
+		summaryFields: ["prefix"],
+		ui: { kind: "schema" },
+		ports: [{ id: "output", label: "Output", direction: "output", dataTypes: ["text"], required: false, multiple: true, defaultConnect: true }],
+		handlerName: "uppercase",
+	});
+	try {
+		const definition = findFlowNodeTypeDefinition("fixture-flow/uppercase");
+		assert.equal(definition?.pluginFingerprint, "sha256:fixture");
+		assert.equal(definition?.typeId, "fixture-flow/uppercase");
+	} finally {
+		clearPluginRegistrations(ownerPluginId);
+	}
+	assert.equal(findFlowNodeTypeDefinition("fixture-flow/uppercase"), undefined);
+});
+
 test("worker protocol accepts JSON line events and rejects malformed envelopes", (): void => {
 	const encoded = encodeWorkerMessage({ type: "shutdown" });
 	assert.equal(encoded.endsWith("\n"), true);
-	assert.equal(parseWorkerEvent(JSON.stringify({ type: "ready", protocolVersion: 2 })).type, "ready");
+	assert.equal(parseWorkerMessage(JSON.stringify({ type: "cancel", id: "call-a" })).type, "cancel");
+	assert.equal(parseWorkerEvent(JSON.stringify({ type: "ready", protocolVersion: 3 })).type, "ready");
 	assert.throws(() => parseWorkerEvent(JSON.stringify({ value: true })), /Invalid plugin worker event/);
 });
 
@@ -67,8 +100,8 @@ test("a recovered plugin runtime clears stale exit errors", (): void => {
 
 test("native plugin fixture registers and invokes through the worker protocol", async (): Promise<void> => {
 	const backendRoot: string = resolve(".");
-	const bootstrap: string = resolve("src/plugins/runtime/worker-bootstrap.ts");
-	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, ["--import", "tsx", bootstrap, "--plugin-worker"], {
+	const bootstrap: string = resolve("src/plugins/runtime/worker-bootstrap.js");
+	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [bootstrap, "--plugin-worker"], {
 		cwd: backendRoot,
 		stdio: ["pipe", "pipe", "pipe"],
 		windowsHide: true,
@@ -78,7 +111,7 @@ test("native plugin fixture registers and invokes through the worker protocol", 
 	try {
 		child.stdin.write(encodeWorkerMessage({
 			type: "initialize",
-			protocolVersion: 2,
+			protocolVersion: 3,
 			entry: resolve(fixturePath, "index.js"),
 			context: { pluginId: "fixture", sessionId: "test", workspaceId: "workspace", workspaceRoot: backendRoot, capabilities: ["tools", "skills", "hooks", "mcp"] },
 		}));
@@ -97,4 +130,63 @@ test("native plugin fixture registers and invokes through the worker protocol", 
 	} finally {
 		if (child.exitCode === null) child.kill();
 	}
+});
+
+test("worker protocol cancels an active Flow node without blocking the message loop", async (): Promise<void> => {
+	const bootstrap: string = resolve("src/plugins/runtime/worker-bootstrap.js");
+	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [bootstrap, "--plugin-worker"], {
+		cwd: resolve("."),
+		stdio: ["pipe", "pipe", "pipe"],
+		windowsHide: true,
+	});
+	let stderr = "";
+	child.stderr.on("data", (chunk: Buffer): void => { stderr += chunk.toString("utf8"); });
+	try {
+		child.stdin.write(encodeWorkerMessage({
+			type: "initialize",
+			protocolVersion: 3,
+			entry: resolve(flowFixturePath, "index.js"),
+			context: { pluginId: "fixture", sessionId: "flow-test", capabilities: ["flowNodes"] },
+		}));
+		child.stdin.write(encodeWorkerMessage({ type: "invoke", id: "flow-call", kind: "flow_node", name: "flow-node:fixture/cancellable:0", args: { config: {}, inputs: {}, context: {} } }));
+		child.stdin.write(encodeWorkerMessage({ type: "cancel", id: "flow-call" }));
+		const events = await readWorkerEvents(child, 3);
+		assert.equal(events[0]?.type, "register.flowNode");
+		assert.equal(events[1]?.type, "ready");
+		assert.deepEqual(events[2], { type: "result", id: "flow-call", ok: false, error: "fixture cancelled" });
+	} finally {
+		child.kill();
+	}
+	assert.equal(stderr, "");
+});
+
+test("Flow node workers access host tools only through the reverse capability channel", async (): Promise<void> => {
+	const bootstrap: string = resolve("src/plugins/runtime/worker-bootstrap.js");
+	const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [bootstrap, "--plugin-worker"], {
+		cwd: resolve("."),
+		stdio: ["pipe", "pipe", "pipe"],
+		windowsHide: true,
+	});
+	let stderr = "";
+	child.stderr.on("data", (chunk: Buffer): void => { stderr += chunk.toString("utf8"); });
+	try {
+		child.stdin.write(encodeWorkerMessage({
+			type: "initialize",
+			protocolVersion: 3,
+			entry: resolve(flowFixturePath, "index.js"),
+			context: { pluginId: "fixture", sessionId: "flow-host-test", capabilities: ["flowNodes", "flowHostTools"] },
+		}));
+		const registrations = await readWorkerEvents(child, 2);
+		assert.equal(registrations[0]?.type, "register.flowNode");
+		assert.equal(registrations[1]?.type, "ready");
+		child.stdin.write(encodeWorkerMessage({ type: "invoke", id: "flow-host-call", kind: "flow_node", name: "flow-node:fixture/cancellable:0", args: { config: { hostTool: "fixture_read", hostArgs: { path: "a.txt" } }, inputs: {}, context: {} } }));
+		const [request] = await readWorkerEvents(child, 1);
+		assert.deepEqual(request, { type: "host.request", requestId: "host-flow-host-call-1", invocationId: "flow-host-call", method: "tool.call", params: { name: "fixture_read", args: { path: "a.txt" } } });
+		child.stdin.write(encodeWorkerMessage({ type: "host.response", requestId: String(request?.requestId), ok: true, value: { text: "safe result" } }));
+		const [result] = await readWorkerEvents(child, 1);
+		assert.deepEqual(result, { type: "result", id: "flow-host-call", ok: true, value: { output: { text: "safe result" } } });
+	} finally {
+		child.kill();
+	}
+	assert.equal(stderr, "");
 });

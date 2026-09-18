@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 21;
+const DB_SCHEMA_VERSION: number = 22;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -18,6 +18,9 @@ function resolveDatabasePath(): string {
 }
 
 function migrateSchema(db: DatabaseSync): void {
+	const previousSchemaVersion: number = Number(
+		(db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined)?.user_version ?? 0,
+	);
 	db.exec(`
 		PRAGMA journal_mode = WAL;
 		PRAGMA foreign_keys = ON;
@@ -310,61 +313,6 @@ function migrateSchema(db: DatabaseSync): void {
 		);
 		CREATE INDEX IF NOT EXISTS idx_subagent_edges_dependent
 			ON subagent_edges (graph_id, dependent_node_id);
-		CREATE TABLE IF NOT EXISTS conversation_flows (
-			flow_id TEXT PRIMARY KEY,
-			title TEXT NOT NULL,
-			workspace_id TEXT,
-			pinned INTEGER NOT NULL DEFAULT 0,
-			root_branch_id TEXT NOT NULL,
-			revision INTEGER NOT NULL DEFAULT 1,
-			active_branch_id TEXT,
-			active_request_id TEXT,
-			archived_at TEXT,
-			created_from_session_id TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_conversation_flows_workspace
-			ON conversation_flows (workspace_id, archived_at, updated_at DESC);
-		CREATE TABLE IF NOT EXISTS conversation_flow_branches (
-			branch_id TEXT PRIMARY KEY,
-			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL UNIQUE REFERENCES sessions(session_id) ON DELETE RESTRICT,
-			parent_branch_id TEXT REFERENCES conversation_flow_branches(branch_id) ON DELETE RESTRICT,
-			fork_request_id TEXT,
-			fork_role TEXT CHECK(fork_role IS NULL OR fork_role IN ('user', 'assistant')),
-			seed_request_id TEXT,
-			head_node_id TEXT,
-			pending_regenerate INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_conversation_flow_branches_flow
-			ON conversation_flow_branches (flow_id, created_at, branch_id);
-		CREATE TABLE IF NOT EXISTS conversation_flow_nodes (
-			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
-			node_id TEXT NOT NULL,
-			branch_id TEXT NOT NULL REFERENCES conversation_flow_branches(branch_id) ON DELETE CASCADE,
-			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE RESTRICT,
-			request_id TEXT NOT NULL,
-			role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-			parent_node_id TEXT,
-			status TEXT NOT NULL,
-			content_preview TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(flow_id, node_id)
-		);
-		CREATE INDEX IF NOT EXISTS idx_conversation_flow_nodes_branch
-			ON conversation_flow_nodes (branch_id, created_at, node_id);
-		CREATE TABLE IF NOT EXISTS conversation_flow_layout (
-			flow_id TEXT NOT NULL REFERENCES conversation_flows(flow_id) ON DELETE CASCADE,
-			node_id TEXT NOT NULL,
-			x REAL NOT NULL,
-			y REAL NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(flow_id, node_id)
-		);
 		CREATE TABLE IF NOT EXISTS flow_documents (
 			flow_id TEXT PRIMARY KEY,
 			title TEXT NOT NULL,
@@ -384,13 +332,18 @@ function migrateSchema(db: DatabaseSync): void {
 		CREATE TABLE IF NOT EXISTS flow_nodes (
 			node_id TEXT PRIMARY KEY,
 			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
-			type TEXT NOT NULL CHECK(type IN ('prompt', 'text', 'template', 'merge', 'json_extract', 'condition', 'file_input', 'llm', 'tool', 'command', 'output', 'note')),
+			type_id TEXT NOT NULL,
+			plugin_id TEXT NOT NULL,
+			plugin_version TEXT NOT NULL,
+			plugin_fingerprint TEXT NOT NULL,
+			config_version INTEGER NOT NULL,
 			title TEXT NOT NULL,
 			x REAL NOT NULL,
 			y REAL NOT NULL,
 			width REAL NOT NULL,
 			height REAL NOT NULL,
 			config_json TEXT NOT NULL,
+			ports_json TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'idle',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
@@ -420,6 +373,10 @@ function migrateSchema(db: DatabaseSync): void {
 		CREATE TABLE IF NOT EXISTS flow_node_runs (
 			run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE,
 			node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+			type_id TEXT NOT NULL,
+			plugin_version TEXT NOT NULL,
+			plugin_fingerprint TEXT NOT NULL,
+			config_version INTEGER NOT NULL,
 			status TEXT NOT NULL,
 			input_fingerprint TEXT,
 			output_json TEXT,
@@ -429,6 +386,17 @@ function migrateSchema(db: DatabaseSync): void {
 			PRIMARY KEY(run_id, node_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_flow_node_runs_cache ON flow_node_runs (node_id, input_fingerprint, status);
+		CREATE TABLE IF NOT EXISTS flow_operations (
+			mutation_id TEXT PRIMARY KEY,
+			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+			client_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			graph_revision INTEGER NOT NULL,
+			layout_revision INTEGER NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_flow_operations_flow ON flow_operations(flow_id, created_at, mutation_id);
 		CREATE TABLE IF NOT EXISTS flow_approvals (
 			approval_id TEXT PRIMARY KEY,
 			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
@@ -592,48 +560,50 @@ function migrateSchema(db: DatabaseSync): void {
 	if (!flowDocumentColumns.has("approval_mode")) db.exec("ALTER TABLE flow_documents ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'manual'");
 	db.exec("UPDATE flow_documents SET graph_revision = revision WHERE graph_revision = 1 AND revision <> 1");
 	db.exec("UPDATE flow_documents SET layout_revision = revision WHERE layout_revision = 1 AND revision <> 1");
-	const flowNodesSql = String((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'flow_nodes'").get() as { sql?: string } | undefined)?.sql ?? "");
-	if (!flowNodesSql.includes("'command'")) {
+	const flowNodeColumns = new Set((db.prepare("PRAGMA table_info(flow_nodes)").all() as Array<{ name: string }>).map((column): string => column.name));
+	if (previousSchemaVersion < DB_SCHEMA_VERSION || !flowNodeColumns.has("type_id") || !flowNodeColumns.has("plugin_fingerprint")) {
+		// Flow is still pre-release. Reset the old closed node model rather than
+		// retaining a permanent compatibility layer for its fixed type enum.
+		const legacyFlowBranchSessionIds: string[] = db.prepare(
+			"SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'conversation_flow_branches'",
+		).get() === undefined
+			? []
+			: (db.prepare("SELECT session_id FROM conversation_flow_branches").all() as Array<{ session_id: string }>).map(
+				(row): string => row.session_id,
+			);
 		db.exec("PRAGMA foreign_keys = OFF");
-		db.exec("PRAGMA legacy_alter_table = ON");
 		db.exec(`
-			DROP INDEX IF EXISTS idx_flow_edges_flow;
-			DROP INDEX IF EXISTS idx_flow_nodes_flow;
-			ALTER TABLE flow_edges RENAME TO flow_edges_legacy_v20;
-			ALTER TABLE flow_nodes RENAME TO flow_nodes_legacy_v20;
-			CREATE TABLE flow_nodes (
-				node_id TEXT PRIMARY KEY,
-				flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
-				type TEXT NOT NULL CHECK(type IN ('prompt', 'text', 'template', 'merge', 'json_extract', 'condition', 'file_input', 'llm', 'tool', 'command', 'output', 'note')),
-				title TEXT NOT NULL,
-				x REAL NOT NULL,
-				y REAL NOT NULL,
-				width REAL NOT NULL,
-				height REAL NOT NULL,
-				config_json TEXT NOT NULL,
-				status TEXT NOT NULL DEFAULT 'idle',
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			);
-			INSERT INTO flow_nodes SELECT * FROM flow_nodes_legacy_v20;
+			DROP TABLE IF EXISTS flow_node_run_events;
+			DROP TABLE IF EXISTS flow_approvals;
+			DROP TABLE IF EXISTS flow_node_runs;
+			DROP TABLE IF EXISTS flow_runs;
+			DROP TABLE IF EXISTS flow_operations;
+			DROP TABLE IF EXISTS flow_edges;
+			DROP TABLE IF EXISTS flow_nodes;
+			DROP TABLE IF EXISTS flow_documents;
+			DROP TABLE IF EXISTS conversation_flow_layout;
+			DROP TABLE IF EXISTS conversation_flow_nodes;
+			DROP TABLE IF EXISTS conversation_flow_branches;
+			DROP TABLE IF EXISTS conversation_flows;
+			CREATE TABLE flow_documents (flow_id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, pinned INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 1, graph_revision INTEGER NOT NULL DEFAULT 1, layout_revision INTEGER NOT NULL DEFAULT 1, approval_mode TEXT NOT NULL DEFAULT 'manual', viewport_json TEXT NOT NULL, archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+			CREATE INDEX idx_flow_documents_workspace ON flow_documents (workspace_id, archived_at, updated_at DESC);
+			CREATE TABLE flow_nodes (node_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, type_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version TEXT NOT NULL, plugin_fingerprint TEXT NOT NULL, config_version INTEGER NOT NULL, title TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL, config_json TEXT NOT NULL, ports_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 			CREATE INDEX idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
-			CREATE TABLE flow_edges (
-				edge_id TEXT PRIMARY KEY,
-				flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
-				source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
-				source_port TEXT NOT NULL,
-				target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
-				target_port TEXT NOT NULL,
-				data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'artifact')),
-				UNIQUE(flow_id, target_node_id, target_port)
-			);
-			INSERT INTO flow_edges SELECT * FROM flow_edges_legacy_v20;
+			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'artifact')), UNIQUE(flow_id, target_node_id, target_port));
 			CREATE INDEX idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
-			DROP TABLE flow_edges_legacy_v20;
-			DROP TABLE flow_nodes_legacy_v20;
+			CREATE TABLE flow_runs (run_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, revision INTEGER NOT NULL, status TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT);
+			CREATE INDEX idx_flow_runs_flow ON flow_runs (flow_id, started_at DESC);
+			CREATE TABLE flow_node_runs (run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, type_id TEXT NOT NULL, plugin_version TEXT NOT NULL, plugin_fingerprint TEXT NOT NULL, config_version INTEGER NOT NULL, status TEXT NOT NULL, input_fingerprint TEXT, output_json TEXT, error TEXT, started_at TEXT, finished_at TEXT, PRIMARY KEY(run_id, node_id));
+			CREATE INDEX idx_flow_node_runs_cache ON flow_node_runs (node_id, input_fingerprint, status);
+			CREATE TABLE flow_approvals (approval_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, tool_name TEXT NOT NULL, reason TEXT NOT NULL, pending_json TEXT NOT NULL, status TEXT NOT NULL, required_consent_json TEXT, created_at TEXT NOT NULL, resolved_at TEXT);
+			CREATE INDEX idx_flow_approvals_run ON flow_approvals(flow_id, run_id, status, created_at);
+			CREATE TABLE flow_node_run_events (run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, sequence INTEGER NOT NULL, event_type TEXT NOT NULL, payload_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(run_id, node_id, sequence));
+			CREATE TABLE flow_operations (mutation_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, client_id TEXT NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, graph_revision INTEGER NOT NULL, layout_revision INTEGER NOT NULL, created_at TEXT NOT NULL);
+			CREATE INDEX idx_flow_operations_flow ON flow_operations(flow_id, created_at, mutation_id);
 		`);
-		db.exec("PRAGMA legacy_alter_table = OFF");
 		db.exec("PRAGMA foreign_keys = ON");
+		const deleteLegacySession = db.prepare("DELETE FROM sessions WHERE session_id = ?");
+		for (const sessionId of legacyFlowBranchSessionIds) deleteLegacySession.run(sessionId);
 	}
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
@@ -652,25 +622,6 @@ function migrateSchema(db: DatabaseSync): void {
 	if (!subagentColumnNames.has("queue_reason")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queue_reason TEXT");
 	if (!subagentColumnNames.has("queued_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN queued_at TEXT");
 	if (!subagentColumnNames.has("next_retry_at")) db.exec("ALTER TABLE subagent_nodes ADD COLUMN next_retry_at TEXT");
-	const flowBranchColumnNames: Set<string> = new Set(
-		(db.prepare("PRAGMA table_info(conversation_flow_branches)").all() as Array<{ name: string }>).map(
-			(column): string => column.name,
-		),
-	);
-	const flowColumnNames: Set<string> = new Set(
-		(db.prepare("PRAGMA table_info(conversation_flows)").all() as Array<{ name: string }>).map(
-			(column): string => column.name,
-		),
-	);
-	if (!flowColumnNames.has("pinned")) db.exec("ALTER TABLE conversation_flows ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0");
-	if (!flowBranchColumnNames.has("head_node_id")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN head_node_id TEXT");
-	if (!flowBranchColumnNames.has("pending_regenerate")) db.exec("ALTER TABLE conversation_flow_branches ADD COLUMN pending_regenerate INTEGER NOT NULL DEFAULT 0");
-	const flowNodeColumnNames: Set<string> = new Set(
-		(db.prepare("PRAGMA table_info(conversation_flow_nodes)").all() as Array<{ name: string }>).map(
-			(column): string => column.name,
-		),
-	);
-	if (!flowNodeColumnNames.has("content_preview")) db.exec("ALTER TABLE conversation_flow_nodes ADD COLUMN content_preview TEXT NOT NULL DEFAULT ''");
 	runSessionTransaction(db, (): void => {
 		const observationColumns = db.prepare("PRAGMA table_info(computer_observations)").all();
 		if (!observationColumns.some((column): boolean => column.name === "groundings_json")) {
@@ -682,12 +633,6 @@ function migrateSchema(db: DatabaseSync): void {
 			PRAGMA user_version = ${DB_SCHEMA_VERSION};
 		`);
 	});
-	// 运行锁只描述当前后端进程中的真实执行，进程重启后不能继续占用 Flow
-	db.exec(`
-		UPDATE conversation_flows
-		SET active_branch_id = NULL, active_request_id = NULL
-		WHERE active_request_id IS NOT NULL;
-	`);
 }
 
 async function openDatabase(): Promise<SessionDatabaseState> {

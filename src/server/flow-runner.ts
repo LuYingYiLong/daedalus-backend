@@ -25,6 +25,12 @@ import {
 	updateFlowNodeRunDocument,
 	updateFlowRunDocument,
 } from "../session/flow-document-store.js";
+import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition } from "./flow-node-registry.js";
+import {
+	executeRegisteredFlowNode,
+	registerFlowNodeExecutor,
+	type FlowNodeExecutionContext,
+} from "./flow-node-executor-registry.js";
 
 type PortOutputs = Record<string, unknown>;
 type NodeInputs = Record<string, unknown>;
@@ -53,7 +59,9 @@ export async function stopFlowRunDocument(flowId: string, runId: string): Promis
 
 function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readonly FlowDocumentEdge[]): string {
 	return createHash("sha256").update(JSON.stringify({
-		type: node.type,
+		typeId: node.typeId,
+		pluginVersion: node.pluginVersion,
+		pluginFingerprint: node.pluginFingerprint,
 		config: node.config,
 		inputs,
 		ports: inbound.map((edge): string[] => [edge.sourcePort, edge.targetPort, edge.dataType]),
@@ -190,7 +198,7 @@ async function executeCommandNode(params: { node: FlowDocumentNode; inputs: Node
 		...(params.node.config.env !== null && typeof params.node.config.env === "object" ? { env: params.node.config.env } : {}),
 		...(typeof params.inputs.stdin === "string" ? { stdin: params.inputs.stdin } : {}),
 	};
-	const proxyNode: FlowDocumentNode = { ...params.node, type: "tool", config: { toolName: "mcp_terminal_run_command", args, bindings: [] } };
+	const proxyNode: FlowDocumentNode = { ...params.node, typeId: "builtin/tool", pluginId: "builtin", pluginVersion: "1.0.0", pluginFingerprint: "builtin@1.0.0", configVersion: 1, config: { toolName: "mcp_terminal_run_command", args, bindings: [] } };
 	const output = await executeToolNode({ ...params, node: proxyNode });
 	const record = output.result !== null && typeof output.result === "object" ? output.result as Record<string, unknown> : {};
 	return { result: output.result, stdout: typeof record.stdout === "string" ? record.stdout : output.text, stderr: typeof record.stderr === "string" ? record.stderr : "" };
@@ -214,15 +222,16 @@ async function readFileNode(node: FlowDocumentNode, flow: FlowDocument): Promise
 	return { output: node.config.mode === "json" ? JSON.parse(content) as unknown : content };
 }
 
-async function executeNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; gateway: ApprovalGateway; mcpHost: McpHost; signal: AbortSignal }): Promise<PortOutputs> {
-	const { node, inputs } = params;
-	if (node.type === "prompt" || node.type === "text") return { output: typeof node.config.text === "string" ? node.config.text : "" };
-	if (node.type === "template") {
+function registerBuiltinExecutors(): void {
+	const register = (typeId: string, execute: (context: FlowNodeExecutionContext) => Promise<PortOutputs>): void => registerFlowNodeExecutor(typeId, "builtin", execute);
+	register("builtin/prompt", async ({ node }): Promise<PortOutputs> => ({ output: typeof node.config.text === "string" ? node.config.text : "" }));
+	register("builtin/text", async ({ node }): Promise<PortOutputs> => ({ output: typeof node.config.text === "string" ? node.config.text : "" }));
+	register("builtin/template", async ({ node, inputs }): Promise<PortOutputs> => {
 		let rendered = typeof node.config.template === "string" ? node.config.template : "";
 		for (const [key, value] of Object.entries(inputs)) rendered = rendered.replaceAll(`{{${key}}}`, asText(value));
 		return { output: rendered };
-	}
-	if (node.type === "merge") {
+	});
+	register("builtin/merge", async ({ node, inputs }): Promise<PortOutputs> => {
 		const configuredOrder = Array.isArray(node.config.inputs)
 			? node.config.inputs.flatMap((candidate): string[] => candidate !== null && typeof candidate === "object" && typeof (candidate as Record<string, unknown>).id === "string" ? [String((candidate as Record<string, unknown>).id)] : [])
 			: [];
@@ -231,19 +240,20 @@ async function executeNode(params: { node: FlowDocumentNode; inputs: NodeInputs;
 		if (node.config.mode === "array") return { output: entries.map(([, value]): unknown => value) };
 		if (node.config.mode === "object") return { output: Object.fromEntries(entries) };
 		return { output: entries.map(([, value]): string => asText(value)).join(typeof node.config.separator === "string" ? node.config.separator : "\n") };
-	}
-	if (node.type === "json_extract") {
+	});
+	register("builtin/json-extract", async ({ node, inputs }): Promise<PortOutputs> => {
 		const value = typeof inputs.input === "string" ? JSON.parse(inputs.input) as unknown : inputs.input;
 		return { output: readJsonPointer(value, typeof node.config.pointer === "string" ? node.config.pointer : "/") };
-	}
-	if (node.type === "condition") return { [compareCondition(node, inputs.input) ? "true" : "false"]: inputs.input };
-	if (node.type === "file_input") return readFileNode(node, params.flow);
-	if (node.type === "llm") return { output: await runLlm(node, inputs, params.signal) };
-	if (node.type === "tool") return executeToolNode(params);
-	if (node.type === "command") return executeCommandNode(params);
-	if (node.type === "output") return { result: inputs.input };
-	return {};
+	});
+	register("builtin/condition", async ({ node, inputs }): Promise<PortOutputs> => ({ [compareCondition(node, inputs.input) ? "true" : "false"]: inputs.input }));
+	register("builtin/file-input", async ({ node, flow }): Promise<PortOutputs> => readFileNode(node, flow));
+	register("builtin/llm", async ({ node, inputs, signal }): Promise<PortOutputs> => ({ output: await runLlm(node, inputs, signal) }));
+	register("builtin/tool", executeToolNode);
+	register("builtin/command", executeCommandNode);
+	register("builtin/output", async ({ inputs }): Promise<PortOutputs> => ({ result: inputs.input }));
 }
+
+registerBuiltinExecutors();
 
 function forceWithDescendants(forceNodeIds: readonly string[], edges: readonly FlowDocumentEdge[]): Set<string> {
 	const result = new Set(forceNodeIds);
@@ -258,8 +268,10 @@ function forceWithDescendants(forceNodeIds: readonly string[], edges: readonly F
 }
 
 function canUseCache(node: FlowDocumentNode, flow: FlowDocument): boolean {
-	if (node.type === "command") return false;
-	if (node.type !== "tool") return node.type !== "note";
+	const definition = getFlowNodeTypeDefinition(node.typeId);
+	if (definition.cachePolicy === "never") return false;
+	if (definition.cachePolicy === "always") return true;
+	if (node.typeId !== "builtin/tool") return false;
 	const toolName = typeof node.config.toolName === "string" ? node.config.toolName : "";
 	const risk = createWorkspaceToolCatalog({ workspaceId: flow.workspaceId ?? undefined, clientType: "studio" }).getPolicy(toolName)?.risk;
 	return risk === "read" || risk === "verify";
@@ -278,7 +290,15 @@ export async function startFlowRunDocument(params: {
 	if (activeRunId !== undefined && activeRunId !== params.runId) throw Object.assign(new Error("Another Flow run is active."), { code: "flow_busy", activeRunId });
 	const graph = await readFlowGraphForScheduler(params.flowId);
 	if (graph.flow.graphRevision !== params.revision) throw Object.assign(new Error("The Flow changed before execution started."), { code: "flow_revision_conflict" });
-	const executable = graph.nodes.filter((node): boolean => node.type !== "note");
+	const unavailableTypes = [...new Set(graph.nodes.filter((node): boolean => {
+		const definition = findFlowNodeTypeDefinition(node.typeId);
+		return definition === undefined
+			|| definition.pluginVersion !== node.pluginVersion
+			|| definition.pluginFingerprint !== node.pluginFingerprint
+			|| definition.configVersion !== node.configVersion;
+	}).map((node): string => node.typeId))];
+	if (unavailableTypes.length > 0) throw Object.assign(new Error(`Flow contains unavailable node types: ${unavailableTypes.join(", ")}.`), { code: "flow_node_type_unavailable", typeIds: unavailableTypes });
+	const executable = graph.nodes.filter((node): boolean => getFlowNodeTypeDefinition(node.typeId).executable);
 	const run = params.runId === undefined ? await createFlowRunDocument(params.flowId, params.revision, graph.nodes.map((node): string => node.nodeId)) : await getFlowRunDocument(params.flowId, params.runId);
 	const key = `${params.flowId}:${run.runId}`;
 	const controller = activeControllers.get(key) ?? new AbortController();
@@ -298,7 +318,7 @@ export async function startFlowRunDocument(params: {
 		else if (state.status === "waiting") waiting.add(state.nodeId);
 	}
 	const force = forceWithDescendants(params.forceNodeIds ?? [], graph.edges);
-	for (const note of graph.nodes.filter((node): boolean => node.type === "note")) {
+	for (const note of graph.nodes.filter((node): boolean => !getFlowNodeTypeDefinition(node.typeId).executable)) {
 		if (!skipped.has(note.nodeId)) await updateFlowNodeRunDocument(params.flowId, run.runId, note.nodeId, { status: "skipped", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
 		skipped.add(note.nodeId);
 	}
@@ -325,7 +345,7 @@ export async function startFlowRunDocument(params: {
 					await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "running", inputFingerprint: fingerprintKey, startedAt });
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 					try {
-						const output = await executeNode({ node, inputs: collected.inputs, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal });
+						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal });
 						outputs.set(node.nodeId, output);
 						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "completed", inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
 					} catch (nodeError: unknown) {

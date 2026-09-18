@@ -16,8 +16,8 @@ export async function createSessionBrowserSnapshot(session: ClientSession, mcpHo
 	const allSessions: SessionMetadata[] = await listSessions();
 	const allArchivedSessions: SessionMetadata[] = await listArchivedSessions();
 	hydrateWorkspacesFromSessionMetadata([...allSessions, ...allArchivedSessions]);
-	const sessions: SessionMetadata[] = allSessions.filter((candidate: SessionMetadata): boolean => candidate.surface !== "flow_branch");
-	const archivedSessions: SessionMetadata[] = allArchivedSessions.filter((candidate: SessionMetadata): boolean => candidate.surface !== "flow_branch");
+	const sessions: SessionMetadata[] = allSessions;
+	const archivedSessions: SessionMetadata[] = allArchivedSessions;
 
 	return {
 		sessions,

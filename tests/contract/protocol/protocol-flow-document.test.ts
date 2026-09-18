@@ -6,11 +6,8 @@ test("Flow graph requests validate", (): void => {
 	const methods = [
 		{ method: "flow.create", params: { title: "Graph", workspaceId: "workspace-a" } },
 		{ method: "flow.get", params: { flowId: "flow-a" } },
-		{ method: "flow.node.create", params: { flowId: "flow-a", revision: 1, type: "prompt", x: 0, y: 0, config: { text: "hello" } } },
 		{ method: "flow.node.types.list", params: { flowId: "flow-a" } },
-		{ method: "flow.node.createConnected", params: { flowId: "flow-a", revision: 1, type: "template", x: 240, y: 0, connection: { direction: "from_existing", existingNodeId: "node-a", existingPort: "output", newPort: "input", dataType: "text" } } },
-		{ method: "flow.node.update", params: { flowId: "flow-a", nodeId: "node-a", revision: 1, patch: { config: { text: "updated" } } } },
-		{ method: "flow.edge.create", params: { flowId: "flow-a", revision: 2, sourceNodeId: "node-a", sourcePort: "text", targetNodeId: "node-b", targetPort: "prompt", dataType: "text" } },
+		{ method: "flow.patch.commit", params: { flowId: "flow-a", clientId: "studio-a", operations: [{ mutationId: "mutation-a", baseGraphRevision: 1, kind: "node.create", payload: { nodeId: "node-a", typeId: "builtin/prompt", x: 0, y: 0, config: { text: "hello" } } }] } },
 		{ method: "flow.run.start", params: { flowId: "flow-a", revision: 3 } },
 		{ method: "flow.run.stop", params: { flowId: "flow-a", runId: "run-a" } },
 		{ method: "flow.settings.update", params: { flowId: "flow-a", revision: 3, approvalMode: "auto-safe" } },
@@ -26,9 +23,11 @@ test("Flow graph requests validate", (): void => {
 	}
 });
 
-test("Flow graph rejects unsupported node types and malformed edges", (): void => {
-	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "request-1", method: "flow.node.create", params: { flowId: "flow-a", revision: 1, type: "script", x: 0, y: 0 } }).success, false);
-	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "request-2", method: "flow.edge.create", params: { flowId: "flow-a", revision: 1, sourceNodeId: "node-a", sourcePort: "text", targetNodeId: "node-b", targetPort: "prompt", dataType: "binary" } }).success, false);
+test("Flow graph accepts namespaced node IDs only through batched patches", (): void => {
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "request-1", method: "flow.patch.commit", params: { flowId: "flow-a", clientId: "studio-a", operations: [{ mutationId: "mutation-a", kind: "node.create", payload: { nodeId: "node-a", typeId: "script", x: 0, y: 0 } }] } }).success, false);
+	for (const method of ["flow.node.create", "flow.node.createConnected", "flow.node.update", "flow.node.delete", "flow.edge.create", "flow.edge.delete", "flow.viewport.update"]) {
+		assert.equal(clientRequestSchema.safeParse({ type: "request", id: `removed-${method}`, method, params: {} }).success, false, method);
+	}
 });
 
 

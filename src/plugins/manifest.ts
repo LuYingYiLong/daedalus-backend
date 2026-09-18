@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { z } from "zod";
 import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
 import { parseHarnessBundlePatch } from "./harness/patch-parser.js";
 import { pluginP2ManifestSchema, type PluginP2Manifest } from "./extensions/protocol.js";
+import { flowNodeTypeDefinitionSchema } from "../protocol/schema.js";
+
+const nativeFlowNodeDeclarationSchema = flowNodeTypeDefinitionSchema.omit({ pluginFingerprint: true }).extend({
+	handlerName: z.string().trim().min(1).max(160),
+});
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
 const MAX_PATCH_BYTES: number = 512 * 1024;
@@ -290,7 +296,21 @@ export function readNativePluginDeclaration(manifest: PluginPackageManifest): Na
 	if (apiVersion !== 1 || typeof entry !== "string" || !entry.startsWith(".") || !Array.isArray(capabilities)) return undefined;
 	const normalized: string[] = [...new Set(capabilities.filter((item): item is string => typeof item === "string" && (PLUGIN_CAPABILITIES as readonly string[]).includes(item)))];
 	if (normalized.length !== capabilities.length || normalized.length === 0) return undefined;
-	return { apiVersion: 1, entry, capabilities: normalized as NativePluginDeclaration["capabilities"] };
+	const declaredFlowNodes = value.flowNodes;
+	const flowNodes = declaredFlowNodes === undefined ? [] : z.array(nativeFlowNodeDeclarationSchema).max(128).parse(declaredFlowNodes);
+	if (normalized.includes("flowNodes") !== (flowNodes.length > 0)) {
+		throw Object.assign(new Error("The flowNodes capability and static flowNodes declarations must be provided together."), { code: "plugin_flow_nodes_manifest_invalid" });
+	}
+	for (const node of flowNodes) {
+		if (!node.typeId.startsWith(`${node.pluginId}/`)) throw Object.assign(new Error(`Flow node namespace does not match pluginId: ${node.typeId}.`), { code: "plugin_flow_nodes_manifest_invalid" });
+		if (node.ui.kind === "sandbox" && (!node.ui.entry.startsWith("./") || node.ui.entry.includes("\\"))) throw Object.assign(new Error(`Flow node UI entry must be a package-relative path: ${node.typeId}.`), { code: "plugin_flow_nodes_manifest_invalid" });
+	}
+	return {
+		apiVersion: 1,
+		entry,
+		capabilities: normalized as NativePluginDeclaration["capabilities"],
+		...(flowNodes.length === 0 ? {} : { flowNodes }),
+	};
 }
 
 export function readPluginP2Declaration(manifest: PluginPackageManifest): PluginP2Manifest | undefined {

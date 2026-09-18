@@ -213,7 +213,6 @@ import { runWorktreeSetup, skipPendingWorktreeSetup } from "../workspace/local-e
 import { cancelWorktreeOperation, getWorktreeOperation, runTrackedWorktreeOperation } from "../workspace/worktree-operations.js";
 import { executeWorktreeHandoff, previewWorktreeHandoff } from "../workspace/worktree-handoff.js";
 import { readLocalEnvironmentConfig } from "../workspace/local-environment.js";
-import { assertSessionCanUseStandaloneMutation } from "../session/conversation-flow-store.js";
 
 function sessionRpcError(error: unknown, fallbackCode: string, fallbackMessage: string): { code: string; message: string } {
 	const candidate = error as Error & { code?: string };
@@ -835,7 +834,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			let createdWorktree: Awaited<ReturnType<typeof createManagedWorktree>> | undefined;
 			let workspaceBindingCommitted: boolean = false;
 			try {
-				await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 				if (getClientConnection(socket)?.clientType !== "studio") {
 					throw new WorktreeOperationError("worktree_studio_only", "Managed worktrees are only available to Daedalus Studio.");
 				}
@@ -1094,7 +1092,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 		case "session.fork": {
 			try {
-				await assertSessionCanUseStandaloneMutation(request.params.sourceSessionId);
 				if (getClientConnection(socket)?.clientType !== "studio") {
 					throw Object.assign(new Error("Session forking is only available to Daedalus Studio."), {
 						code: "session_fork_studio_only"
@@ -1555,7 +1552,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 
 		case "session.archive": {
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			if (session.sessionId === request.params.sessionId) {
 				await waitForFullSessionLoad(session);
 				await waitForSessionEventPersistence(session);
@@ -1585,15 +1581,12 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				id: request.id,
 				ok: true,
 				result: {
-					archivedSessions: (await listArchivedSessions()).filter(
-						(candidate: SessionMetadata): boolean => candidate.surface !== "flow_branch"
-					)
+					archivedSessions: await listArchivedSessions()
 				}
 			});
 			break;
 
 		case "session.archived.restore": {
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			const metadata: SessionMetadata = await restoreArchivedSession(request.params.sessionId);
 			sendJson(socket, {
 				type: "response",
@@ -1605,7 +1598,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		}
 
 		case "session.archived.delete":
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			if ((await getStoredSessionMetadata(request.params.sessionId)).worktree !== undefined) {
 				sendJson(socket, {
 					type: "response",
@@ -1628,7 +1620,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 
 		case "session.export": {
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			if (getClientConnection(socket)?.clientType !== "studio") {
 				sendJson(socket, {
 					type: "response",
@@ -1828,7 +1819,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 		}
 
 		case "session.delete":
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			if ((await getStoredSessionMetadata(request.params.sessionId)).worktree !== undefined) {
 				sendJson(socket, {
 					type: "response",
@@ -1863,7 +1853,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 			break;
 
 		case "session.rename": {
-			await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 			const metadata: SessionMetadata = await renameSession(request.params.sessionId, request.params.title);
 			if (session.sessionId === request.params.sessionId) {
 				session.sessionTitle = metadata.title;
@@ -1932,7 +1921,6 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 		case "session.workspace.move": {
 			try {
-				await assertSessionCanUseStandaloneMutation(request.params.sessionId);
 				if (getClientConnection(socket)?.clientType !== "studio") {
 					throw createSessionWorkspaceMoveError(
 						"session_workspace_studio_only",

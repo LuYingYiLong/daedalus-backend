@@ -1,6 +1,11 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatCompletionMessageToolCall } from "openai/resources/chat/completions";
 import type { ToolMapping } from "../../tools/tool-mapping.js";
-import type { PluginCommandRegistration, PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
+import AjvModule from "ajv";
+import type { Ajv as AjvInstance } from "ajv";
+import { registerFlowNodeDefinition, unregisterFlowNodeDefinition } from "../../server/flow-node-registry.js";
+import { registerFlowNodeExecutor, unregisterPluginFlowNodeExecutors } from "../../server/flow-node-executor-registry.js";
+import type { PluginCommandRegistration, PluginFlowNodeRegistration, PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
 
 export type PluginRegistryNamespace = "plugin" | "harness";
 export type RegisteredPluginTool = PluginToolRegistration & { llmToolName: string; pluginId: string; namespace: PluginRegistryNamespace; mapping: ToolMapping };
@@ -17,6 +22,7 @@ export type RegisteredPluginMcpTool = {
 	risk: PluginToolRisk;
 };
 export type RegisteredPluginCommand = PluginCommandRegistration & { pluginId: string; namespace: PluginRegistryNamespace; commandId: string };
+export type RegisteredPluginFlowNode = PluginFlowNodeRegistration & { ownerPluginId: string };
 
 const tools = new Map<string, RegisteredPluginTool>();
 const definitions = new Map<string, ChatCompletionTool>();
@@ -24,6 +30,9 @@ const skills = new Map<string, RegisteredPluginSkill>();
 const hooks = new Map<string, RegisteredPluginHook[]>();
 const mcps = new Map<string, RegisteredPluginMcp>();
 const commands = new Map<string, RegisteredPluginCommand>();
+const flowNodes = new Map<string, RegisteredPluginFlowNode>();
+const Ajv = AjvModule as unknown as new (options?: Record<string, unknown>) => AjvInstance;
+const ajv = new Ajv({ allErrors: true, strict: false });
 
 function toolName(pluginId: string, name: string, namespace: PluginRegistryNamespace = "plugin"): string {
 	return `mcp_${namespace}_${pluginId.replace(/[^a-z0-9]+/giu, "_").slice(0, 24)}_${name.replace(/[^a-z0-9]+/giu, "_").slice(0, 32)}`;
@@ -38,6 +47,70 @@ export function clearPluginRegistrations(pluginId: string): void {
 	}
 	for (const [serverId, entry] of mcps) if (entry.pluginId === pluginId) mcps.delete(serverId);
 	for (const [id, entry] of commands) if (entry.pluginId === pluginId) commands.delete(id);
+	for (const [typeId, entry] of flowNodes) if (entry.ownerPluginId === pluginId) { flowNodes.delete(typeId); unregisterFlowNodeDefinition(typeId); }
+	unregisterPluginFlowNodeExecutors(pluginId);
+}
+
+export function registerPluginFlowNode(pluginId: string, pluginFingerprint: string, registration: PluginFlowNodeRegistration): RegisteredPluginFlowNode {
+	if (registration.pluginId !== pluginId) throw Object.assign(new Error("Plugin Flow node owner does not match the installed plugin."), { code: "plugin_registry_namespace_mismatch" });
+	if (!registration.typeId.startsWith(`${registration.pluginId}/`)) throw Object.assign(new Error("Plugin Flow node uses a different namespace."), { code: "plugin_registry_namespace_mismatch" });
+	if (flowNodes.has(registration.typeId)) throw Object.assign(new Error(`Plugin Flow node is already registered: ${registration.typeId}.`), { code: "plugin_registry_conflict" });
+	const validate = ajv.compile(registration.configSchema);
+	registerFlowNodeDefinition({
+		...registration,
+		pluginFingerprint,
+		parseConfig(value): Record<string, unknown> {
+			const candidate = structuredClone(value);
+			if (!validate(candidate)) throw Object.assign(new Error(`Invalid ${registration.typeId} configuration: ${ajv.errorsText(validate.errors)}`), { code: "flow_node_config_invalid" });
+			return candidate;
+		},
+	});
+	registerFlowNodeExecutor(registration.typeId, pluginId, async ({ node, inputs, flow, runId, gateway, mcpHost, signal }) => {
+		if (signal.aborted) throw new Error("Flow run cancelled.");
+		const { ensurePluginRuntime, invokePlugin } = await import("./manager.js");
+		const sessionId = `flow:${flow.flowId}`;
+		// Flow executors do not receive direct workspace filesystem access. File,
+		// tool, command, network and secret access must cross an audited host proxy.
+		await ensurePluginRuntime(pluginId, { sessionId, ...(flow.workspaceId === null ? {} : { workspaceId: flow.workspaceId }) });
+		const toolContext = { workspaceId: flow.workspaceId ?? undefined, requestId: runId, sessionId, clientType: "studio" as const, hookContext: { model: "flow", approvalMode: flow.approvalMode, chatMode: "agent" as const } };
+		const value = await invokePlugin(
+			pluginId,
+			sessionId,
+			"flow_node",
+			registration.handlerName,
+			{ config: node.config, inputs, context: { flowId: flow.flowId, nodeId: node.nodeId, runId, workspaceId: flow.workspaceId } },
+			undefined,
+			signal,
+			async (request): Promise<unknown> => {
+				const [{ createWorkspaceToolCatalog }, { dispatchToolCalls }] = await Promise.all([
+					import("../../tools/tool-catalog.js"),
+					import("../../tools/tool-dispatcher.js"),
+				]);
+				const toolName = request.params.name;
+				const catalog = createWorkspaceToolCatalog(toolContext);
+				if (catalog.getEntry(toolName) === undefined) throw Object.assign(new Error(`Tool is unavailable in this Flow workspace: ${toolName}`), { code: "plugin_flow_host_tool_unavailable" });
+				const call: ChatCompletionMessageToolCall = { id: `flow-plugin-${runId}-${node.nodeId}-${request.requestId}`, type: "function", function: { name: toolName, arguments: JSON.stringify(request.params.args) } };
+				const [result] = await dispatchToolCalls(mcpHost, [call], 1, gateway, undefined, undefined, toolContext, signal);
+				const content = result?.content ?? "";
+				if (typeof content !== "string") return content;
+				try { return JSON.parse(content) as unknown; } catch { return content; }
+			},
+		);
+		if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Plugin Flow node returned a non-object output.");
+		const outputs = value as Record<string, unknown>;
+		const outputPorts = new Map(registration.ports.filter((port): boolean => port.direction === "output").map((port) => [port.id, port]));
+		for (const [portId, outputValue] of Object.entries(outputs)) {
+			const port = outputPorts.get(portId);
+			if (port === undefined) throw Object.assign(new Error(`Plugin Flow node returned an undeclared output port: ${portId}.`), { code: "plugin_flow_node_output_invalid" });
+			if (!port.dataTypes.some((dataType): boolean => dataType === "json" || dataType === "text" && typeof outputValue === "string" || dataType === "artifact" && typeof outputValue === "object" && outputValue !== null && !Array.isArray(outputValue))) {
+				throw Object.assign(new Error(`Plugin Flow node returned an invalid value for port: ${portId}.`), { code: "plugin_flow_node_output_invalid" });
+			}
+		}
+		return outputs;
+	});
+	const entry = { ...registration, ownerPluginId: pluginId };
+	flowNodes.set(registration.typeId, entry);
+	return entry;
 }
 
 export function registerPluginCommand(pluginId: string, registration: PluginCommandRegistration, namespace: PluginRegistryNamespace = "plugin"): RegisteredPluginCommand {
@@ -108,3 +181,4 @@ export function getPluginMcp(serverId: string): RegisteredPluginMcp | undefined 
 export function listPluginMcps(): RegisteredPluginMcp[] { return [...mcps.values()]; }
 export function listPluginCommands(): RegisteredPluginCommand[] { return [...commands.values()]; }
 export function getPluginCommandById(id: string): RegisteredPluginCommand | undefined { return commands.get(id); }
+export function listPluginFlowNodes(): RegisteredPluginFlowNode[] { return [...flowNodes.values()].map((entry) => structuredClone(entry)); }

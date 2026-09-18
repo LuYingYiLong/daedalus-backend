@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
+import { logger } from "../logger.js";
 import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson } from "./session-database.js";
 import type {
 	FlowApproval,
@@ -9,6 +12,8 @@ import type {
 	FlowDocumentNodeRun,
 	FlowDocumentRun,
 	FlowDocumentSnapshot,
+	FlowOperation,
+	FlowPatchAck,
 } from "../protocol/types.js";
 import type { PendingApproval } from "../tools/approval-gateway.js";
 import {
@@ -19,7 +24,7 @@ import {
 	resolveFlowNodePorts,
 } from "../server/flow-node-registry.js";
 
-export type FlowDocumentNodeType = FlowDocumentNode["type"];
+export type FlowNodeTypeId = FlowDocumentNode["typeId"];
 export type FlowDocumentNodeStatus = FlowDocumentNode["status"];
 export type FlowDocumentRunStatus = FlowDocumentRun["status"];
 
@@ -40,13 +45,18 @@ type FlowRow = {
 type NodeRow = {
 	node_id: string;
 	flow_id: string;
-	type: FlowDocumentNodeType;
+	type_id: FlowNodeTypeId;
+	plugin_id: string;
+	plugin_version: string;
+	plugin_fingerprint: string;
+	config_version: number;
 	title: string;
 	x: number;
 	y: number;
 	width: number;
 	height: number;
 	config_json: string;
+	ports_json: string;
 	status: FlowDocumentNodeStatus;
 	created_at: string;
 	updated_at: string;
@@ -72,6 +82,10 @@ type RunRow = {
 type NodeRunRow = {
 	run_id: string;
 	node_id: string;
+	type_id: FlowNodeTypeId;
+	plugin_version: string;
+	plugin_fingerprint: string;
+	config_version: number;
 	status: FlowDocumentNodeStatus;
 	input_fingerprint: string | null;
 	output_json: string | null;
@@ -82,6 +96,20 @@ type NodeRunRow = {
 
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 const DEFAULT_NODE_SIZE = { width: 300, height: 180 };
+const NODE_COLUMNS = "node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at";
+
+export type CreateFlowStarterGraph = {
+	provider?: string;
+	model?: string;
+	reasoningEffort?: string;
+};
+
+export type CreateFlowDocumentParams = {
+	title: string;
+	workspaceId?: string | null;
+	approvalMode?: FlowDocument["approvalMode"];
+	starterGraph?: CreateFlowStarterGraph;
+};
 
 export function flowDocumentError(code: string, message: string): Error & { code: string } {
 	return Object.assign(new Error(message), { code });
@@ -112,13 +140,18 @@ function mapNode(row: NodeRow): FlowDocumentNode {
 	return {
 		nodeId: row.node_id,
 		flowId: row.flow_id,
-		type: row.type,
+		typeId: row.type_id,
+		pluginId: row.plugin_id,
+		pluginVersion: row.plugin_version,
+		pluginFingerprint: row.plugin_fingerprint,
+		configVersion: Number(row.config_version),
 		title: row.title,
 		x: Number(row.x),
 		y: Number(row.y),
 		width: Number(row.width),
 		height: Number(row.height),
 		config: parseSqlJson<Record<string, unknown>>(row.config_json),
+		ports: parseSqlJson<FlowDocumentNode["ports"]>(row.ports_json),
 		status: row.status,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
@@ -154,6 +187,10 @@ function mapNodeRun(row: NodeRunRow): FlowDocumentNodeRun {
 	return {
 		runId: row.run_id,
 		nodeId: row.node_id,
+		typeId: row.type_id,
+		pluginVersion: row.plugin_version,
+		pluginFingerprint: row.plugin_fingerprint,
+		configVersion: row.config_version,
 		status: row.status,
 		inputFingerprint: row.input_fingerprint,
 		output: row.output_json === null ? null : parseSqlJson<unknown>(row.output_json),
@@ -191,22 +228,22 @@ function bumpLayoutRevision(db: DatabaseSync, flowId: string, revision: number):
 	return requireFlow(db, flowId);
 }
 
-function assertNodeType(type: FlowDocumentNodeType): void {
+function assertNodeType(type: FlowNodeTypeId): void {
 	getFlowNodeTypeDefinition(type);
 }
 
 function readNodes(db: DatabaseSync, flowId: string): FlowDocumentNode[] {
-	return (db.prepare("SELECT node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at FROM flow_nodes WHERE flow_id = ? ORDER BY created_at, node_id").all(flowId) as NodeRow[]).map(mapNode);
+	return (db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? ORDER BY created_at, node_id`).all(flowId) as NodeRow[]).map(mapNode);
 }
 
 function readEdges(db: DatabaseSync, flowId: string): FlowDocumentEdge[] {
 	return (db.prepare("SELECT edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flowId) as EdgeRow[]).map(mapEdge);
 }
 
-function readRuns(db: DatabaseSync, flowId: string, limit: number = 20): FlowDocumentRun[] {
+function readRuns(db: DatabaseSync, flowId: string, limit: number = 1): FlowDocumentRun[] {
 	const runs: RunRow[] = db.prepare("SELECT run_id, flow_id, revision, status, started_at, finished_at, error FROM flow_runs WHERE flow_id = ? ORDER BY COALESCE(started_at, '') DESC, run_id DESC LIMIT ?").all(flowId, limit) as RunRow[];
 	return runs.map((run): FlowDocumentRun => {
-		const nodeRuns = (db.prepare("SELECT run_id, node_id, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(run.run_id) as NodeRunRow[]).map(mapNodeRun);
+		const nodeRuns = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(run.run_id) as NodeRunRow[]).map(mapNodeRun);
 		return mapRun(run, nodeRuns);
 	});
 }
@@ -215,6 +252,12 @@ export async function getFlowDocument(flowId: string, includeArchived: boolean =
 	const db = await getSessionDatabase();
 	const flow = requireFlow(db, flowId, includeArchived);
 	return { flow, nodes: readNodes(db, flowId), edges: readEdges(db, flowId), runs: readRuns(db, flowId) };
+}
+
+export async function listFlowRunsDocument(flowId: string, limit: number = 20): Promise<FlowDocumentRun[]> {
+	const db = await getSessionDatabase();
+	requireFlow(db, flowId);
+	return readRuns(db, flowId, Math.max(1, Math.min(100, limit)));
 }
 
 export async function listFlowsDocument(params: { workspaceId?: string | undefined; archived?: boolean | undefined } = {}): Promise<FlowDocument[]> {
@@ -237,14 +280,36 @@ export async function updateFlowPinnedStatesDocument(pinnedFlowIds: readonly str
 	return listFlowsDocument();
 }
 
-export async function createFlowDocument(params: { title: string; workspaceId?: string | null }): Promise<FlowDocumentSnapshot> {
+export async function createFlowDocument(params: CreateFlowDocumentParams): Promise<FlowDocumentSnapshot> {
 	const db = await getSessionDatabase();
 	const title = params.title.trim();
 	if (title.length === 0 || title.length > 200) throw flowDocumentError("flow_title_invalid", "Flow title must contain between 1 and 200 characters.");
 	const flowId = `flow-${randomUUID()}`;
 	const timestamp = now();
 	runSessionTransaction(db, (): void => {
-		db.prepare("INSERT INTO flow_documents(flow_id, title, workspace_id, pinned, revision, graph_revision, layout_revision, approval_mode, viewport_json, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 1, 1, 'manual', ?, ?, ?)").run(flowId, title, params.workspaceId ?? null, sqlJson(DEFAULT_VIEWPORT), timestamp, timestamp);
+		db.prepare("INSERT INTO flow_documents(flow_id, title, workspace_id, pinned, revision, graph_revision, layout_revision, approval_mode, viewport_json, created_at, updated_at) VALUES (?, ?, ?, 0, 1, 1, 1, ?, ?, ?, ?)").run(flowId, title, params.workspaceId ?? null, params.approvalMode ?? "manual", sqlJson(DEFAULT_VIEWPORT), timestamp, timestamp);
+		if (params.starterGraph === undefined) return;
+
+		const insertNode = db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)");
+		const createStarterNode = (typeId: FlowNodeTypeId, x: number, configPatch: Record<string, unknown>): string => {
+			const definition = getFlowNodeTypeDefinition(typeId);
+			const config = normalizeFlowNodeConfig(typeId, configPatch);
+			const ports = resolveFlowNodePorts({ typeId, config, ports: definition.ports });
+			const nodeId = `node-${randomUUID()}`;
+			insertNode.run(nodeId, flowId, typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, definition.defaultTitle, x, 0, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
+			return nodeId;
+		};
+		const promptNodeId = createStarterNode("builtin/prompt", 0, { text: "" });
+		const llmNodeId = createStarterNode("builtin/llm", 360, {
+			provider: params.starterGraph.provider ?? "",
+			model: params.starterGraph.model ?? "",
+			reasoningEffort: params.starterGraph.reasoningEffort ?? "",
+			systemPrompt: "",
+		});
+		const outputNodeId = createStarterNode("builtin/output", 720, { format: "text" });
+		const insertEdge = db.prepare("INSERT INTO flow_edges(edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type) VALUES (?, ?, ?, ?, ?, ?, ?)");
+		insertEdge.run(`edge-${randomUUID()}`, flowId, promptNodeId, "output", llmNodeId, "input", "text");
+		insertEdge.run(`edge-${randomUUID()}`, flowId, llmNodeId, "output", outputNodeId, "input", "text");
 	});
 	return getFlowDocument(flowId);
 }
@@ -271,16 +336,17 @@ export async function archiveFlowDocument(flowId: string, revision: number): Pro
 	return (await getFlowDocument(flowId, true)).flow;
 }
 
-export async function createFlowNodeDocument(params: { flowId: string; revision: number; type: FlowDocumentNodeType; title?: string | undefined; x: number; y: number; config?: Record<string, unknown> | undefined }): Promise<FlowDocumentSnapshot> {
+export async function createFlowNodeDocument(params: { flowId: string; revision: number; typeId: FlowNodeTypeId; title?: string | undefined; x: number; y: number; config?: Record<string, unknown> | undefined }): Promise<FlowDocumentSnapshot> {
 	const db = await getSessionDatabase();
-	assertNodeType(params.type);
-	const config = normalizeFlowNodeConfig(params.type, params.config);
-	const definition = getFlowNodeTypeDefinition(params.type);
+	assertNodeType(params.typeId);
+	const config = normalizeFlowNodeConfig(params.typeId, params.config);
+	const definition = getFlowNodeTypeDefinition(params.typeId);
+	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: definition.ports });
 	const nodeId = `node-${randomUUID()}`;
 	const timestamp = now();
 	runSessionTransaction(db, (): void => {
 		requireFlow(db, params.flowId);
-		db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(nodeId, params.flowId, params.type, params.title?.trim() || definition.defaultTitle, params.x, params.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), timestamp, timestamp);
+		db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(nodeId, params.flowId, params.typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, params.title?.trim() || definition.defaultTitle, params.x, params.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
 		bumpRevision(db, params.flowId, params.revision);
 	});
 	return getFlowDocument(params.flowId);
@@ -290,7 +356,7 @@ export async function updateFlowNodeDocument(params: { flowId: string; nodeId: s
 	const db = await getSessionDatabase();
 	runSessionTransaction(db, (): void => {
 		requireFlow(db, params.flowId);
-		const current = db.prepare("SELECT node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at FROM flow_nodes WHERE flow_id = ? AND node_id = ?").get(params.flowId, params.nodeId) as NodeRow | undefined;
+		const current = db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? AND node_id = ?`).get(params.flowId, params.nodeId) as NodeRow | undefined;
 		if (current === undefined) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${params.nodeId}`);
 		const fields: string[] = [];
 		const values: SQLInputValue[] = [];
@@ -298,8 +364,9 @@ export async function updateFlowNodeDocument(params: { flowId: string; nodeId: s
 			if (params.patch[key] !== undefined) { fields.push(`${key} = ?`); values.push(params.patch[key]); }
 		}
 		if (params.patch.config !== undefined) {
-			const normalizedConfig = normalizeFlowNodeConfig(current.type, params.patch.config);
-			fields.push("config_json = ?"); values.push(sqlJson(normalizedConfig));
+			const normalizedConfig = normalizeFlowNodeConfig(current.type_id, params.patch.config);
+			const normalizedPorts = resolveFlowNodePorts({ typeId: current.type_id, config: normalizedConfig, ports: parseSqlJson<FlowDocumentNode["ports"]>(current.ports_json) });
+			fields.push("config_json = ?", "ports_json = ?"); values.push(sqlJson(normalizedConfig), sqlJson(normalizedPorts));
 			const nextNode = { ...mapNode(current), config: normalizedConfig };
 			const inputIds = new Set(resolveFlowNodePorts(nextNode).filter((port): boolean => port.direction === "input").map((port): string => port.id));
 			const outputIds = new Set(resolveFlowNodePorts(nextNode).filter((port): boolean => port.direction === "output").map((port): string => port.id));
@@ -351,7 +418,7 @@ export async function createFlowEdgeDocument(params: { flowId: string; revision:
 	runSessionTransaction(db, (): void => {
 		requireFlow(db, params.flowId);
 		if (params.sourceNodeId === params.targetNodeId) throw flowDocumentError("flow_cycle", "A Flow node cannot connect to itself.");
-		const rows = db.prepare("SELECT node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at FROM flow_nodes WHERE flow_id = ? AND node_id IN (?, ?)").all(params.flowId, params.sourceNodeId, params.targetNodeId) as NodeRow[];
+		const rows = db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? AND node_id IN (?, ?)`).all(params.flowId, params.sourceNodeId, params.targetNodeId) as NodeRow[];
 		if (rows.length !== 2) throw flowDocumentError("flow_node_not_found", "Both edge endpoints must belong to the Flow.");
 		const sourceNode = mapNode(rows.find((row): boolean => row.node_id === params.sourceNodeId)!);
 		const targetNode = mapNode(rows.find((row): boolean => row.node_id === params.targetNodeId)!);
@@ -372,7 +439,7 @@ export async function createFlowEdgeDocument(params: { flowId: string; revision:
 export async function createConnectedFlowNodeDocument(params: {
 	flowId: string;
 	revision: number;
-	type: FlowDocumentNodeType;
+	typeId: FlowNodeTypeId;
 	title?: string | undefined;
 	x: number;
 	y: number;
@@ -386,26 +453,32 @@ export async function createConnectedFlowNodeDocument(params: {
 	};
 }): Promise<{ snapshot: FlowDocumentSnapshot; nodeId: string; edgeId: string }> {
 	const db = await getSessionDatabase();
-	assertNodeType(params.type);
-	const config = normalizeFlowNodeConfig(params.type, params.config);
-	const definition = getFlowNodeTypeDefinition(params.type);
+	assertNodeType(params.typeId);
+	const config = normalizeFlowNodeConfig(params.typeId, params.config);
+	const definition = getFlowNodeTypeDefinition(params.typeId);
+	const ports = resolveFlowNodePorts({ typeId: params.typeId, config, ports: definition.ports });
 	const nodeId = `node-${randomUUID()}`;
 	const edgeId = `edge-${randomUUID()}`;
 	const timestamp = now();
 	runSessionTransaction(db, (): void => {
 		requireFlow(db, params.flowId);
-		const existingRow = db.prepare("SELECT node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at FROM flow_nodes WHERE flow_id = ? AND node_id = ?").get(params.flowId, params.connection.existingNodeId) as NodeRow | undefined;
+		const existingRow = db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? AND node_id = ?`).get(params.flowId, params.connection.existingNodeId) as NodeRow | undefined;
 		if (existingRow === undefined) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${params.connection.existingNodeId}`);
 		const createdNode: FlowDocumentNode = {
 			nodeId,
 			flowId: params.flowId,
-			type: params.type,
+			typeId: params.typeId,
+			pluginId: definition.pluginId,
+			pluginVersion: definition.pluginVersion,
+			pluginFingerprint: definition.pluginFingerprint,
+			configVersion: definition.configVersion,
 			title: params.title?.trim() || definition.defaultTitle,
 			x: params.x,
 			y: params.y,
 			width: DEFAULT_NODE_SIZE.width,
 			height: DEFAULT_NODE_SIZE.height,
 			config,
+			ports,
 			status: "idle",
 			createdAt: timestamp,
 			updatedAt: timestamp,
@@ -423,7 +496,7 @@ export async function createConnectedFlowNodeDocument(params: {
 		const sourceNodeId = sourceNode.nodeId;
 		const targetNodeId = targetNode.nodeId;
 		if (introducesCycle(readEdges(db, params.flowId), sourceNodeId, targetNodeId)) throw flowDocumentError("flow_cycle", "Flow connections cannot create a cycle.");
-		db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type, title, x, y, width, height, config_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(nodeId, params.flowId, params.type, createdNode.title, params.x, params.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), timestamp, timestamp);
+		db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(nodeId, params.flowId, params.typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, createdNode.title, params.x, params.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
 		db.prepare("DELETE FROM flow_edges WHERE flow_id = ? AND target_node_id = ? AND target_port = ?").run(params.flowId, targetNodeId, targetPortId);
 		db.prepare("INSERT INTO flow_edges(edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type) VALUES (?, ?, ?, ?, ?, ?, ?)").run(edgeId, params.flowId, sourceNodeId, sourcePortId, targetNodeId, targetPortId, params.connection.dataType);
 		bumpRevision(db, params.flowId, params.revision);
@@ -462,6 +535,119 @@ export async function updateFlowSettingsDocument(params: { flowId: string; revis
 	return (await getFlowDocument(params.flowId)).flow;
 }
 
+/** Applies renderer operations in one transaction and records their IDs for crash-safe replay. */
+export async function commitFlowOperationsDocument(params: { flowId: string; clientId: string; operations: FlowOperation[] }): Promise<FlowPatchAck> {
+	const startedAt: number = performance.now();
+	const db = await getSessionDatabase();
+	let acceptedMutationIds: string[] = [];
+	let appliedOperations: FlowOperation[] = [];
+	let replayRevision: { graphRevision: number; layoutRevision: number } | null = null;
+	runSessionTransaction(db, (): void => {
+		const initial = requireFlow(db, params.flowId);
+		const existing = db.prepare("SELECT flow_id, client_id, payload_json, graph_revision, layout_revision FROM flow_operations WHERE mutation_id = ?");
+		const duplicateRevisions: Array<{ graphRevision: number; layoutRevision: number }> = [];
+		const pending = params.operations.filter((operation): boolean => {
+			const row = existing.get(operation.mutationId) as { flow_id: string; client_id: string; payload_json: string; graph_revision: number; layout_revision: number } | undefined;
+			if (row === undefined) return true;
+			const storedOperation = parseSqlJson<unknown>(row.payload_json);
+			if (row.flow_id !== params.flowId || row.client_id !== params.clientId || !isDeepStrictEqual(storedOperation, operation)) {
+				throw flowDocumentError("flow_mutation_conflict", `Flow mutation ID was reused with different content: ${operation.mutationId}`);
+			}
+			duplicateRevisions.push({ graphRevision: row.graph_revision, layoutRevision: row.layout_revision });
+			return false;
+		});
+		appliedOperations = pending;
+		acceptedMutationIds = params.operations.map((operation): string => operation.mutationId);
+		if (pending.length === 0) {
+			replayRevision = duplicateRevisions.reduce((latest, revision): { graphRevision: number; layoutRevision: number } => ({
+				graphRevision: Math.max(latest.graphRevision, revision.graphRevision),
+				layoutRevision: Math.max(latest.layoutRevision, revision.layoutRevision),
+			}), { graphRevision: 0, layoutRevision: 0 });
+			return;
+		}
+
+		const graphBases = new Set(pending.flatMap((operation): number[] => "baseGraphRevision" in operation && operation.baseGraphRevision !== undefined ? [operation.baseGraphRevision] : []));
+		const layoutBases = new Set(pending.flatMap((operation): number[] => "baseLayoutRevision" in operation && operation.baseLayoutRevision !== undefined ? [operation.baseLayoutRevision] : []));
+		if (graphBases.size > 1 || graphBases.size === 1 && !graphBases.has(initial.graphRevision)) throw flowDocumentError("flow_revision_conflict", "The Flow graph changed elsewhere.");
+		// Layout is intentionally last-write-wins. Stale viewport and position
+		// operations remain safe because they do not change graph semantics.
+		void layoutBases;
+		const graphChanged = pending.some((operation): boolean => ["node.create", "node.update", "node.delete", "edge.create", "edge.delete"].includes(operation.kind));
+		const layoutChanged = pending.some((operation): boolean => ["node.move", "node.resize", "viewport.update"].includes(operation.kind));
+		if (graphChanged) assertGraphEditable(db, params.flowId);
+
+		for (const operation of pending) {
+			if (operation.kind === "node.create") {
+				const definition = getFlowNodeTypeDefinition(operation.payload.typeId);
+				const config = normalizeFlowNodeConfig(operation.payload.typeId, operation.payload.config);
+				const ports = resolveFlowNodePorts({ typeId: operation.payload.typeId, config, ports: definition.ports });
+				const timestamp = now();
+				db.prepare("INSERT INTO flow_nodes(node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?)").run(operation.payload.nodeId, params.flowId, operation.payload.typeId, definition.pluginId, definition.pluginVersion, definition.pluginFingerprint, definition.configVersion, operation.payload.title ?? definition.defaultTitle, operation.payload.x, operation.payload.y, DEFAULT_NODE_SIZE.width, DEFAULT_NODE_SIZE.height, sqlJson(config), sqlJson(ports), timestamp, timestamp);
+			} else if (operation.kind === "node.update") {
+				const current = db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? AND node_id = ?`).get(params.flowId, operation.payload.nodeId) as NodeRow | undefined;
+				if (current === undefined) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+				const fields: string[] = [];
+				const values: SQLInputValue[] = [];
+				if (operation.payload.title !== undefined) { fields.push("title = ?"); values.push(operation.payload.title); }
+				if (operation.payload.config !== undefined) {
+					const config = normalizeFlowNodeConfig(current.type_id, operation.payload.config);
+					const ports = resolveFlowNodePorts({ typeId: current.type_id, config, ports: parseSqlJson<FlowDocumentNode["ports"]>(current.ports_json) });
+					fields.push("config_json = ?", "ports_json = ?"); values.push(sqlJson(config), sqlJson(ports));
+					const inputIds = new Set(ports.filter((port): boolean => port.direction === "input").map((port): string => port.id));
+					const outputIds = new Set(ports.filter((port): boolean => port.direction === "output").map((port): string => port.id));
+					for (const edge of readEdges(db, params.flowId)) if (edge.targetNodeId === operation.payload.nodeId && !inputIds.has(edge.targetPort) || edge.sourceNodeId === operation.payload.nodeId && !outputIds.has(edge.sourcePort)) db.prepare("DELETE FROM flow_edges WHERE edge_id = ?").run(edge.edgeId);
+				}
+				if (fields.length > 0) { fields.push("updated_at = ?"); values.push(now(), params.flowId, operation.payload.nodeId); db.prepare(`UPDATE flow_nodes SET ${fields.join(", ")} WHERE flow_id = ? AND node_id = ?`).run(...values); }
+			} else if (operation.kind === "node.delete") {
+				const deleted = db.prepare("DELETE FROM flow_nodes WHERE flow_id = ? AND node_id = ?").run(params.flowId, operation.payload.nodeId);
+				if (Number(deleted.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+			} else if (operation.kind === "node.move") {
+				const moved = db.prepare("UPDATE flow_nodes SET x = ?, y = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(operation.payload.x, operation.payload.y, now(), params.flowId, operation.payload.nodeId);
+				if (Number(moved.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+			} else if (operation.kind === "node.resize") {
+				const resized = db.prepare("UPDATE flow_nodes SET width = ?, height = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(operation.payload.width, operation.payload.height, now(), params.flowId, operation.payload.nodeId);
+				if (Number(resized.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+			} else if (operation.kind === "viewport.update") {
+				db.prepare("UPDATE flow_documents SET viewport_json = ? WHERE flow_id = ?").run(sqlJson(operation.payload), params.flowId);
+			} else if (operation.kind === "edge.delete") {
+				const deleted = db.prepare("DELETE FROM flow_edges WHERE flow_id = ? AND edge_id = ?").run(params.flowId, operation.payload.edgeId);
+				if (Number(deleted.changes) !== 1) throw flowDocumentError("flow_edge_not_found", `Flow edge not found: ${operation.payload.edgeId}`);
+			} else if (operation.kind === "edge.create") {
+				if (operation.payload.sourceNodeId === operation.payload.targetNodeId) throw flowDocumentError("flow_cycle", "A Flow node cannot connect to itself.");
+				const rows = db.prepare(`SELECT ${NODE_COLUMNS} FROM flow_nodes WHERE flow_id = ? AND node_id IN (?, ?)`).all(params.flowId, operation.payload.sourceNodeId, operation.payload.targetNodeId) as NodeRow[];
+				if (rows.length !== 2) throw flowDocumentError("flow_node_not_found", "Both edge endpoints must belong to the Flow.");
+				const sourceNode = mapNode(rows.find((row): boolean => row.node_id === operation.payload.sourceNodeId)!);
+				const targetNode = mapNode(rows.find((row): boolean => row.node_id === operation.payload.targetNodeId)!);
+				const source = getFlowNodePort(sourceNode, operation.payload.sourcePort, "output");
+				const target = getFlowNodePort(targetNode, operation.payload.targetPort, "input");
+				if (source === undefined || target === undefined || !areFlowPortsCompatible(source, target, operation.payload.dataType)) throw flowDocumentError("flow_port_incompatible", "The selected Flow ports are not compatible.");
+				if (introducesCycle(readEdges(db, params.flowId), operation.payload.sourceNodeId, operation.payload.targetNodeId)) throw flowDocumentError("flow_cycle", "Flow connections cannot create a cycle.");
+				if (!target.multiple) db.prepare("DELETE FROM flow_edges WHERE flow_id = ? AND target_node_id = ? AND target_port = ?").run(params.flowId, operation.payload.targetNodeId, operation.payload.targetPort);
+				db.prepare("INSERT INTO flow_edges(edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type) VALUES (?, ?, ?, ?, ?, ?, ?)").run(operation.payload.edgeId, params.flowId, operation.payload.sourceNodeId, operation.payload.sourcePort, operation.payload.targetNodeId, operation.payload.targetPort, operation.payload.dataType);
+			}
+		}
+
+		if (graphChanged) db.prepare("UPDATE flow_documents SET revision = revision + 1, graph_revision = graph_revision + 1, updated_at = ? WHERE flow_id = ?").run(now(), params.flowId);
+		if (layoutChanged) db.prepare("UPDATE flow_documents SET layout_revision = layout_revision + 1, updated_at = ? WHERE flow_id = ?").run(now(), params.flowId);
+		const final = requireFlow(db, params.flowId);
+		const insertOperation = db.prepare("INSERT INTO flow_operations(mutation_id, flow_id, client_id, kind, payload_json, graph_revision, layout_revision, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+		for (const operation of pending) insertOperation.run(operation.mutationId, params.flowId, params.clientId, operation.kind, sqlJson(operation), final.graphRevision, final.layoutRevision, now());
+		db.prepare("DELETE FROM flow_operations WHERE flow_id = ? AND mutation_id IN (SELECT mutation_id FROM flow_operations WHERE flow_id = ? ORDER BY created_at DESC, mutation_id DESC LIMIT -1 OFFSET 5000)").run(params.flowId, params.flowId);
+	});
+	const flow = requireFlow(db, params.flowId);
+	const acknowledgedRevision = replayRevision ?? { graphRevision: flow.graphRevision, layoutRevision: flow.layoutRevision };
+	if (process.env.DAEDALUS_FLOW_PERF === "1") {
+		logger.info("flow", "patch_commit_measured", {
+			durationMs: Number((performance.now() - startedAt).toFixed(3)),
+			operationCount: params.operations.length,
+			appliedOperationCount: appliedOperations.length,
+			graphRevision: acknowledgedRevision.graphRevision,
+			layoutRevision: acknowledgedRevision.layoutRevision,
+		});
+	}
+	return { flowId: params.flowId, ...acknowledgedRevision, acceptedMutationIds, operations: structuredClone(appliedOperations) };
+}
+
 export async function createFlowRunDocument(flowId: string, revision: number, nodeIds: readonly string[]): Promise<FlowDocumentRun> {
 	const db = await getSessionDatabase();
 	const runId = `run-${randomUUID()}`;
@@ -472,8 +658,11 @@ export async function createFlowRunDocument(flowId: string, revision: number, no
 		if (active !== undefined) throw Object.assign(flowDocumentError("flow_busy", "Another Flow run is active."), { activeRunId: active.run_id });
 		const timestamp = now();
 		db.prepare("INSERT INTO flow_runs(run_id, flow_id, revision, status, started_at) VALUES (?, ?, ?, 'running', ?)").run(runId, flowId, revision, timestamp);
-		const insert = db.prepare("INSERT INTO flow_node_runs(run_id, node_id, status) VALUES (?, ?, 'queued')");
-		for (const nodeId of nodeIds) insert.run(runId, nodeId);
+		const insert = db.prepare("INSERT INTO flow_node_runs(run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status) SELECT ?, node_id, type_id, plugin_version, plugin_fingerprint, config_version, 'queued' FROM flow_nodes WHERE flow_id = ? AND node_id = ?");
+		for (const nodeId of nodeIds) {
+			const inserted = insert.run(runId, flowId, nodeId);
+			if (Number(inserted.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${nodeId}`);
+		}
 	});
 	return (await getFlowDocument(flowId)).runs.find((run): boolean => run.runId === runId)!;
 }
@@ -482,7 +671,7 @@ export async function getFlowRunDocument(flowId: string, runId: string): Promise
 	const db = await getSessionDatabase();
 	const row = db.prepare("SELECT run_id, flow_id, revision, status, started_at, finished_at, error FROM flow_runs WHERE flow_id = ? AND run_id = ?").get(flowId, runId) as RunRow | undefined;
 	if (row === undefined) throw flowDocumentError("flow_run_not_found", `Flow run not found: ${runId}`);
-	const nodes = (db.prepare("SELECT run_id, node_id, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
+	const nodes = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
 	return mapRun(row, nodes);
 }
 

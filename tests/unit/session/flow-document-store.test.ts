@@ -9,6 +9,7 @@ import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
 import { listFlowNodeTypeDefinitions, normalizeFlowNodeConfig } from "../../../src/server/flow-node-registry.js";
 import {
 	createConnectedFlowNodeDocument,
+	commitFlowOperationsDocument,
 	createFlowDocument,
 	createFlowEdgeDocument,
 	createFlowNodeDocument,
@@ -27,14 +28,49 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 }
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
-	assert.deepEqual(listFlowNodeTypeDefinitions(true).map((definition): string => definition.type), ["prompt", "text", "template", "merge", "json_extract", "condition", "file_input", "llm", "tool", "command", "output", "note"]);
-	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
-	assert.equal(normalizeFlowNodeConfig("command", { commandLine: "echo ok" }).timeoutMs, 30_000);
+	assert.deepEqual(listFlowNodeTypeDefinitions(true).map((definition): string => definition.typeId), ["builtin/command", "builtin/condition", "builtin/file-input", "builtin/json-extract", "builtin/llm", "builtin/merge", "builtin/note", "builtin/output", "builtin/prompt", "builtin/template", "builtin/text", "builtin/tool"]);
+	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
+	assert.equal(normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok" }).timeoutMs, 30_000);
 });
+
+test("Flow creation can atomically seed the Prompt to LLM to Output starter graph", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	const created = await createFlowDocument({
+		title: "Starter",
+		workspaceId: "workspace-a",
+		approvalMode: "auto-safe",
+		starterGraph: {
+			provider: "deepseek",
+			model: "deepseek-chat",
+			reasoningEffort: "high",
+		},
+	});
+	assert.equal(created.flow.workspaceId, "workspace-a");
+	assert.equal(created.flow.approvalMode, "auto-safe");
+	assert.deepEqual([...created.nodes].sort((left, right): number => left.x - right.x).map((node): string => node.typeId), ["builtin/prompt", "builtin/llm", "builtin/output"]);
+	assert.equal(created.edges.length, 2);
+	const prompt = created.nodes.find((node): boolean => node.typeId === "builtin/prompt")!;
+	const llm = created.nodes.find((node): boolean => node.typeId === "builtin/llm")!;
+	const output = created.nodes.find((node): boolean => node.typeId === "builtin/output")!;
+	assert.deepEqual(llm.config, {
+		provider: "deepseek",
+		model: "deepseek-chat",
+		reasoningEffort: "high",
+		systemPrompt: "",
+	});
+	assert.deepEqual(
+		created.edges
+			.map((edge): [string, string, string, string] => [edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort])
+			.sort((left, right): number => left[0] === prompt.nodeId ? -1 : right[0] === prompt.nodeId ? 1 : 0),
+		[
+			[prompt.nodeId, "output", llm.nodeId, "input"],
+			[llm.nodeId, "output", output.nodeId, "input"],
+		],
+	);
+}));
 
 test("Flow graph and layout revisions advance independently", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	const created = await createFlowDocument({ title: "Revisions" });
-	const withNode = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: created.flow.graphRevision, type: "text", x: 10, y: 20, config: { text: "hello" } });
+	const withNode = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: created.flow.graphRevision, typeId: "builtin/text", x: 10, y: 20, config: { text: "hello" } });
 	assert.equal(withNode.flow.graphRevision, created.flow.graphRevision + 1);
 	assert.equal(withNode.flow.layoutRevision, created.flow.layoutRevision);
 	const moved = await updateFlowNodeDocument({ flowId: created.flow.flowId, nodeId: withNode.nodes[0]!.nodeId, revision: withNode.flow.layoutRevision, patch: { x: 80, y: 90 } });
@@ -45,17 +81,68 @@ test("Flow graph and layout revisions advance independently", async (): Promise<
 	assert.equal(viewport.layoutRevision, moved.flow.layoutRevision + 1);
 }));
 
+test("Flow patch batches are idempotent and layout operations use last-write-wins", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	const created = await createFlowDocument({ title: "Patch log" });
+	const createNode = {
+		mutationId: "mutation-create",
+		kind: "node.create" as const,
+		baseGraphRevision: created.flow.graphRevision,
+		payload: { nodeId: "node-patch", typeId: "builtin/text", x: 0, y: 0, config: { text: "hello" } },
+	};
+	const viewport = {
+		mutationId: "mutation-viewport",
+		kind: "viewport.update" as const,
+		baseLayoutRevision: created.flow.layoutRevision,
+		payload: { x: 10, y: 20, zoom: 1.25 },
+	};
+	const first = await commitFlowOperationsDocument({ flowId: created.flow.flowId, clientId: "studio-test", operations: [createNode, viewport] });
+	assert.equal(first.graphRevision, created.flow.graphRevision + 1);
+	assert.equal(first.layoutRevision, created.flow.layoutRevision + 1);
+	const replayed = await commitFlowOperationsDocument({ flowId: created.flow.flowId, clientId: "studio-test", operations: [createNode, viewport] });
+	assert.equal(replayed.graphRevision, first.graphRevision);
+	assert.equal(replayed.layoutRevision, first.layoutRevision);
+
+	const moves = Array.from({ length: 100 }, (_, index) => ({
+		mutationId: `mutation-move-${index}`,
+		kind: "node.move" as const,
+		baseLayoutRevision: created.flow.layoutRevision,
+		payload: { nodeId: "node-patch", x: index, y: index * 2 },
+	}));
+	const moved = await commitFlowOperationsDocument({ flowId: created.flow.flowId, clientId: "studio-test", operations: moves });
+	assert.equal(moved.layoutRevision, first.layoutRevision + 1);
+	const snapshot = await getFlowDocument(created.flow.flowId);
+	assert.deepEqual({ x: snapshot.nodes[0]!.x, y: snapshot.nodes[0]!.y }, { x: 99, y: 198 });
+	const delayedReplay = await commitFlowOperationsDocument({ flowId: created.flow.flowId, clientId: "studio-test", operations: [createNode, viewport] });
+	assert.equal(delayedReplay.graphRevision, first.graphRevision);
+	assert.equal(delayedReplay.layoutRevision, first.layoutRevision);
+	await assert.rejects(commitFlowOperationsDocument({
+		flowId: created.flow.flowId,
+		clientId: "studio-test",
+		operations: [{ ...createNode, payload: { ...createNode.payload, title: "reused mutation" } }],
+	}), { code: "flow_mutation_conflict" });
+	await assert.rejects(commitFlowOperationsDocument({
+		flowId: created.flow.flowId,
+		clientId: "another-client",
+		operations: [createNode],
+	}), { code: "flow_mutation_conflict" });
+	await assert.rejects(commitFlowOperationsDocument({
+		flowId: created.flow.flowId,
+		clientId: "studio-test",
+		operations: [{ mutationId: "mutation-stale", kind: "node.update", baseGraphRevision: created.flow.graphRevision, payload: { nodeId: "node-patch", title: "stale" } }],
+	}), { code: "flow_revision_conflict" });
+}));
+
 test("createConnected is atomic and replaces a single-input edge", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Atomic" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "text", x: 0, y: 0, config: { text: "first" } });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "first" } });
 	const firstNodeId = snapshot.nodes[0]!.nodeId;
-	const connected = await createConnectedFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "output", x: 300, y: 0, connection: { direction: "from_existing", existingNodeId: firstNodeId, existingPort: "output", newPort: "input", dataType: "text" } });
+	const connected = await createConnectedFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/output", x: 300, y: 0, connection: { direction: "from_existing", existingNodeId: firstNodeId, existingPort: "output", newPort: "input", dataType: "text" } });
 	assert.equal(connected.snapshot.nodes.length, 2);
 	assert.equal(connected.snapshot.edges.length, 1);
-	await assert.rejects(createConnectedFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: connected.snapshot.flow.graphRevision, type: "note", x: 500, y: 0, connection: { direction: "from_existing", existingNodeId: firstNodeId, existingPort: "output", newPort: "input", dataType: "text" } }), { code: "flow_port_incompatible" });
+	await assert.rejects(createConnectedFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: connected.snapshot.flow.graphRevision, typeId: "builtin/note", x: 500, y: 0, connection: { direction: "from_existing", existingNodeId: firstNodeId, existingPort: "output", newPort: "input", dataType: "text" } }), { code: "flow_port_incompatible" });
 	assert.equal((await getFlowDocument(snapshot.flow.flowId)).nodes.length, 2);
-	let next = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: connected.snapshot.flow.graphRevision, type: "text", x: 0, y: 200, config: { text: "second" } });
-	const secondNodeId = next.nodes.find((node): boolean => node.nodeId !== firstNodeId && node.type === "text")!.nodeId;
+	let next = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: connected.snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 200, config: { text: "second" } });
+	const secondNodeId = next.nodes.find((node): boolean => node.nodeId !== firstNodeId && node.typeId === "builtin/text")!.nodeId;
 	next = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: next.flow.graphRevision, sourceNodeId: secondNodeId, sourcePort: "output", targetNodeId: connected.nodeId, targetPort: "input", dataType: "text" });
 	assert.equal(next.edges.length, 1);
 	assert.equal(next.edges[0]!.sourceNodeId, secondNodeId);
@@ -63,10 +150,10 @@ test("createConnected is atomic and replaces a single-input edge", async (): Pro
 
 test("Flow runner passes values by port and caches pure nodes", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Run" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "text", x: 0, y: 0, config: { text: "hello" } });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "hello" } });
 	const textNode = snapshot.nodes[0]!;
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "template", x: 320, y: 0, config: { template: "{{input}} world", inputs: [{ id: "input", label: "Input", dataType: "text" }] } });
-	const templateNode = snapshot.nodes.find((node): boolean => node.type === "template")!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/template", x: 320, y: 0, config: { template: "{{input}} world", inputs: [{ id: "input", label: "Input", dataType: "text" }] } });
+	const templateNode = snapshot.nodes.find((node): boolean => node.typeId === "builtin/template")!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: textNode.nodeId, sourcePort: "output", targetNodeId: templateNode.nodeId, targetPort: "input", dataType: "text" });
 	const first = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
 	assert.equal(first.status, "completed");
@@ -77,36 +164,36 @@ test("Flow runner passes values by port and caches pure nodes", async (): Promis
 
 test("an active run locks semantic edits but keeps layout editable", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Locked graph" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "text", x: 0, y: 0, config: { text: "hello" } });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "hello" } });
 	const node = snapshot.nodes[0]!;
 	const run = await createFlowRunDocument(snapshot.flow.flowId, snapshot.flow.graphRevision, [node.nodeId]);
-	await assert.rejects(createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "note", x: 10, y: 10 }), { code: "flow_graph_locked" });
+	await assert.rejects(createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/note", x: 10, y: 10 }), { code: "flow_graph_locked" });
 	const moved = await updateFlowNodeDocument({ flowId: snapshot.flow.flowId, nodeId: node.nodeId, revision: snapshot.flow.layoutRevision, patch: { x: 80, y: 90 } });
 	assert.equal(moved.nodes[0]!.x, 80);
 	assert.equal(moved.flow.graphRevision, snapshot.flow.graphRevision);
 	await updateFlowRunDocument(snapshot.flow.flowId, run.runId, { status: "completed", finishedAt: new Date().toISOString() });
-	const editable = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "note", x: 10, y: 10 });
+	const editable = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/note", x: 10, y: 10 });
 	assert.equal(editable.nodes.length, 2);
 }));
 
 test("Merge keeps configured input order and Condition activates one output branch", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Branching" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "text", x: 0, y: 0, config: { text: "first" } });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "first" } });
 	const first = snapshot.nodes[0]!;
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "text", x: 0, y: 160, config: { text: "second" } });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 160, config: { text: "second" } });
 	const second = snapshot.nodes.find((node): boolean => node.nodeId !== first.nodeId)!;
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "merge", x: 300, y: 80, config: { mode: "concat", separator: "|", inputs: [{ id: "input-1", label: "First", dataType: "text" }, { id: "input-2", label: "Second", dataType: "text" }] } });
-	const merge = snapshot.nodes.find((node): boolean => node.type === "merge")!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/merge", x: 300, y: 80, config: { mode: "concat", separator: "|", inputs: [{ id: "input-1", label: "First", dataType: "text" }, { id: "input-2", label: "Second", dataType: "text" }] } });
+	const merge = snapshot.nodes.find((node): boolean => node.typeId === "builtin/merge")!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: first.nodeId, sourcePort: "output", targetNodeId: merge.nodeId, targetPort: "input-2", dataType: "text" });
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: second.nodeId, sourcePort: "output", targetNodeId: merge.nodeId, targetPort: "input-1", dataType: "text" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "condition", x: 620, y: 80, config: { pointer: "/", operator: "equals", value: "second|first" } });
-	const condition = snapshot.nodes.find((node): boolean => node.type === "condition")!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/condition", x: 620, y: 80, config: { pointer: "/", operator: "equals", value: "second|first" } });
+	const condition = snapshot.nodes.find((node): boolean => node.typeId === "builtin/condition")!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: merge.nodeId, sourcePort: "output", targetNodeId: condition.nodeId, targetPort: "input", dataType: "text" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "output", x: 940, y: 0, config: { format: "text" } });
-	const trueOutput = snapshot.nodes.find((node): boolean => node.type === "output")!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/output", x: 940, y: 0, config: { format: "text" } });
+	const trueOutput = snapshot.nodes.find((node): boolean => node.typeId === "builtin/output")!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: condition.nodeId, sourcePort: "true", targetNodeId: trueOutput.nodeId, targetPort: "input", dataType: "text" });
-	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, type: "output", x: 940, y: 180, config: { format: "text" } });
-	const falseOutput = snapshot.nodes.find((node): boolean => node.type === "output" && node.nodeId !== trueOutput.nodeId)!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/output", x: 940, y: 180, config: { format: "text" } });
+	const falseOutput = snapshot.nodes.find((node): boolean => node.typeId === "builtin/output" && node.nodeId !== trueOutput.nodeId)!;
 	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: condition.nodeId, sourcePort: "false", targetNodeId: falseOutput.nodeId, targetPort: "input", dataType: "text" });
 	const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
 	assert.equal(run.status, "completed");
@@ -115,7 +202,7 @@ test("Merge keeps configured input order and Condition activates one output bran
 	assert.equal(run.nodes.find((node): boolean => node.nodeId === falseOutput.nodeId)?.status, "skipped");
 }));
 
-test("Flow schema migration preserves existing documents, nodes, and edges", async (): Promise<void> => {
+test("Flow schema migration resets legacy Flow data without touching the session database", async (): Promise<void> => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "daedalus-document-flow-migration-"));
 	const databasePath = path.join(directory, "sessions.sqlite");
 	const db = new DatabaseSync(databasePath);
@@ -132,13 +219,10 @@ test("Flow schema migration preserves existing documents, nodes, and edges", asy
 	db.close();
 	await resetSessionDatabaseForTests(databasePath);
 	try {
-		const migrated = await getFlowDocument("flow-old");
-		assert.equal(migrated.flow.graphRevision, 7);
-		assert.equal(migrated.flow.layoutRevision, 7);
-		assert.equal(migrated.nodes.length, 2);
-		assert.equal(migrated.edges.length, 1);
-		const added = await createFlowNodeDocument({ flowId: "flow-old", revision: 7, type: "command", x: 640, y: 0, config: { commandLine: "echo ok" } });
-		assert.equal(added.nodes.some((node): boolean => node.type === "command"), true);
+		await assert.rejects(getFlowDocument("flow-old"), { code: "flow_not_found" });
+		const created = await createFlowDocument({ title: "New schema" });
+		const added = await createFlowNodeDocument({ flowId: created.flow.flowId, revision: created.flow.graphRevision, typeId: "builtin/command", x: 640, y: 0, config: { commandLine: "echo ok" } });
+		assert.equal(added.nodes.some((node): boolean => node.typeId === "builtin/command"), true);
 	} finally {
 		await resetSessionDatabaseForTests();
 		await fs.rm(directory, { recursive: true, force: true });

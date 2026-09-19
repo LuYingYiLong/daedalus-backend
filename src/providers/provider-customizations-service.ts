@@ -56,14 +56,14 @@ export type AddCustomModelInput = {
 	contextWindowTokens: number;
 	maxOutputTokens: number;
 	capabilities: {
-		[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration">]-?: boolean;
-	} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration", boolean | undefined>>;
+		[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration" | "textToVideo" | "imageToVideo" | "referenceToVideo">]-?: boolean;
+	} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration" | "textToVideo" | "imageToVideo" | "referenceToVideo", boolean | undefined>>;
 	reasoningEfforts: ProviderReasoningEffortOption[];
 };
 
 type ModelCapabilityUpdate = {
-	[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration">]-?: boolean | null;
-} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration", boolean | null | undefined>>;
+	[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration" | "textToVideo" | "imageToVideo" | "referenceToVideo">]-?: boolean | null;
+} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration" | "textToVideo" | "imageToVideo" | "referenceToVideo", boolean | null | undefined>>;
 
 export type UpdateModelCustomizationInput = {
 	provider: ProviderId;
@@ -200,7 +200,10 @@ function normalizeCapabilityOverrides(
 		"imageEdit",
 		"videoGeneration",
 		"videoEdit",
-		"audioGeneration"
+		"audioGeneration",
+		"textToVideo",
+		"imageToVideo",
+		"referenceToVideo"
 	] as const) {
 		if (typeof capabilities[key] === "boolean") {
 			normalized[key] = capabilities[key];

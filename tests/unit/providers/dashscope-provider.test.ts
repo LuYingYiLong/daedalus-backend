@@ -118,6 +118,9 @@ test("DashScope provider model list keeps the recommended catalog when API retur
 			assert.equal(result.models.find((model): boolean => model.id === "qwen-image-max")?.capabilities.imageEdit, undefined);
 			assert.equal(result.models.find((model): boolean => model.id === "qwen-image-edit")?.capabilities.imageGeneration, undefined);
 			assert.equal(result.models.find((model): boolean => model.id === "qwen-image-edit")?.capabilities.imageEdit, true);
+			assert.equal(result.models.find((model): boolean => model.id === "wan3.0-video")?.capabilities.videoGeneration, true);
+			assert.equal(result.models.find((model): boolean => model.id === "wan3.0-video")?.capabilities.videoEdit, true);
+			assert.equal(result.models.find((model): boolean => model.id === "wan2.7-i2v")?.capabilities.imageInput, true);
 		});
 	});
 });

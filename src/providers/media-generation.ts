@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ProviderId } from "../protocol/types.js";
+import { createDashScopeMediaGenerationAdapter } from "./dashscope-media-generation.js";
 import { generateImageWithArtifactSink, type ImageGenerationArtifactSink } from "./image-generation.js";
 
 export type MediaGenerationKind = "imageGeneration" | "imageEdit" | "videoGeneration" | "videoEdit";
@@ -57,6 +58,7 @@ export type MediaGenerationAdapter = {
 	createTask?: ((request: MediaGenerationRequest, signal: AbortSignal) => Promise<MediaGenerationTask>) | undefined;
 	getTask?: ((providerJobId: string, signal: AbortSignal) => Promise<MediaGenerationTask>) | undefined;
 	cancelTask?: ((providerJobId: string, signal: AbortSignal) => Promise<void>) | undefined;
+	pollIntervalMs?: number | undefined;
 };
 
 const adapters = new Map<ProviderId, MediaGenerationAdapter>();
@@ -83,9 +85,10 @@ function createMockArtifact(request: MediaGenerationRequest): MediaGenerationBin
 	return { bytes: Buffer.from(svg, "utf8"), mimeType: "image/svg+xml", width: 512, height: 512, metadata: { mock: true } };
 }
 
-async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: MediaGenerationRequest, signal: AbortSignal, onProgress?: ((progress: number) => void) | undefined): Promise<MediaGenerationResult> {
+async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: MediaGenerationRequest, signal: AbortSignal, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined): Promise<MediaGenerationResult> {
 	if (adapter.createTask === undefined || adapter.getTask === undefined) return adapter.generate(request, signal, onProgress);
 	let task = await adapter.createTask(request, signal);
+	await onProviderJobId?.(task.providerJobId);
 	onProgress?.(task.progress ?? 0);
 	try {
 		while (task.status === "queued" || task.status === "running") {
@@ -104,7 +107,7 @@ async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: Medi
 					signal.removeEventListener("abort", abort);
 					resolve();
 				};
-				timer = setTimeout(complete, 500);
+				timer = setTimeout(complete, adapter.pollIntervalMs ?? 500);
 				signal.addEventListener("abort", abort, { once: true });
 			});
 			task = await adapter.getTask(task.providerJobId, signal);
@@ -133,12 +136,13 @@ const mockAdapter: MediaGenerationAdapter = {
 	},
 };
 registerMediaGenerationAdapter(mockAdapter);
+registerMediaGenerationAdapter(createDashScopeMediaGenerationAdapter());
 
-export async function generateMedia(request: MediaGenerationRequest, signal: AbortSignal, sink?: ImageGenerationArtifactSink, onProgress?: ((progress: number) => void) | undefined): Promise<MediaGenerationResult> {
+export async function generateMedia(request: MediaGenerationRequest, signal: AbortSignal, sink?: ImageGenerationArtifactSink, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined): Promise<MediaGenerationResult> {
 	const adapter = adapters.get(request.provider);
 	if (adapter !== undefined) {
 		if (!adapter.supports.includes(request.kind)) throw Object.assign(new Error(`Provider ${request.provider} does not support ${request.kind}.`), { code: "media_generation_not_supported" });
-		return waitForAdapterTask(adapter, request, signal, onProgress);
+		return waitForAdapterTask(adapter, request, signal, onProgress, onProviderJobId);
 	}
 	if (request.kind !== "imageGeneration" && request.kind !== "imageEdit") throw Object.assign(new Error(`Provider ${request.provider} has no video generation adapter.`), { code: "media_generation_not_supported" });
 	if (sink === undefined) throw new Error("Image generation requires an artifact sink.");

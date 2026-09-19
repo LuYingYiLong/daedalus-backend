@@ -43,7 +43,10 @@ const EDITABLE_CAPABILITY_KEYS = [
 	"imageEdit",
 	"videoGeneration",
 	"videoEdit",
-	"audioGeneration"
+	"audioGeneration",
+	"textToVideo",
+	"imageToVideo",
+	"referenceToVideo"
 ] as const;
 
 let snapshot: ProviderCustomizations = createEmptyProviderCustomizations();

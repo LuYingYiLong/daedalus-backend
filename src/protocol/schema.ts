@@ -168,7 +168,10 @@ const providerModelCapabilitiesSchema = z
 		imageEdit: z.boolean().optional(),
 		videoGeneration: z.boolean().optional(),
 		videoEdit: z.boolean().optional(),
-		audioGeneration: z.boolean().optional()
+		audioGeneration: z.boolean().optional(),
+		textToVideo: z.boolean().optional(),
+		imageToVideo: z.boolean().optional(),
+		referenceToVideo: z.boolean().optional()
 	})
 	.strict();
 
@@ -214,7 +217,10 @@ const editableProviderModelCapabilitiesSchema = z
 		imageEdit: z.boolean(),
 		videoGeneration: z.boolean().optional(),
 		videoEdit: z.boolean().optional(),
-		audioGeneration: z.boolean().optional()
+		audioGeneration: z.boolean().optional(),
+		textToVideo: z.boolean().optional(),
+		imageToVideo: z.boolean().optional(),
+		referenceToVideo: z.boolean().optional()
 	})
 	.strict();
 
@@ -229,7 +235,10 @@ const editableProviderModelCapabilityOverridesSchema = z
 		imageEdit: z.boolean().nullable(),
 		videoGeneration: z.boolean().nullable().optional(),
 		videoEdit: z.boolean().nullable().optional(),
-		audioGeneration: z.boolean().nullable().optional()
+		audioGeneration: z.boolean().nullable().optional(),
+		textToVideo: z.boolean().nullable().optional(),
+		imageToVideo: z.boolean().nullable().optional(),
+		referenceToVideo: z.boolean().nullable().optional()
 	})
 	.strict();
 

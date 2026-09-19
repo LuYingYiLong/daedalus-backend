@@ -400,7 +400,10 @@ function applyEditableCapabilities(
 		"imageEdit",
 		"videoGeneration",
 		"videoEdit",
-		"audioGeneration"
+		"audioGeneration",
+		"textToVideo",
+		"imageToVideo",
+		"referenceToVideo"
 	] as const) {
 		if (editable[key] !== undefined) {
 			capabilities[key] = editable[key];

@@ -371,8 +371,7 @@ async function executeMediaNode(params: { node: FlowDocumentNode; inputs: NodeIn
 		async save(input) {
 			return { imageId: `flow-capture-${input.model}-${input.bytes.byteLength}`, sessionId: "flow-media", mimeType: input.mimeType, byteSize: input.bytes.byteLength, provider: input.provider, model: input.model, prompt: input.prompt, createdAt: new Date().toISOString(), fileName: "flow-capture", storagePath: "" };
 		},
-	}, params.onProgress);
-	if (result.providerJobId !== undefined) await params.onProviderJobId?.(result.providerJobId);
+	}, params.onProgress, params.onProviderJobId);
 	const binaries = result.artifacts;
 	const refs = [];
 	try {

@@ -1209,6 +1209,140 @@
     "ownedBy": "dashscope"
   },
   {
+    "id": "wan3.0-video",
+    "displayName": "Wan 3.0 Video",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoGeneration": true,
+      "videoEdit": true,
+      "textToVideo": true,
+      "imageToVideo": true,
+      "referenceToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan3.0-video-prime",
+    "displayName": "Wan 3.0 Video Prime",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoGeneration": true,
+      "videoEdit": true,
+      "textToVideo": true,
+      "imageToVideo": true,
+      "referenceToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-t2v",
+    "displayName": "Wan 2.7 Text to Video",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "videoGeneration": true,
+      "textToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-t2v-2026-06-12",
+    "displayName": "Wan 2.7 Text to Video 2026-06-12",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "videoGeneration": true,
+      "textToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-t2v-2026-04-25",
+    "displayName": "Wan 2.7 Text to Video 2026-04-25",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "videoGeneration": true,
+      "textToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-i2v",
+    "displayName": "Wan 2.7 Image to Video",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoGeneration": true,
+      "imageToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-i2v-2026-04-25",
+    "displayName": "Wan 2.7 Image to Video 2026-04-25",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoGeneration": true,
+      "imageToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-r2v-2026-06-12",
+    "displayName": "Wan 2.7 Reference to Video 2026-06-12",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoGeneration": true,
+      "referenceToVideo": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "wan2.7-videoedit",
+    "displayName": "Wan 2.7 Video Edit",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 5000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "videoEdit": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
     "id": "doubao-seed-evolving",
     "displayName": "Doubao Seed Evolving",
     "provider": "volcengine",

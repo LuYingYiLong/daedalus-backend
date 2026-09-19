@@ -42,6 +42,8 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
 	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
+	const fileInputProperties = definitions.find((definition): boolean => definition.typeId === "builtin/file-input")?.configSchema.properties as Record<string, Record<string, unknown>>;
+	assert.equal(fileInputProperties.path?.["x-daedalus-control"], "workspace-file");
 	const llm = definitions.find((definition): boolean => definition.typeId === "builtin/llm")!;
 	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
 		{ id: "user-prompt", mode: "hybrid" },

@@ -56,14 +56,14 @@ export type AddCustomModelInput = {
 	contextWindowTokens: number;
 	maxOutputTokens: number;
 	capabilities: {
-		[K in keyof EditableModelCapabilities]-?: boolean;
-	};
+		[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration">]-?: boolean;
+	} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration", boolean | undefined>>;
 	reasoningEfforts: ProviderReasoningEffortOption[];
 };
 
 type ModelCapabilityUpdate = {
-	[K in keyof EditableModelCapabilities]-?: boolean | null;
-};
+	[K in Exclude<keyof EditableModelCapabilities, "videoGeneration" | "videoEdit" | "audioGeneration">]-?: boolean | null;
+} & Partial<Record<"videoGeneration" | "videoEdit" | "audioGeneration", boolean | null | undefined>>;
 
 export type UpdateModelCustomizationInput = {
 	provider: ProviderId;
@@ -197,7 +197,10 @@ function normalizeCapabilityOverrides(
 		"tools",
 		"webSearch",
 		"imageGeneration",
-		"imageEdit"
+		"imageEdit",
+		"videoGeneration",
+		"videoEdit",
+		"audioGeneration"
 	] as const) {
 		if (typeof capabilities[key] === "boolean") {
 			normalized[key] = capabilities[key];

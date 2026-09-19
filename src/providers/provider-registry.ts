@@ -397,7 +397,10 @@ function applyEditableCapabilities(
 		"tools",
 		"webSearch",
 		"imageGeneration",
-		"imageEdit"
+		"imageEdit",
+		"videoGeneration",
+		"videoEdit",
+		"audioGeneration"
 	] as const) {
 		if (editable[key] !== undefined) {
 			capabilities[key] = editable[key];

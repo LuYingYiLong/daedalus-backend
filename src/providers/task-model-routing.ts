@@ -13,7 +13,7 @@ import { normalizeConfiguredProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderId } from "../protocol/types.js";
 import { resolveModelProfile } from "../tokens/model-profiles.js";
 
-export type ProviderTaskModelKind = "imageRecognition" | "sessionTitle" | "nextStepHints" | "imageGeneration" | "gitCommit" | "commandReview" | "goalEvaluator" | "contextCompression";
+export type ProviderTaskModelKind = "imageRecognition" | "sessionTitle" | "nextStepHints" | "imageGeneration" | "videoGeneration" | "gitCommit" | "commandReview" | "goalEvaluator" | "contextCompression";
 
 export type ResolvedProviderTaskModel = {
 	kind: ProviderTaskModelKind;
@@ -135,4 +135,22 @@ export async function resolveConfiguredProviderTaskModelOptions(kind: ProviderTa
 		model: configuredRef.model,
 		options
 	};
+}
+
+export async function resolveProviderModelOptions(provider: ProviderId, model: string): Promise<ProviderChatOptions> {
+	const config = await loadProviderConfigWithSecret(provider);
+	if (config === null || config.apiKey === undefined) throw new ProviderTaskModelError("task_model_api_key_missing", `Provider ${provider} API key is not configured.`);
+	const endpointType = getProviderEndpointTypeForModel(provider, model);
+	const options: ProviderChatOptions = {
+		provider,
+		apiKey: config.apiKey,
+		model,
+		endpointType,
+		adapterFamily: getProviderAdapterFamily(provider, endpointType),
+		modelProfile: resolveModelProfile(provider, model),
+	};
+	const normalizedBaseUrl = normalizeConfiguredProviderBaseUrl(config.baseUrl);
+	if (normalizedBaseUrl !== undefined) options.baseUrl = normalizedBaseUrl;
+	if (config.requestOverrides !== undefined) options.requestOverrides = config.requestOverrides;
+	return options;
 }

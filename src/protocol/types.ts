@@ -21,6 +21,7 @@ import type {
 	flowNodeOutputDefinitionSchema,
 	flowNodeTypeDefinitionSchema,
 	flowApprovalSchema,
+	flowMediaArtifactRefSchema,
 	flowTreeOrderSchema,
 	messageTextAnchorSchema,
 	promptIdSchema,
@@ -98,6 +99,7 @@ export type FlowNodeParameterDefinition = z.infer<typeof flowNodeParameterDefini
 export type FlowNodeOutputDefinition = z.infer<typeof flowNodeOutputDefinitionSchema>;
 export type FlowNodeTypeDefinition = z.infer<typeof flowNodeTypeDefinitionSchema>;
 export type FlowApproval = z.infer<typeof flowApprovalSchema>;
+export type FlowMediaArtifactRef = z.infer<typeof flowMediaArtifactRefSchema>;
 export type FlowOperation = z.infer<typeof flowOperationSchema>;
 export type FlowPatchAck = z.infer<typeof flowPatchAckSchema>;
 export type FlowDocumentEventDataMap = {

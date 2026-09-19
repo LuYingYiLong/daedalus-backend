@@ -40,7 +40,10 @@ const EDITABLE_CAPABILITY_KEYS = [
 	"tools",
 	"webSearch",
 	"imageGeneration",
-	"imageEdit"
+	"imageEdit",
+	"videoGeneration",
+	"videoEdit",
+	"audioGeneration"
 ] as const;
 
 let snapshot: ProviderCustomizations = createEmptyProviderCustomizations();

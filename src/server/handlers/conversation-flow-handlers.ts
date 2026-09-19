@@ -22,6 +22,7 @@ import {
 import { getFlowTreeOrder, updateFlowTreeOrder, type FlowTreeOrderInventory } from "../../session/flow-tree-order-store.js";
 import { createSession, getStoredSessionMetadata, openSession, saveSession, type SessionMetadata } from "../../session/session-store.js";
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
+import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, listFlowArtifacts } from "../../session/flow-artifact-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
 import { broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
@@ -48,6 +49,13 @@ type FlowRequestMethod =
 	| "flow.run.retry"
 	| "flow.run.get"
 	| "flow.run.list"
+	| "flow.artifact.list"
+	| "flow.artifact.get"
+	| "flow.artifact.preview"
+	| "flow.artifact.thumbnail"
+	| "flow.artifact.download"
+	| "flow.artifact.delete"
+	| "flow.artifact.cleanup"
 	| "flow.import.fromSession"
 	| "flow.export.toSession";
 
@@ -237,6 +245,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
 					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status, nodeRun: node });
 				},
+				onNodeProgress: (runId, nodeId, progress): void => broadcastGlobalEvent(runId, "flow.node.state", { flowId: flowRequest.params.flowId, runId, nodeId, revision: flowRequest.params.revision, status: "running", progress }),
 			}).catch(async (runError: unknown): Promise<void> => {
 				const failed = await updateFlowRunDocument(flowRequest.params.flowId, runId, {
 					status: "failed",
@@ -282,6 +291,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
 					if (node !== undefined) broadcastGlobalEvent(run.runId, "flow.node.state", { flowId: run.flowId, runId: run.runId, nodeId, revision: run.revision, status: node.status, nodeRun: node });
 				},
+				onNodeProgress: (runId, nodeId, progress): void => broadcastGlobalEvent(runId, "flow.node.state", { flowId: flowRequest.params.flowId, runId, nodeId, revision, status: "running", progress }),
 			}).catch(async (runError: unknown): Promise<void> => {
 				const failed = await updateFlowRunDocument(flowRequest.params.flowId, retryRunId, {
 					status: "failed",
@@ -297,6 +307,28 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			break;
 		case "flow.run.list":
 			result = await listFlowRunsDocument(flowRequest.params.flowId, flowRequest.params.limit ?? 20);
+			break;
+		case "flow.artifact.list":
+			result = { artifacts: await listFlowArtifacts(flowRequest.params.flowId, flowRequest.params.runId) };
+			break;
+		case "flow.artifact.get": {
+				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
+				result = { ref: artifact.ref, ...(flowRequest.params.includeData === true ? { dataBase64: artifact.bytes.toString("base64") } : {}) };
+				break;
+			}
+		case "flow.artifact.preview":
+		case "flow.artifact.thumbnail":
+		case "flow.artifact.download": {
+				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
+				result = { ref: artifact.ref, dataBase64: artifact.bytes.toString("base64") };
+				break;
+			}
+		case "flow.artifact.delete":
+			await deleteFlowArtifact(flowRequest.params.artifactId);
+			result = { deleted: true };
+			break;
+		case "flow.artifact.cleanup":
+			result = { removed: await cleanupFlowArtifacts(flowRequest.params.flowId, flowRequest.params.keepRunIds ?? []) };
 			break;
 		case "flow.import.fromSession":
 			result = await importFlowFromSessionDocument(flowRequest.params);

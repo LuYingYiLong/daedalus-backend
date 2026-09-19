@@ -154,7 +154,22 @@ function normalizeCapabilities(raw: Record<string, unknown>, fallback: ProviderM
 			? raw.supports_image_edit
 			: typeof raw.image_edit === "boolean"
 				? raw.image_edit
-				: fallback?.capabilities.imageEdit
+				: fallback?.capabilities.imageEdit,
+		videoGeneration: typeof raw.supports_video_generation === "boolean"
+			? raw.supports_video_generation
+			: typeof raw.video_generation === "boolean"
+				? raw.video_generation
+				: fallback?.capabilities.videoGeneration,
+		videoEdit: typeof raw.supports_video_edit === "boolean"
+			? raw.supports_video_edit
+			: typeof raw.video_edit === "boolean"
+				? raw.video_edit
+				: fallback?.capabilities.videoEdit,
+		audioGeneration: typeof raw.supports_audio_generation === "boolean"
+			? raw.supports_audio_generation
+			: typeof raw.audio_generation === "boolean"
+				? raw.audio_generation
+				: fallback?.capabilities.audioGeneration
 	};
 
 	return normalizeProviderModelCapabilities(capabilities);

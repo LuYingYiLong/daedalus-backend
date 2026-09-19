@@ -96,6 +96,7 @@ const providerModelRoutingSchema = z
 		sessionTitle: providerTaskModelRefSchema.nullable().optional(),
 		nextStepHints: providerTaskModelRefSchema.nullable().optional(),
 		imageGeneration: providerTaskModelRefSchema.nullable().optional(),
+		videoGeneration: providerTaskModelRefSchema.nullable().optional(),
 		gitCommit: providerTaskModelRefSchema.nullable().optional(),
 		commandReview: providerTaskModelRefSchema.nullable().optional(),
 		goalEvaluator: providerTaskModelRefSchema.nullable().optional(),
@@ -164,7 +165,10 @@ const providerModelCapabilitiesSchema = z
 		webSearch: z.boolean().optional(),
 		vision: z.boolean().optional(),
 		imageGeneration: z.boolean().optional(),
-		imageEdit: z.boolean().optional()
+		imageEdit: z.boolean().optional(),
+		videoGeneration: z.boolean().optional(),
+		videoEdit: z.boolean().optional(),
+		audioGeneration: z.boolean().optional()
 	})
 	.strict();
 
@@ -207,7 +211,10 @@ const editableProviderModelCapabilitiesSchema = z
 		tools: z.boolean(),
 		webSearch: z.boolean(),
 		imageGeneration: z.boolean(),
-		imageEdit: z.boolean()
+		imageEdit: z.boolean(),
+		videoGeneration: z.boolean().optional(),
+		videoEdit: z.boolean().optional(),
+		audioGeneration: z.boolean().optional()
 	})
 	.strict();
 
@@ -219,7 +226,10 @@ const editableProviderModelCapabilityOverridesSchema = z
 		tools: z.boolean().nullable(),
 		webSearch: z.boolean().nullable(),
 		imageGeneration: z.boolean().nullable(),
-		imageEdit: z.boolean().nullable()
+		imageEdit: z.boolean().nullable(),
+		videoGeneration: z.boolean().nullable().optional(),
+		videoEdit: z.boolean().nullable().optional(),
+		audioGeneration: z.boolean().nullable().optional()
 	})
 	.strict();
 
@@ -1011,7 +1021,24 @@ export const flowNodeTypeIdSchema = z.string().trim().regex(
 );
 export const flowDocumentNodeStatusSchema = z.enum(["idle", "queued", "running", "waiting", "completed", "cached", "failed", "cancelled", "skipped"]);
 export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled"]);
-export const flowDocumentPortTypeSchema = z.enum(["text", "json", "artifact"]);
+export const flowDocumentPortTypeSchema = z.enum(["text", "json", "image", "video", "audio", "frames", "artifact"]);
+export const flowMediaArtifactRefSchema = z.object({
+	artifactId: flowIdentifierSchema,
+	flowId: flowIdentifierSchema,
+	runId: flowIdentifierSchema,
+	nodeId: flowIdentifierSchema,
+	mimeType: z.string().trim().min(1).max(160),
+	byteSize: z.number().int().positive(),
+	sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+	width: z.number().int().positive().optional(),
+	height: z.number().int().positive().optional(),
+	durationMs: z.number().int().positive().optional(),
+	fps: z.number().finite().positive().optional(),
+	previewArtifactId: flowIdentifierSchema.optional(),
+	storagePath: z.string().trim().min(1).max(1_000),
+	metadata: z.record(z.string(), z.unknown()).default({}),
+	createdAt: z.string().datetime(),
+}).strict();
 export const flowApprovalModeSchema = z.enum(["manual", "auto-safe", "full-trust"]);
 export const flowDynamicParameterValueSchema = z.object({
 	id: flowIdentifierSchema,
@@ -1073,8 +1100,33 @@ const flowCommandConfigSchema = z.object({
 	timeoutMs: z.number().int().min(1_000).max(1_800_000).default(30_000),
 	stdin: z.string().max(2_000_000).default(""),
 }).strict();
-const flowOutputConfigSchema = z.object({ format: z.enum(["text", "json"]).default("text") }).strict();
+const flowOutputConfigSchema = z.object({ format: z.enum(["text", "json", "image", "video", "auto"]).default("text") }).strict();
 const flowNoteConfigSchema = z.object({ text: z.string().max(200_000).default("") }).strict();
+const flowImageGenerationConfigSchema = z.object({
+	provider: z.string().max(120).default(""),
+	model: z.string().max(240).default(""),
+	prompt: z.string().max(200_000).default(""),
+	negativePrompt: z.string().max(200_000).default(""),
+	aspectRatio: z.string().max(32).default("1:1"),
+	style: z.string().max(120).default(""),
+	seed: z.number().int().optional(),
+	count: z.number().int().min(1).max(4).default(1),
+	outputFormat: z.enum(["png", "jpeg", "webp"]).default("png"),
+}).strict();
+const flowVideoGenerationConfigSchema = z.object({
+	provider: z.string().max(120).default(""),
+	model: z.string().max(240).default(""),
+	prompt: z.string().max(200_000).default(""),
+	negativePrompt: z.string().max(200_000).default(""),
+	width: z.number().int().min(64).max(8192).default(1280),
+	height: z.number().int().min(64).max(8192).default(720),
+	durationMs: z.number().int().min(250).max(300_000).default(5_000),
+	fps: z.number().finite().min(1).max(120).default(24),
+	seed: z.number().int().optional(),
+	count: z.number().int().min(1).max(4).default(1),
+	outputFormat: z.enum(["mp4", "webm", "mov"]).default("mp4"),
+}).strict();
+const flowMediaOutputConfigSchema = z.object({ format: z.enum(["preview", "download", "workspace"]).default("preview") }).strict();
 export const flowDocumentNodeConfigSchemas = {
 	"builtin/user-prompt": flowPromptConfigSchema,
 	"builtin/system-prompt": flowPromptConfigSchema,
@@ -1090,13 +1142,18 @@ export const flowDocumentNodeConfigSchemas = {
 	"builtin/command": flowCommandConfigSchema,
 	"builtin/output": flowOutputConfigSchema,
 	"builtin/note": flowNoteConfigSchema,
+	"builtin/text-to-image": flowImageGenerationConfigSchema,
+	"builtin/image-to-image": flowImageGenerationConfigSchema,
+	"builtin/text-to-video": flowVideoGenerationConfigSchema,
+	"builtin/image-to-video": flowVideoGenerationConfigSchema,
+	"builtin/media-output": flowMediaOutputConfigSchema,
 } as const;
 export const flowDocumentNodeConfigSchema = z.record(z.string(), z.unknown());
 export const flowNodePortDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
 	direction: z.enum(["input", "output"]),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1111,7 +1168,7 @@ const flowConnectionParameterDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
 	mode: z.literal("connection"),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1121,7 +1178,7 @@ const flowHybridParameterDefinitionSchema = z.object({
 	label: z.string().min(1).max(120),
 	mode: z.literal("hybrid"),
 	configField: z.string().trim().min(1).max(120),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1135,14 +1192,14 @@ export const flowNodeParameterDefinitionSchema = z.discriminatedUnion("mode", [
 export const flowNodeOutputDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
 	defaultConnect: z.boolean(),
 }).strict();
 export const flowDynamicParameterDefinitionSchema = z.object({
 	configField: z.string().trim().min(1).max(120),
 	idField: z.string().trim().min(1).max(120).default("id"),
 	labelField: z.string().trim().min(1).max(120).default("label"),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(3),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
 	dataTypeField: z.string().trim().min(1).max(120).optional(),
 	required: z.boolean(),
 	multiple: z.boolean(),
@@ -1233,6 +1290,8 @@ export const flowDocumentNodeRunSchema = z.object({
 	pluginFingerprint: z.string().trim().min(1).max(256),
 	configVersion: z.number().int().positive(),
 	status: flowDocumentNodeStatusSchema,
+	providerJobId: z.string().trim().min(1).max(240).nullable().optional(),
+	progress: z.number().min(0).max(1).optional(),
 	inputFingerprint: z.string().max(512).nullable(),
 	output: z.unknown().nullable(),
 	error: z.string().max(8_000).nullable(),
@@ -1308,6 +1367,7 @@ export const flowDocumentNodeStateEventDataSchema = z.object({
 	nodeId: flowIdentifierSchema,
 	revision: z.number().int().positive(),
 	status: flowDocumentNodeStatusSchema,
+	progress: z.number().min(0).max(1).optional(),
 	nodeRun: flowDocumentNodeRunSchema.optional(),
 }).strict();
 const flowTreeSectionKeySchema = z.enum(["pinned", "projects", "recent"]);
@@ -1778,6 +1838,48 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("flow.run.list"),
 		params: z.object({ flowId: flowIdentifierSchema, limit: z.number().int().min(1).max(100).optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.list"),
+		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema.optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.get"),
+		params: z.object({ artifactId: flowIdentifierSchema, includeData: z.boolean().optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.preview"),
+		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.thumbnail"),
+		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.download"),
+		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.delete"),
+		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.cleanup"),
+		params: z.object({ flowId: flowIdentifierSchema, keepRunIds: z.array(flowIdentifierSchema).max(100).optional() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

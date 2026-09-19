@@ -13,6 +13,8 @@ export type FlowNodeExecutionContext = {
 	gateway: ApprovalGateway;
 	mcpHost: McpHost;
 	signal: AbortSignal;
+	onProgress?: ((progress: number) => void) | undefined;
+	onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined;
 };
 export type FlowNodeExecutor = (context: FlowNodeExecutionContext) => Promise<FlowNodeOutputs>;
 

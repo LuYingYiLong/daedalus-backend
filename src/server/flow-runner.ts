@@ -13,6 +13,8 @@ import { findWorkspace } from "../workspace/registry.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { createWorkspaceToolCatalog } from "../tools/tool-catalog.js";
 import { dispatchToolCalls, ToolApprovalRequiredError } from "../tools/tool-dispatcher.js";
+import { generateMedia } from "../providers/media-generation.js";
+import { deleteFlowArtifact, getFlowArtifact, saveFlowArtifact } from "../session/flow-artifact-store.js";
 import {
 	cancelPendingFlowApprovalsDocument,
 	createFlowApprovalDocument,
@@ -23,6 +25,7 @@ import {
 	readFlowGraphForScheduler,
 	resolveFlowApprovalDocument,
 	updateFlowNodeRunDocument,
+	updateFlowNodeProviderJobIdDocument,
 	updateFlowRunDocument,
 } from "../session/flow-document-store.js";
 import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition, resolveFlowNodeParameters } from "./flow-node-registry.js";
@@ -161,7 +164,7 @@ export async function prepareFlowRunDocument(params: {
 			throw Object.assign(new Error(`Flow run entry must be a Flow Input node: ${entryNodeId}.`), { code: "flow_input_entry_invalid", nodeId: entryNodeId });
 	}
 	const reachableFromSelectedEntries = reachableNodeIdsFromEntries(graph.edges, entryNodeIds);
-	const outputNodes = graph.nodes.filter((node): boolean => node.typeId === "builtin/output");
+	const outputNodes = graph.nodes.filter((node): boolean => node.typeId === "builtin/output" || node.typeId === "builtin/media-output");
 	const requestedTargetIds = params.selection?.targetNodeIds;
 	const targetNodeIds = requestedTargetIds === undefined
 		? outputNodes.filter((node): boolean => entryNodeIds.length === 0 || reachableFromSelectedEntries.has(node.nodeId)).map((node): string => node.nodeId)
@@ -170,7 +173,7 @@ export async function prepareFlowRunDocument(params: {
 		throw Object.assign(new Error("Add an Output node before running this Flow."), { code: "flow_output_target_required" });
 	for (const targetNodeId of targetNodeIds) {
 		const target = graph.nodes.find((node): boolean => node.nodeId === targetNodeId);
-		if (target === undefined || target.typeId !== "builtin/output")
+		if (target === undefined || (target.typeId !== "builtin/output" && target.typeId !== "builtin/media-output"))
 			throw Object.assign(new Error(`Flow run target must be an Output node: ${targetNodeId}.`), { code: "flow_output_target_invalid", nodeId: targetNodeId });
 		if (entryNodeIds.length > 0 && !reachableFromSelectedEntries.has(targetNodeId))
 			throw Object.assign(new Error(`Output is not reachable from the selected Flow Input: ${targetNodeId}.`), { code: "flow_output_target_unreachable", nodeId: targetNodeId });
@@ -326,6 +329,61 @@ function parseToolContent(content: string): unknown {
 	try { return JSON.parse(content) as unknown; } catch { return content; }
 }
 
+async function executeMediaNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
+	const provider = typeof params.node.config.provider === "string" ? params.node.config.provider.trim() : "";
+	const model = typeof params.node.config.model === "string" ? params.node.config.model.trim() : "";
+	if (provider.length === 0 || model.length === 0) throw Object.assign(new Error("Media node requires a provider and model."), { code: "media_model_required" });
+	const kind = params.node.typeId === "builtin/text-to-video" || params.node.typeId === "builtin/image-to-video" ? "videoGeneration" : params.node.typeId === "builtin/image-to-image" ? "imageEdit" : "imageGeneration";
+	const sourceRefs: Array<{ artifactId: string }> = [];
+	const collectSourceRefs = (value: unknown): void => {
+		if (Array.isArray(value)) {
+			for (const item of value) collectSourceRefs(item);
+			return;
+		}
+		if (value !== null && typeof value === "object" && typeof (value as Record<string, unknown>).artifactId === "string") {
+			sourceRefs.push({ artifactId: String((value as Record<string, unknown>).artifactId) });
+		}
+	};
+	collectSourceRefs(params.inputs.image);
+	const sourceImages = sourceRefs.length === 0
+		? undefined
+		: await Promise.all(sourceRefs.map(async (ref): Promise<{ mimeType: string; bytes: Buffer }> => {
+			const artifact = await getFlowArtifact(ref.artifactId);
+			return { mimeType: artifact.ref.mimeType, bytes: artifact.bytes };
+		}));
+	const result = await generateMedia({
+		kind,
+		provider,
+		model,
+		prompt: typeof params.inputs.prompt === "string" ? params.inputs.prompt : typeof params.node.config.prompt === "string" ? params.node.config.prompt : "",
+		negativePrompt: typeof params.node.config.negativePrompt === "string" ? params.node.config.negativePrompt : undefined,
+		width: typeof params.node.config.width === "number" ? params.node.config.width : undefined,
+		height: typeof params.node.config.height === "number" ? params.node.config.height : undefined,
+		durationMs: typeof params.node.config.durationMs === "number" ? params.node.config.durationMs : undefined,
+		fps: typeof params.node.config.fps === "number" ? params.node.config.fps : undefined,
+		aspectRatio: typeof params.node.config.aspectRatio === "string" ? params.node.config.aspectRatio : undefined,
+		style: typeof params.node.config.style === "string" ? params.node.config.style : undefined,
+		seed: typeof params.node.config.seed === "number" ? params.node.config.seed : undefined,
+		count: typeof params.node.config.count === "number" ? params.node.config.count : undefined,
+		outputFormat: typeof params.node.config.outputFormat === "string" ? params.node.config.outputFormat : undefined,
+		sourceImages,
+	}, params.signal, {
+		async save(input) {
+			return { imageId: `flow-capture-${input.model}-${input.bytes.byteLength}`, sessionId: "flow-media", mimeType: input.mimeType, byteSize: input.bytes.byteLength, provider: input.provider, model: input.model, prompt: input.prompt, createdAt: new Date().toISOString(), fileName: "flow-capture", storagePath: "" };
+		},
+	}, params.onProgress);
+	if (result.providerJobId !== undefined) await params.onProviderJobId?.(result.providerJobId);
+	const binaries = result.artifacts;
+	const refs = [];
+	try {
+		for (const artifact of binaries) refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: artifact.metadata }));
+	} catch (error: unknown) {
+		await Promise.allSettled(refs.map((ref): Promise<void> => deleteFlowArtifact(ref.artifactId)));
+		throw error;
+	}
+	return { [kind.startsWith("video") ? "video" : "image"]: refs.length === 1 ? refs[0] : refs };
+}
+
 async function executeToolNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; gateway: ApprovalGateway; mcpHost: McpHost; signal: AbortSignal }): Promise<PortOutputs> {
 	const toolName = typeof params.node.config.toolName === "string" ? params.node.config.toolName : "";
 	const context = { workspaceId: params.flow.workspaceId ?? undefined, requestId: params.runId, sessionId: `flow:${params.flow.flowId}`, clientType: "studio" as const, hookContext: { model: "flow", approvalMode: params.flow.approvalMode, chatMode: "agent" as const } };
@@ -412,6 +470,11 @@ function registerBuiltinExecutors(): void {
 	register("builtin/tool", executeToolNode);
 	register("builtin/command", executeCommandNode);
 	register("builtin/output", async ({ inputs }): Promise<PortOutputs> => ({ result: inputs.input }));
+	register("builtin/text-to-image", async (context): Promise<PortOutputs> => executeMediaNode(context));
+	register("builtin/image-to-image", async (context): Promise<PortOutputs> => executeMediaNode(context));
+	register("builtin/text-to-video", async (context): Promise<PortOutputs> => executeMediaNode(context));
+	register("builtin/image-to-video", async (context): Promise<PortOutputs> => executeMediaNode(context));
+	register("builtin/media-output", async ({ inputs }): Promise<PortOutputs> => ({ result: inputs.input }));
 }
 
 registerBuiltinExecutors();
@@ -449,6 +512,7 @@ export async function startFlowRunDocument(params: {
 	inputValues?: Readonly<Record<string, unknown>>;
 	onRunState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>) => void;
 	onNodeState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>, nodeId: string) => void;
+	onNodeProgress?: (runId: string, nodeId: string, progress: number) => void;
 }): Promise<Awaited<ReturnType<typeof getFlowRunDocument>>> {
 	const activeRunId = activeRunsByFlow.get(params.flowId);
 	if (activeRunId !== undefined && activeRunId !== params.runId) throw Object.assign(new Error("Another Flow run is active."), { code: "flow_busy", activeRunId });
@@ -547,7 +611,7 @@ export async function startFlowRunDocument(params: {
 					await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "running", inputFingerprint: fingerprintKey, startedAt });
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 					try {
-						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal });
+						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal, onProgress: (progress): void => params.onNodeProgress?.(run.runId, node.nodeId, progress), onProviderJobId: (providerJobId): Promise<void> => updateFlowNodeProviderJobIdDocument(params.flowId, run.runId, node.nodeId, providerJobId) });
 						outputs.set(node.nodeId, output);
 						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "completed", inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
 					} catch (nodeError: unknown) {

@@ -90,6 +90,7 @@ type NodeRunRow = {
 	plugin_fingerprint: string;
 	config_version: number;
 	status: FlowDocumentNodeStatus;
+	provider_job_id: string | null;
 	input_fingerprint: string | null;
 	output_json: string | null;
 	error: string | null;
@@ -199,6 +200,7 @@ function mapNodeRun(row: NodeRunRow): FlowDocumentNodeRun {
 		pluginFingerprint: row.plugin_fingerprint,
 		configVersion: row.config_version,
 		status: row.status,
+		providerJobId: row.provider_job_id,
 		inputFingerprint: row.input_fingerprint,
 		output: row.output_json === null ? null : parseSqlJson<unknown>(row.output_json),
 		error: row.error,
@@ -250,7 +252,7 @@ function readEdges(db: DatabaseSync, flowId: string): FlowDocumentEdge[] {
 function readRuns(db: DatabaseSync, flowId: string, limit: number = 1): FlowDocumentRun[] {
 	const runs: RunRow[] = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? ORDER BY COALESCE(started_at, '') DESC, run_id DESC LIMIT ?`).all(flowId, limit) as RunRow[];
 	return runs.map((run): FlowDocumentRun => {
-		const nodeRuns = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(run.run_id) as NodeRunRow[]).map(mapNodeRun);
+		const nodeRuns = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, provider_job_id, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(run.run_id) as NodeRunRow[]).map(mapNodeRun);
 		return mapRun(run, nodeRuns);
 	});
 }
@@ -694,7 +696,7 @@ export async function getFlowRunDocument(flowId: string, runId: string): Promise
 	const db = await getSessionDatabase();
 	const row = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? AND run_id = ?`).get(flowId, runId) as RunRow | undefined;
 	if (row === undefined) throw flowDocumentError("flow_run_not_found", `Flow run not found: ${runId}`);
-	const nodes = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
+	const nodes = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, provider_job_id, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
 	return mapRun(row, nodes);
 }
 
@@ -708,6 +710,11 @@ export async function updateFlowNodeRunDocument(flowId: string, runId: string, n
 	const db = await getSessionDatabase();
 	db.prepare("UPDATE flow_node_runs SET status = ?, input_fingerprint = ?, output_json = ?, error = ?, started_at = ?, finished_at = ? WHERE run_id = ? AND node_id = (SELECT node_id FROM flow_nodes WHERE flow_id = ? AND node_id = ?)").run(patch.status, patch.inputFingerprint ?? null, patch.output === undefined ? null : sqlJson(patch.output), patch.error ?? null, patch.startedAt ?? null, patch.finishedAt ?? null, runId, flowId, nodeId);
 	return getFlowRunDocument(flowId, runId);
+}
+
+export async function updateFlowNodeProviderJobIdDocument(flowId: string, runId: string, nodeId: string, providerJobId: string): Promise<void> {
+	const db = await getSessionDatabase();
+	db.prepare("UPDATE flow_node_runs SET provider_job_id = ? WHERE run_id = ? AND node_id = (SELECT node_id FROM flow_nodes WHERE flow_id = ? AND node_id = ?)").run(providerJobId, runId, flowId, nodeId);
 }
 
 export async function findCachedFlowNodeOutput(flowId: string, nodeId: string, fingerprint: string): Promise<unknown | null> {

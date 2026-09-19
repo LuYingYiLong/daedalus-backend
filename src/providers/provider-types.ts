@@ -24,11 +24,14 @@ export type ProviderModelCapabilities = {
 	vision?: boolean | undefined;
 	imageGeneration?: boolean | undefined;
 	imageEdit?: boolean | undefined;
+	videoGeneration?: boolean | undefined;
+	videoEdit?: boolean | undefined;
+	audioGeneration?: boolean | undefined;
 };
 
 export type ProviderModelCapabilityOverrides = Partial<Pick<
 	ProviderModelCapabilities,
-	"imageInput" | "videoInput" | "reasoning" | "tools" | "webSearch" | "imageGeneration" | "imageEdit"
+	"imageInput" | "videoInput" | "reasoning" | "tools" | "webSearch" | "imageGeneration" | "imageEdit" | "videoGeneration" | "videoEdit" | "audioGeneration"
 >>;
 
 export type ProviderModelCustomizationInfo = {
@@ -204,6 +207,9 @@ export function normalizeProviderModelCapabilities(capabilities: ProviderModelCa
 	copyBooleanCapability(normalized, source, "webSearch");
 	copyBooleanCapability(normalized, source, "imageGeneration");
 	copyBooleanCapability(normalized, source, "imageEdit");
+	copyBooleanCapability(normalized, source, "videoGeneration");
+	copyBooleanCapability(normalized, source, "videoEdit");
+	copyBooleanCapability(normalized, source, "audioGeneration");
 	const reasoningEfforts = normalizeReasoningEfforts(source.reasoningEfforts);
 	if (reasoningEfforts !== undefined) {
 		normalized.reasoningEfforts = reasoningEfforts;

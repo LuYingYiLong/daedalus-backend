@@ -179,7 +179,7 @@ test("provider schema and registry include official OpenAI provider", (): void =
 	assert.equal(providerIdSchema.safeParse("anthropic").success, true);
 	assert.equal(providerIdSchema.safeParse("Anthropic").success, false);
 	assert.ok(getProviderIds().includes("openai"));
-	assert.equal(getProviderDefaultModel("openai"), "gpt-5.6-sol");
+	assert.equal(getProviderDefaultModel("openai"), "gpt-6-astra");
 	assert.equal(getProviderDefaultBaseUrl("openai"), "https://api.openai.com/v1");
 });
 
@@ -205,7 +205,7 @@ test("OpenAI Responses request builder maps instructions, input, stream-safe opt
 		"稳定系统指令"
 	);
 
-	assert.equal(requestBody.model, "gpt-5.6-sol");
+	assert.equal(requestBody.model, "gpt-6-astra");
 	assert.equal(requestBody.instructions, "稳定系统指令");
 	assert.equal(requestBody.store, false);
 	assert.equal(requestBody.temperature, 0.2);

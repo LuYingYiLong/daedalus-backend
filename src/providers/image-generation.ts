@@ -785,7 +785,7 @@ function createDashScopeImageParameters(model: string, input: ImageGenerationInp
 }
 
 async function generateDashScopeImages(options: ProviderChatOptions, input: ImageGenerationInput, runtime: ImageGenerationRuntime): Promise<ImageGenerationResult> {
-	const model: string = options.model ?? "qwen-image-2.0-pro";
+	const model: string = options.model ?? "qwen-image-3.0-pro";
 	const sourceImages: ImageGenerationSourceImage[] = await resolveImageGenerationSourceImages(input.sessionId, input.sourceImages);
 	const content: DashScopeImageContent[] = [
 		...sourceImages.map((image: ImageGenerationSourceImage): DashScopeImageContent => ({ image: image.dataUrl })),

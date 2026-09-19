@@ -220,6 +220,29 @@
     "ownedBy": "moonshot"
   },
   {
+    "id": "gpt-6-astra",
+    "displayName": "GPT-6 Astra",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 1050000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+			"reasoningEfforts": [
+				{ "id": "low", "fallback": "low" },
+				{ "id": "medium", "fallback": "medium" },
+				{ "id": "high", "fallback": "high" },
+				{ "id": "xhigh", "fallback": "high" },
+				{ "id": "max", "fallback": "max" }
+			],
+      "tools": true,
+      "webSearch": true,
+      "vision": true
+    },
+    "ownedBy": "openai"
+  },
+  {
     "id": "gpt-5.6-sol",
     "displayName": "GPT-5.6 Sol",
     "provider": "openai",
@@ -334,6 +357,90 @@
   {
     "id": "gpt-image-2",
     "displayName": "GPT Image 2",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-2-2026-04-21",
+    "displayName": "GPT Image 2 2026-04-21",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-2.5-sunburst",
+    "displayName": "GPT Image 2.5 Sunburst",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-2.5-sunburst-2026-09-08",
+    "displayName": "GPT Image 2.5 Sunburst 2026-09-08",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-2.5-flare",
+    "displayName": "GPT Image 2.5 Flare",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-2.5-flare-2026-09-08",
+    "displayName": "GPT Image 2.5 Flare 2026-09-08",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-1.5",
+    "displayName": "GPT Image 1.5",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 4096,
+    "capabilities": {
+      "imageGeneration": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-image-1-mini",
+    "displayName": "GPT Image 1 Mini",
     "provider": "openai",
     "endpointType": "openai-responses",
     "contextWindowTokens": 32000,
@@ -599,9 +706,42 @@
     "provider": "dashscope",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
-    "maxOutputTokens": 32000,
+    "maxOutputTokens": 65536,
     "capabilities": {
       "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.8-max-0902",
+    "displayName": "Qwen3.8 Max 0902",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.8-flash",
+    "displayName": "Qwen3.8 Flash",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
       "reasoning": true,
       "tools": true,
       "vision": true
@@ -614,10 +754,13 @@
     "provider": "dashscope",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
-    "maxOutputTokens": 32000,
+    "maxOutputTokens": 65536,
     "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
       "reasoning": true,
-      "tools": true
+      "tools": true,
+      "vision": true
     },
     "ownedBy": "dashscope"
   },
@@ -627,10 +770,109 @@
     "provider": "dashscope",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
-    "maxOutputTokens": 32000,
+    "maxOutputTokens": 65536,
     "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
       "reasoning": true,
-      "tools": true
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.7-max-2026-06-08",
+    "displayName": "Qwen3.7 Max 2026-06-08",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.7-plus-2026-05-26",
+    "displayName": "Qwen3.7 Plus 2026-05-26",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.7-flash",
+    "displayName": "Qwen3.7 Flash",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.7-flash-2026-07-15",
+    "displayName": "Qwen3.7 Flash 2026-07-15",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.6-plus",
+    "displayName": "Qwen3.6 Plus",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.6-plus-2026-04-02",
+    "displayName": "Qwen3.6 Plus 2026-04-02",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
     },
     "ownedBy": "dashscope"
   },
@@ -640,10 +882,119 @@
     "provider": "dashscope",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
-    "maxOutputTokens": 32000,
+    "maxOutputTokens": 65536,
     "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
       "reasoning": true,
-      "tools": true
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.6-flash-2026-04-16",
+    "displayName": "Qwen3.6 Flash 2026-04-16",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.5-plus",
+    "displayName": "Qwen3.5 Plus",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.5-plus-2026-02-15",
+    "displayName": "Qwen3.5 Plus 2026-02-15",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.5-flash",
+    "displayName": "Qwen3.5 Flash",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen3.5-flash-2026-02-23",
+    "displayName": "Qwen3.5 Flash 2026-02-23",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 65536,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "vision": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen-image-3.0-pro",
+    "displayName": "Qwen Image 3.0 Pro",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageGeneration": true,
+      "imageEdit": true
+    },
+    "ownedBy": "dashscope"
+  },
+  {
+    "id": "qwen-image-3.0",
+    "displayName": "Qwen Image 3.0",
+    "provider": "dashscope",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 32000,
+    "maxOutputTokens": 1,
+    "capabilities": {
+      "imageGeneration": true,
+      "imageEdit": true
     },
     "ownedBy": "dashscope"
   },

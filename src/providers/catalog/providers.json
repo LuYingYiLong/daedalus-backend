@@ -44,7 +44,7 @@
     "displayName": "OpenAI",
     "websiteUrl": "https://openai.com",
     "authType": "api-key",
-    "defaultModel": "gpt-5.6-sol",
+    "defaultModel": "gpt-6-astra",
     "defaultEndpointType": "openai-responses",
     "modelListMode": "catalog-recommended",
     "endpointConfigs": {
@@ -84,7 +84,7 @@
     "displayName": "Alibaba Cloud Qwen",
     "websiteUrl": "https://dashscope.aliyun.com",
     "authType": "api-key",
-    "defaultModel": "qwen3.7-plus",
+    "defaultModel": "qwen3.8-max",
     "modelListMode": "catalog-recommended",
     "defaultEndpointType": "openai-chat-completions",
     "endpointConfigs": {

@@ -94,6 +94,7 @@ type PendingCall = {
 type StagedRegistrations = { tools: PluginToolRegistration[]; skills: PluginSkillRegistration[]; hooks: Array<{ registration: PluginHookRegistration; handlerName: string }>; mcps: PluginMcpRegistration[]; commands: PluginCommandRegistration[]; flowNodes: PluginFlowNodeRegistration[] };
 
 export type WorkerHandle = {
+	pluginNamespace: string;
 	pluginId: string;
 	pluginFingerprint: string;
 	sessionId: string;
@@ -168,7 +169,7 @@ function commitWorkerRegistrations(handle: WorkerHandle): void {
 		for (const { registration, handlerName } of handle.stagedRegistrations.hooks) registerPluginHook(handle.pluginId, registration, handlerName);
 		for (const registration of handle.stagedRegistrations.mcps) registerPluginMcp(handle.pluginId, registration);
 		for (const registration of handle.stagedRegistrations.commands) registerPluginCommand(handle.pluginId, registration);
-		for (const registration of handle.stagedRegistrations.flowNodes) registerPluginFlowNode(handle.pluginId, handle.pluginFingerprint, registration);
+		for (const registration of handle.stagedRegistrations.flowNodes) registerPluginFlowNode(handle.pluginId, handle.pluginFingerprint, registration, handle.pluginNamespace);
 	} catch (error: unknown) {
 		clearPluginRegistrations(handle.pluginId);
 		throw error;
@@ -223,7 +224,7 @@ function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 		if (pending === undefined || !pending.started) throw new Error("Plugin worker requested a host capability for an unknown invocation.");
 		if (pending.hostRequestIds.has(event.requestId) || pending.hostRequestIds.size >= 32) throw new Error("Plugin worker host request limit exceeded.");
 		pending.hostRequestIds.add(event.requestId);
-		const handler = handle.context.capabilities.includes("flowHostTools") ? pending.hostRequest : undefined;
+		const handler = handle.context.capabilities.includes(event.method === "media.process" ? "flowMedia" : "flowHostTools") ? pending.hostRequest : undefined;
 		void (handler === undefined ? Promise.reject(new Error("Plugin host tool access is not declared or available.")) : handler(event)).then(
 			(value: unknown): void => {
 				const active = handle.pending.get(event.invocationId);
@@ -309,6 +310,8 @@ function handleEvent(handle: WorkerHandle, event: PluginWorkerEvent): void {
 	}
 	if (event.type === "register.flowNode") {
 		if (!handle.context.capabilities.includes("flowNodes")) throw new Error("Plugin registered a capability that was not declared.");
+		const advancedPorts = [...event.registration.parameters, ...event.registration.outputs].some(port => "cardinality" in port || "optional" in port || "dataTypes" in port && port.dataTypes.some(type => ["number", "boolean", "color", "size", "mask"].includes(type)));
+        if (advancedPorts && !handle.context.capabilities.includes("flowTypedValues")) throw new Error("Plugin must declare flowTypedValues for typed or list ports.");
 		if (++handle.registrationCounts.flowNodes > 128) throw new Error("Plugin Flow node registration limit exceeded.");
 		const registration = event.registration.ui.kind === "sandbox" && !Array.isArray(event.registration.ui.actions)
 			? { ...event.registration, ui: { ...event.registration.ui, actions: [] } }
@@ -367,7 +370,7 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	let resolveReady!: () => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<void>((resolve, reject): void => { resolveReady = resolve; rejectReady = reject; });
-	const handle: WorkerHandle = { pluginId: record.id, pluginFingerprint: record.fingerprint, sessionId: context.sessionId, child, pending: new Map(), ignoredResultIds: new Set(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, flowNodes: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], flowNodes: [] }, declaredFlowNodes: structuredClone(record.nativePlugin?.flowNodes ?? []) };
+	const handle: WorkerHandle = { pluginNamespace: record.packageName.replace(/^@/u, "").replaceAll("/", "-"), pluginId: record.id, pluginFingerprint: record.fingerprint, sessionId: context.sessionId, child, pending: new Map(), ignoredResultIds: new Set(), ready, resolveReady, rejectReady, buffer: "", stderrTail: "", registrationCounts: { tools: 0, skills: 0, hooks: 0, mcps: 0, commands: 0, flowNodes: 0 }, context, activeCalls: 0, lastUsedAt: Date.now(), stopping: false, failed: false, stagedRegistrations: { tools: [], skills: [], hooks: [], mcps: [], commands: [], flowNodes: [] }, declaredFlowNodes: structuredClone(record.nativePlugin?.flowNodes ?? []) };
 	handles.set(key(record.id, context.sessionId), handle);
 	setSnapshot(record.id, { status: "starting", activeSessions: [...handles.values()].filter((item): boolean => item.pluginId === record.id).length });
 	child.stdout.setEncoding("utf8");

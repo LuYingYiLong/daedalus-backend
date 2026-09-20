@@ -1,3 +1,9 @@
+import { z } from "zod";
+import { validateFlowArtifactValues } from "../../server/flow-node-executor-registry.js";
+import { assertFlowPortValue } from "../../protocol/flow-value-types.js";
+import { getFlowArtifact } from "../../session/flow-artifact-store.js";
+import { imageOperationSchema } from "../../media/image-processing.js";
+import { transformFlowImage } from "../../server/flow-composable-executors.js";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ChatCompletionMessageToolCall } from "openai/resources/chat/completions";
 import type { ToolMapping } from "../../tools/tool-mapping.js";
@@ -51,8 +57,8 @@ export function clearPluginRegistrations(pluginId: string): void {
 	unregisterPluginFlowNodeExecutors(pluginId);
 }
 
-export function registerPluginFlowNode(pluginId: string, pluginFingerprint: string, registration: PluginFlowNodeRegistration): RegisteredPluginFlowNode {
-	if (registration.pluginId !== pluginId) throw Object.assign(new Error("Plugin Flow node owner does not match the installed plugin."), { code: "plugin_registry_namespace_mismatch" });
+export function registerPluginFlowNode(pluginId: string, pluginFingerprint: string, registration: PluginFlowNodeRegistration, namespace: string = pluginId): RegisteredPluginFlowNode {
+	if (registration.pluginId !== namespace) throw Object.assign(new Error("Plugin Flow node owner does not match the installed plugin."), { code: "plugin_registry_namespace_mismatch" });
 	if (!registration.typeId.startsWith(`${registration.pluginId}/`)) throw Object.assign(new Error("Plugin Flow node uses a different namespace."), { code: "plugin_registry_namespace_mismatch" });
 	if (flowNodes.has(registration.typeId)) throw Object.assign(new Error(`Plugin Flow node is already registered: ${registration.typeId}.`), { code: "plugin_registry_conflict" });
 	const validate = ajv.compile(registration.configSchema);
@@ -65,7 +71,9 @@ export function registerPluginFlowNode(pluginId: string, pluginFingerprint: stri
 			return candidate;
 		},
 	});
-	registerFlowNodeExecutor(registration.typeId, pluginId, async ({ node, inputs, flow, runId, gateway, mcpHost, signal }) => {
+	registerFlowNodeExecutor(registration.typeId, pluginId, async ({ node, inputs, flow, runId, gateway, mcpHost, signal: parentSignal }) => {
+		const invocation = new AbortController();
+		const signal = AbortSignal.any([parentSignal, invocation.signal]);
 		if (signal.aborted) throw new Error("Flow run cancelled.");
 		const { ensurePluginRuntime, invokePlugin } = await import("./manager.js");
 		const sessionId = `flow:${flow.flowId}`;
@@ -73,15 +81,29 @@ export function registerPluginFlowNode(pluginId: string, pluginFingerprint: stri
 		// tool, command, network and secret access must cross an audited host proxy.
 		await ensurePluginRuntime(pluginId, { sessionId, ...(flow.workspaceId === null ? {} : { workspaceId: flow.workspaceId }) });
 		const toolContext = { workspaceId: flow.workspaceId ?? undefined, requestId: runId, sessionId, clientType: "studio" as const, hookContext: { model: "flow", approvalMode: flow.approvalMode, chatMode: "agent" as const } };
+        const allowed = new Set<string>();
+        const visit = (value: unknown): void => { if (Array.isArray(value)) value.forEach(visit); else if (value && typeof value === "object") { const record = value as Record<string, unknown>; if (typeof record.artifactId === "string") allowed.add(record.artifactId); else Object.values(record).forEach(visit); } };
+        visit(inputs);
+        const publicValue = (value: unknown): unknown => Array.isArray(value) ? value.map(publicValue) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== "storagePath").map(([key, item]) => [key, publicValue(item)])) : value;
 		const value = await invokePlugin(
 			pluginId,
 			sessionId,
 			"flow_node",
 			registration.handlerName,
-			{ config: node.config, inputs, context: { flowId: flow.flowId, nodeId: node.nodeId, runId, workspaceId: flow.workspaceId } },
+			{ config: node.config, inputs: publicValue(inputs), context: { flowId: flow.flowId, nodeId: node.nodeId, runId, workspaceId: flow.workspaceId } },
 			undefined,
 			signal,
 			async (request): Promise<unknown> => {
+				if (request.method === "media.process") {
+					if (request.params.name !== "image.transform") throw new Error("plugin_flow_media_operation_invalid");
+                    const args = z.object({ artifactId: z.string(), operation: imageOperationSchema }).strict().parse(request.params.args);
+                    if (!allowed.has(args.artifactId)) throw new Error("plugin_flow_artifact_unauthorized");
+                    const ref = (await getFlowArtifact(args.artifactId)).ref;
+                    const result = await transformFlowImage({ node, inputs, flow, runId, gateway, mcpHost, signal, runInputs: {} }, ref, args.operation);
+                    visit(result);
+                    return publicValue(result);
+				}
+
 				const [{ createWorkspaceToolCatalog }, { dispatchToolCalls }] = await Promise.all([
 					import("../../tools/tool-catalog.js"),
 					import("../../tools/tool-dispatcher.js"),
@@ -95,17 +117,16 @@ export function registerPluginFlowNode(pluginId: string, pluginFingerprint: stri
 				if (typeof content !== "string") return content;
 				try { return JSON.parse(content) as unknown; } catch { return content; }
 			},
-		);
+		).finally(() => invocation.abort());
 		if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Plugin Flow node returned a non-object output.");
 		const outputs = value as Record<string, unknown>;
 		const outputPorts = new Map(registration.outputs.map((port) => [port.id, port]));
 		for (const [portId, outputValue] of Object.entries(outputs)) {
 			const port = outputPorts.get(portId);
 			if (port === undefined) throw Object.assign(new Error(`Plugin Flow node returned an undeclared output port: ${portId}.`), { code: "plugin_flow_node_output_invalid" });
-			if (!port.dataTypes.some((dataType): boolean => dataType === "json" || dataType === "text" && typeof outputValue === "string" || dataType === "artifact" && typeof outputValue === "object" && outputValue !== null && !Array.isArray(outputValue))) {
-				throw Object.assign(new Error(`Plugin Flow node returned an invalid value for port: ${portId}.`), { code: "plugin_flow_node_output_invalid" });
-			}
+			assertFlowPortValue(port, outputValue);
 		}
+		await validateFlowArtifactValues(outputs, flow.flowId, allowed);
 		return outputs;
 	});
 	const entry = { ...registration, ownerPluginId: pluginId };

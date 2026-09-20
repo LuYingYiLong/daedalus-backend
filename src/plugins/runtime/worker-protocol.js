@@ -19,7 +19,7 @@ function assertRuntimeContext(value) {
   assertString(value.sessionId, "session ID", 256);
   if (value.workspaceId !== void 0 && (typeof value.workspaceId !== "string" || value.workspaceId.length > 256)) throw new Error("Invalid plugin worker workspace ID.");
   if (value.workspaceRoot !== void 0 && (typeof value.workspaceRoot !== "string" || value.workspaceRoot.length > 4096)) throw new Error("Invalid plugin worker workspace root.");
-  if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability) => ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
+  if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability) => ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools", "flowMedia", "flowTypedValues"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
   if (value.p2Capabilities !== void 0 && (!Array.isArray(value.p2Capabilities) || value.p2Capabilities.length > 16 || !value.p2Capabilities.every((capability) => typeof capability === "string" && capability.length <= 64))) throw new Error("Invalid plugin worker P2 capabilities.");
 }
 function parseWorkerMessage(line) {
@@ -59,7 +59,7 @@ function parseWorkerMessage(line) {
 }
 function assertRegistration(value, kind) {
   if (kind === "flowNode") {
-    assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "parameters", "outputs", "dynamicParameters", "handlerName"]);
+    assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "parameters", "outputs", "dynamicParameters", "terminal", "batch", "modelCapability", "handlerName"]);
     assertString(value.typeId, "Flow node type ID", 256);
     assertString(value.pluginId, "Flow node plugin ID", 128);
     assertString(value.pluginVersion, "Flow node plugin version", 80);
@@ -146,7 +146,7 @@ function parseWorkerEvent(line) {
       assertKeys(value, ["type", "requestId", "invocationId", "method", "params"]);
       assertString(value.requestId, "host request ID", 128);
       assertString(value.invocationId, "host invocation ID", 128);
-      if (value.method !== "tool.call" || !isRecord(value.params)) throw new Error("Invalid plugin host request.");
+      if (!["tool.call", "media.process"].includes(String(value.method)) || !isRecord(value.params)) throw new Error("Invalid plugin host request.");
       assertKeys(value.params, ["name", "args"]);
       assertString(value.params.name, "host tool name", 240);
       if (!isRecord(value.params.args) || Buffer.byteLength(JSON.stringify(value.params.args), "utf8") > 2e5) throw new Error("Invalid plugin host tool arguments.");

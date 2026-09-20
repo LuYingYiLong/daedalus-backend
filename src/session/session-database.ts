@@ -1,11 +1,11 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import { getSessionsDatabasePath } from "../app-paths.js";
+import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 25;
-const FLOW_PARAMETER_SCHEMA_VERSION: number = 25;
+const DB_SCHEMA_VERSION: number = 27;
+const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
 	| { available: true; db: DatabaseSync }
@@ -375,7 +375,7 @@ function migrateSchema(db: DatabaseSync): void {
 			source_port TEXT NOT NULL,
 			target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
 			target_port TEXT NOT NULL,
-			data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact')),
+			data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact', 'number', 'boolean', 'color', 'size', 'mask')),
 			UNIQUE(flow_id, target_node_id, target_port)
 		);
 		CREATE INDEX IF NOT EXISTS idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
@@ -596,6 +596,8 @@ function migrateSchema(db: DatabaseSync): void {
 			);
 		db.exec("PRAGMA foreign_keys = OFF");
 		db.exec(`
+			DROP TABLE IF EXISTS flow_image_saves;
+			DROP TABLE IF EXISTS flow_batch_items;
 			DROP TABLE IF EXISTS flow_node_run_events;
 			DROP TABLE IF EXISTS flow_artifacts;
 			DROP TABLE IF EXISTS flow_approvals;
@@ -615,7 +617,7 @@ function migrateSchema(db: DatabaseSync): void {
 			CREATE INDEX idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
 			CREATE TABLE flow_artifacts (artifact_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER, height INTEGER, duration_ms INTEGER, fps REAL, preview_artifact_id TEXT, storage_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 			CREATE INDEX idx_flow_artifacts_flow_run ON flow_artifacts (flow_id, run_id, node_id, created_at DESC);
-			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact')), UNIQUE(flow_id, target_node_id, target_port));
+			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact', 'number', 'boolean', 'color', 'size', 'mask')), UNIQUE(flow_id, target_node_id, target_port));
 			CREATE INDEX idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
 			CREATE TABLE flow_runs (run_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, revision INTEGER NOT NULL, entry_node_ids_json TEXT NOT NULL DEFAULT '[]', target_node_ids_json TEXT NOT NULL DEFAULT '[]', input_values_json TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL, started_at TEXT, finished_at TEXT, error TEXT);
 			CREATE INDEX idx_flow_runs_flow ON flow_runs (flow_id, started_at DESC);
@@ -631,19 +633,29 @@ function migrateSchema(db: DatabaseSync): void {
 		const deleteLegacySession = db.prepare("DELETE FROM sessions WHERE session_id = ?");
 		for (const sessionId of legacyFlowBranchSessionIds) deleteLegacySession.run(sessionId);
 	}
+	db.exec(`CREATE TABLE IF NOT EXISTS flow_batch_items(run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, item_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, request_fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(run_id,node_id,item_id)); CREATE INDEX IF NOT EXISTS idx_flow_batch_cache ON flow_batch_items(flow_id,node_id,item_id,request_fingerprint,updated_at);`);
+	db.exec("CREATE TABLE IF NOT EXISTS flow_image_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
+	const currentFlowNodeColumns = db.prepare("PRAGMA table_info(flow_nodes)").all() as Array<{ name: string }>;
+	if (!currentFlowNodeColumns.some(column => column.name === "collapsed"))
+		db.exec("ALTER TABLE flow_nodes ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0 CHECK (collapsed IN (0, 1))");
 	const flowRunColumns = new Set((db.prepare("PRAGMA table_info(flow_runs)").all() as Array<{ name: string }>).map((column): string => column.name));
 	if (!flowRunColumns.has("entry_node_ids_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN entry_node_ids_json TEXT NOT NULL DEFAULT '[]'");
 	if (!flowRunColumns.has("target_node_ids_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN target_node_ids_json TEXT NOT NULL DEFAULT '[]'");
 	if (!flowRunColumns.has("input_values_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN input_values_json TEXT NOT NULL DEFAULT '{}'");
 	db.exec("UPDATE flow_nodes SET config_json = json_remove(config_json, '$.required') WHERE type_id = 'builtin/flow-input' AND json_type(config_json, '$.required') IS NOT NULL");
 	db.exec(`
+		CREATE TEMP TABLE recoverable_flow_runs AS SELECT DISTINCT r.run_id FROM flow_runs r JOIN flow_batch_items b ON b.run_id=r.run_id WHERE r.status IN ('queued','running') AND b.status IN ('running','submitting') AND json_extract(b.payload_json,'$.providerJobId') IS NOT NULL;
 		UPDATE flow_node_runs
 		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		WHERE status IN ('queued', 'running', 'waiting')
+			AND NOT (run_id IN (SELECT run_id FROM recoverable_flow_runs) AND (status='queued' OR node_id IN (SELECT node_id FROM flow_batch_items WHERE flow_batch_items.run_id=flow_node_runs.run_id)))
 			AND run_id IN (SELECT run_id FROM flow_runs WHERE status IN ('queued', 'running', 'waiting'));
 		UPDATE flow_runs
 		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-		WHERE status IN ('queued', 'running', 'waiting');
+		WHERE status IN ('queued', 'running', 'waiting') AND run_id NOT IN (SELECT run_id FROM recoverable_flow_runs);
+		UPDATE flow_node_runs SET status='queued' WHERE run_id IN (SELECT run_id FROM recoverable_flow_runs) AND status IN ('running','waiting');
+		UPDATE flow_runs SET status='queued' WHERE run_id IN (SELECT run_id FROM recoverable_flow_runs);
+		DROP TABLE recoverable_flow_runs;
 	`);
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
@@ -682,7 +694,15 @@ async function openDatabase(): Promise<SessionDatabaseState> {
 		const sqlite = await import("node:sqlite");
 		await mkdir(dirname(databasePath), { recursive: true });
 		db = new sqlite.DatabaseSync(databasePath, { timeout: 5000 });
+		const previousVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+		db.exec("CREATE TABLE IF NOT EXISTS flow_storage_maintenance(key TEXT PRIMARY KEY, pending INTEGER NOT NULL)");
+		if (previousVersion > 0 && previousVersion < 27) db.exec("INSERT OR REPLACE INTO flow_storage_maintenance VALUES('composable-reset',1)");
 		migrateSchema(db);
+		if (db.prepare("SELECT key FROM flow_storage_maintenance WHERE key='composable-reset' AND pending=1").get() && testDatabasePath === null) {
+			await rm(getDaedalusPath("flow.artifacts.root"), { recursive: true, force: true });
+			await rm(getDaedalusPath("config.flowTreeOrder"), { force: true });
+			db.exec("UPDATE flow_storage_maintenance SET pending=0 WHERE key='composable-reset'");
+		}
 		const integrity = db.prepare("PRAGMA integrity_check").get() as Record<string, unknown> | undefined;
 		if (String(integrity?.integrity_check ?? "") !== "ok") {
 			throw new Error(`SQLite integrity_check failed: ${String(integrity?.integrity_check ?? "unknown")}`);

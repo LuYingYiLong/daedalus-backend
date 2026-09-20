@@ -1,3 +1,4 @@
+import { FLOW_VALUE_TYPES } from "./flow-value-types.js";
 import { z } from "zod";
 import { computerIdSchema, computerToolResultParamsSchema, computerControlUpdateSchema } from "./computer-observation.js";
 import {
@@ -1028,9 +1029,9 @@ export const flowNodeTypeIdSchema = z.string().trim().regex(
 	/^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/iu,
 	"Flow node type IDs must use the pluginId/nodeName form.",
 );
-export const flowDocumentNodeStatusSchema = z.enum(["idle", "queued", "running", "waiting", "completed", "cached", "failed", "cancelled", "skipped"]);
-export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "waiting", "completed", "failed", "cancelled"]);
-export const flowDocumentPortTypeSchema = z.enum(["text", "json", "image", "video", "audio", "frames", "artifact"]);
+export const flowDocumentNodeStatusSchema = z.enum(["idle", "queued", "running", "waiting", "completed", "cached", "partial_failure", "failed", "cancelled", "skipped"]);
+export const flowDocumentRunStatusSchema = z.enum(["queued", "running", "waiting", "completed", "partial_failure", "failed", "cancelled"]);
+export const flowDocumentPortTypeSchema = z.enum(FLOW_VALUE_TYPES);
 export const flowMediaArtifactRefSchema = z.object({
 	artifactId: flowIdentifierSchema,
 	flowId: flowIdentifierSchema,
@@ -1162,7 +1163,8 @@ export const flowNodePortDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
 	direction: z.enum(["input", "output"]),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(12),
+	cardinality: z.enum(["one", "many", "one-or-many"]).optional(),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1177,7 +1179,8 @@ const flowConnectionParameterDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
 	mode: z.literal("connection"),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(12),
+	cardinality: z.enum(["one", "many", "one-or-many"]).optional(),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1187,7 +1190,8 @@ const flowHybridParameterDefinitionSchema = z.object({
 	label: z.string().min(1).max(120),
 	mode: z.literal("hybrid"),
 	configField: z.string().trim().min(1).max(120),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(12),
+	cardinality: z.enum(["one", "many", "one-or-many"]).optional(),
 	required: z.boolean(),
 	multiple: z.boolean(),
 	defaultConnect: z.boolean(),
@@ -1201,14 +1205,17 @@ export const flowNodeParameterDefinitionSchema = z.discriminatedUnion("mode", [
 export const flowNodeOutputDefinitionSchema = z.object({
 	id: flowIdentifierSchema,
 	label: z.string().min(1).max(120),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(12),
+	cardinality: z.enum(["one", "many", "one-or-many"]).optional(),
 	defaultConnect: z.boolean(),
+	optional: z.boolean().optional(),
 }).strict();
 export const flowDynamicParameterDefinitionSchema = z.object({
 	configField: z.string().trim().min(1).max(120),
 	idField: z.string().trim().min(1).max(120).default("id"),
 	labelField: z.string().trim().min(1).max(120).default("label"),
-	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(7),
+	dataTypes: z.array(flowDocumentPortTypeSchema).min(1).max(12),
+	cardinality: z.enum(["one", "many", "one-or-many"]).optional(),
 	dataTypeField: z.string().trim().min(1).max(120).optional(),
 	required: z.boolean(),
 	multiple: z.boolean(),
@@ -1223,6 +1230,8 @@ export const flowNodeTypeDefinitionSchema = z.object({
 	category: z.string().trim().min(1).max(80),
 	workspaceRequired: z.boolean(),
 	sideEffecting: z.boolean(),
+	terminal: z.boolean().optional(),	batch: z.boolean().optional(),
+	modelCapability: z.enum(["imageGeneration", "imageEdit", "textToVideo", "imageToVideo"]).optional(),
 	executable: z.boolean(),
 	cachePolicy: z.enum(["always", "read-only", "never"]),
 	defaultTitle: z.string().min(1).max(120),
@@ -1264,6 +1273,7 @@ export const flowDocumentSchema = z.object({
 	updatedAt: z.string().datetime(),
 }).strict();
 export const flowDocumentNodeSchema = z.object({
+	collapsed: z.boolean().default(false),
 	nodeId: flowIdentifierSchema,
 	flowId: flowIdentifierSchema,
 	typeId: flowNodeTypeIdSchema,
@@ -1291,7 +1301,14 @@ export const flowDocumentEdgeSchema = z.object({
 	targetPort: flowIdentifierSchema,
 	dataType: flowDocumentPortTypeSchema,
 }).strict();
+export const flowBatchItemRunSchema = z.object({
+ flowId: flowIdentifierSchema, runId: flowIdentifierSchema, nodeId: flowIdentifierSchema, itemId: z.string().min(1).max(80),
+ ordinal: z.number().int().nonnegative(), requestFingerprint: z.string().max(512), fingerprint: z.string().max(512), params: z.record(z.string(), z.unknown()),
+ status: z.enum(["queued", "submitting", "running", "completed", "failed", "cancelled", "uncertain"]),
+ providerJobId: z.string().nullable(), output: z.array(z.unknown()).max(100), error: z.string().nullable(), attempts: z.number().int().nonnegative(),
+}).strict();
 export const flowDocumentNodeRunSchema = z.object({
+	batchItems: z.record(z.string(), flowBatchItemRunSchema).optional(),
 	runId: flowIdentifierSchema,
 	nodeId: flowIdentifierSchema,
 	typeId: flowNodeTypeIdSchema,
@@ -1341,6 +1358,7 @@ export const flowOperationSchema = z.discriminatedUnion("kind", [
 	}).strict(),
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.delete"), baseGraphRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema }).strict() }).strict(),
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.move"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, x: z.number().finite(), y: z.number().finite() }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.collapse"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, collapsed: z.boolean() }).strict() }).strict(),
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.resize"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, width: z.number().finite().positive().max(10_000), height: z.number().finite().positive().max(10_000) }).strict() }).strict(),
 	z.object({
 		mutationId: flowIdentifierSchema,
@@ -1778,6 +1796,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: z.object({
 			flowId: flowIdentifierSchema,
 			clientId: flowIdentifierSchema,
+			generation: z.string().optional(),
 			operations: z.array(flowOperationSchema).min(1).max(500),
 		}).strict(),
 	}).strict(),
@@ -1895,6 +1914,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("flow.import.fromSession"),
 		params: z.object({ sourceSessionId: flowIdentifierSchema, title: z.string().trim().min(1).max(200) }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.export"),
+		params: z.object({ flowId: flowIdentifierSchema, destinationPath: z.string().trim().min(1).max(32768) }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

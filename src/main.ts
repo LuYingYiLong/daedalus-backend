@@ -1,3 +1,4 @@
+import { recoverFlowMediaRuns } from "./server/flow-runner.js";
 import type WebSocket from "ws";
 import type { WebSocketServer } from "ws";
 import { markActiveAgentGoalsPaused } from "./session/agent-goal-store.js";
@@ -125,6 +126,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		await closeLogger();
 		throw new Error(`Daedalus backend could not listen on 127.0.0.1:${port}: ${message}`);
 	}
+	await recoverFlowMediaRuns(mcpHost);
 	const runtimeConnectionId: string | null =
 		process.env[BACKEND_CONNECTION_ID_ENV]?.trim() || null;
 	const runtimeAuthToken: string | null =

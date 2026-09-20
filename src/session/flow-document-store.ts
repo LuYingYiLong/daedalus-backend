@@ -1,3 +1,4 @@
+import { listFlowBatchItems } from "./flow-batch-store.js";
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
@@ -55,6 +56,7 @@ type NodeRow = {
 	y: number;
 	width: number;
 	height: number;
+	collapsed: number;
 	config_json: string;
 	ports_json: string;
 	status: FlowDocumentNodeStatus;
@@ -100,7 +102,7 @@ type NodeRunRow = {
 
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 const DEFAULT_NODE_SIZE = { width: 300, height: 180 };
-const NODE_COLUMNS = "node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at";
+const NODE_COLUMNS = "collapsed, node_id, flow_id, type_id, plugin_id, plugin_version, plugin_fingerprint, config_version, title, x, y, width, height, config_json, ports_json, status, created_at, updated_at";
 const RUN_COLUMNS = "run_id, flow_id, revision, entry_node_ids_json, target_node_ids_json, input_values_json, status, started_at, finished_at, error";
 
 export type CreateFlowStarterGraph = {
@@ -155,6 +157,7 @@ function mapNode(row: NodeRow): FlowDocumentNode {
 		y: Number(row.y),
 		width: Number(row.width),
 		height: Number(row.height),
+		collapsed: row.collapsed === 1,
 		config: parseSqlJson<Record<string, unknown>>(row.config_json),
 		ports: parseSqlJson<FlowDocumentNode["ports"]>(row.ports_json),
 		status: row.status,
@@ -489,6 +492,7 @@ export async function createConnectedFlowNodeDocument(params: {
 			y: params.y,
 			width: DEFAULT_NODE_SIZE.width,
 			height: DEFAULT_NODE_SIZE.height,
+			collapsed: false,
 			config,
 			ports,
 			status: "idle",
@@ -585,7 +589,7 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 		// operations remain safe because they do not change graph semantics.
 		void layoutBases;
 		const graphChanged = pending.some((operation): boolean => ["node.create", "node.update", "node.delete", "edge.create", "edge.delete"].includes(operation.kind));
-		const layoutChanged = pending.some((operation): boolean => ["node.move", "node.resize", "viewport.update"].includes(operation.kind));
+		const layoutChanged = pending.some((operation): boolean => ["node.move", "node.resize", "node.collapse", "viewport.update"].includes(operation.kind));
 		if (graphChanged) assertGraphEditable(db, params.flowId);
 
 		for (const operation of pending) {
@@ -616,6 +620,9 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 			} else if (operation.kind === "node.move") {
 				const moved = db.prepare("UPDATE flow_nodes SET x = ?, y = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(operation.payload.x, operation.payload.y, now(), params.flowId, operation.payload.nodeId);
 				if (Number(moved.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+			} else if (operation.kind === "node.collapse") {
+				const changed = db.prepare("UPDATE flow_nodes SET collapsed = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(Number(operation.payload.collapsed), now(), params.flowId, operation.payload.nodeId);
+				if (!changed.changes) throw flowDocumentError("flow_node_not_found", "Flow node not found.");
 			} else if (operation.kind === "node.resize") {
 				const resized = db.prepare("UPDATE flow_nodes SET width = ?, height = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(operation.payload.width, operation.payload.height, now(), params.flowId, operation.payload.nodeId);
 				if (Number(resized.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
@@ -697,6 +704,11 @@ export async function getFlowRunDocument(flowId: string, runId: string): Promise
 	const row = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? AND run_id = ?`).get(flowId, runId) as RunRow | undefined;
 	if (row === undefined) throw flowDocumentError("flow_run_not_found", `Flow run not found: ${runId}`);
 	const nodes = (db.prepare("SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status, provider_job_id, input_fingerprint, output_json, error, started_at, finished_at FROM flow_node_runs WHERE run_id = ? ORDER BY node_id").all(runId) as NodeRunRow[]).map(mapNodeRun);
+	const batchItems = await listFlowBatchItems(runId);
+	for (const node of nodes) {
+		const items = batchItems.filter(item => item.nodeId === node.nodeId);
+		if (items.length) node.batchItems = Object.fromEntries(items.map(item => [item.itemId, item]));
+	}
 	return mapRun(row, nodes);
 }
 

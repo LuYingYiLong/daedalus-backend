@@ -93,7 +93,7 @@ export async function saveFlowArtifact(input: SaveFlowArtifactInput): Promise<Fl
 		...(input.fps === undefined ? {} : { fps: input.fps }),
 		...(input.previewArtifactId === undefined ? {} : { previewArtifactId: input.previewArtifactId }),
 		storagePath: relative(getDaedalusPath("flow.artifacts.root"), storagePath).replaceAll("\\", "/"),
-		metadata: input.metadata ?? {},
+		metadata: parseSqlJson<Record<string, unknown>>(sqlJson(input.metadata ?? {})),
 		createdAt,
 	};
 	await mkdir(getDaedalusPath("flow.artifacts.root"), { recursive: true });
@@ -124,6 +124,13 @@ export async function saveFlowArtifact(input: SaveFlowArtifactInput): Promise<Fl
 		throw error;
 	}
 	return metadata;
+}
+
+export async function getFlowArtifactReference(artifactId: string): Promise<FlowMediaArtifactRef> {
+	const db = await getSessionDatabase();
+	const row = db.prepare("SELECT * FROM flow_artifacts WHERE artifact_id = ?").get(assertArtifactId(artifactId)) as ArtifactRow | undefined;
+	if (row === undefined) throw Object.assign(new Error(`Flow artifact not found: ${artifactId}`), { code: "flow_artifact_not_found" });
+	return mapArtifact(row);
 }
 
 export async function getFlowArtifact(artifactId: string): Promise<{ ref: FlowMediaArtifactRef; bytes: Buffer }> {

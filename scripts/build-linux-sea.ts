@@ -1,3 +1,4 @@
+import { packageFlowImageRuntime } from "./package-flow-image-runtime.js";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, rm, stat, writeFile, chmod } from "node:fs/promises";
@@ -237,7 +238,7 @@ async function runExecutableSelfTests(manifest: BackendPayloadManifestV1): Promi
 }
 
 async function createArchive(): Promise<void> {
-        await run("zip", ["-j", "-9", ARCHIVE_PATH, "daedalus-backend", "backend-manifest.json"], {
+        await run("zip", ["-r", "-9", ARCHIVE_PATH, "daedalus-backend", "backend-manifest.json", "media"], {
                 cwd: PAYLOAD_ROOT
         });
 }
@@ -260,6 +261,7 @@ async function main(): Promise<void> {
 
         await buildBundle(packageManifest, buildId);
         await generateSeaExecutable();
+	await packageFlowImageRuntime(PROJECT_ROOT, PAYLOAD_ROOT);
         const executableInfo = await stat(EXECUTABLE_PATH);
         const payloadManifest: BackendPayloadManifestV1 = backendPayloadManifestV1Schema.parse({
                 schemaVersion: 1,

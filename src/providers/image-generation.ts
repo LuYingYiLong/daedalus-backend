@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 import type { Image, ImageGenerateParamsNonStreaming, ImagesResponse } from "openai/resources/images";
 import type { ProviderId } from "../protocol/types.js";
 import type { GeneratedImageArtifactMetadata } from "../session/session-attachments.js";
@@ -18,6 +18,8 @@ export type ImageGenerationInput = {
 	prompt: string;
 	negativePrompt?: string | undefined;
 	count?: number | undefined;
+	width?: number | undefined;
+	height?: number | undefined;
 	aspectRatio?: ImageGenerationAspectRatio | undefined;
 	style?: string | undefined;
 	seed?: number | undefined;
@@ -67,11 +69,13 @@ export type ImageGenerationSourceImage = ImageGenerationSourceImageRef & {
 
 export class ImageGenerationError extends Error {
 	readonly code: "image_generation_not_configured" | "image_generation_not_supported" | "image_generation_failed";
+	readonly status: number | undefined;
 
 	constructor(code: ImageGenerationError["code"], message: string) {
 		super(message);
 		this.name = "ImageGenerationError";
 		this.code = code;
+		this.status = code === "image_generation_failed" ? undefined : 400;
 	}
 }
 
@@ -324,9 +328,10 @@ export async function resolveImageGenerationSourceImages(sessionId: string, refs
 	return images;
 }
 
-function createOpenAIClient(options: ProviderChatOptions): OpenAI {
+function createOpenAIClient(options: ProviderChatOptions, flow = false): OpenAI {
 	const clientOptions: ConstructorParameters<typeof OpenAI>[0] = {
-		apiKey: options.apiKey
+		apiKey: options.apiKey,
+		...(flow ? { maxRetries: 0 } : {})
 	};
 	const normalizedBaseUrl: string | undefined = normalizeConfiguredProviderBaseUrl(options.baseUrl);
 	if (normalizedBaseUrl !== undefined) {
@@ -353,6 +358,7 @@ function createPrompt(input: ImageGenerationInput): string {
 }
 
 type ImageGenerationRuntime = {
+	sourceImages?: readonly { mimeType: string; bytes: Buffer }[] | undefined;
 	abortSignal?: AbortSignal | undefined;
 	savedArtifacts: GeneratedImageArtifactMetadata[];
 	artifactSink?: ImageGenerationArtifactSink | undefined;
@@ -441,20 +447,29 @@ async function readImageUrlBytes(url: string, abortSignal?: AbortSignal | undefi
 	if (!imageResponse.ok) {
 		throw new ImageGenerationError("image_generation_failed", `Failed to download generated image: HTTP ${imageResponse.status}`);
 	}
-	return Buffer.from(await imageResponse.arrayBuffer());
+	const limit = 64 * 1024 * 1024;
+	if (Number(imageResponse.headers.get("content-length")) > limit || imageResponse.body === null) throw new ImageGenerationError("image_generation_failed", "Generated image exceeds 64 MiB.");
+	const reader = imageResponse.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
+	try {
+		for (;;) { const next = await reader.read(); if (next.done) break; size += next.value.length; if (size > limit) throw new ImageGenerationError("image_generation_failed", "Generated image exceeds 64 MiB."); chunks.push(next.value); }
+	} finally { await reader.cancel().catch(() => undefined); }
+	return Buffer.concat(chunks, size);
 }
 
 async function generateOpenAIImages(options: ProviderChatOptions, input: ImageGenerationInput, runtime: ImageGenerationRuntime): Promise<ImageGenerationResult> {
 	const model: string = options.model ?? "gpt-image-1";
-	const client: OpenAI = createOpenAIClient(options);
-	const response: ImagesResponse = await client.images.generate({
+	const client: OpenAI = createOpenAIClient(options, runtime.artifactSink !== undefined);
+	const parameters = {
 		model,
 		prompt: createPrompt(input),
 		n: input.count ?? 1,
 		size: mapAspectRatioToOpenAIImageSize(input.aspectRatio ?? "1:1"),
 		output_format: input.outputFormat ?? "png",
-		stream: false
-	}, { signal: runtime.abortSignal });
+		stream: false as const
+	};
+	const response: ImagesResponse = runtime.sourceImages?.length
+		? await client.images.edit({ ...parameters, image: await Promise.all(runtime.sourceImages.map((image, index) => toFile(image.bytes, `source-${index}.${image.mimeType.split("/")[1]}`, { type: image.mimeType }))) }, { signal: runtime.abortSignal })
+		: await client.images.generate(parameters, { signal: runtime.abortSignal });
 	const images: Image[] = response.data ?? [];
 	if (images.length === 0) {
 		throw new ImageGenerationError("image_generation_failed", "Provider returned no generated images.");
@@ -771,24 +786,28 @@ function getDashScopeImageCount(model: string, input: ImageGenerationInput): num
 	return input.count ?? 1;
 }
 
-function createDashScopeImageParameters(model: string, input: ImageGenerationInput): Record<string, unknown> {
+function createDashScopeImageParameters(model: string, input: ImageGenerationInput, flow = false): Record<string, unknown> {
 	const parameters: Record<string, unknown> = {
 		n: getDashScopeImageCount(model, input),
 		negative_prompt: " ",
 		watermark: false
 	};
+	if (flow) {
+		if (input.seed !== undefined) parameters.seed = input.seed;
+		parameters.negative_prompt = input.negativePrompt ?? "";
+	}
 	if (!shouldOmitQwenImageEditOptionalParameters(model)) {
 		parameters.prompt_extend = true;
-		parameters.size = mapAspectRatioToDashScopeImageSize(input.aspectRatio ?? "1:1");
+		parameters.size = input.width !== undefined && input.height !== undefined ? `${input.width}*${input.height}` : mapAspectRatioToDashScopeImageSize(input.aspectRatio ?? "1:1");
 	}
 	return parameters;
 }
 
 async function generateDashScopeImages(options: ProviderChatOptions, input: ImageGenerationInput, runtime: ImageGenerationRuntime): Promise<ImageGenerationResult> {
 	const model: string = options.model ?? "qwen-image-3.0-pro";
-	const sourceImages: ImageGenerationSourceImage[] = await resolveImageGenerationSourceImages(input.sessionId, input.sourceImages);
+	const sourceImages = runtime.sourceImages?.map(image => ({ dataUrl: `data:${image.mimeType};base64,${image.bytes.toString("base64")}` })) ?? await resolveImageGenerationSourceImages(input.sessionId, input.sourceImages);
 	const content: DashScopeImageContent[] = [
-		...sourceImages.map((image: ImageGenerationSourceImage): DashScopeImageContent => ({ image: image.dataUrl })),
+		...sourceImages.map((image): DashScopeImageContent => ({ image: image.dataUrl })),
 		{ text: createPrompt(input) }
 	];
 	const response: Response = await fetch(`${resolveDashScopeApiBaseUrl(options.baseUrl)}/services/aigc/multimodal-generation/generation`, {
@@ -805,7 +824,7 @@ async function generateDashScopeImages(options: ProviderChatOptions, input: Imag
 					content
 				}]
 			},
-			parameters: createDashScopeImageParameters(model, input)
+			parameters: createDashScopeImageParameters(model, input, runtime.artifactSink !== undefined)
 		}),
 		signal: runtime.abortSignal ?? null
 	});
@@ -817,10 +836,10 @@ async function generateDashScopeImages(options: ProviderChatOptions, input: Imag
 		throw new ImageGenerationError("image_generation_failed", `DashScope image generation returned invalid JSON: HTTP ${response.status}`);
 	}
 	if (!response.ok || parsed.code !== undefined) {
-		throw new ImageGenerationError(
+		throw Object.assign(new ImageGenerationError(
 			"image_generation_failed",
 			parsed.message ?? `DashScope image generation failed: HTTP ${response.status}`
-		);
+		), { status: response.ok ? 400 : response.status, headers: response.headers });
 	}
 
 	const urls: string[] = extractDashScopeImageUrls(parsed);
@@ -873,6 +892,11 @@ export async function generateImage(input: ImageGenerationInput, abortSignal?: A
 			if (options.provider === "dashscope") {
 				return await generateDashScopeImages(options, input, runtime);
 			}
+			if (options.provider === "openai") {
+				const sources = await resolveImageGenerationSourceImages(input.sessionId, input.sourceImages);
+				runtime.sourceImages = sources.map(source => ({ mimeType: source.mimeType, bytes: Buffer.from(source.dataUrl.slice(source.dataUrl.indexOf(",") + 1), "base64") }));
+				return await generateOpenAIImages(options, input, runtime);
+			}
 
 			await resolveImageGenerationSourceImages(input.sessionId, input.sourceImages);
 			throw new ImageGenerationError(
@@ -923,22 +947,30 @@ export async function generateImage(input: ImageGenerationInput, abortSignal?: A
 	}
 }
 
-export async function generateImageWithArtifactSink(input: ImageGenerationInput, artifactSink: ImageGenerationArtifactSink, abortSignal?: AbortSignal | undefined): Promise<ImageGenerationResult> {
-	const runtime: ImageGenerationRuntime = { abortSignal, savedArtifacts: [], artifactSink };
+export async function generateImageWithArtifactSink(input: ImageGenerationInput, artifactSink: ImageGenerationArtifactSink, abortSignal?: AbortSignal | undefined, sourceImages?: readonly { mimeType: string; bytes: Buffer }[]): Promise<ImageGenerationResult> {
+	const runtime: ImageGenerationRuntime = { abortSignal, savedArtifacts: [], artifactSink, sourceImages };
 	try {
 		throwIfImageGenerationAborted(runtime);
 		const resolved = input.provider !== undefined && input.model !== undefined
 			? { provider: input.provider, model: input.model, options: await resolveProviderModelOptions(input.provider, input.model) }
 			: await resolveConfiguredProviderTaskModelOptions("imageGeneration");
 		const options: ProviderChatOptions = resolved.options;
-		const hasSourceImages: boolean = (input.sourceImages?.length ?? 0) > 0;
+		const hasSourceImages: boolean = (sourceImages?.length ?? input.sourceImages?.length ?? 0) > 0;
 		const supportsImageGeneration: boolean = modelSupportsImageGeneration(options.provider, resolved.model);
 		const supportsImageEdit: boolean = modelSupportsImageEdit(options.provider, resolved.model);
 		if (!hasSourceImages && !supportsImageGeneration) throw new ImageGenerationError("image_generation_not_supported", `Model ${options.provider}/${resolved.model} does not support image generation.`);
 		if (hasSourceImages) {
 			if (!supportsImageEdit) throw new ImageGenerationError("image_generation_not_supported", createImageEditUnsupportedMessage(options.provider, resolved.model));
-			throw new ImageGenerationError("image_generation_not_supported", `Provider ${options.provider} is not adapted for image-to-image generation yet.`);
+			if (options.provider !== "dashscope" && options.provider !== "openai") throw new ImageGenerationError("image_generation_not_supported", `Provider ${options.provider} is not adapted for image-to-image generation yet.`);
 		}
+		if (input.width !== undefined || input.height !== undefined) {
+			if (!Number.isInteger(input.width) || !Number.isInteger(input.height) || input.width! < 1 || input.height! < 1 || input.width! * input.height! > 16_000_000) throw Object.assign(new Error("Invalid generation dimensions."), { status: 400 });
+			if (options.provider === "minimax" || options.provider === "dashscope" && shouldOmitQwenImageEditOptionalParameters(resolved.model)) throw Object.assign(new Error("This model does not accept explicit generation dimensions."), { status: 400 });
+			const choices = options.provider === "zhipu" ? ZHIPU_IMAGE_SIZE_OPTIONS : OPENAI_IMAGE_SIZE_OPTIONS;
+			if (options.provider !== "dashscope" && !choices.some(size => size.width === input.width && size.height === input.height)) throw Object.assign(new Error("Unsupported generation dimensions for this provider; choose a supported canvas size."), { status: 400 });
+			input = { ...input, aspectRatio: `${input.width}:${input.height}` };
+		}
+		if (options.provider === "dashscope" && getDashScopeImageCount(resolved.model, input) !== (input.count ?? 1)) throw Object.assign(new Error("This model only supports one image per request; split the parameter row."), { status: 400 });
 		if (options.provider === "zhipu") return await generateZhipuImages(options, input, runtime);
 		if (options.provider === "dashscope") return await generateDashScopeImages(options, input, runtime);
 		if (options.provider === "volcengine") return await generateVolcengineImages(options, input, runtime);
@@ -948,7 +980,8 @@ export async function generateImageWithArtifactSink(input: ImageGenerationInput,
 	} catch (error: unknown) {
 		await Promise.allSettled(runtime.savedArtifacts.map((artifact): Promise<void> => artifactSink.remove === undefined ? Promise.resolve() : artifactSink.remove(artifact)));
 		if (error instanceof ImageGenerationError) throw error;
-		if (error instanceof ProviderTaskModelError) throw new ImageGenerationError(error.code === "task_model_not_configured" ? "image_generation_not_configured" : "image_generation_failed", error.message);
-		throw new ImageGenerationError("image_generation_failed", error instanceof Error ? error.message : "Image generation failed.");
+		if (error instanceof ProviderTaskModelError) throw Object.assign(new ImageGenerationError(error.code === "task_model_not_configured" ? "image_generation_not_configured" : "image_generation_failed", error.message), { status: 400 });
+		const source = error as { status?: number; headers?: Headers };
+		throw Object.assign(new ImageGenerationError("image_generation_failed", error instanceof Error ? error.message : "Image generation failed."), { status: source.status, headers: source.headers });
 	}
 }

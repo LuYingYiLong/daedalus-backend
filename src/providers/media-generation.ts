@@ -1,3 +1,5 @@
+import { createMockPng } from "./mock-image.js";
+import { withMediaRequestLimit } from "./media-request-limiter.js";
 import { createHash } from "node:crypto";
 import type { ProviderId } from "../protocol/types.js";
 import { createDashScopeMediaGenerationAdapter } from "./dashscope-media-generation.js";
@@ -52,6 +54,7 @@ export type MediaGenerationTask = {
 };
 
 export type MediaGenerationAdapter = {
+	version?: string;
 	provider: ProviderId;
 	supports: readonly MediaGenerationKind[];
 	generate: (request: MediaGenerationRequest, signal: AbortSignal, onProgress?: ((progress: number) => void) | undefined) => Promise<MediaGenerationResult>;
@@ -62,6 +65,8 @@ export type MediaGenerationAdapter = {
 };
 
 const adapters = new Map<ProviderId, MediaGenerationAdapter>();
+export function mediaAdapterFingerprint(provider: string): string { return `${provider}:${adapters.get(provider)?.version ?? "1"}:media-contract-2`; }
+
 
 export function registerMediaGenerationAdapter(adapter: MediaGenerationAdapter): void {
 	if (adapters.has(adapter.provider)) throw Object.assign(new Error(`Media adapter is already registered: ${adapter.provider}`), { code: "media_adapter_conflict" });
@@ -81,20 +86,22 @@ function createMockArtifact(request: MediaGenerationRequest): MediaGenerationBin
 	if (request.kind === "videoGeneration" || request.kind === "videoEdit") {
 		return { bytes: Buffer.from(`DAEDALUS-MOCK-VIDEO:${digest}`, "utf8"), mimeType: "video/mp4", width: request.width, height: request.height, durationMs: request.durationMs, fps: request.fps, metadata: { mock: true } };
 	}
-	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="100%" height="100%" fill="#20232a"/><text x="24" y="256" fill="#fff" font-size="24">${digest}</text></svg>`;
-	return { bytes: Buffer.from(svg, "utf8"), mimeType: "image/svg+xml", width: 512, height: 512, metadata: { mock: true } };
+	return { bytes: createMockPng([parseInt(digest.slice(0,2),16),parseInt(digest.slice(2,4),16),parseInt(digest.slice(4,6),16)]), mimeType: "image/png", width: 32, height: 32, metadata: { mock: true } };
 }
 
-async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: MediaGenerationRequest, signal: AbortSignal, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined): Promise<MediaGenerationResult> {
-	if (adapter.createTask === undefined || adapter.getTask === undefined) return adapter.generate(request, signal, onProgress);
-	let task = await adapter.createTask(request, signal);
+async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: MediaGenerationRequest, signal: AbortSignal, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined, resumeProviderJobId?: string): Promise<MediaGenerationResult> {
+	if (adapter.createTask === undefined || adapter.getTask === undefined) {
+		if (resumeProviderJobId !== undefined) throw new Error("media_task_recovery_unsupported");
+		return adapter.generate(request, signal, onProgress);
+	}
+	let task = resumeProviderJobId === undefined ? await adapter.createTask(request, signal) : await adapter.getTask(resumeProviderJobId, signal);
 	await onProviderJobId?.(task.providerJobId);
 	onProgress?.(task.progress ?? 0);
 	try {
 		while (task.status === "queued" || task.status === "running") {
 			if (signal.aborted) {
-				await adapter.cancelTask?.(task.providerJobId, signal);
-				throw new Error("Media generation cancelled.");
+				await adapter.cancelTask?.(task.providerJobId, AbortSignal.timeout(10000));
+				throw Object.assign(new Error("Media generation cancelled."), { providerTaskTerminal: true });
 			}
 			await new Promise<void>((resolve, reject): void => {
 				let timer: ReturnType<typeof setTimeout>;
@@ -113,12 +120,12 @@ async function waitForAdapterTask(adapter: MediaGenerationAdapter, request: Medi
 			task = await adapter.getTask(task.providerJobId, signal);
 			onProgress?.(task.progress ?? 0);
 		}
-		if (task.status === "cancelled") throw new Error("Media generation cancelled.");
-		if (task.status === "failed") throw new Error(task.error ?? "Media generation failed.");
+		if (task.status === "cancelled") throw Object.assign(new Error("Media generation cancelled."), { providerTaskTerminal: true });
+		if (task.status === "failed") throw Object.assign(new Error(task.error ?? "Media generation failed."), { providerTaskTerminal: true });
 		if (task.result === undefined) throw new Error("Media provider completed without a result.");
 		return { ...task.result, providerJobId: task.result.providerJobId ?? task.providerJobId };
 	} catch (error: unknown) {
-		if (signal.aborted) await adapter.cancelTask?.(task.providerJobId, signal).catch((): void => undefined);
+		if (signal.aborted) await adapter.cancelTask?.(task.providerJobId, AbortSignal.timeout(10000)).catch((): void => undefined);
 		throw error;
 	}
 }
@@ -127,10 +134,10 @@ const mockAdapter: MediaGenerationAdapter = {
 	provider: "mock",
 	supports: ["imageGeneration", "imageEdit", "videoGeneration", "videoEdit"],
 	async generate(request, signal, onProgress): Promise<MediaGenerationResult> {
-		if (signal.aborted) throw new Error("Media generation cancelled.");
+		if (signal.aborted) throw Object.assign(new Error("Media generation cancelled."), { providerTaskTerminal: true });
 		onProgress?.(0.25);
 		await Promise.resolve();
-		if (signal.aborted) throw new Error("Media generation cancelled.");
+		if (signal.aborted) throw Object.assign(new Error("Media generation cancelled."), { providerTaskTerminal: true });
 		onProgress?.(1);
 		return { status: "completed", provider: request.provider, model: request.model, artifacts: Array.from({ length: Math.max(1, Math.min(4, request.count ?? 1)) }, () => createMockArtifact(request)) };
 	},
@@ -138,23 +145,25 @@ const mockAdapter: MediaGenerationAdapter = {
 registerMediaGenerationAdapter(mockAdapter);
 registerMediaGenerationAdapter(createDashScopeMediaGenerationAdapter());
 
-export async function generateMedia(request: MediaGenerationRequest, signal: AbortSignal, sink?: ImageGenerationArtifactSink, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined): Promise<MediaGenerationResult> {
+export async function generateMedia(request: MediaGenerationRequest, signal: AbortSignal, sink?: ImageGenerationArtifactSink, onProgress?: ((progress: number) => void) | undefined, onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined, resumeProviderJobId?: string): Promise<MediaGenerationResult> {
+	signal = AbortSignal.any([signal, AbortSignal.timeout(request.kind.startsWith("video") ? 60 * 60_000 : 15 * 60_000)]);
 	const adapter = adapters.get(request.provider);
-	if (adapter !== undefined) {
-		if (!adapter.supports.includes(request.kind)) throw Object.assign(new Error(`Provider ${request.provider} does not support ${request.kind}.`), { code: "media_generation_not_supported" });
-		return waitForAdapterTask(adapter, request, signal, onProgress, onProviderJobId);
+	if (adapter?.supports.includes(request.kind)) {
+		return withMediaRequestLimit(request.provider, signal, () => waitForAdapterTask(adapter, request, signal, onProgress, onProviderJobId, resumeProviderJobId));
 	}
+	if (resumeProviderJobId !== undefined) throw new Error("media_task_recovery_unsupported");
 	if (request.kind !== "imageGeneration" && request.kind !== "imageEdit") throw Object.assign(new Error(`Provider ${request.provider} has no video generation adapter.`), { code: "media_generation_not_supported" });
 	if (sink === undefined) throw new Error("Image generation requires an artifact sink.");
-	if (request.sourceImages !== undefined && request.sourceImages.length > 0) throw Object.assign(new Error(`Provider ${request.provider} image editing is not adapted for Flow artifacts yet.`), { code: "media_generation_not_supported" });
 	const captured: MediaGenerationBinaryArtifact[] = [];
-	const result = await generateImageWithArtifactSink({
+	const result = await withMediaRequestLimit(request.provider, signal, () => generateImageWithArtifactSink({
 		sessionId: "flow-media",
 		provider: request.provider,
 		model: request.model,
 		prompt: request.prompt,
 		negativePrompt: request.negativePrompt,
 		count: request.count,
+		width: request.width,
+		height: request.height,
 		aspectRatio: request.aspectRatio,
 		style: request.style,
 		seed: request.seed,
@@ -165,7 +174,7 @@ export async function generateMedia(request: MediaGenerationRequest, signal: Abo
 			captured.push({ bytes: input.bytes, mimeType: input.mimeType, metadata: { revisedPrompt: input.revisedPrompt } });
 			return sink.save(input);
 		},
-	}, signal);
+	}, signal, request.sourceImages));
 	onProgress?.(1);
 	return { status: result.status, provider: result.provider, model: result.model, artifacts: captured };
 }

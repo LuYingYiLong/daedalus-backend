@@ -1,3 +1,6 @@
+import { IMAGE_ENGINE_FINGERPRINT } from "../media/image-processing.js";
+import { registerComposableDefinitions } from "./flow-composable-definitions.js";
+import { FLOW_VALUE_TYPES, acceptsFlowCardinality, type FlowValueType } from "../protocol/flow-value-types.js";
 import { z, type ZodType } from "zod";
 import { flowDocumentNodeConfigSchemas } from "../protocol/schema.js";
 import type {
@@ -17,7 +20,7 @@ type RegisteredDefinition = FlowNodeTypeDefinition & {
 	parseConfig: (value: Record<string, unknown>) => Record<string, unknown>;
 };
 
-const ALL_TYPES = ["text", "json", "image", "video", "audio", "frames", "artifact"] as const;
+const ALL_TYPES = FLOW_VALUE_TYPES;
 const definitions = new Map<FlowNodeTypeId, RegisteredDefinition>();
 
 function fixed(id: string, label: string, configField: string = id): FlowNodeParameterDefinition {
@@ -27,10 +30,10 @@ function fixed(id: string, label: string, configField: string = id): FlowNodePar
 function connection(
 	id: string,
 	label: string,
-	dataTypes: readonly ("text" | "json" | "image" | "video" | "audio" | "frames" | "artifact")[],
+	dataTypes: readonly (FlowValueType)[],
 	required: boolean = false,
 	defaultConnect: boolean = false,
-): FlowNodeParameterDefinition {
+): Extract<FlowNodeParameterDefinition, { mode: "connection" }> {
 	return { id, label, mode: "connection", dataTypes: [...dataTypes], required, multiple: false, defaultConnect };
 }
 
@@ -38,7 +41,7 @@ function hybrid(
 	id: string,
 	label: string,
 	configField: string,
-	dataTypes: readonly ("text" | "json" | "image" | "video" | "audio" | "frames" | "artifact")[],
+	dataTypes: readonly (FlowValueType)[],
 	required: boolean = false,
 	defaultConnect: boolean = false,
 ): FlowNodeParameterDefinition {
@@ -58,7 +61,7 @@ function hybrid(
 function output(
 	id: string,
 	label: string,
-	dataTypes: readonly ("text" | "json" | "image" | "video" | "audio" | "frames" | "artifact")[],
+	dataTypes: readonly (FlowValueType)[],
 	defaultConnect: boolean = false,
 ): FlowNodeOutputDefinition {
 	return { id, label, dataTypes: [...dataTypes], defaultConnect };
@@ -94,8 +97,8 @@ function resolveDeclaredParameters(
 				continue;
 			const configuredType = dynamic.dataTypeField === undefined ? undefined : record[dynamic.dataTypeField];
 			const dataTypes =
-				typeof configuredType === "string" && ["text", "json", "image", "video", "audio", "frames", "artifact"].includes(configuredType)
-					? [configuredType as "text" | "json" | "image" | "video" | "audio" | "frames" | "artifact"]
+				typeof configuredType === "string" && (FLOW_VALUE_TYPES as readonly string[]).includes(configuredType)
+					? [configuredType as FlowValueType]
 					: [...dynamic.dataTypes];
 			parameters.push({
 				id,
@@ -123,6 +126,7 @@ function resolveDeclaredPorts(definition: FlowNodeTypeDefinition, config: Record
 					required: parameter.required,
 					multiple: parameter.multiple,
 					defaultConnect: parameter.defaultConnect,
+					...(parameter.cardinality === undefined ? {} : { cardinality: parameter.cardinality }),
 				}],
 	);
 	const outputs = definition.outputs.map((definition): FlowNodePortDefinition => ({
@@ -133,8 +137,13 @@ function resolveDeclaredPorts(definition: FlowNodeTypeDefinition, config: Record
 		required: false,
 		multiple: true,
 		defaultConnect: definition.defaultConnect,
+		...(definition.cardinality === undefined ? {} : { cardinality: definition.cardinality }),
 	}));
-	return [...inputs, ...outputs];
+	const ports = [...inputs, ...outputs];
+	if (definition.typeId === "builtin/flow-input") for (const port of ports) if (port.direction === "output") port.dataTypes = [config.dataType === "json" ? "json" : "text"];
+	if (typeof config.elementType === "string" && FLOW_VALUE_TYPES.includes(config.elementType as FlowValueType))
+		for (const port of ports) if (port.id !== "index") port.dataTypes = [config.elementType as FlowValueType];
+	return ports;
 }
 
 function publicDefinition(definition: RegisteredDefinition): FlowNodeTypeDefinition {
@@ -164,7 +173,7 @@ function schemaRecord(schema: ZodType): Record<string, unknown> {
 	return z.toJSONSchema(schema, { unrepresentable: "any" }) as Record<string, unknown>;
 }
 
-function registerBuiltin(
+export function registerBuiltin(
 	name: string,
 	category: string,
 	defaultTitle: string,
@@ -173,13 +182,16 @@ function registerBuiltin(
 	outputs: FlowNodeOutputDefinition[],
 	configSchema: ZodType,
 	options: {
+		terminal?: boolean;
+		batch?: boolean;
+		modelCapability?: FlowNodeTypeDefinition["modelCapability"];
 		workspaceRequired?: boolean;
 		sideEffecting?: boolean;
 		executable?: boolean;
 		cachePolicy?: "always" | "read-only" | "never";
 		summaryFields?: string[];
 		dynamicParameters?: FlowNodeTypeDefinition["dynamicParameters"];
-		fieldControls?: Record<string, "provider" | "model" | "reasoning-effort" | "workspace-file">;
+		fieldControls?: Record<string, string>;
 	} = {},
 ): void {
 	const typeId = `builtin/${name}`;
@@ -200,10 +212,13 @@ function registerBuiltin(
 	registerFlowNodeDefinition({
 		typeId,
 		pluginId: "builtin",
-		pluginVersion: "3.0.0",
-		pluginFingerprint: "builtin@3.0.0",
-		configVersion: 3,
+		pluginVersion: "4.0.0",
+		pluginFingerprint: `builtin@4.0.0/${IMAGE_ENGINE_FINGERPRINT}`,
+		configVersion: 4,
 		category,
+		...(options.modelCapability ? { modelCapability: options.modelCapability } : {}),
+		...(options.batch ? { batch: true } : {}),
+		terminal: options.terminal ?? (name === "output" || name === "media-output"),
 		workspaceRequired: options.workspaceRequired === true,
 		sideEffecting: options.sideEffecting === true,
 		executable: options.executable !== false,
@@ -233,25 +248,27 @@ const dynamicInputs = [{
 	defaultConnect: true,
 }];
 
-registerBuiltin("user-prompt", "basic", "User Prompt", { text: "" }, [hybrid("input", "User prompt", "text", ["text", "json"], false, true)], [output("output", "User prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/user-prompt"], { summaryFields: ["text"] });
+registerBuiltin("user-prompt", "basic", "User Prompt", { text: "" }, [hybrid("input", "User prompt", "text", ["text"], false, true)], [output("output", "User prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/user-prompt"], { summaryFields: ["text"] });
 registerBuiltin("system-prompt", "basic", "System Prompt", { text: "" }, [fixed("text", "System prompt")], [output("output", "System prompt", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/system-prompt"], { summaryFields: ["text"] });
 registerBuiltin("text", "basic", "Text", { text: "" }, [fixed("text", "Text")], [output("output", "Text", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/text"], { summaryFields: ["text"] });
 registerBuiltin("template", "basic", "Template", { template: "{{input}}", inputs: [{ id: "input", label: "Input", dataType: "text" }] }, [fixed("template", "Template"), fixed("inputs", "Inputs")], [output("output", "Text", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/template"], { summaryFields: ["template"], dynamicParameters: dynamicInputs });
 registerBuiltin("merge", "basic", "Merge", { mode: "concat", separator: "\n", inputs: [{ id: "input-1", label: "Input 1", dataType: "text" }, { id: "input-2", label: "Input 2", dataType: "text" }] }, [fixed("mode", "Mode"), fixed("separator", "Separator"), fixed("inputs", "Inputs")], [output("output", "Merged", ALL_TYPES, true)], flowDocumentNodeConfigSchemas["builtin/merge"], { summaryFields: ["mode"], dynamicParameters: dynamicInputs });
 registerBuiltin("json-extract", "basic", "JSON Extract", { pointer: "/" }, [connection("input", "JSON", ["text", "json"], true, true), fixed("pointer", "Pointer")], [output("output", "Value", ["json"], true)], flowDocumentNodeConfigSchemas["builtin/json-extract"], { summaryFields: ["pointer"] });
-registerBuiltin("condition", "basic", "Condition", { pointer: "/", operator: "equals" }, [connection("input", "Value", ["text", "json"], true, true), fixed("pointer", "Pointer"), fixed("operator", "Operator"), fixed("value", "Expected value")], [output("true", "True", ["text", "json"], true), output("false", "False", ["text", "json"])], flowDocumentNodeConfigSchemas["builtin/condition"], { summaryFields: ["operator", "pointer"] });
+registerBuiltin("condition", "basic", "Condition", { pointer: "/", operator: "equals" }, [connection("input", "Value", ["text", "json"], true, true), fixed("pointer", "Pointer"), fixed("operator", "Operator"), fixed("value", "Expected value")], [{ ...output("true", "True", ["text", "json"], true), optional: true }, { ...output("false", "False", ["text", "json"]), optional: true }], flowDocumentNodeConfigSchemas["builtin/condition"], { summaryFields: ["operator", "pointer"] });
 registerBuiltin("file-input", "workspace", "File Input", { path: "", mode: "text" }, [fixed("path", "Path"), fixed("mode", "Mode")], [output("output", "File", ALL_TYPES, true)], flowDocumentNodeConfigSchemas["builtin/file-input"], { workspaceRequired: true, summaryFields: ["path"], fieldControls: { path: "workspace-file" } });
 registerBuiltin("flow-input", "basic", "Flow Input", { label: "Input", dataType: "text", defaultValue: "" }, [fixed("label", "Name"), fixed("dataType", "Type"), fixed("defaultValue", "Default value")], [output("output", "Value", ["text", "json"], true)], flowDocumentNodeConfigSchemas["builtin/flow-input"], { cachePolicy: "never", summaryFields: ["label", "dataType"] });
-registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", userPrompt: "", systemPrompt: "" }, [hybrid("user-prompt", "User prompt", "userPrompt", ["text", "json"], false, true), hybrid("system-prompt", "System prompt", "systemPrompt", ["text"], false), fixed("provider", "Provider"), fixed("model", "Model"), fixed("reasoningEffort", "Reasoning effort")], [output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model", reasoningEffort: "reasoning-effort" } });
-registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings: [] }, [connection("input", "Arguments", ["text", "json"], false, true), fixed("toolName", "Tool"), fixed("args", "Arguments"), fixed("bindings", "Bindings")], [output("result", "Result", ["json"], true), output("text", "Text", ["text"]), output("artifact", "Artifact", ["artifact"])], flowDocumentNodeConfigSchemas["builtin/tool"], { sideEffecting: true, cachePolicy: "read-only", summaryFields: ["toolName"] });
+registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", userPrompt: "", systemPrompt: "" }, [hybrid("user-prompt", "User prompt", "userPrompt", ["text"], false, true), hybrid("system-prompt", "System prompt", "systemPrompt", ["text"], false), fixed("provider", "Provider"), fixed("model", "Model"), fixed("reasoningEffort", "Reasoning effort")], [output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model", reasoningEffort: "reasoning-effort" } });
+registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings: [] }, [connection("input", "Arguments", ["text"], false, true), fixed("toolName", "Tool"), fixed("args", "Arguments"), fixed("bindings", "Bindings")], [output("result", "Result", ["json"], true), output("text", "Text", ["text"]), output("artifact", "Artifact", ["artifact"])], flowDocumentNodeConfigSchemas["builtin/tool"], { sideEffecting: true, cachePolicy: "read-only", summaryFields: ["toolName"] });
 registerBuiltin("command", "workspace", "Command", { commandLine: "", cwd: "", env: {}, timeoutMs: 30_000, stdin: "" }, [hybrid("stdin", "stdin", "stdin", ["text"], false, true), fixed("commandLine", "Command"), fixed("cwd", "Working directory"), fixed("env", "Environment"), fixed("timeoutMs", "Timeout")], [output("result", "Result", ["json"], true), output("stdout", "stdout", ["text"]), output("stderr", "stderr", ["text"])], flowDocumentNodeConfigSchemas["builtin/command"], { workspaceRequired: true, sideEffecting: true, cachePolicy: "never", summaryFields: ["commandLine"] });
-registerBuiltin("text-to-image", "media", "Text to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "Image", ["image"], true)], flowDocumentNodeConfigSchemas["builtin/text-to-image"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
-registerBuiltin("image-to-image", "media", "Image to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "Image", ["image"], true)], flowDocumentNodeConfigSchemas["builtin/image-to-image"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
-registerBuiltin("text-to-video", "media", "Text to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/text-to-video"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
-registerBuiltin("image-to-video", "media", "Image to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/image-to-video"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
+registerBuiltin("text-to-image", "media", "Text to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "First image", ["image"], true), { ...output("images", "All images", ["image"]), cardinality: "many" }], flowDocumentNodeConfigSchemas["builtin/text-to-image"], { modelCapability: "imageGeneration", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
+registerBuiltin("image-to-image", "media", "Image to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "First image", ["image"], true), { ...output("images", "All images", ["image"]), cardinality: "many" }], flowDocumentNodeConfigSchemas["builtin/image-to-image"], { modelCapability: "imageEdit", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
+registerBuiltin("text-to-video", "media", "Text to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/text-to-video"], { modelCapability: "textToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
+registerBuiltin("image-to-video", "media", "Image to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/image-to-video"], { modelCapability: "imageToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
 registerBuiltin("output", "basic", "Output", { format: "text" }, [connection("input", "Value", ALL_TYPES, true, true), fixed("format", "Format")], [], flowDocumentNodeConfigSchemas["builtin/output"], { summaryFields: ["format"] });
-registerBuiltin("media-output", "media", "Media Output", { format: "preview" }, [connection("input", "Media", ["image", "video", "audio", "frames", "artifact"], true, true), fixed("format", "Display mode")], [], flowDocumentNodeConfigSchemas["builtin/media-output"], { summaryFields: ["format"] });
+registerBuiltin("media-output", "media", "Media Output", { format: "preview" }, [{ ...connection("input", "Media", ["image", "video", "audio", "frames", "artifact"], true, true), cardinality: "one-or-many" }, fixed("format", "Display mode")], [], flowDocumentNodeConfigSchemas["builtin/media-output"], { summaryFields: ["format"] });
 registerBuiltin("note", "basic", "Note", { text: "" }, [fixed("text", "Note")], [], flowDocumentNodeConfigSchemas["builtin/note"], { executable: false, cachePolicy: "never", summaryFields: ["text"] });
+
+registerComposableDefinitions(registerBuiltin);
 
 export function listFlowNodeTypeDefinitions(_workspaceAvailable: boolean): FlowNodeTypeDefinition[] {
 	return [...definitions.values()].map(publicDefinition).sort((left, right): number => left.typeId.localeCompare(right.typeId));
@@ -293,6 +310,6 @@ export function getFlowNodePort(node: Pick<FlowDocumentNode, "typeId" | "config"
 	return resolveFlowNodePorts(node).find((port): boolean => port.id === portId && port.direction === direction);
 }
 
-export function areFlowPortsCompatible(source: FlowNodePortDefinition, target: FlowNodePortDefinition, dataType: "text" | "json" | "image" | "video" | "audio" | "frames" | "artifact"): boolean {
-	return source.direction === "output" && target.direction === "input" && source.dataTypes.includes(dataType) && target.dataTypes.includes(dataType);
+export function areFlowPortsCompatible(source: FlowNodePortDefinition, target: FlowNodePortDefinition, dataType: FlowValueType): boolean {
+	return acceptsFlowCardinality(source.cardinality, target.cardinality) && source.direction === "output" && target.direction === "input" && source.dataTypes.includes(dataType) && target.dataTypes.includes(dataType);
 }

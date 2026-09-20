@@ -14,7 +14,7 @@ test("mock media adapter exposes image and video lifecycle results", async (): P
 	}, controller.signal);
 	assert.equal(image.status, "completed");
 	assert.equal(image.artifacts.length, 2);
-	assert.equal(image.artifacts[0]?.mimeType, "image/svg+xml");
+	assert.equal(image.artifacts[0]?.mimeType, "image/png");
 
 	const video = await generateMedia({
 		kind: "videoGeneration",

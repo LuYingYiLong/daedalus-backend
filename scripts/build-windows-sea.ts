@@ -1,3 +1,4 @@
+import { packageFlowImageRuntime } from "./package-flow-image-runtime.js";
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -223,11 +224,12 @@ async function createArchive(): Promise<void> {
 		"-NoProfile",
 		"-NonInteractive",
 		"-Command",
-		"Compress-Archive -LiteralPath @($env:DAEDALUS_EXE, $env:DAEDALUS_SANDBOX_HELPER, $env:DAEDALUS_PAYLOAD_MANIFEST) -DestinationPath $env:DAEDALUS_ARCHIVE -CompressionLevel Optimal -Force"
+		"Compress-Archive -LiteralPath @($env:DAEDALUS_EXE, $env:DAEDALUS_SANDBOX_HELPER, $env:DAEDALUS_PAYLOAD_MANIFEST, $env:DAEDALUS_MEDIA_RUNTIME) -DestinationPath $env:DAEDALUS_ARCHIVE -CompressionLevel Optimal -Force"
 	], {
 		env: {
 			...process.env,
 			DAEDALUS_EXE: EXECUTABLE_PATH,
+			DAEDALUS_MEDIA_RUNTIME: join(PAYLOAD_ROOT, "media"),
 			DAEDALUS_SANDBOX_HELPER: SANDBOX_HELPER_PATH,
 			DAEDALUS_PAYLOAD_MANIFEST: PAYLOAD_MANIFEST_PATH,
 			DAEDALUS_ARCHIVE: ARCHIVE_PATH
@@ -742,6 +744,7 @@ async function main(): Promise<void> {
 	const manifest: PackageManifest = await readPackageManifest();
 	const buildId: string = await resolveBuildId(manifest.version);
 	const publishedAt: string = new Date().toISOString();
+	if (!OUTPUT_ROOT.startsWith(`${PROJECT_ROOT}\\dist\\`)) throw new Error("Unsafe output directory");
 	await rm(OUTPUT_ROOT, { recursive: true, force: true });
 	await Promise.all([
 		mkdir(PAYLOAD_ROOT, { recursive: true }),
@@ -750,6 +753,7 @@ async function main(): Promise<void> {
 
 	await buildBundle(manifest, buildId);
 	await generateSeaExecutable();
+	await packageFlowImageRuntime(PROJECT_ROOT, PAYLOAD_ROOT);
 	await buildSandboxHelper();
 
 	const executableInfo = await stat(EXECUTABLE_PATH);

@@ -159,6 +159,7 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 		}
 		return createDisplay("skills", "Skills", "write", "Create skill", `Create ${label}`, { kind: "unknown", label });
 	}
+	if (toolName === "mcp_image_import_flow_images") return createDisplay("image", "Flow", "write", "Save images", `Save ${Array.isArray(args.items) ? args.items.length : 0} image(s) to the workspace`, { kind: "file", label: "Flow images" });
 	if (toolName === "mcp_image_generate") {
 		const prompt: string = getStringArg(args, "prompt") ?? "image";
 		const count: string = String(args.count ?? 1);

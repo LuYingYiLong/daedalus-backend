@@ -107,13 +107,13 @@ function createApi(context: PluginRuntimeContext): PluginApi {
 	};
 }
 
-function callHostTool(context: PluginRuntimeContext, invocationId: string, name: string, args: Record<string, unknown>): Promise<unknown> {
-	if (!context.capabilities.includes("flowHostTools")) throw new Error("Plugin did not declare the flowHostTools capability.");
+function callHostTool(context: PluginRuntimeContext, invocationId: string, name: string, args: Record<string, unknown>, method: "tool.call" | "media.process" = "tool.call"): Promise<unknown> {
+	if (!context.capabilities.includes(method === "media.process" ? "flowMedia" : "flowHostTools")) throw new Error("Plugin did not declare the flowHostTools capability.");
 	if (hostRequests.size >= 64) throw new Error("Plugin host request limit reached.");
 	const requestId = `host-${invocationId}-${sequence++}`;
 	return new Promise((resolve, reject): void => {
 		hostRequests.set(requestId, { resolve, reject, invocationId });
-		send({ type: "host.request", requestId, invocationId, method: "tool.call", params: { name, args } });
+		send({ type: "host.request", requestId, invocationId, method, params: { name, args } });
 	});
 }
 
@@ -161,7 +161,7 @@ async function handle(message: PluginWorkerMessage, context: PluginRuntimeContex
 			const args = message.kind === "flow_node" ? {
 				...message.args,
 				signal: controller.signal,
-				host: { callTool: (name: string, toolArgs: Record<string, unknown>): Promise<unknown> => callHostTool(context, message.id, name, toolArgs) },
+				host: { processImage: (artifactId: string, operation: Record<string, unknown>): Promise<unknown> => callHostTool(context, message.id, "image.transform", { artifactId, operation }, "media.process"), callTool: (name: string, toolArgs: Record<string, unknown>): Promise<unknown> => callHostTool(context, message.id, name, toolArgs) },
 			} : message.args;
 			send({ type: "result", id: message.id, ok: true, value: await handler(args) });
 		} catch (error: unknown) {

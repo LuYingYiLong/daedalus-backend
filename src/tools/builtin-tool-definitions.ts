@@ -43,6 +43,7 @@ function supportsSourceFolderParameter(name: string): boolean {
 		|| name.startsWith("mcp_terminal_")
 		|| name.startsWith("mcp_skills_")
 		|| name === "mcp_image_propose_import_to_workspace"
+		|| name === "mcp_image_import_flow_images"
 		|| name === "mcp_image_import_to_workspace"
 		|| name === "mcp_image_replace_workspace_asset";
 }
@@ -342,6 +343,7 @@ const IMAGE_GENERATION_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		},
 		["imageId", "relativePath"]
 	),
+	createSceneToolDefinition("mcp_image_import_flow_images", "Save Flow image artifacts to new workspace files. Only available with an active Flow context; never overwrites files.", { flowId: { type: "string" }, saveId: { type: "string" }, items: { type: "array", maxItems: 100, items: { type: "object", properties: { itemKey: { type: "string" }, artifactId: { type: "string" }, relativePath: { type: "string" } }, required: ["artifactId", "relativePath"], additionalProperties: false } } }, ["flowId", "saveId", "items"]),
 	createSceneToolDefinition(
 		"mcp_image_import_to_workspace",
 		"Import a generated image from the current Daedalus session into a new workspace file. The destination must not already exist. Use the propose tool first.",

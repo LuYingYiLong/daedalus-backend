@@ -7,6 +7,7 @@ import type {
 	flowDocumentNodeSchema,
 	flowNodeTypeIdSchema,
 	flowDocumentNodeRunSchema,
+	flowBatchItemRunSchema,
 	flowDocumentNodeStateEventDataSchema,
 	flowDocumentRunSchema,
 	flowDocumentRunStateEventDataSchema,
@@ -103,6 +104,7 @@ export type FlowMediaArtifactRef = z.infer<typeof flowMediaArtifactRefSchema>;
 export type FlowOperation = z.infer<typeof flowOperationSchema>;
 export type FlowPatchAck = z.infer<typeof flowPatchAckSchema>;
 export type FlowDocumentEventDataMap = {
+	"flow.batch.item.state": z.infer<typeof flowBatchItemRunSchema>;
 	"flow.updated": z.infer<typeof flowDocumentUpdatedEventDataSchema>;
 	"flow.run.state": z.infer<typeof flowDocumentRunStateEventDataSchema>;
 	"flow.node.state": z.infer<typeof flowDocumentNodeStateEventDataSchema>;
@@ -155,6 +157,7 @@ export type CanonicalServerEventName =
 	| "agent.subgraph.node.approval"
 	| "agent.subgraph.merge.state"
 	| "flow.updated"
+	| "flow.batch.item.state"
 	| "flow.node.state"
 	| "flow.patch.applied"
 	| "flow.run.state"

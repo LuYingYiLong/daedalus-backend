@@ -320,7 +320,7 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(openaiModels.find((model) => model.id === "gpt-image-2")?.capabilities.imageGeneration, true);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-image-2.5-sunburst")?.capabilities.imageGeneration, true);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-image-2.5-flare")?.capabilities.imageGeneration, true);
-	assert.equal(openaiModels.find((model) => model.id === "gpt-image-2")?.capabilities.imageEdit, undefined);
+	assert.equal(openaiModels.find((model) => model.id === "gpt-image-2")?.capabilities.imageEdit, true);
 	assert.equal(getCatalogModels().length >= providerIds.length, true);
 });
 

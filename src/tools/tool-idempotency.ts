@@ -572,6 +572,11 @@ export async function executeLlmToolWithIdempotency(
 	onProgress?: ((progress: McpProgressNotification) => void) | undefined,
 	toolCallId?: string | undefined
 ): Promise<IdempotentToolExecutionResult> {
+	if (llmToolName === "mcp_image_import_flow_images") {
+		const { saveFlowImages } = await import("./flow-image-save.js");
+		const content = JSON.stringify(await saveFlowImages(args, workspaceId, sessionId, abortSignal));
+		return { content, rawContentLength: content.length, truncated: false, reused: false };
+	}
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
 	}

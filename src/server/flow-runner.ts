@@ -1,3 +1,8 @@
+import { broadcastGlobalEvent } from "./client-connections.js";
+import { getSessionDatabase } from "../session/session-database.js";
+import { processImage, IMAGE_ENGINE_FINGERPRINT } from "../media/image-processing.js";
+import { registerComposableExecutors } from "./flow-composable-executors.js";
+import type { FlowBatchItemRun } from "../session/flow-batch-store.js";
 import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +18,7 @@ import { findWorkspace } from "../workspace/registry.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { createWorkspaceToolCatalog } from "../tools/tool-catalog.js";
 import { dispatchToolCalls, ToolApprovalRequiredError } from "../tools/tool-dispatcher.js";
-import { generateMedia } from "../providers/media-generation.js";
+import { generateMedia, mediaAdapterFingerprint } from "../providers/media-generation.js";
 import { deleteFlowArtifact, getFlowArtifact, saveFlowArtifact } from "../session/flow-artifact-store.js";
 import {
 	cancelPendingFlowApprovalsDocument,
@@ -31,6 +36,7 @@ import {
 import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition, resolveFlowNodeParameters } from "./flow-node-registry.js";
 import {
 	executeRegisteredFlowNode,
+	resolveApprovedFlowResult,
 	registerFlowNodeExecutor,
 	type FlowNodeExecutionContext,
 } from "./flow-node-executor-registry.js";
@@ -73,6 +79,22 @@ export async function stopFlowRunDocument(flowId: string, runId: string): Promis
 	return true;
 }
 
+function fingerprintValue(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(fingerprintValue);
+	if (value && typeof value === "object") {
+		const record = value as Record<string, unknown>;
+		if (typeof record.artifactId === "string" && typeof record.sha256 === "string") return { sha256: record.sha256, mimeType: record.mimeType };
+		return Object.fromEntries(Object.keys(record).sort().map(key => [key, fingerprintValue(record[key])]));
+	}
+	return value;
+}
+async function cachedArtifactsAvailable(value: unknown, flowId: string): Promise<boolean> {
+	const ids = new Set<string>();
+	const visit = (item: unknown): void => { if (Array.isArray(item)) item.forEach(visit); else if (item && typeof item === "object") { const record = item as Record<string, unknown>; if (typeof record.artifactId === "string") ids.add(record.artifactId); else Object.values(record).forEach(visit); } };
+	visit(value);
+	try { for (const id of ids) if ((await getFlowArtifact(id)).ref.flowId !== flowId) return false; return true; } catch { return false; }
+}
+
 function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readonly FlowDocumentEdge[], runtimeInput: unknown): string {
 	const effectiveConfig = structuredClone(node.config);
 	const connectedInputIds = new Set(inbound.map((edge): string => edge.targetPort));
@@ -83,10 +105,12 @@ function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readon
 		typeId: node.typeId,
 		pluginVersion: node.pluginVersion,
 		pluginFingerprint: node.pluginFingerprint,
+		imageEngine: IMAGE_ENGINE_FINGERPRINT,
 		config: effectiveConfig,
-		inputs,
+		inputs: fingerprintValue(inputs),
 		runtimeInput,
 		ports: inbound.map((edge): string[] => [edge.sourcePort, edge.targetPort, edge.dataType]),
+		adapterVersion: typeof node.config.provider === "string" ? mediaAdapterFingerprint(node.config.provider) : undefined,
 		provider: node.config.provider,
 		model: node.config.model,
 		reasoningEffort: node.config.reasoningEffort,
@@ -164,7 +188,7 @@ export async function prepareFlowRunDocument(params: {
 			throw Object.assign(new Error(`Flow run entry must be a Flow Input node: ${entryNodeId}.`), { code: "flow_input_entry_invalid", nodeId: entryNodeId });
 	}
 	const reachableFromSelectedEntries = reachableNodeIdsFromEntries(graph.edges, entryNodeIds);
-	const outputNodes = graph.nodes.filter((node): boolean => node.typeId === "builtin/output" || node.typeId === "builtin/media-output");
+	const outputNodes = graph.nodes.filter((node): boolean => findFlowNodeTypeDefinition(node.typeId)?.terminal === true);
 	const requestedTargetIds = params.selection?.targetNodeIds;
 	const targetNodeIds = requestedTargetIds === undefined
 		? outputNodes.filter((node): boolean => entryNodeIds.length === 0 || reachableFromSelectedEntries.has(node.nodeId)).map((node): string => node.nodeId)
@@ -173,7 +197,7 @@ export async function prepareFlowRunDocument(params: {
 		throw Object.assign(new Error("Add an Output node before running this Flow."), { code: "flow_output_target_required" });
 	for (const targetNodeId of targetNodeIds) {
 		const target = graph.nodes.find((node): boolean => node.nodeId === targetNodeId);
-		if (target === undefined || (target.typeId !== "builtin/output" && target.typeId !== "builtin/media-output"))
+		if (target === undefined || findFlowNodeTypeDefinition(target.typeId)?.terminal !== true)
 			throw Object.assign(new Error(`Flow run target must be an Output node: ${targetNodeId}.`), { code: "flow_output_target_invalid", nodeId: targetNodeId });
 		if (entryNodeIds.length > 0 && !reachableFromSelectedEntries.has(targetNodeId))
 			throw Object.assign(new Error(`Output is not reachable from the selected Flow Input: ${targetNodeId}.`), { code: "flow_output_target_unreachable", nodeId: targetNodeId });
@@ -329,7 +353,7 @@ function parseToolContent(content: string): unknown {
 	try { return JSON.parse(content) as unknown; } catch { return content; }
 }
 
-async function executeMediaNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
+async function executeMediaNode(params: { resumeProviderJobId?: string | undefined; node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
 	const provider = typeof params.node.config.provider === "string" ? params.node.config.provider.trim() : "";
 	const model = typeof params.node.config.model === "string" ? params.node.config.model.trim() : "";
 	if (provider.length === 0 || model.length === 0) throw Object.assign(new Error("Media node requires a provider and model."), { code: "media_model_required" });
@@ -371,16 +395,20 @@ async function executeMediaNode(params: { node: FlowDocumentNode; inputs: NodeIn
 		async save(input) {
 			return { imageId: `flow-capture-${input.model}-${input.bytes.byteLength}`, sessionId: "flow-media", mimeType: input.mimeType, byteSize: input.bytes.byteLength, provider: input.provider, model: input.model, prompt: input.prompt, createdAt: new Date().toISOString(), fileName: "flow-capture", storagePath: "" };
 		},
-	}, params.onProgress, params.onProviderJobId);
+	}, params.onProgress, params.onProviderJobId, params.resumeProviderJobId);
 	const binaries = result.artifacts;
 	const refs = [];
 	try {
-		for (const artifact of binaries) refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: artifact.metadata }));
+		for (const [imageIndex, binary] of binaries.entries()) {
+			let artifact = binary;
+			if (artifact.mimeType.startsWith("image/")) artifact = { ...artifact, ...await processImage(artifact.bytes, { kind: "convert", format: artifact.mimeType === "image/jpeg" ? "jpeg" : artifact.mimeType === "image/webp" ? "webp" : "png" }, params.signal) };
+			refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: { ...artifact.metadata, itemId: params.node.config.id, imageIndex, seed: params.node.config.seed, rowIndex: params.node.config.rowIndex, width: params.node.config.width, height: params.node.config.height } }));
+		}
 	} catch (error: unknown) {
 		await Promise.allSettled(refs.map((ref): Promise<void> => deleteFlowArtifact(ref.artifactId)));
 		throw error;
 	}
-	return { [kind.startsWith("video") ? "video" : "image"]: refs.length === 1 ? refs[0] : refs };
+	return kind.startsWith("video") ? { video: refs.length === 1 ? refs[0] : refs } : { image: refs[0], images: refs };
 }
 
 async function executeToolNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; gateway: ApprovalGateway; mcpHost: McpHost; signal: AbortSignal }): Promise<PortOutputs> {
@@ -477,6 +505,7 @@ function registerBuiltinExecutors(): void {
 }
 
 registerBuiltinExecutors();
+registerComposableExecutors(registerFlowNodeExecutor, executeMediaNode, executeToolNode);
 
 function forceWithDescendants(forceNodeIds: readonly string[], edges: readonly FlowDocumentEdge[]): Set<string> {
 	const result = new Set(forceNodeIds);
@@ -506,11 +535,13 @@ export async function startFlowRunDocument(params: {
 	mcpHost: McpHost;
 	runId?: string;
 	forceNodeIds?: readonly string[];
+	retryFailedItemsOnly?: boolean;
 	entryNodeIds?: readonly string[];
 	targetNodeIds?: readonly string[];
 	inputValues?: Readonly<Record<string, unknown>>;
 	onRunState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>) => void;
 	onNodeState?: (run: Awaited<ReturnType<typeof getFlowRunDocument>>, nodeId: string) => void;
+	onBatchItem?: ((item: FlowBatchItemRun) => void) | undefined;
 	onNodeProgress?: (runId: string, nodeId: string, progress: number) => void;
 }): Promise<Awaited<ReturnType<typeof getFlowRunDocument>>> {
 	const activeRunId = activeRunsByFlow.get(params.flowId);
@@ -548,10 +579,12 @@ export async function startFlowRunDocument(params: {
 	const outputs = new Map<string, PortOutputs>();
 	const completed = new Set<string>();
 	const failed = new Set<string>();
+	const partial = new Set<string>();
 	const skipped = new Set<string>();
 	const waiting = new Set<string>();
 	for (const state of run.nodes) {
-		if ((state.status === "completed" || state.status === "cached") && state.output !== null && typeof state.output === "object") { completed.add(state.nodeId); outputs.set(state.nodeId, state.output as PortOutputs); }
+		if (state.status === "partial_failure") partial.add(state.nodeId);
+		if ((state.status === "completed" || state.status === "cached" || state.status === "partial_failure") && state.output !== null && typeof state.output === "object") { completed.add(state.nodeId); outputs.set(state.nodeId, state.output as PortOutputs); }
 		else if (state.status === "failed") failed.add(state.nodeId);
 		else if (state.status === "skipped") skipped.add(state.nodeId);
 		else if (state.status === "waiting") waiting.add(state.nodeId);
@@ -573,7 +606,7 @@ export async function startFlowRunDocument(params: {
 				params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 			}
 			for (let offset = 0; offset < ready.length; offset += 4) {
-				await Promise.all(ready.slice(offset, offset + 4).filter((node): boolean => !skipped.has(node.nodeId)).map(async (node): Promise<void> => {
+				const settled = await Promise.allSettled(ready.slice(offset, offset + 4).filter((node): boolean => !skipped.has(node.nodeId)).map(async (node): Promise<void> => {
 					const inbound = graph.edges.filter((edge): boolean => edge.targetNodeId === node.nodeId);
 					const collected = collectInputs(node, graph.edges, outputs);
 					if (collected.inactive) {
@@ -598,7 +631,7 @@ export async function startFlowRunDocument(params: {
 					const fingerprintKey = fingerprint(node, collected.inputs, inbound, runtimeInput);
 					if (!force.has(node.nodeId) && canUseCache(node, graph.flow)) {
 						const cached = await findCachedFlowNodeOutput(params.flowId, node.nodeId, fingerprintKey);
-						if (cached !== null && typeof cached === "object") {
+						if (cached !== null && typeof cached === "object" && await cachedArtifactsAvailable(cached, params.flowId)) {
 							outputs.set(node.nodeId, cached as PortOutputs);
 							await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "cached", inputFingerprint: fingerprintKey, output: cached, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
 							completed.add(node.nodeId);
@@ -610,20 +643,26 @@ export async function startFlowRunDocument(params: {
 					await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "running", inputFingerprint: fingerprintKey, startedAt });
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 					try {
-						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal, onProgress: (progress): void => params.onNodeProgress?.(run.runId, node.nodeId, progress), onProviderJobId: (providerJobId): Promise<void> => updateFlowNodeProviderJobIdDocument(params.flowId, run.runId, node.nodeId, providerJobId) });
+						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal, force: params.forceNodeIds?.includes(node.nodeId) === true && params.retryFailedItemsOnly !== true, onPartialFailure: () => { partial.add(node.nodeId); }, onBatchItem: params.onBatchItem, onProgress: (progress): void => params.onNodeProgress?.(run.runId, node.nodeId, progress), onProviderJobId: (providerJobId): Promise<void> => updateFlowNodeProviderJobIdDocument(params.flowId, run.runId, node.nodeId, providerJobId) });
 						outputs.set(node.nodeId, output);
-						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "completed", inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
+						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: partial.has(node.nodeId) ? "partial_failure" : "completed", error: partial.has(node.nodeId) ? "Some batch items failed. Successful results were retained." : null, inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
 					} catch (nodeError: unknown) {
 						if (nodeError instanceof ToolApprovalRequiredError) { await createFlowApprovalDocument({ flowId: params.flowId, runId: run.runId, nodeId: node.nodeId, pending: nodeError.pendingApproval }); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "waiting", inputFingerprint: fingerprintKey, startedAt }); waiting.add(node.nodeId); }
 						else { if (controller.signal.aborted) throw nodeError; failed.add(node.nodeId); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "failed", inputFingerprint: fingerprintKey, error: nodeError instanceof Error ? nodeError.message : String(nodeError), startedAt, finishedAt: new Date().toISOString() }); }
 					}
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 				}));
+				const rejected = settled.find(result => result.status === "rejected");
+				if (rejected?.status === "rejected") throw rejected.reason;
 			}
 		}
 		if (waiting.size > 0) { const waitingRun = await updateFlowRunDocument(params.flowId, run.runId, { status: "waiting" }); params.onRunState?.(waitingRun); return waitingRun; }
-		const finished = await updateFlowRunDocument(params.flowId, run.runId, { status: failed.size > 0 ? "failed" : "completed", ...(failed.size > 0 ? { error: `${failed.size} node(s) failed.` } : {}), finishedAt: new Date().toISOString() }); params.onRunState?.(finished); return finished;
+		const finished = await updateFlowRunDocument(params.flowId, run.runId, { status: failed.size > 0 ? "failed" : partial.size > 0 ? "partial_failure" : "completed", ...(failed.size > 0 ? { error: `${failed.size} node(s) failed.` } : {}), finishedAt: new Date().toISOString() }); params.onRunState?.(finished); return finished;
 	} catch (error: unknown) {
+        if (controller.signal.aborted) {
+         for (const state of (await getFlowRunDocument(params.flowId, run.runId)).nodes) if (["running", "queued", "waiting"].includes(state.status))
+          await updateFlowNodeRunDocument(params.flowId, run.runId, state.nodeId, { status: "cancelled", error: "Flow run cancelled.", finishedAt: new Date().toISOString() });
+        }
 		const failedRun = await updateFlowRunDocument(params.flowId, run.runId, { status: controller.signal.aborted ? "cancelled" : "failed", error: error instanceof Error ? error.message : String(error), finishedAt: new Date().toISOString() }); params.onRunState?.(failedRun); return failedRun;
 	} finally {
 		const current = await getFlowRunDocument(params.flowId, run.runId);
@@ -647,7 +686,25 @@ export async function resolveFlowRunApproval(params: { flowId: string; runId: st
 	} else {
 		const result = await gateway.approve(params.approvalId, params.mcpHost);
 		await resolveFlowApprovalDocument(params.flowId, params.runId, params.approvalId, "approved");
-		await updateFlowNodeRunDocument(params.flowId, params.runId, stored.approval.nodeId, { status: "completed", inputFingerprint: currentNodeRun?.inputFingerprint ?? null, output: { result: parseToolContent(result.content), text: result.content }, finishedAt: new Date().toISOString() });
+		try {
+            const node = graph.nodes.find(node => node.nodeId === stored.approval.nodeId)!;
+            const resolved = resolveApprovedFlowResult(node.typeId, parseToolContent(result.content), result.content);
+            await updateFlowNodeRunDocument(params.flowId, params.runId, node.nodeId, { status: resolved.partialFailures ? "partial_failure" : "completed", inputFingerprint: currentNodeRun?.inputFingerprint ?? null, output: resolved.output, error: resolved.partialFailures ? `${resolved.partialFailures} item(s) failed.` : null, finishedAt: new Date().toISOString() });
+        } catch (error) {
+            await updateFlowNodeRunDocument(params.flowId, params.runId, stored.approval.nodeId, { status: "failed", error: String(error), finishedAt: new Date().toISOString() });
+        }
 	}
 	return startFlowRunDocument({ flowId: params.flowId, revision: graph.flow.graphRevision, runId: params.runId, mcpHost: params.mcpHost });
+}
+
+export async function recoverFlowMediaRuns(mcpHost: McpHost): Promise<void> {
+	const db = await getSessionDatabase();
+	const runs = db.prepare("SELECT run_id,flow_id,revision FROM flow_runs WHERE status='queued' AND run_id IN (SELECT run_id FROM flow_batch_items)").all() as Array<{ run_id: string; flow_id: string; revision: number }>;
+	for (const run of runs) {
+		void startFlowRunDocument({ flowId: run.flow_id, revision: run.revision, runId: run.run_id, mcpHost,
+ onBatchItem: item => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),
+ onRunState: state => broadcastGlobalEvent(state.runId, "flow.run.state", { flowId: state.flowId, runId: state.runId, revision: state.revision, status: state.status, run: state }),
+ onNodeState: (state, nodeId) => { const nodeRun = state.nodes.find(node => node.nodeId === nodeId); if (nodeRun) broadcastGlobalEvent(state.runId, "flow.node.state", { flowId: state.flowId, runId: state.runId, revision: state.revision, nodeId, status: nodeRun.status, nodeRun }); },
+ }).catch(async error => { await updateFlowRunDocument(run.flow_id, run.run_id, { status: "failed", error: String(error), finishedAt: new Date().toISOString() }); });
+	}
 }

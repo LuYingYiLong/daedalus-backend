@@ -1,3 +1,6 @@
+import { processImage } from "../../media/image-processing.js";
+import { FLOW_STORAGE_GENERATION, FLOW_TYPE_PRESENTATION } from "../../protocol/flow-value-types.js";
+import { exportFlowToSqlite } from "../../session/flow-export.js";
 import type WebSocket from "ws";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import { ensureFlowNodePluginRuntimes } from "../../plugins/runtime/manager.js";
@@ -24,7 +27,7 @@ import { createSession, getStoredSessionMetadata, openSession, saveSession, type
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
 import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, listFlowArtifacts } from "../../session/flow-artifact-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
-import { broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
+import { getClientConnection, broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
 import { listFlowNodeTypeDefinitions } from "../flow-node-registry.js";
 import { getActiveFlowRunIdDocument, prepareFlowRunDocument, resolveFlowRunApproval, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
@@ -57,6 +60,7 @@ type FlowRequestMethod =
 	| "flow.artifact.delete"
 	| "flow.artifact.cleanup"
 	| "flow.import.fromSession"
+	| "flow.export"
 	| "flow.export.toSession";
 
 type FlowRequest = Extract<ClientRequest, { method: FlowRequestMethod }>;
@@ -193,10 +197,11 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			const flow = flowRequest.params.flowId === undefined ? null : (await getFlowDocument(flowRequest.params.flowId)).flow;
 			const workspaceId = flow?.workspaceId ?? flowRequest.params.workspaceId;
 			await ensureFlowNodePluginRuntimes({ sessionId: `flow-catalog:${flow?.flowId ?? "new"}`, ...(workspaceId === undefined || workspaceId === null ? {} : { workspaceId }) });
-			result = { nodes: listFlowNodeTypeDefinitions(workspaceId !== undefined && workspaceId !== null) };
+			result = { nodes: listFlowNodeTypeDefinitions(workspaceId !== undefined && workspaceId !== null), generation: FLOW_STORAGE_GENERATION, valueTypes: FLOW_TYPE_PRESENTATION };
 			break;
 		}
 		case "flow.patch.commit":
+			if (flowRequest.params.generation !== FLOW_STORAGE_GENERATION) throw flowError("flow_storage_generation_mismatch", "Reload Studio after the Flow storage upgrade.");
 			result = await commitFlowOperationsDocument(flowRequest.params);
 			break;
 		case "flow.settings.update":
@@ -240,6 +245,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				runId,
 				mcpHost,
 				...(flowRequest.params.forceNodeIds === undefined ? {} : { forceNodeIds: flowRequest.params.forceNodeIds }),
+				onBatchItem: (item): void => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),
 				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
 				onNodeState: (run, nodeId): void => {
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
@@ -284,8 +290,10 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				flowId: flowRequest.params.flowId,
 				revision,
 				runId: retryRunId,
+				retryFailedItemsOnly: true,
 				mcpHost,
 				...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }),
+				onBatchItem: (item): void => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),
 				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
 				onNodeState: (run, nodeId): void => {
 					const node = run.nodes.find((candidate): boolean => candidate.nodeId === nodeId);
@@ -316,8 +324,13 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				result = { ref: artifact.ref, ...(flowRequest.params.includeData === true ? { dataBase64: artifact.bytes.toString("base64") } : {}) };
 				break;
 			}
+		case "flow.artifact.thumbnail": {
+			const artifact = await getFlowArtifact(flowRequest.params.artifactId);
+			const thumbnail = await processImage(artifact.bytes, { kind: "resize", width: 256, height: 256, fit: "contain" }, AbortSignal.timeout(60000));
+			result = { ref: artifact.ref, dataBase64: thumbnail.bytes.toString("base64") };
+			break;
+		}
 		case "flow.artifact.preview":
-		case "flow.artifact.thumbnail":
 		case "flow.artifact.download": {
 				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
 				result = { ref: artifact.ref, dataBase64: artifact.bytes.toString("base64") };
@@ -332,6 +345,10 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			break;
 		case "flow.import.fromSession":
 			result = await importFlowFromSessionDocument(flowRequest.params);
+			break;
+		case "flow.export":
+			if (getClientConnection(socket)?.clientType !== "studio") throw Object.assign(new Error("flow.export is only available to Daedalus Studio."), { code: "studio_only" });
+			result = await exportFlowToSqlite(flowRequest.params.flowId, flowRequest.params.destinationPath);
 			break;
 		case "flow.export.toSession":
 			result = await exportFlowToSessionDocument(flowRequest.params);

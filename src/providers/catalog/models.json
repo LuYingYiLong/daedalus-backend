@@ -9,11 +9,21 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "high", "fallback": "high", "default": true },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high",
+          "default": true
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true
     },
     "ownedBy": "deepseek"
@@ -28,11 +38,21 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "high", "fallback": "high", "default": true },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high",
+          "default": true
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true
     },
     "ownedBy": "deepseek"
@@ -47,11 +67,21 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "high", "fallback": "high", "default": true },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high",
+          "default": true
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true
     },
     "ownedBy": "deepseek"
@@ -68,9 +98,19 @@
       "videoInput": true,
       "reasoning": true,
       "reasoningEfforts": [
-        { "id": "low", "fallback": "low" },
-        { "id": "high", "fallback": "high" },
-        { "id": "max", "fallback": "max", "default": true }
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max",
+          "default": true
+        }
       ],
       "tools": true,
       "vision": true
@@ -229,13 +269,28 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "xhigh", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -252,13 +307,28 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "xhigh", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -275,13 +345,28 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "xhigh", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -298,13 +383,28 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "xhigh", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -321,12 +421,24 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "vision": true
     },
@@ -342,12 +454,24 @@
     "capabilities": {
       "imageInput": true,
       "reasoning": true,
-			"reasoningEfforts": [
-				{ "id": "low", "fallback": "low" },
-				{ "id": "medium", "fallback": "medium" },
-				{ "id": "high", "fallback": "high" },
-				{ "id": "max", "fallback": "max" }
-			],
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
       "tools": true,
       "webSearch": true,
       "vision": true
@@ -362,7 +486,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -374,7 +500,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -386,7 +514,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -398,7 +528,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -410,7 +542,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -422,7 +556,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -434,7 +570,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -446,7 +584,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -458,7 +598,9 @@
     "contextWindowTokens": 32000,
     "maxOutputTokens": 4096,
     "capabilities": {
-      "imageGeneration": true
+      "imageGeneration": true,
+      "imageEdit": true,
+      "imageInput": true
     },
     "ownedBy": "openai"
   },
@@ -486,9 +628,19 @@
     "capabilities": {
       "reasoning": true,
       "reasoningEfforts": [
-        { "id": "low", "fallback": "low" },
-        { "id": "high", "fallback": "high" },
-        { "id": "max", "fallback": "max", "default": true }
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max",
+          "default": true
+        }
       ],
       "tools": true
     },
@@ -506,9 +658,19 @@
       "videoInput": true,
       "reasoning": true,
       "reasoningEfforts": [
-        { "id": "low", "fallback": "low" },
-        { "id": "high", "fallback": "high" },
-        { "id": "max", "fallback": "max", "default": true }
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max",
+          "default": true
+        }
       ],
       "tools": true
     },

@@ -81,13 +81,13 @@ function createApi(context) {
     }
   };
 }
-function callHostTool(context, invocationId, name, args) {
-  if (!context.capabilities.includes("flowHostTools")) throw new Error("Plugin did not declare the flowHostTools capability.");
+function callHostTool(context, invocationId, name, args, method = "tool.call") {
+  if (!context.capabilities.includes(method === "media.process" ? "flowMedia" : "flowHostTools")) throw new Error("Plugin did not declare the flowHostTools capability.");
   if (hostRequests.size >= 64) throw new Error("Plugin host request limit reached.");
   const requestId = `host-${invocationId}-${sequence++}`;
   return new Promise((resolve, reject) => {
     hostRequests.set(requestId, { resolve, reject, invocationId });
-    send({ type: "host.request", requestId, invocationId, method: "tool.call", params: { name, args } });
+    send({ type: "host.request", requestId, invocationId, method, params: { name, args } });
   });
 }
 async function handle(message, context) {
@@ -134,7 +134,7 @@ async function handle(message, context) {
       const args = message.kind === "flow_node" ? {
         ...message.args,
         signal: controller.signal,
-        host: { callTool: (name, toolArgs) => callHostTool(context, message.id, name, toolArgs) }
+        host: { processImage: (artifactId, operation) => callHostTool(context, message.id, "image.transform", { artifactId, operation }, "media.process"), callTool: (name, toolArgs) => callHostTool(context, message.id, name, toolArgs) }
       } : message.args;
       send({ type: "result", id: message.id, ok: true, value: await handler(args) });
     } catch (error) {

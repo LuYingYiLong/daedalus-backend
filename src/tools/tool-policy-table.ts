@@ -41,6 +41,7 @@ export const TOOL_POLICIES: Record<string, ToolPolicy> = {
 	"mcp_image_generate": { risk: "verify" },
 	"mcp_image_inspect": { risk: "read" },
 	"mcp_image_propose_import_to_workspace": { risk: "propose" },
+	"mcp_image_import_flow_images": { risk: "write" },
 	"mcp_image_import_to_workspace": { risk: "write" },
 	"mcp_image_replace_workspace_asset": { risk: "destructive" },
 	"mcp_web_search": { risk: "read" },

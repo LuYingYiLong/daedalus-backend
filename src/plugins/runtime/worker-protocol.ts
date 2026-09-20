@@ -82,7 +82,7 @@ export type PluginWorkerEvent =
 	| { type: "register.mcp"; registration: PluginMcpRegistration }
 	| { type: "register.command"; registration: PluginCommandRegistration }
 	| { type: "register.flowNode"; registration: PluginFlowNodeRegistration }
-	| { type: "host.request"; requestId: string; invocationId: string; method: "tool.call"; params: { name: string; args: Record<string, unknown> } }
+	| { type: "host.request"; requestId: string; invocationId: string; method: "tool.call" | "media.process"; params: { name: string; args: Record<string, unknown> } }
 	| { type: "result"; id: string; ok: boolean; value?: unknown; error?: string }
 	| { type: "error"; message: string };
 
@@ -109,7 +109,7 @@ function assertRuntimeContext(value: unknown): asserts value is PluginRuntimeCon
 	assertString(value.sessionId, "session ID", 256);
 	if (value.workspaceId !== undefined && (typeof value.workspaceId !== "string" || value.workspaceId.length > 256)) throw new Error("Invalid plugin worker workspace ID.");
 	if (value.workspaceRoot !== undefined && (typeof value.workspaceRoot !== "string" || value.workspaceRoot.length > 4096)) throw new Error("Invalid plugin worker workspace root.");
-	if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability): boolean => ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
+	if (!Array.isArray(value.capabilities) || !value.capabilities.every((capability): boolean => ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools", "flowMedia", "flowTypedValues"].includes(String(capability)))) throw new Error("Invalid plugin worker capabilities.");
 	if (value.p2Capabilities !== undefined && (!Array.isArray(value.p2Capabilities) || value.p2Capabilities.length > 16 || !value.p2Capabilities.every((capability): boolean => typeof capability === "string" && capability.length <= 64))) throw new Error("Invalid plugin worker P2 capabilities.");
 }
 
@@ -151,7 +151,7 @@ export function parseWorkerMessage(line: string): PluginWorkerMessage {
 
 function assertRegistration(value: Record<string, unknown>, kind: "tool" | "skill" | "hook" | "mcp" | "command" | "flowNode"): void {
 	if (kind === "flowNode") {
-		assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "parameters", "outputs", "dynamicParameters", "handlerName"]);
+		assertKeys(value, ["typeId", "pluginId", "pluginVersion", "configVersion", "category", "workspaceRequired", "sideEffecting", "executable", "cachePolicy", "defaultTitle", "defaultConfig", "configSchema", "summaryFields", "ui", "parameters", "outputs", "dynamicParameters", "terminal", "batch", "modelCapability", "handlerName"]);
 		assertString(value.typeId, "Flow node type ID", 256);
 		assertString(value.pluginId, "Flow node plugin ID", 128);
 		assertString(value.pluginVersion, "Flow node plugin version", 80);
@@ -239,7 +239,7 @@ export function parseWorkerEvent(line: string): PluginWorkerEvent {
 		assertKeys(value, ["type", "requestId", "invocationId", "method", "params"]);
 		assertString(value.requestId, "host request ID", 128);
 		assertString(value.invocationId, "host invocation ID", 128);
-		if (value.method !== "tool.call" || !isRecord(value.params)) throw new Error("Invalid plugin host request.");
+		if (!["tool.call", "media.process"].includes(String(value.method)) || !isRecord(value.params)) throw new Error("Invalid plugin host request.");
 		assertKeys(value.params, ["name", "args"]);
 		assertString(value.params.name, "host tool name", 240);
 		if (!isRecord(value.params.args) || Buffer.byteLength(JSON.stringify(value.params.args), "utf8") > 200_000) throw new Error("Invalid plugin host tool arguments.");

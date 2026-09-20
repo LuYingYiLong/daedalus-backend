@@ -22,7 +22,7 @@ export type PluginCompatibility = {
 	classification: "native" | "harness-bundle" | "harness-client" | "both" | "metadata-only" | "unsupported";
 };
 
-export const PLUGIN_CAPABILITIES = ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools"] as const;
+export const PLUGIN_CAPABILITIES = ["tools", "skills", "hooks", "mcp", "flowNodes", "flowHostTools", "flowMedia", "flowTypedValues"] as const;
 export type PluginCapability = typeof PLUGIN_CAPABILITIES[number];
 
 export type NativePluginDeclaration = {

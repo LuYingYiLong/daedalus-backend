@@ -63,7 +63,7 @@ async function findExistingAncestor(absolutePath: string): Promise<string> {
 	}
 }
 
-async function resolveSafeDestination(workspaceRoot: string, relativePath: string): Promise<{
+export async function resolveSafeDestination(workspaceRoot: string, relativePath: string): Promise<{
 	workspaceRoot: string;
 	relativePath: string;
 	absolutePath: string;

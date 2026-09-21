@@ -15,6 +15,13 @@ export async function readScopedFlowImage(context: Pick<FlowNodeExecutionContext
 	return artifact;
 }
 
+export async function readScopedFlowVideo(context: Pick<FlowNodeExecutionContext, "flow">, value: unknown): Promise<Awaited<ReturnType<typeof getFlowArtifact>>> {
+	assertFlowPortValue({ id: "video", dataTypes: ["video"] }, value);
+	const artifact = await getFlowArtifact((value as { artifactId: string }).artifactId);
+	if (artifact.ref.flowId !== context.flow.flowId || artifact.ref.sha256 !== (value as { sha256: string }).sha256) throw new Error("flow_artifact_scope_invalid");
+	return artifact;
+}
+
 export async function transformFlowImage(context: FlowNodeExecutionContext, value: unknown, operation: ImageOperation, overlay?: unknown): Promise<unknown> {
 	const artifact = await readScopedFlowImage(context, value);
 	const layer = overlay === undefined ? undefined : await readScopedFlowImage(context, overlay);
@@ -60,6 +67,24 @@ export function registerComposableExecutors(register: typeof registerFlowNodeExe
 		if (resolved.partialFailures) context.onPartialFailure?.(resolved.partialFailures);
 		return resolved.output;
 	}, imageSaveResult);
+	add("save-videos", async context => {
+		const refs = Array.isArray(context.inputs.videos) ? context.inputs.videos : [context.inputs.videos];
+		const items = [];
+		for (const [index, ref] of refs.entries()) {
+			const artifact = await readScopedFlowVideo(context, ref);
+			const pattern = String(context.node.config.fileName);
+			if (/[\\/:]/u.test(pattern) || /\{(?!runId\}|index\}|row\}|seed\})/u.test(pattern)) throw new Error("flow_video_filename_invalid");
+			const name = pattern.replaceAll("{runId}", context.runId).replaceAll("{index}", String(index + 1)).replaceAll("{row}", String(artifact.ref.metadata.rowIndex ?? index + 1)).replaceAll("{seed}", String(artifact.ref.metadata.seed ?? "unknown"));
+			const extension = artifact.ref.mimeType === "video/quicktime" ? "mov" : artifact.ref.mimeType.split("/")[1];
+			const itemKey = createHash("sha256").update(JSON.stringify([artifact.ref.sha256, artifact.ref.metadata.itemId ?? artifact.ref.artifactId, artifact.ref.metadata.videoIndex ?? 0])).digest("hex");
+			items.push({ itemKey, artifactId: artifact.ref.artifactId, relativePath: `${context.node.config.directory}/${name}.${extension}` });
+		}
+		const saveId = createHash("sha256").update(JSON.stringify({ node: context.node.nodeId, config: context.node.config })).digest("hex");
+		const result = await tool({ ...context, node: { ...context.node, config: { toolName: "mcp_video_import_flow_videos", args: { flowId: context.flow.flowId, saveId, items }, bindings: [] } } });
+		const resolved = videoSaveResult(result.result);
+		if (resolved.partialFailures) context.onPartialFailure?.(resolved.partialFailures);
+		return resolved.output;
+	}, videoSaveResult);
 	add("parameter-sets", async ({ node }) => ({ rows: node.config.rows }));
 	add("image-input", async context => {
 		const workspace = context.flow.workspaceId === null ? null : findWorkspace(context.flow.workspaceId);
@@ -92,4 +117,11 @@ function imageSaveResult(value: unknown): FlowApprovedResult {
  if (!Array.isArray(report?.saved)) throw new Error("flow_image_save_invalid_result");
  if (report.failed?.length && !report.saved.length) throw new Error(report.failed.map(item => item.error).join("; "));
  return { output: { result: value }, partialFailures: report.failed?.length ?? 0 };
+}
+
+function videoSaveResult(value: unknown): FlowApprovedResult {
+	const report = value as { saved?: unknown[]; failed?: Array<{ error: string }> };
+	if (!Array.isArray(report?.saved)) throw new Error("flow_video_save_invalid_result");
+	if (report.failed?.length && !report.saved.length) throw new Error(report.failed.map(item => item.error).join("; "));
+	return { output: { result: value }, partialFailures: report.failed?.length ?? 0 };
 }

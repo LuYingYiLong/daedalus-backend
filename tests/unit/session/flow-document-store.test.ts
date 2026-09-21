@@ -37,13 +37,18 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
 	const definitions = listFlowNodeTypeDefinitions(true);
-	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/batch-image-to-image", "builtin/batch-text-to-image", "builtin/boolean", "builtin/color", "builtin/image-composite", "builtin/image-convert", "builtin/image-crop", "builtin/image-input", "builtin/image-resize", "builtin/image-rotate", "builtin/list", "builtin/list-item", "builtin/list-merge", "builtin/number", "builtin/parameter-sets", "builtin/save-images", "builtin/size", "builtin/text-replace", "builtin/to-text", "builtin/command", "builtin/condition", "builtin/file-input", "builtin/flow-input", "builtin/image-to-image", "builtin/image-to-video", "builtin/json-extract", "builtin/llm", "builtin/media-output", "builtin/merge", "builtin/note", "builtin/output", "builtin/system-prompt", "builtin/template", "builtin/text", "builtin/text-to-image", "builtin/text-to-video", "builtin/tool", "builtin/user-prompt"].sort((a,b) => a.localeCompare(b)));
+	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/batch-image-to-image", "builtin/batch-text-to-image", "builtin/boolean", "builtin/color", "builtin/image-composite", "builtin/image-convert", "builtin/image-crop", "builtin/image-input", "builtin/image-resize", "builtin/image-rotate", "builtin/list", "builtin/list-item", "builtin/list-merge", "builtin/number", "builtin/parameter-sets", "builtin/save-images", "builtin/save-videos", "builtin/size", "builtin/text-replace", "builtin/to-text", "builtin/command", "builtin/condition", "builtin/file-input", "builtin/flow-input", "builtin/image-to-image", "builtin/image-to-video", "builtin/json-extract", "builtin/llm", "builtin/media-output", "builtin/merge", "builtin/note", "builtin/output", "builtin/system-prompt", "builtin/template", "builtin/text", "builtin/text-to-image", "builtin/text-to-video", "builtin/tool", "builtin/user-prompt"].sort((a,b) => a.localeCompare(b)));
 	const llmProperties = definitions.find((definition): boolean => definition.typeId === "builtin/llm")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
 	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
 	const fileInputProperties = definitions.find((definition): boolean => definition.typeId === "builtin/file-input")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(fileInputProperties.path?.["x-daedalus-control"], "workspace-file");
+	const saveVideos = definitions.find((definition): boolean => definition.typeId === "builtin/save-videos")!;
+	assert.equal(saveVideos.category, "workspace-media");
+	const saveVideosInput = saveVideos.parameters.find((parameter): boolean => parameter.id === "videos");
+	assert.equal(saveVideosInput?.mode, "connection");
+	if (saveVideosInput?.mode === "connection") assert.deepEqual(saveVideosInput.dataTypes, ["video"]);
 	const llm = definitions.find((definition): boolean => definition.typeId === "builtin/llm")!;
 	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
 		{ id: "user-prompt", mode: "hybrid" },

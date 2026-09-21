@@ -577,6 +577,11 @@ export async function executeLlmToolWithIdempotency(
 		const content = JSON.stringify(await saveFlowImages(args, workspaceId, sessionId, abortSignal));
 		return { content, rawContentLength: content.length, truncated: false, reused: false };
 	}
+	if (llmToolName === "mcp_video_import_flow_videos") {
+		const { saveFlowVideos } = await import("./flow-video-save.js");
+		const content = JSON.stringify(await saveFlowVideos(args, workspaceId, sessionId, abortSignal));
+		return { content, rawContentLength: content.length, truncated: false, reused: false };
+	}
 	if (llmToolName === "mcp_image_generate") {
 		return executeImageGenerationTool(args, sessionId, abortSignal);
 	}

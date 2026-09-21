@@ -48,6 +48,7 @@ export const BUILTIN_TOOL_MAPPINGS: Record<string, ToolMapping> = {
 	"mcp_image_inspect": { serverId: "image", toolName: "inspect" },
 	"mcp_image_propose_import_to_workspace": { serverId: "image", toolName: "propose_import_to_workspace" },
 	"mcp_image_import_flow_images": { serverId: "image", toolName: "import_flow_images" },
+	"mcp_video_import_flow_videos": { serverId: "image", toolName: "import_flow_videos" },
 	"mcp_image_import_to_workspace": { serverId: "image", toolName: "import_to_workspace" },
 	"mcp_image_replace_workspace_asset": { serverId: "image", toolName: "replace_workspace_asset" },
 	"mcp_web_search": { serverId: "web_search", toolName: "search" },

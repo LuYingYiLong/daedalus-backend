@@ -308,7 +308,7 @@ function isGodotToolName(toolName: string | undefined): boolean {
 }
 
 function isStaticToolAvailableInContext(toolName: string | undefined, context: ToolExecutionContext): boolean {
-	if (toolName === "mcp_image_import_flow_images") return context.workspaceId !== undefined && context.sessionId?.startsWith("flow:") === true;
+	if (toolName === "mcp_image_import_flow_images" || toolName === "mcp_video_import_flow_videos") return context.workspaceId !== undefined && context.sessionId?.startsWith("flow:") === true;
 	if (toolName !== undefined && LEGACY_GODOT_PROCESS_TOOL_NAMES.has(toolName)) return false;
 	if (toolName !== undefined && SUBAGENT_TOOL_NAME_SET.has(toolName)) return context.subagentControl !== undefined;
 	if (toolName?.startsWith("mcp_godot_runtime_") === true) {

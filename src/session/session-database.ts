@@ -596,6 +596,7 @@ function migrateSchema(db: DatabaseSync): void {
 			);
 		db.exec("PRAGMA foreign_keys = OFF");
 		db.exec(`
+			DROP TABLE IF EXISTS flow_video_saves;
 			DROP TABLE IF EXISTS flow_image_saves;
 			DROP TABLE IF EXISTS flow_batch_items;
 			DROP TABLE IF EXISTS flow_node_run_events;
@@ -635,6 +636,7 @@ function migrateSchema(db: DatabaseSync): void {
 	}
 	db.exec(`CREATE TABLE IF NOT EXISTS flow_batch_items(run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, item_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, request_fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(run_id,node_id,item_id)); CREATE INDEX IF NOT EXISTS idx_flow_batch_cache ON flow_batch_items(flow_id,node_id,item_id,request_fingerprint,updated_at);`);
 	db.exec("CREATE TABLE IF NOT EXISTS flow_image_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
+	db.exec("CREATE TABLE IF NOT EXISTS flow_video_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
 	const currentFlowNodeColumns = db.prepare("PRAGMA table_info(flow_nodes)").all() as Array<{ name: string }>;
 	if (!currentFlowNodeColumns.some(column => column.name === "collapsed"))
 		db.exec("ALTER TABLE flow_nodes ADD COLUMN collapsed INTEGER NOT NULL DEFAULT 0 CHECK (collapsed IN (0, 1))");

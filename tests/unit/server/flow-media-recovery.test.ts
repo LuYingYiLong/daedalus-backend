@@ -13,8 +13,16 @@ import { upsertRuntimeWorkspace, deleteWorkspace } from "../../../src/workspace/
 import { saveFlowImages } from "../../../src/tools/flow-image-save.js";
 import { installPlugin, updateActivePluginProfile, updatePluginTrustStatus, removePlugin } from "../../../src/plugins/manager.js";
 import { ensurePluginRuntime, stopAllPluginRuntimes } from "../../../src/plugins/runtime/manager.js";
+import { getSandboxAvailability } from "../../../src/mcp/terminal/sandbox-runner.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import { ImageGenerationError } from "../../../src/providers/image-generation.js";
+
+const pluginSandbox = getSandboxAvailability();
+// 插件 Worker 必须运行在 OS sandbox 中，CI runner 不具备该能力时保留为环境跳过，而不是把安全边界误报成业务回归
+const pluginRuntimeTest = pluginSandbox.available ? test : test.skip;
+const pluginRuntimeSkipReason: string | false = pluginSandbox.available
+	? false
+	: `OS sandbox is unavailable in this test environment: ${pluginSandbox.error}`;
 
 async function fixture(operation: (directory: string) => Promise<void>): Promise<void> {
 	const directory = await mkdtemp(join(tmpdir(), "flow-recovery-"));
@@ -122,7 +130,7 @@ test("saving images requires approval, stays within the workspace and does not d
 	} finally { deleteWorkspace(workspaceId); }
 }));
 
-test("installable grayscale plugin executes through the media proxy and disappears when disabled", async () => fixture(async () => {
+pluginRuntimeTest("installable grayscale plugin executes through the media proxy and disappears when disabled", { skip: pluginRuntimeSkipReason }, async () => fixture(async () => {
 	const installed = await installPlugin({ type: "local", path: resolve("examples/flow-grayscale") });
 	try {
 		await updatePluginTrustStatus(installed.id, installed.fingerprint, "trusted");
@@ -185,7 +193,7 @@ test("batch → resize → composite → preview/save retains successful files w
 	} finally { unregisterMediaGenerationAdapter(provider); deleteWorkspace(workspaceId); }
 }));
 
-for (const mode of ["unauthorized", "wrong-output", "missing-capability"] as const) test(`plugin media boundary rejects ${mode}`, async () => fixture(async directory => {
+for (const mode of ["unauthorized", "wrong-output", "missing-capability"] as const) pluginRuntimeTest(`plugin media boundary rejects ${mode}`, { skip: pluginRuntimeSkipReason }, async () => fixture(async directory => {
 	const pluginPath = join(directory, "plugin");
 	await cp(resolve("examples/flow-grayscale"), pluginPath, { recursive: true });
 	const body = mode === "wrong-output" ? 'return { image: "invalid" };' : `return { image: await host.processImage(${mode === "unauthorized" ? '"flow-artifact-unauthorized"' : 'inputs.image.artifactId'}, { kind: "grayscale" }) };`;

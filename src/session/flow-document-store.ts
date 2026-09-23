@@ -341,6 +341,31 @@ export async function renameFlowDocument(flowId: string, title: string, revision
 	return (await getFlowDocument(flowId)).flow;
 }
 
+export async function moveFlowWorkspaceDocument(
+	flowId: string,
+	workspaceId: string | null,
+	revision: number,
+): Promise<FlowDocument> {
+	const db = await getSessionDatabase();
+	runSessionTransaction(db, (): void => {
+		const flow = requireFlow(db, flowId);
+		if (flow.revision !== revision) {
+			throw flowDocumentError("flow_revision_conflict", "The Flow changed elsewhere. Reload and try again.");
+		}
+		if (flow.workspaceId === workspaceId) return;
+		const active = db.prepare("SELECT run_id FROM flow_runs WHERE flow_id = ? AND status IN ('queued', 'running', 'waiting') LIMIT 1").get(flowId) as { run_id: string } | undefined;
+		if (active !== undefined) {
+			throw Object.assign(
+				flowDocumentError("flow_run_active", "Stop the active Flow run before moving it to another workspace."),
+				{ activeRunId: active.run_id },
+			);
+		}
+		const updated = db.prepare("UPDATE flow_documents SET workspace_id = ?, updated_at = ?, revision = revision + 1 WHERE flow_id = ? AND revision = ? AND archived_at IS NULL").run(workspaceId, now(), flowId, revision);
+		if (Number(updated.changes) !== 1) throw flowDocumentError("flow_revision_conflict", "The Flow changed elsewhere. Reload and try again.");
+	});
+	return (await getFlowDocument(flowId)).flow;
+}
+
 export async function archiveFlowDocument(flowId: string, revision: number): Promise<FlowDocument> {
 	const db = await getSessionDatabase();
 	runSessionTransaction(db, (): void => {

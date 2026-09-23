@@ -23,6 +23,7 @@ import {
 	createFlowNodeDocument,
 	createFlowRunDocument,
 	getFlowDocument,
+	moveFlowWorkspaceDocument,
 	updateFlowRunDocument,
 	updateFlowNodeDocument,
 	updateFlowViewportDocument,
@@ -111,6 +112,19 @@ test("Flow creation can atomically seed User and System Prompt nodes into LLM an
 			.sort((left, right): number => left[0].localeCompare(right[0])),
 		expectedEdges.sort((left, right): number => left[0].localeCompare(right[0])),
 	);
+}));
+
+test("Flow workspace moves persist ownership and reject stale revisions", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	const created = await createFlowDocument({ title: "Move me", workspaceId: "workspace-a" });
+	const moved = await moveFlowWorkspaceDocument(created.flow.flowId, "workspace-b", created.flow.revision);
+	assert.equal(moved.workspaceId, "workspace-b");
+	assert.equal(moved.revision, created.flow.revision + 1);
+	await assert.rejects(
+		moveFlowWorkspaceDocument(created.flow.flowId, null, created.flow.revision),
+		{ code: "flow_revision_conflict" },
+	);
+	const unbound = await moveFlowWorkspaceDocument(created.flow.flowId, null, moved.revision);
+	assert.equal(unbound.workspaceId, null);
 }));
 
 test("Flow graph and layout revisions advance independently", async (): Promise<void> => withDatabase(async (): Promise<void> => {
@@ -416,6 +430,7 @@ test("an active run locks semantic edits but keeps layout editable", async (): P
 	const node = snapshot.nodes[0]!;
 	const run = await createFlowRunDocument(snapshot.flow.flowId, snapshot.flow.graphRevision, [node.nodeId]);
 	await assert.rejects(createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/note", x: 10, y: 10 }), { code: "flow_graph_locked" });
+	await assert.rejects(moveFlowWorkspaceDocument(snapshot.flow.flowId, "workspace-b", snapshot.flow.revision), { code: "flow_run_active" });
 	const moved = await updateFlowNodeDocument({ flowId: snapshot.flow.flowId, nodeId: node.nodeId, revision: snapshot.flow.layoutRevision, patch: { x: 80, y: 90 } });
 	assert.equal(moved.nodes[0]!.x, 80);
 	assert.equal(moved.flow.graphRevision, snapshot.flow.graphRevision);

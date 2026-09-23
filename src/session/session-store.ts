@@ -1017,15 +1017,21 @@ export async function replaceSessionWorkspaceBinding(params: { sessionId: string
 	return updated;
 }
 
-export async function moveSessionToWorkspace(sessionId: string, workspace: WorkspaceConfig): Promise<SessionMetadata> {
+export async function moveSessionToWorkspace(sessionId: string, workspace: WorkspaceConfig | undefined): Promise<SessionMetadata> {
 	const existing: SessionMetadata = await readSessionMetadata(sessionId, false);
 	const updated: SessionMetadata = {
 		...existing,
 		...createWorkspaceMetadataSnapshot(workspace),
-		workspaceId: workspace.id,
+		workspaceId: workspace?.id,
 		updatedAt: new Date().toISOString()
 	};
-	if (workspace.godotExecutablePath === undefined) {
+	if (workspace === undefined) {
+		delete updated.workspaceId;
+		delete updated.workspaceName;
+		delete updated.workspaceKind;
+		delete updated.workspaceRoot;
+		delete updated.godotExecutablePath;
+	} else if (workspace.godotExecutablePath === undefined) {
 		delete updated.godotExecutablePath;
 	} else {
 		updated.godotExecutablePath = workspace.godotExecutablePath;

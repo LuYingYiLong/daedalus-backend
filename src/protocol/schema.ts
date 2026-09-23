@@ -1764,6 +1764,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.workspace.move"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			workspaceId: z.string().min(1).max(200).nullable(),
+			revision: z.number().int().positive(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.get"),
 		params: z.object({ flowId: flowIdentifierSchema }).strict(),
 	}).strict(),
@@ -2809,7 +2819,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		method: z.literal("session.workspace.move"),
 		params: z.object({
 			sessionId: z.string().min(1),
-			workspaceId: z.string().min(1),
+			workspaceId: z.string().min(1).nullable(),
 		}).strict(),
 	}),
 	z.object({

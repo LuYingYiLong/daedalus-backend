@@ -11,12 +11,18 @@ function assertMoveError(error: unknown, code: string): boolean {
 		&& (error as Error & { code: string }).code === code;
 }
 
-test("session workspace move protocol accepts only strict identifiers", (): void => {
+test("session workspace move protocol accepts a project id or null and rejects unknown fields", (): void => {
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",
 		id: "request-move",
 		method: "session.workspace.move",
 		params: { sessionId: "session-a", workspaceId: "workspace-b" }
+	}).success, true);
+	assert.equal(clientRequestSchema.safeParse({
+		type: "request",
+		id: "request-move-unbound",
+		method: "session.workspace.move",
+		params: { sessionId: "session-a", workspaceId: null }
 	}).success, true);
 	assert.equal(clientRequestSchema.safeParse({
 		type: "request",

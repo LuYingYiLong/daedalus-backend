@@ -17,6 +17,7 @@ import {
 	listFlowApprovalsDocument,
 	listFlowRunsDocument,
 	listFlowsDocument,
+	moveFlowWorkspaceDocument,
 	renameFlowDocument,
 	updateFlowRunDocument,
 	updateFlowPinnedStatesDocument,
@@ -38,6 +39,7 @@ type FlowRequestMethod =
 	| "flow.list"
 	| "flow.tree.order.get"
 	| "flow.tree.order.update"
+	| "flow.workspace.move"
 	| "flow.get"
 	| "flow.rename"
 	| "flow.archive"
@@ -182,6 +184,16 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		case "flow.tree.order.update": {
 			const order = await updateFlowTreeOrder(flowRequest.params, await loadFlowTreeOrderInventory());
 			result = { order, flows: await updateFlowPinnedStatesDocument(order.pinnedFlowIds) };
+			break;
+		}
+		case "flow.workspace.move": {
+			const { flowId, workspaceId, revision } = flowRequest.params;
+			if (workspaceId !== null && !loadWorkspaces().some((workspace): boolean => workspace.id === workspaceId)) {
+				throw flowError("workspace_not_found", `Workspace not found: ${workspaceId}`);
+			}
+			const flow = await moveFlowWorkspaceDocument(flowId, workspaceId, revision);
+			const order = await getFlowTreeOrder(await loadFlowTreeOrderInventory());
+			result = { flow, order };
 			break;
 		}
 		case "flow.get":
@@ -362,7 +374,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			const ack = result as { flowId: string; graphRevision: number; layoutRevision: number; acceptedMutationIds: string[]; operations: unknown[] };
 			broadcastGlobalEvent(request.id, "flow.patch.applied", { flowId: ack.flowId, clientId: flowRequest.params.clientId, graphRevision: ack.graphRevision, layoutRevision: ack.layoutRevision, acceptedMutationIds: ack.acceptedMutationIds, operations: ack.operations });
 		}
-		if (["flow.create", "flow.rename", "flow.archive", "flow.settings.update", "flow.import.fromSession"].includes(flowRequest.method)) {
+		if (["flow.create", "flow.rename", "flow.archive", "flow.workspace.move", "flow.settings.update", "flow.import.fromSession"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
 		}

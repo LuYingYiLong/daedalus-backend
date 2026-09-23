@@ -1934,16 +1934,18 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						"Hand off or delete the managed worktree before moving this session."
 					);
 				}
-				if (storedMetadata.workspaceId === request.params.workspaceId) {
+				if ((storedMetadata.workspaceId ?? null) === request.params.workspaceId) {
 					throw createSessionWorkspaceMoveError(
 						"session_workspace_unchanged",
 						"The session already belongs to this project."
 					);
 				}
-				const workspace: WorkspaceConfig | undefined = loadWorkspaces().find(
-					(candidate: WorkspaceConfig): boolean => candidate.id === request.params.workspaceId
-				);
-				if (workspace === undefined) {
+				const workspace: WorkspaceConfig | undefined = request.params.workspaceId === null
+					? undefined
+					: loadWorkspaces().find(
+							(candidate: WorkspaceConfig): boolean => candidate.id === request.params.workspaceId
+						);
+				if (request.params.workspaceId !== null && workspace === undefined) {
 					throw createSessionWorkspaceMoveError(
 						"session_workspace_not_found",
 						`Workspace not found: ${request.params.workspaceId}`
@@ -1952,15 +1954,17 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 				const runtime: ClientSession | undefined = getSessionRuntime(request.params.sessionId);
 				assertSessionWorkspaceMoveAllowed(runtime, request.id);
-				await mcpHost.ensureWorkspace(workspace);
+				if (workspace !== undefined) {
+					await mcpHost.ensureWorkspace(workspace);
+				}
 				const metadata: SessionMetadata = await moveSessionToWorkspace(request.params.sessionId, workspace);
 				if (runtime !== undefined) {
 					applyWorkspaceToSession(runtime, workspace);
 					runtime.editorInstanceId = undefined;
 					applySessionMetadata(runtime, metadata);
 					updateClientConnectionsForSession(request.params.sessionId, {
-						workspaceId: workspace.id,
-						workspaceRoot: workspace.rootPath,
+						workspaceId: workspace?.id ?? null,
+						workspaceRoot: workspace?.rootPath ?? null,
 						editorInstanceId: null
 					});
 					emitWorkbenchUpdated(socket, request.id, runtime);
@@ -1973,7 +1977,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					result: {
 						moved: true,
 						metadata,
-						workspace,
+						workspace: workspace ?? null,
 						workbench: runtime === undefined ? null : serializeWorkbench(runtime)
 					}
 				});

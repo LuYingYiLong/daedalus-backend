@@ -2148,22 +2148,8 @@
     "ownedBy": "baidu"
   },
   {
-    "id": "mimo-v2.5-pro",
-    "displayName": "MiMo V2.5 Pro",
-    "provider": "mimo",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 1000000,
-    "maxOutputTokens": 131072,
-    "capabilities": {
-      "reasoning": true,
-      "tools": true,
-      "webSearch": true
-    },
-    "ownedBy": "xiaomi"
-  },
-  {
-    "id": "mimo-v2.5",
-    "displayName": "MiMo V2.5",
+    "id": "mimo-v2.6-pro",
+    "displayName": "MiMo V2.6 Pro",
     "provider": "mimo",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
@@ -2175,6 +2161,37 @@
       "tools": true,
       "webSearch": true,
       "vision": true
+    },
+    "ownedBy": "xiaomi"
+  },
+  {
+    "id": "mimo-v2.6-flash",
+    "displayName": "MiMo V2.6 Flash",
+    "provider": "mimo",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "capabilities": {
+      "imageInput": true,
+      "videoInput": true,
+      "reasoning": true,
+      "tools": true,
+      "webSearch": true,
+      "vision": true
+    },
+    "ownedBy": "xiaomi"
+  },
+  {
+    "id": "mimo-v2.6-pro-ultraspeed",
+    "displayName": "MiMo V2.6 Pro Ultraspeed",
+    "provider": "mimo",
+    "endpointType": "openai-chat-completions",
+    "contextWindowTokens": 1000000,
+    "maxOutputTokens": 131072,
+    "capabilities": {
+      "reasoning": true,
+      "tools": true,
+      "webSearch": true
     },
     "ownedBy": "xiaomi"
   }

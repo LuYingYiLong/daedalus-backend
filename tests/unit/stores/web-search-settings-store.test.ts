@@ -37,14 +37,15 @@ test("web search settings expose supported catalog models", async (): Promise<vo
 		assert.equal(status.maxKeywords, 1);
 		assert.equal(status.available, false);
 		assert.equal(status.configured, false);
-		assert.equal(status.models.length, 3);
+		assert.equal(status.models.length, 4);
 		assert.equal(status.models[0]?.provider, "zhipu");
 		assert.equal(status.models[0]?.model, "glm-5.2");
 		assert.deepEqual(status.models
 			.filter((model: { provider: string }): boolean => model.provider === "mimo")
 			.map((model: { model: string }): string => model.model), [
-			"mimo-v2.5-pro",
-			"mimo-v2.5"
+			"mimo-v2.6-pro",
+			"mimo-v2.6-flash",
+			"mimo-v2.6-pro-ultraspeed"
 		]);
 		assert.equal(status.models.find((model: { provider: string }): boolean => model.provider === "mimo")?.searchOptions?.maxKeywords?.chargedPerUnit, true);
 	});
@@ -147,13 +148,13 @@ test("web search settings resolve configured MiMo runtime", async (): Promise<vo
 		await store.updateWebSearchSettings({
 			enabled: true,
 			provider: "mimo",
-			model: "mimo-v2.5-pro",
+			model: "mimo-v2.6-pro",
 			maxKeywords: 3
 		});
 
 		const runtime = await store.resolveWebSearchRuntimeConfig();
 		assert.equal(runtime?.provider, "mimo");
-		assert.equal(runtime?.model, "mimo-v2.5-pro");
+		assert.equal(runtime?.model, "mimo-v2.6-pro");
 		assert.equal(runtime?.maxKeywords, 3);
 		assert.equal(runtime?.apiKey, "mimo-test-key");
 	});

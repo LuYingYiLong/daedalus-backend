@@ -45,7 +45,7 @@ async function withTempAppData(run: () => Promise<void>): Promise<void> {
 
 test("MiMo maps maxTokens to max_completion_tokens", (): void => {
 	const requestBody: ChatCompletionCreateParamsBase = {
-		model: "mimo-v2.5-pro",
+		model: "mimo-v2.6-pro",
 		messages: [{ role: "user", content: "hello" }]
 	};
 	const params = {
@@ -56,7 +56,7 @@ test("MiMo maps maxTokens to max_completion_tokens", (): void => {
 	applyChatOptions(requestBody, params, {
 		provider: "mimo",
 		apiKey: "mimo-test-key",
-		model: "mimo-v2.5-pro"
+		model: "mimo-v2.6-pro"
 	});
 
 	const raw: Record<string, unknown> = requestBody as unknown as Record<string, unknown>;
@@ -75,8 +75,8 @@ test("MiMo model refresh excludes speech models and web search normalizes citati
 				response.end(JSON.stringify({
 					object: "list",
 					data: [
-						{ id: "mimo-v2.5-pro", object: "model", owned_by: "xiaomi" },
-						{ id: "mimo-v2.5", object: "model", owned_by: "xiaomi" },
+						{ id: "mimo-v2.6-pro", object: "model", owned_by: "xiaomi" },
+						{ id: "mimo-v2.6-flash", object: "model", owned_by: "xiaomi" },
 						{ id: "mimo-v2.5-asr", object: "model", owned_by: "xiaomi" }
 					]
 				}));
@@ -99,7 +99,7 @@ test("MiMo model refresh excludes speech models and web search normalizes citati
 			response.end(JSON.stringify({
 				id: "mimo-search",
 				object: "chat.completion",
-				model: "mimo-v2.5-pro",
+				model: "mimo-v2.6-pro",
 				choices: [{
 					index: 0,
 					finish_reason: "stop",
@@ -141,16 +141,16 @@ test("MiMo model refresh excludes speech models and web search normalizes citati
 				provider: "mimo",
 				apiKey: "mimo-test-key",
 				baseUrl,
-				model: "mimo-v2.5-pro"
+				model: "mimo-v2.6-pro"
 			});
 			const models = await listProviderModels("mimo", "mimo-test-key", baseUrl, true);
-			assert.deepEqual(models.models.map((model) => model.id), ["mimo-v2.5-pro", "mimo-v2.5"]);
+			assert.deepEqual(models.models.map((model) => model.id), ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed"]);
 
 			const settings = await import(`../../../src/web-search-settings-store.js?case=${Date.now()}-${Math.random()}`);
 			await settings.updateWebSearchSettings({
 				enabled: true,
 				provider: "mimo",
-				model: "mimo-v2.5-pro",
+				model: "mimo-v2.6-pro",
 				maxResults: 5,
 				maxKeywords: 3
 			});

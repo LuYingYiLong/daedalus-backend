@@ -234,7 +234,7 @@
     "displayName": "Xiaomi MiMo",
     "websiteUrl": "https://mimo.xiaomi.com",
     "authType": "api-key",
-    "defaultModel": "mimo-v2.5-pro",
+    "defaultModel": "mimo-v2.6-pro",
     "modelListMode": "catalog-recommended",
     "defaultEndpointType": "openai-chat-completions",
     "endpointConfigs": {

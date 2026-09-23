@@ -26,7 +26,7 @@ import {
 import { getFlowTreeOrder, updateFlowTreeOrder, type FlowTreeOrderInventory } from "../../session/flow-tree-order-store.js";
 import { createSession, getStoredSessionMetadata, openSession, saveSession, type SessionMetadata } from "../../session/session-store.js";
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
-import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, listFlowArtifacts } from "../../session/flow-artifact-store.js";
+import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
 import { getClientConnection, broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
@@ -257,6 +257,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				runId,
 				mcpHost,
 				...(flowRequest.params.forceNodeIds === undefined ? {} : { forceNodeIds: flowRequest.params.forceNodeIds }),
+				...(flowRequest.params.forceAllSelected === undefined ? {} : { forceAllSelected: flowRequest.params.forceAllSelected }),
 				onBatchItem: (item): void => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),
 				onRunState: (run): void => broadcastGlobalEvent(run.runId, "flow.run.state", { flowId: run.flowId, runId: run.runId, revision: run.revision, status: run.status, run }),
 				onNodeState: (run, nodeId): void => {
@@ -329,7 +330,9 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			result = await listFlowRunsDocument(flowRequest.params.flowId, flowRequest.params.limit ?? 20);
 			break;
 		case "flow.artifact.list":
-			result = { artifacts: await listFlowArtifacts(flowRequest.params.flowId, flowRequest.params.runId) };
+			result = flowRequest.params.aiGeneratedOnly === true
+				? await listFlowGeneratedArtifacts(flowRequest.params.flowId, flowRequest.params.limit ?? 3)
+				: { artifacts: await listFlowArtifacts(flowRequest.params.flowId, flowRequest.params.runId) };
 			break;
 		case "flow.artifact.get": {
 				const artifact = await getFlowArtifact(flowRequest.params.artifactId);

@@ -369,6 +369,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		}
 	};
 	collectSourceRefs(params.inputs.image);
+	const prompt = typeof params.inputs.prompt === "string" ? params.inputs.prompt : typeof params.node.config.prompt === "string" ? params.node.config.prompt : "";
+	const negativePrompt = typeof params.node.config.negativePrompt === "string" ? params.node.config.negativePrompt : undefined;
 	const sourceImages = sourceRefs.length === 0
 		? undefined
 		: await Promise.all(sourceRefs.map(async (ref): Promise<{ mimeType: string; bytes: Buffer }> => {
@@ -379,8 +381,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		kind,
 		provider,
 		model,
-		prompt: typeof params.inputs.prompt === "string" ? params.inputs.prompt : typeof params.node.config.prompt === "string" ? params.node.config.prompt : "",
-		negativePrompt: typeof params.node.config.negativePrompt === "string" ? params.node.config.negativePrompt : undefined,
+		prompt,
+		negativePrompt,
 		width: typeof params.node.config.width === "number" ? params.node.config.width : undefined,
 		height: typeof params.node.config.height === "number" ? params.node.config.height : undefined,
 		durationMs: typeof params.node.config.durationMs === "number" ? params.node.config.durationMs : undefined,
@@ -402,7 +404,36 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		for (const [imageIndex, binary] of binaries.entries()) {
 			let artifact = binary;
 			if (artifact.mimeType.startsWith("image/")) artifact = { ...artifact, ...await processImage(artifact.bytes, { kind: "convert", format: artifact.mimeType === "image/jpeg" ? "jpeg" : artifact.mimeType === "image/webp" ? "webp" : "png" }, params.signal) };
-			refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: { ...artifact.metadata, itemId: params.node.config.id, imageIndex, seed: params.node.config.seed, rowIndex: params.node.config.rowIndex, width: params.node.config.width, height: params.node.config.height } }));
+			refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: {
+				...artifact.metadata,
+				itemId: params.node.config.id,
+				imageIndex,
+				outputIndex: imageIndex,
+				seed: params.node.config.seed,
+				rowIndex: params.node.config.rowIndex,
+				width: params.node.config.width,
+				height: params.node.config.height,
+				provenance: {
+					kind: "ai-generation",
+					generationType: kind,
+					provider: result.provider,
+					model: result.model,
+					prompt,
+					...(negativePrompt === undefined ? {} : { negativePrompt }),
+					inputArtifactIds: sourceRefs.map((ref): string => ref.artifactId),
+					request: {
+						width: params.node.config.width,
+						height: params.node.config.height,
+						durationMs: params.node.config.durationMs,
+						fps: params.node.config.fps,
+						aspectRatio: params.node.config.aspectRatio,
+						style: params.node.config.style,
+						seed: params.node.config.seed,
+						count: params.node.config.count,
+						outputFormat: params.node.config.outputFormat,
+					},
+				},
+			} }));
 		}
 	} catch (error: unknown) {
 		await Promise.allSettled(refs.map((ref): Promise<void> => deleteFlowArtifact(ref.artifactId)));
@@ -535,6 +566,7 @@ export async function startFlowRunDocument(params: {
 	mcpHost: McpHost;
 	runId?: string;
 	forceNodeIds?: readonly string[];
+	forceAllSelected?: boolean;
 	retryFailedItemsOnly?: boolean;
 	entryNodeIds?: readonly string[];
 	targetNodeIds?: readonly string[];
@@ -589,7 +621,9 @@ export async function startFlowRunDocument(params: {
 		else if (state.status === "skipped") skipped.add(state.nodeId);
 		else if (state.status === "waiting") waiting.add(state.nodeId);
 	}
-	const force = forceWithDescendants(params.forceNodeIds ?? [], graph.edges);
+	const force = params.forceAllSelected === true
+		? new Set(graph.nodes.map((node): string => node.nodeId))
+		: forceWithDescendants(params.forceNodeIds ?? [], graph.edges);
 	for (const note of graph.nodes.filter((node): boolean => !getFlowNodeTypeDefinition(node.typeId).executable)) {
 		if (!skipped.has(note.nodeId)) await updateFlowNodeRunDocument(params.flowId, run.runId, note.nodeId, { status: "skipped", startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
 		skipped.add(note.nodeId);

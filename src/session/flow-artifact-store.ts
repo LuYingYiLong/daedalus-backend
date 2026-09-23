@@ -151,6 +151,14 @@ export async function listFlowArtifacts(flowId: string, runId?: string): Promise
 	return rows.map(mapArtifact);
 }
 
+export async function listFlowGeneratedArtifacts(flowId: string, limit: number): Promise<{ artifacts: FlowMediaArtifactRef[]; total: number }> {
+	const db = await getSessionDatabase();
+	const where = "flow_id = ? AND (mime_type LIKE 'image/%' OR mime_type LIKE 'video/%') AND json_extract(metadata_json, '$.provenance.kind') = 'ai-generation'";
+	const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM flow_artifacts WHERE ${where}`).get(flowId) as { total: number };
+	const rows = db.prepare(`SELECT artifact_id, flow_id, run_id, node_id, mime_type, byte_size, sha256, width, height, duration_ms, fps, preview_artifact_id, storage_path, metadata_json, created_at FROM flow_artifacts WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(flowId, limit) as ArtifactRow[];
+	return { artifacts: rows.map(mapArtifact), total: Number(totalRow.total) };
+}
+
 export async function deleteFlowArtifact(artifactId: string): Promise<void> {
 	const db = await getSessionDatabase();
 	const row = db.prepare("SELECT mime_type FROM flow_artifacts WHERE artifact_id = ?").get(assertArtifactId(artifactId)) as { mime_type: string } | undefined;

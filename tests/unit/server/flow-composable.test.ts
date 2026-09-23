@@ -10,8 +10,8 @@ import { createFlowDocument, createFlowNodeDocument, createFlowEdgeDocument, get
 import { resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
 import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
 import { listFlowBatchItems } from "../../../src/session/flow-batch-store.js";
-import { getFlowArtifact } from "../../../src/session/flow-artifact-store.js";
-import { registerMediaGenerationAdapter } from "../../../src/providers/media-generation.js";
+import { getFlowArtifact, listFlowGeneratedArtifacts } from "../../../src/session/flow-artifact-store.js";
+import { registerMediaGenerationAdapter, unregisterMediaGenerationAdapter } from "../../../src/providers/media-generation.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import sharp from "sharp";
 
@@ -98,4 +98,72 @@ test("batch generation retains ordered successes and retries only failed rows th
 		assert.equal((await getFlowArtifact(output.result[0]!.artifactId)).ref.width, 12);
 		assert.equal((await getFlowDocument(snapshot.flow.flowId)).nodes.length, 4);
 	} finally { await resetSessionDatabaseForTests(); if (previousProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previousProfile; await rm(directory, { recursive: true, force: true }); }
+});
+
+test("AI image and video artifacts retain immutable Flow generation provenance", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "flow-provenance-"));
+	const previousProfile = process.env.USERPROFILE;
+	process.env.USERPROFILE = directory;
+	await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+	const provider = "fixture-provenance";
+	registerMediaGenerationAdapter({
+		provider,
+		supports: ["imageGeneration", "videoGeneration"],
+		generate: async request => ({
+			status: "completed",
+			provider,
+			model: request.model,
+			artifacts: request.kind === "videoGeneration"
+				? [{ bytes: Buffer.from("fixture-video"), mimeType: "video/mp4", width: 1280, height: 720, durationMs: 2_000, fps: 24 }]
+				: [{ bytes: createMockPng([30, 80, 120]), mimeType: "image/png", width: 32, height: 32 }],
+		}),
+	});
+	try {
+		let snapshot = await createFlowDocument({ title: "Media provenance" });
+		const nodes: Record<string, string> = {};
+		for (const [key, typeId, config] of [
+			["prompt", "builtin/text", { text: "wired image prompt" }],
+			["image", "builtin/text-to-image", { provider, model: "fixture-image", prompt: "fallback" }],
+			["video", "builtin/image-to-video", { provider, model: "fixture-video", prompt: "animate the source" }],
+			["output", "builtin/media-output", {}],
+		] as Array<[string, string, Record<string, unknown>]>) {
+			const before = new Set(snapshot.nodes.map(node => node.nodeId));
+			snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId, x: 0, y: 0, config });
+			nodes[key] = snapshot.nodes.find(node => !before.has(node.nodeId))!.nodeId;
+		}
+		for (const [sourceNodeId, sourcePort, targetNodeId, targetPort, dataType] of [
+			[nodes.prompt!, "output", nodes.image!, "prompt", "text"],
+			[nodes.image!, "image", nodes.video!, "image", "image"],
+			[nodes.video!, "video", nodes.output!, "input", "video"],
+		] as const) {
+			snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId, sourcePort, targetNodeId, targetPort, dataType });
+		}
+		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(run.status, "completed", JSON.stringify(run.nodes));
+		const imageOutput = run.nodes.find(node => node.nodeId === nodes.image)!.output as { image: { artifactId: string } };
+		const videoOutput = run.nodes.find(node => node.nodeId === nodes.video)!.output as { video: { artifactId: string } };
+		const imageArtifact = await getFlowArtifact(imageOutput.image.artifactId);
+		const videoArtifact = await getFlowArtifact(videoOutput.video.artifactId);
+		const imageProvenance = imageArtifact.ref.metadata.provenance as Record<string, unknown>;
+		assert.equal(imageProvenance.kind, "ai-generation");
+		assert.equal(imageProvenance.generationType, "imageGeneration");
+		assert.equal(imageProvenance.provider, provider);
+		assert.equal(imageProvenance.model, "fixture-image");
+		assert.equal(imageProvenance.prompt, "wired image prompt");
+		assert.deepEqual(imageProvenance.inputArtifactIds, []);
+		const videoProvenance = videoArtifact.ref.metadata.provenance as Record<string, unknown>;
+		assert.equal(videoProvenance.generationType, "videoGeneration");
+		assert.equal(videoProvenance.prompt, "animate the source");
+		assert.deepEqual(videoProvenance.inputArtifactIds, [imageOutput.image.artifactId]);
+		const generated = await listFlowGeneratedArtifacts(snapshot.flow.flowId, 1);
+		assert.equal(generated.total, 2);
+		assert.equal(generated.artifacts.length, 1);
+		assert.equal(generated.artifacts[0]!.artifactId, videoOutput.video.artifactId);
+	} finally {
+		unregisterMediaGenerationAdapter(provider);
+		await resetSessionDatabaseForTests();
+		if (previousProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousProfile;
+		await rm(directory, { recursive: true, force: true });
+	}
 });

@@ -1848,6 +1848,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			flowId: flowIdentifierSchema,
 			revision: z.number().int().positive(),
 			forceNodeIds: z.array(flowIdentifierSchema).max(2_000).optional(),
+			forceAllSelected: z.boolean().optional(),
 			entryNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
 			targetNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
 			inputValues: z.record(flowIdentifierSchema, z.unknown()).optional(),
@@ -1881,7 +1882,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.list"),
-		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema.optional() }).strict(),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			runId: flowIdentifierSchema.optional(),
+			aiGeneratedOnly: z.boolean().optional(),
+			limit: z.number().int().min(1).max(500).optional(),
+		}).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

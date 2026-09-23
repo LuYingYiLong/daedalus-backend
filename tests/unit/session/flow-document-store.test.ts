@@ -301,7 +301,29 @@ test("Flow runner passes values by port and caches pure nodes", async (): Promis
 	assert.equal(repeated.status, "completed");
 	assert.equal(repeated.nodes.find((node): boolean => node.nodeId === textNode.nodeId)?.status, "completed");
 	assert.equal(repeated.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "completed");
-}));
+	const cachedAfterForce = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+	});
+	assert.equal(cachedAfterForce.nodes.find((node): boolean => node.nodeId === textNode.nodeId)?.status, "cached");
+	assert.equal(cachedAfterForce.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "cached");
+	const rerunSelected = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+		forceAllSelected: true,
+	});
+	assert.equal(rerunSelected.nodes.find((node): boolean => node.nodeId === textNode.nodeId)?.status, "completed");
+	assert.equal(rerunSelected.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "completed");
+	const cachedAfterSelectedRerun = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		mcpHost: {} as McpHost,
+	});
+	assert.equal(cachedAfterSelectedRerun.nodes.find((node): boolean => node.nodeId === textNode.nodeId)?.status, "cached");
+	assert.equal(cachedAfterSelectedRerun.nodes.find((node): boolean => node.nodeId === templateNode.nodeId)?.status, "cached");
+	}));
 
 test("Flow runner starts same-name entries together and excludes unrelated entry branches", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Entry run" });
@@ -336,6 +358,16 @@ test("Flow runner starts same-name entries together and excludes unrelated entry
 	assert.equal(run.nodes.some((node): boolean => node.nodeId === unrelated.input.nodeId || node.nodeId === unrelated.output.nodeId), false);
 	assert.deepEqual(run.nodes.find((node): boolean => node.nodeId === first.output.nodeId)?.output, { result: "alpha" });
 	assert.deepEqual(run.nodes.find((node): boolean => node.nodeId === second.output.nodeId)?.output, { result: "beta" });
+	const rerun = await startFlowRunDocument({
+		flowId: snapshot.flow.flowId,
+		revision: snapshot.flow.graphRevision,
+		entryNodeIds: [first.input.nodeId, second.input.nodeId],
+		forceAllSelected: true,
+		mcpHost: {} as McpHost,
+	});
+	assert.equal(rerun.nodes.some((node): boolean => node.nodeId === unrelated.input.nodeId || node.nodeId === unrelated.output.nodeId), false);
+	assert.equal(rerun.nodes.find((node): boolean => node.nodeId === first.output.nodeId)?.status, "completed");
+	assert.equal(rerun.nodes.find((node): boolean => node.nodeId === second.output.nodeId)?.status, "completed");
 }));
 
 test("hybrid parameters use local fallback only while disconnected", async (): Promise<void> => {

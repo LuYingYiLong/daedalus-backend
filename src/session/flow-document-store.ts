@@ -756,7 +756,7 @@ export async function updateFlowNodeProviderJobIdDocument(flowId: string, runId:
 
 export async function findCachedFlowNodeOutput(flowId: string, nodeId: string, fingerprint: string): Promise<unknown | null> {
 	const db = await getSessionDatabase();
-	const row = db.prepare("SELECT output_json FROM flow_node_runs WHERE node_id = ? AND input_fingerprint = ? AND status IN ('completed', 'cached') ORDER BY finished_at DESC LIMIT 1").get(nodeId, fingerprint) as { output_json: string | null } | undefined;
+	const row = db.prepare("SELECT output_json FROM flow_node_runs WHERE node_id = ? AND input_fingerprint = ? AND status IN ('completed', 'cached') ORDER BY finished_at DESC, rowid DESC LIMIT 1").get(nodeId, fingerprint) as { output_json: string | null } | undefined;
 	return row?.output_json === null || row === undefined ? null : parseSqlJson<unknown>(row.output_json);
 }
 

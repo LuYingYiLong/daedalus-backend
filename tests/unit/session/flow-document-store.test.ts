@@ -45,6 +45,13 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
 	const fileInputProperties = definitions.find((definition): boolean => definition.typeId === "builtin/file-input")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(fileInputProperties.path?.["x-daedalus-control"], "workspace-file");
+	for (const typeId of ["builtin/text-to-video", "builtin/image-to-video"]) {
+		const properties = definitions.find((definition): boolean => definition.typeId === typeId)?.configSchema.properties as Record<string, Record<string, unknown>>;
+		assert.equal(properties.durationMs?.["x-daedalus-unit"], "ms");
+		assert.equal(properties.width?.["x-daedalus-unit"], "px");
+		assert.equal(properties.height?.["x-daedalus-unit"], "px");
+		assert.equal(properties.fps?.["x-daedalus-unit"], "fps");
+	}
 	const saveVideos = definitions.find((definition): boolean => definition.typeId === "builtin/save-videos")!;
 	assert.equal(saveVideos.category, "workspace-media");
 	const saveVideosInput = saveVideos.parameters.find((parameter): boolean => parameter.id === "videos");

@@ -192,6 +192,7 @@ export function registerBuiltin(
 		summaryFields?: string[];
 		dynamicParameters?: FlowNodeTypeDefinition["dynamicParameters"];
 		fieldControls?: Record<string, string>;
+		fieldUnits?: Record<string, string>;
 	} = {},
 ): void {
 	const typeId = `builtin/${name}`;
@@ -205,6 +206,19 @@ export function registerBuiltin(
 					(properties as Record<string, unknown>)[field] = {
 						...(property as Record<string, unknown>),
 						"x-daedalus-control": control,
+					};
+			}
+		}
+	}
+	if (options.fieldUnits !== undefined) {
+		const properties = configSchemaDefinition.properties;
+		if (properties !== null && typeof properties === "object" && !Array.isArray(properties)) {
+			for (const [field, unit] of Object.entries(options.fieldUnits)) {
+				const property = (properties as Record<string, unknown>)[field];
+				if (property !== null && typeof property === "object" && !Array.isArray(property))
+					(properties as Record<string, unknown>)[field] = {
+						...(property as Record<string, unknown>),
+						"x-daedalus-unit": unit,
 					};
 			}
 		}
@@ -262,8 +276,8 @@ registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings:
 registerBuiltin("command", "workspace", "Command", { commandLine: "", cwd: "", env: {}, timeoutMs: 30_000, stdin: "" }, [hybrid("stdin", "stdin", "stdin", ["text"], false, true), fixed("commandLine", "Command"), fixed("cwd", "Working directory"), fixed("env", "Environment"), fixed("timeoutMs", "Timeout")], [output("result", "Result", ["json"], true), output("stdout", "stdout", ["text"]), output("stderr", "stderr", ["text"])], flowDocumentNodeConfigSchemas["builtin/command"], { workspaceRequired: true, sideEffecting: true, cachePolicy: "never", summaryFields: ["commandLine"] });
 registerBuiltin("text-to-image", "media-generation", "Text to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "First image", ["image"], true), { ...output("images", "All images", ["image"]), cardinality: "many" }], flowDocumentNodeConfigSchemas["builtin/text-to-image"], { modelCapability: "imageGeneration", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
 registerBuiltin("image-to-image", "media-generation", "Image to Image", { provider: "", model: "", prompt: "", negativePrompt: "", aspectRatio: "1:1", style: "", count: 1, outputFormat: "png" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("aspectRatio", "Aspect ratio"), fixed("style", "Style"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("image", "First image", ["image"], true), { ...output("images", "All images", ["image"]), cardinality: "many" }], flowDocumentNodeConfigSchemas["builtin/image-to-image"], { modelCapability: "imageEdit", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
-registerBuiltin("text-to-video", "media-generation", "Text to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/text-to-video"], { modelCapability: "textToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
-registerBuiltin("image-to-video", "media-generation", "Image to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/image-to-video"], { modelCapability: "imageToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" } });
+registerBuiltin("text-to-video", "media-generation", "Text to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], true, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/text-to-video"], { modelCapability: "textToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" }, fieldUnits: { width: "px", height: "px", durationMs: "ms", fps: "fps" } });
+registerBuiltin("image-to-video", "media-generation", "Image to Video", { provider: "", model: "", prompt: "", negativePrompt: "", width: 1280, height: 720, durationMs: 5_000, fps: 24, count: 1, outputFormat: "mp4" }, [connection("image", "Image", ["image"], true, true), fixed("provider", "Provider"), fixed("model", "Model"), hybrid("prompt", "Prompt", "prompt", ["text"], false, true), fixed("negativePrompt", "Negative prompt"), fixed("width", "Width"), fixed("height", "Height"), fixed("durationMs", "Duration"), fixed("fps", "Frame rate"), fixed("seed", "Seed"), fixed("count", "Count"), fixed("outputFormat", "Output format")], [output("video", "Video", ["video"], true)], flowDocumentNodeConfigSchemas["builtin/image-to-video"], { modelCapability: "imageToVideo", summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model" }, fieldUnits: { width: "px", height: "px", durationMs: "ms", fps: "fps" } });
 registerBuiltin("output", "basic", "Output", { format: "text" }, [connection("input", "Value", ALL_TYPES, true, true), fixed("format", "Format")], [], flowDocumentNodeConfigSchemas["builtin/output"], { summaryFields: ["format"] });
 registerBuiltin("media-output", "media-output", "Media Output", { format: "preview" }, [{ ...connection("input", "Media", ["image", "video", "audio", "frames", "artifact"], true, true), cardinality: "one-or-many" }, fixed("format", "Display mode")], [], flowDocumentNodeConfigSchemas["builtin/media-output"], { summaryFields: ["format"] });
 registerBuiltin("note", "basic", "Note", { text: "" }, [fixed("text", "Note")], [], flowDocumentNodeConfigSchemas["builtin/note"], { executable: false, cachePolicy: "never", summaryFields: ["text"] });

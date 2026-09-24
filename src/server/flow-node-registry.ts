@@ -193,6 +193,8 @@ export function registerBuiltin(
 		dynamicParameters?: FlowNodeTypeDefinition["dynamicParameters"];
 		fieldControls?: Record<string, string>;
 		fieldUnits?: Record<string, string>;
+		fieldFileKinds?: Record<string, "image" | "video" | "audio">;
+		fieldPreviews?: Record<string, "image" | "video" | "audio">;
 	} = {},
 ): void {
 	const typeId = `builtin/${name}`;
@@ -221,6 +223,22 @@ export function registerBuiltin(
 						"x-daedalus-unit": unit,
 					};
 			}
+		}
+	}
+	for (const [fields, annotation] of [
+		[options.fieldFileKinds, "x-daedalus-file-kind"],
+		[options.fieldPreviews, "x-daedalus-preview"],
+	] as const) {
+		if (fields === undefined) continue;
+		const properties = configSchemaDefinition.properties;
+		if (properties === null || typeof properties !== "object" || Array.isArray(properties)) continue;
+		for (const [field, value] of Object.entries(fields)) {
+			const property = (properties as Record<string, unknown>)[field];
+			if (property !== null && typeof property === "object" && !Array.isArray(property))
+				(properties as Record<string, unknown>)[field] = {
+					...(property as Record<string, unknown>),
+					[annotation]: value,
+				};
 		}
 	}
 	registerFlowNodeDefinition({

@@ -45,6 +45,11 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal(llmProperties.reasoningEffort?.["x-daedalus-control"], "reasoning-effort");
 	const fileInputProperties = definitions.find((definition): boolean => definition.typeId === "builtin/file-input")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(fileInputProperties.path?.["x-daedalus-control"], "workspace-file");
+	assert.equal(fileInputProperties.path?.["x-daedalus-preview"], undefined);
+	const imageInputProperties = definitions.find((definition): boolean => definition.typeId === "builtin/image-input")?.configSchema.properties as Record<string, Record<string, unknown>>;
+	assert.equal(imageInputProperties.path?.["x-daedalus-control"], "workspace-file");
+	assert.equal(imageInputProperties.path?.["x-daedalus-file-kind"], "image");
+	assert.equal(imageInputProperties.path?.["x-daedalus-preview"], "image");
 	for (const typeId of ["builtin/text-to-video", "builtin/image-to-video"]) {
 		const properties = definitions.find((definition): boolean => definition.typeId === typeId)?.configSchema.properties as Record<string, Record<string, unknown>>;
 		assert.equal(properties.durationMs?.["x-daedalus-unit"], "ms");

@@ -1342,6 +1342,7 @@ export const flowDocumentSnapshotSchema = z.object({
 	nodes: z.array(flowDocumentNodeSchema),
 	edges: z.array(flowDocumentEdgeSchema),
 	runs: z.array(flowDocumentRunSchema),
+	latestNodeResults: z.array(flowDocumentNodeRunSchema).optional(),
 }).strict();
 export const flowOperationSchema = z.discriminatedUnion("kind", [
 	z.object({

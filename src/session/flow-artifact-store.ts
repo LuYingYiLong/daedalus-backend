@@ -153,10 +153,63 @@ export async function listFlowArtifacts(flowId: string, runId?: string): Promise
 
 export async function listFlowGeneratedArtifacts(flowId: string, limit: number): Promise<{ artifacts: FlowMediaArtifactRef[]; total: number }> {
 	const db = await getSessionDatabase();
-	const where = "flow_id = ? AND (mime_type LIKE 'image/%' OR mime_type LIKE 'video/%') AND json_extract(metadata_json, '$.provenance.kind') = 'ai-generation'";
-	const totalRow = db.prepare(`SELECT COUNT(*) AS total FROM flow_artifacts WHERE ${where}`).get(flowId) as { total: number };
-	const rows = db.prepare(`SELECT artifact_id, flow_id, run_id, node_id, mime_type, byte_size, sha256, width, height, duration_ms, fps, preview_artifact_id, storage_path, metadata_json, created_at FROM flow_artifacts WHERE ${where} ORDER BY created_at DESC, rowid DESC LIMIT ?`).all(flowId, limit) as ArtifactRow[];
-	return { artifacts: rows.map(mapArtifact), total: Number(totalRow.total) };
+	const where = `a.flow_id = ? AND (a.mime_type LIKE 'image/%' OR a.mime_type LIKE 'video/%') AND (
+		json_extract(a.metadata_json, '$.provenance.kind') = 'ai-generation'
+		OR n.type_id IN ('builtin/text-to-image', 'builtin/image-to-image', 'builtin/text-to-video', 'builtin/image-to-video', 'builtin/batch-text-to-image', 'builtin/batch-image-to-image')
+	)`;
+	const from = "FROM flow_artifacts AS a JOIN flow_nodes AS n ON n.node_id = a.node_id";
+	const totalRow = db
+		.prepare(`SELECT COUNT(*) AS total ${from} WHERE ${where}`)
+		.get(flowId) as { total: number };
+	const rows = db
+		.prepare(
+			`SELECT
+				a.artifact_id, a.flow_id, a.run_id, a.node_id, a.mime_type, a.byte_size,
+				a.sha256, a.width, a.height, a.duration_ms, a.fps, a.preview_artifact_id,
+				a.storage_path, a.metadata_json, a.created_at,
+				n.type_id AS source_node_type_id, n.config_json AS source_node_config_json
+			${from}
+			WHERE ${where}
+			ORDER BY a.created_at DESC, a.rowid DESC
+			LIMIT ?`,
+		)
+		.all(flowId, limit) as Array<ArtifactRow & { source_node_type_id: string; source_node_config_json: string }>;
+	return {
+		artifacts: rows.map((row): FlowMediaArtifactRef => {
+			const artifact = mapArtifact(row);
+			const provenance = artifact.metadata.provenance;
+			if (
+				provenance !== null &&
+				typeof provenance === "object" &&
+				!Array.isArray(provenance) &&
+				(provenance as Record<string, unknown>).kind === "ai-generation"
+			)
+				return artifact;
+			const isVideo = row.source_node_type_id === "builtin/text-to-video" || row.source_node_type_id === "builtin/image-to-video";
+			let config: Record<string, unknown> = {};
+			try { config = parseSqlJson<Record<string, unknown>>(row.source_node_config_json); } catch { /* malformed legacy node config should not hide its artifact */ }
+			const generationType = isVideo
+				? "videoGeneration"
+				: row.source_node_type_id === "builtin/image-to-image" || row.source_node_type_id === "builtin/batch-image-to-image"
+					? "imageEdit"
+					: "imageGeneration";
+			return {
+				...artifact,
+				metadata: {
+					...artifact.metadata,
+					provenance: {
+						kind: "ai-generation",
+						generationType,
+						...(typeof config.provider === "string" ? { provider: config.provider } : {}),
+						...(typeof config.model === "string" ? { model: config.model } : {}),
+						...(typeof config.prompt === "string" ? { prompt: config.prompt } : {}),
+						...(typeof config.negativePrompt === "string" ? { negativePrompt: config.negativePrompt } : {}),
+					},
+				},
+			};
+		}),
+		total: Number(totalRow.total),
+	};
 }
 
 export async function deleteFlowArtifact(artifactId: string): Promise<void> {

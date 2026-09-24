@@ -7,7 +7,7 @@ import { processImage } from "../../../src/media/image-processing.js";
 import { createMockPng } from "../../../src/providers/mock-image.js";
 import { assertFlowPortValue, acceptsFlowCardinality } from "../../../src/protocol/flow-value-types.js";
 import { createFlowDocument, createFlowNodeDocument, createFlowEdgeDocument, getFlowDocument } from "../../../src/session/flow-document-store.js";
-import { resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
+import { getSessionDatabase, resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
 import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
 import { listFlowBatchItems } from "../../../src/session/flow-batch-store.js";
 import { getFlowArtifact, listFlowGeneratedArtifacts } from "../../../src/session/flow-artifact-store.js";
@@ -159,6 +159,15 @@ test("AI image and video artifacts retain immutable Flow generation provenance",
 		assert.equal(generated.total, 2);
 		assert.equal(generated.artifacts.length, 1);
 		assert.equal(generated.artifacts[0]!.artifactId, videoOutput.video.artifactId);
+		const database = await getSessionDatabase();
+		database.prepare("UPDATE flow_artifacts SET metadata_json = '{}' WHERE artifact_id = ?").run(videoOutput.video.artifactId);
+		const legacyVideo = await listFlowGeneratedArtifacts(snapshot.flow.flowId, 1);
+		assert.equal(legacyVideo.total, 2);
+		assert.equal(legacyVideo.artifacts[0]!.artifactId, videoOutput.video.artifactId);
+		const inferredProvenance = legacyVideo.artifacts[0]!.metadata.provenance as Record<string, unknown>;
+		assert.equal(inferredProvenance.generationType, "videoGeneration");
+		assert.equal(inferredProvenance.provider, provider);
+		assert.equal(inferredProvenance.model, "fixture-video");
 	} finally {
 		unregisterMediaGenerationAdapter(provider);
 		await resetSessionDatabaseForTests();

@@ -25,6 +25,7 @@ import {
 	getFlowDocument,
 	moveFlowWorkspaceDocument,
 	updateFlowRunDocument,
+	updateFlowNodeRunDocument,
 	updateFlowNodeDocument,
 	updateFlowViewportDocument,
 } from "../../../src/session/flow-document-store.js";
@@ -481,6 +482,48 @@ test("an active run locks semantic edits but keeps layout editable", async (): P
 	await updateFlowRunDocument(snapshot.flow.flowId, run.runId, { status: "completed", finishedAt: new Date().toISOString() });
 	const editable = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/note", x: 10, y: 10 });
 	assert.equal(editable.nodes.length, 2);
+}));
+
+test("Flow snapshots retain each node's latest successful output across isolated runs", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	let snapshot = await createFlowDocument({ title: "Retained node results" });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "first branch" } });
+	const firstNode = snapshot.nodes[0]!;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 200, config: { text: "second branch" } });
+	const secondNode = snapshot.nodes.find((node): boolean => node.nodeId !== firstNode.nodeId)!;
+	const firstRun = await createFlowRunDocument(snapshot.flow.flowId, snapshot.flow.graphRevision, [firstNode.nodeId]);
+	const firstOutput = { output: { artifactId: "artifact-first" } };
+	await updateFlowNodeRunDocument(snapshot.flow.flowId, firstRun.runId, firstNode.nodeId, {
+		status: "completed",
+		inputFingerprint: "fingerprint-first",
+		output: firstOutput,
+		startedAt: new Date().toISOString(),
+		finishedAt: new Date().toISOString(),
+	});
+	await updateFlowRunDocument(snapshot.flow.flowId, firstRun.runId, { status: "completed", finishedAt: new Date().toISOString() });
+	const secondRun = await createFlowRunDocument(snapshot.flow.flowId, snapshot.flow.graphRevision, [secondNode.nodeId]);
+	const runningSnapshot = await getFlowDocument(snapshot.flow.flowId);
+	assert.equal(runningSnapshot.runs[0]?.runId, secondRun.runId);
+	assert.deepEqual(runningSnapshot.latestNodeResults?.find((node): boolean => node.nodeId === firstNode.nodeId)?.output, firstOutput);
+	assert.equal(runningSnapshot.latestNodeResults?.some((node): boolean => node.nodeId === secondNode.nodeId), false);
+
+	await updateFlowNodeRunDocument(snapshot.flow.flowId, secondRun.runId, secondNode.nodeId, {
+		status: "completed",
+		inputFingerprint: "fingerprint-second",
+		output: { output: "second branch output" },
+		startedAt: new Date().toISOString(),
+		finishedAt: new Date().toISOString(),
+	});
+	await updateFlowRunDocument(snapshot.flow.flowId, secondRun.runId, { status: "completed", finishedAt: new Date().toISOString() });
+	const thirdRun = await createFlowRunDocument(snapshot.flow.flowId, snapshot.flow.graphRevision, [firstNode.nodeId]);
+	await updateFlowNodeRunDocument(snapshot.flow.flowId, thirdRun.runId, firstNode.nodeId, {
+		status: "failed",
+		error: "regeneration failed",
+		finishedAt: new Date().toISOString(),
+	});
+	const failedSnapshot = await getFlowDocument(snapshot.flow.flowId);
+	assert.equal(failedSnapshot.runs[0]?.nodes.find((node): boolean => node.nodeId === firstNode.nodeId)?.status, "failed");
+	assert.deepEqual(failedSnapshot.latestNodeResults?.find((node): boolean => node.nodeId === firstNode.nodeId)?.output, firstOutput);
+	assert.deepEqual(failedSnapshot.latestNodeResults?.find((node): boolean => node.nodeId === secondNode.nodeId)?.output, { output: "second branch output" });
 }));
 
 test("Merge keeps configured input order and Condition activates one output branch", async (): Promise<void> => withDatabase(async (): Promise<void> => {

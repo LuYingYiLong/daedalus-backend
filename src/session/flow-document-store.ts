@@ -260,10 +260,54 @@ function readRuns(db: DatabaseSync, flowId: string, limit: number = 1): FlowDocu
 	});
 }
 
+function readLatestNodeResults(db: DatabaseSync, flowId: string): FlowDocumentNodeRun[] {
+	const rows = db.prepare(`
+		WITH ranked_node_results AS (
+			SELECT
+				node_run.run_id,
+				node_run.node_id,
+				node_run.type_id,
+				node_run.plugin_version,
+				node_run.plugin_fingerprint,
+				node_run.config_version,
+				node_run.status,
+				node_run.provider_job_id,
+				node_run.input_fingerprint,
+				node_run.output_json,
+				node_run.error,
+				node_run.started_at,
+				node_run.finished_at,
+				ROW_NUMBER() OVER (
+					PARTITION BY node_run.node_id
+					ORDER BY COALESCE(node_run.finished_at, flow_run.started_at, '') DESC,
+						flow_run.rowid DESC,
+						node_run.rowid DESC
+				) AS result_rank
+			FROM flow_node_runs AS node_run
+			JOIN flow_runs AS flow_run ON flow_run.run_id = node_run.run_id
+			WHERE flow_run.flow_id = ?
+				AND node_run.status IN ('completed', 'cached', 'partial_failure')
+				AND node_run.output_json IS NOT NULL
+		)
+		SELECT run_id, node_id, type_id, plugin_version, plugin_fingerprint, config_version, status,
+			provider_job_id, input_fingerprint, output_json, error, started_at, finished_at
+		FROM ranked_node_results
+		WHERE result_rank = 1
+		ORDER BY node_id
+	`).all(flowId) as NodeRunRow[];
+	return rows.map(mapNodeRun);
+}
+
 export async function getFlowDocument(flowId: string, includeArchived: boolean = false): Promise<FlowDocumentSnapshot> {
 	const db = await getSessionDatabase();
 	const flow = requireFlow(db, flowId, includeArchived);
-	return { flow, nodes: readNodes(db, flowId), edges: readEdges(db, flowId), runs: readRuns(db, flowId) };
+	return {
+		flow,
+		nodes: readNodes(db, flowId),
+		edges: readEdges(db, flowId),
+		runs: readRuns(db, flowId),
+		latestNodeResults: readLatestNodeResults(db, flowId),
+	};
 }
 
 export async function listFlowRunsDocument(flowId: string, limit: number = 20): Promise<FlowDocumentRun[]> {

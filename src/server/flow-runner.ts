@@ -365,6 +365,9 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 	);
 	const validatedConfig = normalizeFlowNodeConfig(params.node.typeId, schemaConfig);
 	Object.assign(config, validatedConfig);
+	const size = config.size !== null && typeof config.size === "object" && !Array.isArray(config.size)
+		? config.size as { width: number; height: number }
+		: undefined;
 	const provider = typeof config.provider === "string" ? config.provider.trim() : "";
 	const model = typeof config.model === "string" ? config.model.trim() : "";
 	if (provider.length === 0 || model.length === 0) throw Object.assign(new Error("Media node requires a provider and model."), { code: "media_model_required" });
@@ -394,8 +397,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		model,
 		prompt,
 		negativePrompt,
-		width: typeof config.width === "number" ? config.width : undefined,
-		height: typeof config.height === "number" ? config.height : undefined,
+		width: size?.width,
+		height: size?.height,
 		durationMs: typeof config.durationMs === "number" ? config.durationMs : undefined,
 		fps: typeof config.fps === "number" ? config.fps : undefined,
 		aspectRatio: typeof config.aspectRatio === "string" ? config.aspectRatio : undefined,
@@ -422,8 +425,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 				outputIndex: imageIndex,
 				seed: config.seed,
 				rowIndex: config.rowIndex,
-				width: config.width,
-				height: config.height,
+				width: size?.width,
+				height: size?.height,
 				provenance: {
 					kind: "ai-generation",
 					generationType: kind,
@@ -433,8 +436,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 					...(negativePrompt === undefined ? {} : { negativePrompt }),
 					inputArtifactIds: sourceRefs.map((ref): string => ref.artifactId),
 					request: {
-						width: config.width,
-						height: config.height,
+						width: size?.width,
+						height: size?.height,
 						durationMs: config.durationMs,
 						fps: config.fps,
 						aspectRatio: config.aspectRatio,

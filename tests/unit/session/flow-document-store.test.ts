@@ -54,9 +54,11 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	for (const typeId of ["builtin/text-to-video", "builtin/image-to-video"]) {
 		const properties = definitions.find((definition): boolean => definition.typeId === typeId)?.configSchema.properties as Record<string, Record<string, unknown>>;
 		assert.equal(properties.durationMs?.["x-daedalus-unit"], "ms");
-		assert.equal(properties.width?.["x-daedalus-unit"], "px");
-		assert.equal(properties.height?.["x-daedalus-unit"], "px");
+		assert.deepEqual(properties.size?.default, { width: 1280, height: 720 });
+		assert.equal(properties.width, undefined);
+		assert.equal(properties.height, undefined);
 		assert.equal(properties.fps?.["x-daedalus-unit"], "fps");
+		assert.throws(() => normalizeFlowNodeConfig(typeId, { width: 1280, height: 720 }), /width|height/i);
 	}
 	const saveVideos = definitions.find((definition): boolean => definition.typeId === "builtin/save-videos")!;
 	assert.equal(saveVideos.category, "workspace-media");
@@ -68,11 +70,20 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	for (const [typeId, ids] of [
 		["builtin/text-to-image", ["prompt", "negativePrompt", "seed", "count"]],
 		["builtin/image-to-image", ["prompt", "negativePrompt", "seed", "count"]],
-		["builtin/text-to-video", ["prompt", "negativePrompt", "width", "height", "durationMs", "fps", "seed", "count"]],
-		["builtin/image-to-video", ["prompt", "negativePrompt", "width", "height", "durationMs", "fps", "seed", "count"]],
+		["builtin/text-to-video", ["prompt", "negativePrompt", "durationMs", "fps", "seed", "count"]],
+		["builtin/image-to-video", ["prompt", "negativePrompt", "durationMs", "fps", "seed", "count"]],
 	] as const) {
 		const definition = definitions.find((candidate): boolean => candidate.typeId === typeId)!;
 		for (const id of ids) assert.equal(definition.parameters.find((parameter): boolean => parameter.id === id)?.mode, "hybrid", `${typeId}.${id} should accept a connected value`);
+		if (typeId === "builtin/text-to-video" || typeId === "builtin/image-to-video") {
+			const sizeParameter = definition.parameters.find((parameter): boolean => parameter.id === "size");
+			assert.equal(sizeParameter?.mode, "hybrid");
+			assert.ok(sizeParameter && "dataTypes" in sizeParameter);
+			assert.deepEqual(sizeParameter.dataTypes, ["size"]);
+			assert.equal(definition.parameters.some((parameter): boolean => parameter.id === "width" || parameter.id === "height"), false);
+			assert.deepEqual(definition.defaultConfig.size, { width: 1280, height: 720 });
+			assert.equal(definition.configVersion, 5);
+		}
 		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "provider")?.mode, "fixed");
 		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "model")?.mode, "fixed");
 	}

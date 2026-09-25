@@ -1,4 +1,4 @@
-import { FLOW_VALUE_TYPES } from "./flow-value-types.js";
+import { FLOW_VALUE_TYPES, flowSizeSchema } from "./flow-value-types.js";
 import { z } from "zod";
 import { computerIdSchema, computerToolResultParamsSchema, computerControlUpdateSchema } from "./computer-observation.js";
 import {
@@ -1123,13 +1123,16 @@ const flowImageGenerationConfigSchema = z.object({
 	count: z.number().int().min(1).max(4).default(1),
 	outputFormat: z.enum(["png", "jpeg", "webp"]).default("png"),
 }).strict();
+const flowVideoSizeSchema = flowSizeSchema.extend({
+	width: z.number().int().min(64).max(8192),
+	height: z.number().int().min(64).max(8192),
+});
 const flowVideoGenerationConfigSchema = z.object({
 	provider: z.string().max(120).default(""),
 	model: z.string().max(240).default(""),
 	prompt: z.string().max(200_000).default(""),
 	negativePrompt: z.string().max(200_000).default(""),
-	width: z.number().int().min(64).max(8192).default(1280),
-	height: z.number().int().min(64).max(8192).default(720),
+	size: flowVideoSizeSchema.default({ width: 1280, height: 720 }),
 	durationMs: z.number().int().min(250).max(300_000).default(5_000),
 	fps: z.number().finite().min(1).max(120).default(24),
 	seed: z.number().int().optional(),

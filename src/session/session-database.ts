@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 27;
+const DB_SCHEMA_VERSION: number = 28;
 const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
@@ -350,6 +350,29 @@ function migrateSchema(db: DatabaseSync): void {
 			updated_at TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
+		CREATE TABLE IF NOT EXISTS flow_groups (
+			group_id TEXT PRIMARY KEY,
+			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+			parent_group_id TEXT,
+			title TEXT NOT NULL,
+			color TEXT NOT NULL,
+			x REAL NOT NULL,
+			y REAL NOT NULL,
+			width REAL NOT NULL,
+			height REAL NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(flow_id, group_id),
+			FOREIGN KEY(flow_id, parent_group_id) REFERENCES flow_groups(flow_id, group_id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_flow_groups_flow_parent ON flow_groups (flow_id, parent_group_id, created_at);
+		CREATE TABLE IF NOT EXISTS flow_group_nodes (
+			node_id TEXT PRIMARY KEY REFERENCES flow_nodes(node_id) ON DELETE CASCADE,
+			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
+			group_id TEXT NOT NULL REFERENCES flow_groups(group_id) ON DELETE CASCADE,
+			FOREIGN KEY(flow_id, group_id) REFERENCES flow_groups(flow_id, group_id) ON DELETE CASCADE
+		);
+		CREATE INDEX IF NOT EXISTS idx_flow_group_nodes_group ON flow_group_nodes (flow_id, group_id, node_id);
 		CREATE TABLE IF NOT EXISTS flow_artifacts (
 			artifact_id TEXT PRIMARY KEY,
 			flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,
@@ -605,6 +628,8 @@ function migrateSchema(db: DatabaseSync): void {
 			DROP TABLE IF EXISTS flow_node_runs;
 			DROP TABLE IF EXISTS flow_runs;
 			DROP TABLE IF EXISTS flow_operations;
+			DROP TABLE IF EXISTS flow_group_nodes;
+			DROP TABLE IF EXISTS flow_groups;
 			DROP TABLE IF EXISTS flow_edges;
 			DROP TABLE IF EXISTS flow_nodes;
 			DROP TABLE IF EXISTS flow_documents;
@@ -616,6 +641,10 @@ function migrateSchema(db: DatabaseSync): void {
 			CREATE INDEX idx_flow_documents_workspace ON flow_documents (workspace_id, archived_at, updated_at DESC);
 			CREATE TABLE flow_nodes (node_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, type_id TEXT NOT NULL, plugin_id TEXT NOT NULL, plugin_version TEXT NOT NULL, plugin_fingerprint TEXT NOT NULL, config_version INTEGER NOT NULL, title TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL, config_json TEXT NOT NULL, ports_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 			CREATE INDEX idx_flow_nodes_flow ON flow_nodes (flow_id, created_at, node_id);
+			CREATE TABLE flow_groups (group_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, parent_group_id TEXT, title TEXT NOT NULL, color TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(flow_id, group_id), FOREIGN KEY(flow_id, parent_group_id) REFERENCES flow_groups(flow_id, group_id) ON DELETE CASCADE);
+			CREATE INDEX idx_flow_groups_flow_parent ON flow_groups (flow_id, parent_group_id, created_at);
+			CREATE TABLE flow_group_nodes (node_id TEXT PRIMARY KEY REFERENCES flow_nodes(node_id) ON DELETE CASCADE, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES flow_groups(group_id) ON DELETE CASCADE, FOREIGN KEY(flow_id, group_id) REFERENCES flow_groups(flow_id, group_id) ON DELETE CASCADE);
+			CREATE INDEX idx_flow_group_nodes_group ON flow_group_nodes (flow_id, group_id, node_id);
 			CREATE TABLE flow_artifacts (artifact_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER, height INTEGER, duration_ms INTEGER, fps REAL, preview_artifact_id TEXT, storage_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 			CREATE INDEX idx_flow_artifacts_flow_run ON flow_artifacts (flow_id, run_id, node_id, created_at DESC);
 			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact', 'number', 'boolean', 'color', 'size', 'mask')), UNIQUE(flow_id, target_node_id, target_port));

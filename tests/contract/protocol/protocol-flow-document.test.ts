@@ -8,6 +8,8 @@ test("Flow graph requests validate", (): void => {
 		{ method: "flow.get", params: { flowId: "flow-a" } },
 		{ method: "flow.node.types.list", params: { flowId: "flow-a" } },
 		{ method: "flow.patch.commit", params: { flowId: "flow-a", clientId: "studio-a", operations: [{ mutationId: "mutation-a", baseGraphRevision: 1, kind: "node.create", payload: { nodeId: "node-a", typeId: "builtin/user-prompt", x: 0, y: 0, config: { text: "hello" } } }] } },
+		{ method: "flow.patch.commit", params: { flowId: "flow-a", clientId: "studio-a", operations: [{ mutationId: "group-create", baseLayoutRevision: 1, kind: "group.create", payload: { groupId: "group-a", title: "Group", color: "#5577aa", parentGroupId: null, x: 0, y: 0, width: 420, height: 260 } }] } },
+		{ method: "flow.patch.commit", params: { flowId: "flow-a", clientId: "studio-a", operations: [{ mutationId: "group-rename", baseLayoutRevision: 1, kind: "group.rename", payload: { groupId: "group-a", title: "Renamed group" } }, { mutationId: "group-move", baseLayoutRevision: 1, kind: "group.move", payload: { groupId: "group-a", x: 32, y: 48 } }] } },
 		{ method: "flow.run.start", params: { flowId: "flow-a", revision: 3, entryNodeIds: ["node-input"], targetNodeIds: ["node-output"], inputValues: { "node-input": "hello" } } },
 		{ method: "flow.run.stop", params: { flowId: "flow-a", runId: "run-a" } },
 		{ method: "flow.settings.update", params: { flowId: "flow-a", revision: 3, approvalMode: "auto-safe" } },

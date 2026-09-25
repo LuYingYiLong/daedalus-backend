@@ -15,7 +15,7 @@ export type FlowExportResult = {
 	missingFileCount: number;
 };
 
-const TABLES = ["flow_documents", "flow_nodes", "flow_edges", "flow_runs", "flow_node_runs", "flow_artifacts", "flow_batch_items"] as const;
+const TABLES = ["flow_documents", "flow_nodes", "flow_groups", "flow_group_nodes", "flow_edges", "flow_runs", "flow_node_runs", "flow_artifacts", "flow_batch_items"] as const;
 function inside(root: string, file: string): boolean {
 	const path = relative(root, file);
 	return path === "" || (!path.startsWith("..") && !isAbsolute(path));

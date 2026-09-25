@@ -204,6 +204,67 @@ test("Flow patch batches are idempotent and layout operations use last-write-win
 	}), { code: "flow_revision_conflict" });
 }));
 
+test("Flow groups persist nested membership and dissolve one level without deleting nodes", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	let snapshot = await createFlowDocument({ title: "Nested groups" });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 40, y: 80, config: { text: "one" } });
+	const firstNodeId = snapshot.nodes[0]!.nodeId;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 420, y: 160, config: { text: "two" } });
+	const secondNodeId = snapshot.nodes.find((node): boolean => node.nodeId !== firstNodeId)!.nodeId;
+	const outerId = "group-outer";
+	const innerId = "group-inner";
+	const ack = await commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-groups",
+		operations: [
+			{ mutationId: "group-outer-create", kind: "group.create", payload: { groupId: outerId, title: "Outer", color: "#5577aa", parentGroupId: null, x: 0, y: 0, width: 800, height: 500 } },
+			{ mutationId: "group-outer-members", kind: "group.reparent", payload: { nodes: [{ nodeId: firstNodeId, groupId: outerId }, { nodeId: secondNodeId, groupId: outerId }], groups: [] } },
+			{ mutationId: "group-inner-create", kind: "group.create", payload: { groupId: innerId, title: "Inner", color: "#44aa88", parentGroupId: outerId, x: 20, y: 20, width: 340, height: 260 } },
+			{ mutationId: "group-inner-members", kind: "group.reparent", payload: { nodes: [{ nodeId: firstNodeId, groupId: innerId }], groups: [] } },
+		],
+	});
+	assert.equal(ack.graphRevision, snapshot.flow.graphRevision);
+	assert.equal(ack.layoutRevision, snapshot.flow.layoutRevision + 1);
+	let grouped = await getFlowDocument(snapshot.flow.flowId);
+	assert.deepEqual(grouped.groups.find((group): boolean => group.groupId === outerId)?.nodeIds, [secondNodeId]);
+	assert.deepEqual(grouped.groups.find((group): boolean => group.groupId === innerId)?.nodeIds, [firstNodeId]);
+	assert.equal(grouped.groups.find((group): boolean => group.groupId === innerId)?.parentGroupId, outerId);
+	await commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-groups",
+		operations: [
+			{ mutationId: "group-inner-rename", kind: "group.rename", payload: { groupId: innerId, title: "Renamed inner" } },
+			{ mutationId: "group-inner-move", kind: "group.move", payload: { groupId: innerId, x: 60, y: 90 } },
+		],
+	});
+	grouped = await getFlowDocument(snapshot.flow.flowId);
+	assert.equal(grouped.groups.find((group): boolean => group.groupId === innerId)?.title, "Renamed inner");
+	assert.deepEqual(
+		{ x: grouped.groups.find((group): boolean => group.groupId === innerId)?.x, y: grouped.groups.find((group): boolean => group.groupId === innerId)?.y },
+		{ x: 60, y: 90 },
+	);
+	await assert.rejects(commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-groups",
+		operations: [{ mutationId: "group-cycle", kind: "group.reparent", payload: { nodes: [], groups: [{ groupId: outerId, parentGroupId: innerId }] } }],
+	}), { code: "flow_group_cycle" });
+	await commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-groups",
+		operations: [{ mutationId: "group-inner-dissolve", kind: "group.dissolve", payload: { groupId: innerId } }],
+	});
+	grouped = await getFlowDocument(snapshot.flow.flowId);
+	assert.equal(grouped.groups.some((group): boolean => group.groupId === innerId), false);
+	assert.deepEqual(grouped.groups.find((group): boolean => group.groupId === outerId)?.nodeIds.sort(), [firstNodeId, secondNodeId].sort());
+	await commitFlowOperationsDocument({
+		flowId: snapshot.flow.flowId,
+		clientId: "studio-groups",
+		operations: [{ mutationId: "group-outer-dissolve", kind: "group.dissolve", payload: { groupId: outerId } }],
+	});
+	const dissolved = await getFlowDocument(snapshot.flow.flowId);
+	assert.equal(dissolved.groups.length, 0);
+	assert.equal(dissolved.nodes.length, snapshot.nodes.length);
+}));
+
 test("createConnected is atomic and replaces a single-input edge", async (): Promise<void> => withDatabase(async (): Promise<void> => {
 	let snapshot = await createFlowDocument({ title: "Atomic" });
 	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text", x: 0, y: 0, config: { text: "first" } });

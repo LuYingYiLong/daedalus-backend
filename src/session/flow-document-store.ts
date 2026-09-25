@@ -8,6 +8,7 @@ import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson } from
 import type {
 	FlowApproval,
 	FlowDocument,
+	FlowDocumentGroup,
 	FlowDocumentEdge,
 	FlowDocumentNode,
 	FlowDocumentNodeRun,
@@ -71,6 +72,19 @@ type EdgeRow = {
 	target_node_id: string;
 	target_port: string;
 	data_type: FlowDocumentEdge["dataType"];
+};
+type GroupRow = {
+	group_id: string;
+	flow_id: string;
+	parent_group_id: string | null;
+	title: string;
+	color: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	created_at: string;
+	updated_at: string;
 };
 type RunRow = {
 	run_id: string;
@@ -178,6 +192,23 @@ function mapEdge(row: EdgeRow): FlowDocumentEdge {
 	};
 }
 
+function mapGroup(row: GroupRow, nodeIds: string[]): FlowDocumentGroup {
+	return {
+		groupId: row.group_id,
+		flowId: row.flow_id,
+		parentGroupId: row.parent_group_id,
+		title: row.title,
+		color: row.color,
+		x: Number(row.x),
+		y: Number(row.y),
+		width: Number(row.width),
+		height: Number(row.height),
+		nodeIds,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+	};
+}
+
 function mapRun(row: RunRow, nodes: FlowDocumentNodeRun[]): FlowDocumentRun {
 	return {
 		runId: row.run_id,
@@ -252,6 +283,18 @@ function readEdges(db: DatabaseSync, flowId: string): FlowDocumentEdge[] {
 	return (db.prepare("SELECT edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flowId) as EdgeRow[]).map(mapEdge);
 }
 
+function readGroups(db: DatabaseSync, flowId: string): FlowDocumentGroup[] {
+	const groups = db.prepare("SELECT group_id, flow_id, parent_group_id, title, color, x, y, width, height, created_at, updated_at FROM flow_groups WHERE flow_id = ? ORDER BY created_at, group_id").all(flowId) as GroupRow[];
+	const members = db.prepare("SELECT group_id, node_id FROM flow_group_nodes WHERE flow_id = ? ORDER BY group_id, node_id").all(flowId) as Array<{ group_id: string; node_id: string }>;
+	const nodesByGroup = new Map<string, string[]>();
+	for (const member of members) {
+		const nodeIds = nodesByGroup.get(member.group_id) ?? [];
+		nodeIds.push(member.node_id);
+		nodesByGroup.set(member.group_id, nodeIds);
+	}
+	return groups.map((group): FlowDocumentGroup => mapGroup(group, nodesByGroup.get(group.group_id) ?? []));
+}
+
 function readRuns(db: DatabaseSync, flowId: string, limit: number = 1): FlowDocumentRun[] {
 	const runs: RunRow[] = db.prepare(`SELECT ${RUN_COLUMNS} FROM flow_runs WHERE flow_id = ? ORDER BY COALESCE(started_at, '') DESC, run_id DESC LIMIT ?`).all(flowId, limit) as RunRow[];
 	return runs.map((run): FlowDocumentRun => {
@@ -304,6 +347,7 @@ export async function getFlowDocument(flowId: string, includeArchived: boolean =
 	return {
 		flow,
 		nodes: readNodes(db, flowId),
+		groups: readGroups(db, flowId),
 		edges: readEdges(db, flowId),
 		runs: readRuns(db, flowId),
 		latestNodeResults: readLatestNodeResults(db, flowId),
@@ -620,6 +664,43 @@ export async function updateFlowSettingsDocument(params: { flowId: string; revis
 	return (await getFlowDocument(params.flowId)).flow;
 }
 
+function validateGroupReparent(
+	db: DatabaseSync,
+	flowId: string,
+	nodes: Array<{ nodeId: string; groupId: string | null }>,
+	groups: Array<{ groupId: string; parentGroupId: string | null }>,
+): void {
+	const nodeIds = new Set<string>();
+	for (const member of nodes) {
+		if (nodeIds.has(member.nodeId)) throw flowDocumentError("flow_group_membership_invalid", "A node can only be assigned once per group operation.");
+		nodeIds.add(member.nodeId);
+		if (db.prepare("SELECT 1 FROM flow_nodes WHERE flow_id = ? AND node_id = ?").get(flowId, member.nodeId) === undefined)
+			throw flowDocumentError("flow_node_not_found", `Flow node not found: ${member.nodeId}`);
+		if (member.groupId !== null && db.prepare("SELECT 1 FROM flow_groups WHERE flow_id = ? AND group_id = ?").get(flowId, member.groupId) === undefined)
+			throw flowDocumentError("flow_group_not_found", `Flow group not found: ${member.groupId}`);
+	}
+	const parentByGroup = new Map<string, string | null>(
+		(db.prepare("SELECT group_id, parent_group_id FROM flow_groups WHERE flow_id = ?").all(flowId) as Array<{ group_id: string; parent_group_id: string | null }>).map((row): [string, string | null] => [row.group_id, row.parent_group_id]),
+	);
+	const updatedIds = new Set<string>();
+	for (const item of groups) {
+		if (updatedIds.has(item.groupId)) throw flowDocumentError("flow_group_membership_invalid", "A group can only be assigned once per group operation.");
+		updatedIds.add(item.groupId);
+		if (!parentByGroup.has(item.groupId)) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${item.groupId}`);
+		if (item.parentGroupId !== null && !parentByGroup.has(item.parentGroupId)) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${item.parentGroupId}`);
+		parentByGroup.set(item.groupId, item.parentGroupId);
+	}
+	for (const groupId of updatedIds) {
+		const ancestors = new Set<string>([groupId]);
+		let parent = parentByGroup.get(groupId) ?? null;
+		while (parent !== null) {
+			if (ancestors.has(parent)) throw flowDocumentError("flow_group_cycle", "Flow groups cannot contain themselves or an ancestor group.");
+			ancestors.add(parent);
+			parent = parentByGroup.get(parent) ?? null;
+		}
+	}
+}
+
 /** Applies renderer operations in one transaction and records their IDs for crash-safe replay. */
 export async function commitFlowOperationsDocument(params: { flowId: string; clientId: string; operations: FlowOperation[] }): Promise<FlowPatchAck> {
 	const startedAt: number = performance.now();
@@ -658,7 +739,7 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 		// operations remain safe because they do not change graph semantics.
 		void layoutBases;
 		const graphChanged = pending.some((operation): boolean => ["node.create", "node.update", "node.delete", "edge.create", "edge.delete"].includes(operation.kind));
-		const layoutChanged = pending.some((operation): boolean => ["node.move", "node.resize", "node.collapse", "viewport.update"].includes(operation.kind));
+		const layoutChanged = pending.some((operation): boolean => ["node.move", "node.resize", "node.collapse", "viewport.update", "group.create", "group.rename", "group.move", "group.reparent", "group.dissolve", "group.delete"].includes(operation.kind));
 		if (graphChanged) assertGraphEditable(db, params.flowId);
 
 		for (const operation of pending) {
@@ -695,6 +776,41 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 			} else if (operation.kind === "node.resize") {
 				const resized = db.prepare("UPDATE flow_nodes SET width = ?, height = ?, updated_at = ? WHERE flow_id = ? AND node_id = ?").run(operation.payload.width, operation.payload.height, now(), params.flowId, operation.payload.nodeId);
 				if (Number(resized.changes) !== 1) throw flowDocumentError("flow_node_not_found", `Flow node not found: ${operation.payload.nodeId}`);
+			} else if (operation.kind === "group.create") {
+				if (db.prepare("SELECT 1 FROM flow_groups WHERE group_id = ?").get(operation.payload.groupId) !== undefined)
+					throw flowDocumentError("flow_group_conflict", `Flow group already exists: ${operation.payload.groupId}`);
+				if (operation.payload.parentGroupId !== null && db.prepare("SELECT 1 FROM flow_groups WHERE flow_id = ? AND group_id = ?").get(params.flowId, operation.payload.parentGroupId) === undefined)
+					throw flowDocumentError("flow_group_not_found", `Flow group not found: ${operation.payload.parentGroupId}`);
+				const timestamp = now();
+				db.prepare("INSERT INTO flow_groups(group_id, flow_id, parent_group_id, title, color, x, y, width, height, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(operation.payload.groupId, params.flowId, operation.payload.parentGroupId, operation.payload.title, operation.payload.color, operation.payload.x, operation.payload.y, operation.payload.width, operation.payload.height, timestamp, timestamp);
+			} else if (operation.kind === "group.rename") {
+				const renamed = db.prepare("UPDATE flow_groups SET title = ?, updated_at = ? WHERE flow_id = ? AND group_id = ?").run(operation.payload.title, now(), params.flowId, operation.payload.groupId);
+				if (Number(renamed.changes) !== 1) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${operation.payload.groupId}`);
+			} else if (operation.kind === "group.move") {
+				const moved = db.prepare("UPDATE flow_groups SET x = ?, y = ?, updated_at = ? WHERE flow_id = ? AND group_id = ?").run(operation.payload.x, operation.payload.y, now(), params.flowId, operation.payload.groupId);
+				if (Number(moved.changes) !== 1) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${operation.payload.groupId}`);
+			} else if (operation.kind === "group.reparent") {
+				validateGroupReparent(db, params.flowId, operation.payload.nodes, operation.payload.groups);
+				const timestamp = now();
+				for (const member of operation.payload.nodes) {
+					if (member.groupId === null) db.prepare("DELETE FROM flow_group_nodes WHERE node_id = ?").run(member.nodeId);
+					else db.prepare("INSERT INTO flow_group_nodes(node_id, flow_id, group_id) VALUES (?, ?, ?) ON CONFLICT(node_id) DO UPDATE SET flow_id = excluded.flow_id, group_id = excluded.group_id").run(member.nodeId, params.flowId, member.groupId);
+				}
+				for (const member of operation.payload.groups)
+					db.prepare("UPDATE flow_groups SET parent_group_id = ?, updated_at = ? WHERE flow_id = ? AND group_id = ?").run(member.parentGroupId, timestamp, params.flowId, member.groupId);
+			} else if (operation.kind === "group.dissolve") {
+				const group = db.prepare("SELECT parent_group_id FROM flow_groups WHERE flow_id = ? AND group_id = ?").get(params.flowId, operation.payload.groupId) as { parent_group_id: string | null } | undefined;
+				if (group === undefined) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${operation.payload.groupId}`);
+				db.prepare("UPDATE flow_groups SET parent_group_id = ?, updated_at = ? WHERE flow_id = ? AND parent_group_id = ?").run(group.parent_group_id, now(), params.flowId, operation.payload.groupId);
+				if (group.parent_group_id === null) db.prepare("DELETE FROM flow_group_nodes WHERE flow_id = ? AND group_id = ?").run(params.flowId, operation.payload.groupId);
+				else db.prepare("UPDATE flow_group_nodes SET group_id = ? WHERE flow_id = ? AND group_id = ?").run(group.parent_group_id, params.flowId, operation.payload.groupId);
+				db.prepare("DELETE FROM flow_groups WHERE flow_id = ? AND group_id = ?").run(params.flowId, operation.payload.groupId);
+			} else if (operation.kind === "group.delete") {
+				if (db.prepare("SELECT 1 FROM flow_groups WHERE flow_id = ? AND parent_group_id = ? LIMIT 1").get(params.flowId, operation.payload.groupId) !== undefined ||
+					db.prepare("SELECT 1 FROM flow_group_nodes WHERE flow_id = ? AND group_id = ? LIMIT 1").get(params.flowId, operation.payload.groupId) !== undefined)
+					throw flowDocumentError("flow_group_not_empty", "A group must be empty before it can be deleted.");
+				const deleted = db.prepare("DELETE FROM flow_groups WHERE flow_id = ? AND group_id = ?").run(params.flowId, operation.payload.groupId);
+				if (Number(deleted.changes) !== 1) throw flowDocumentError("flow_group_not_found", `Flow group not found: ${operation.payload.groupId}`);
 			} else if (operation.kind === "viewport.update") {
 				db.prepare("UPDATE flow_documents SET viewport_json = ? WHERE flow_id = ?").run(sqlJson(operation.payload), params.flowId);
 			} else if (operation.kind === "edge.delete") {

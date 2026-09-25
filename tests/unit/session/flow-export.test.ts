@@ -24,6 +24,8 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 			{ mutationId: "move", kind: "node.move" as const, payload: { nodeId: node.nodeId, x: 135, y: -74 } },
 			{ mutationId: "resize", kind: "node.resize" as const, payload: { nodeId: node.nodeId, width: 560, height: 490 } },
 			{ mutationId: "fold", kind: "node.collapse" as const, payload: { nodeId: node.nodeId, collapsed: true } },
+			{ mutationId: "group-create", kind: "group.create" as const, payload: { groupId: "group-export", title: "Exported group", color: "#5577aa", parentGroupId: null, x: 120, y: -100, width: 600, height: 520 } },
+			{ mutationId: "group-member", kind: "group.reparent" as const, payload: { nodes: [{ nodeId: node.nodeId, groupId: "group-export" }], groups: [] } },
 			{ mutationId: "viewport", kind: "viewport.update" as const, payload: { x: 40, y: 80, zoom: 1.4 } },
 		];
 		const ack = await commitFlowOperationsDocument({ flowId: flow.flow.flowId, clientId: "test", operations });
@@ -33,6 +35,7 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		await resetSessionDatabaseForTests();
 		const restored = await getFlowDocument(flow.flow.flowId);
 		assert.deepEqual(restored.nodes.map(n => [n.nodeId, n.x, n.y, n.width, n.height, n.collapsed]).find(n => n[0] === node.nodeId), [node.nodeId, 135, -74, 560, 490, true]);
+		assert.deepEqual(restored.groups.map(group => [group.groupId, group.title, group.nodeIds]), [["group-export", "Exported group", [node.nodeId]]]);
 		const run = await createFlowRunDocument(flow.flow.flowId, ack.graphRevision, [node.nodeId]);
 		await updateFlowRunDocument(flow.flow.flowId, run.runId, { status: "completed" });
 		const bytes = Buffer.from("test media payload");
@@ -46,6 +49,8 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 			assert.equal(exported.prepare("SELECT count(*) AS n FROM flow_documents").get()?.n, 1);
 			assert.equal(exported.prepare("SELECT * FROM flow_documents WHERE flow_id = ?").get(other.flow.flowId), undefined);
 			assert.equal(exported.prepare("SELECT * FROM flow_nodes WHERE node_id = ?").get(node.nodeId)?.collapsed, 1);
+			assert.deepEqual({ ...exported.prepare("SELECT group_id, flow_id, parent_group_id, title, color, x, y, width, height FROM flow_groups").get() }, { group_id: "group-export", flow_id: flow.flow.flowId, parent_group_id: null, title: "Exported group", color: "#5577aa", x: 120, y: -100, width: 600, height: 520 });
+			assert.deepEqual({ ...exported.prepare("SELECT node_id, group_id FROM flow_group_nodes").get() }, { node_id: node.nodeId, group_id: "group-export" });
 			assert.deepEqual(exported.prepare("SELECT * FROM flow_edges ORDER BY edge_id").all(), (await getSessionDatabase()).prepare("SELECT * FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flow.flow.flowId));
 			assert.deepEqual(Buffer.from(exported.prepare("SELECT content FROM daedalus_flow_export_files WHERE artifact_id = ?").get(artifact.artifactId)!.content as Uint8Array), bytes);
 			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 1);

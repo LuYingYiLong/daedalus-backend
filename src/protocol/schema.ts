@@ -1292,6 +1292,20 @@ export const flowDocumentNodeSchema = z.object({
 	createdAt: z.string().datetime(),
 	updatedAt: z.string().datetime(),
 }).strict();
+export const flowDocumentGroupSchema = z.object({
+	groupId: flowIdentifierSchema,
+	flowId: flowIdentifierSchema,
+	parentGroupId: flowIdentifierSchema.nullable(),
+	title: z.string().trim().min(1).max(120),
+	color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+	x: z.number().finite().min(-10_000_000).max(10_000_000),
+	y: z.number().finite().min(-10_000_000).max(10_000_000),
+	width: z.number().finite().positive().max(10_000),
+	height: z.number().finite().positive().max(10_000),
+	nodeIds: z.array(flowIdentifierSchema).max(10_000),
+	createdAt: z.string().datetime(),
+	updatedAt: z.string().datetime(),
+}).strict();
 export const flowDocumentEdgeSchema = z.object({
 	edgeId: flowIdentifierSchema,
 	flowId: flowIdentifierSchema,
@@ -1340,6 +1354,7 @@ export const flowDocumentRunSchema = z.object({
 export const flowDocumentSnapshotSchema = z.object({
 	flow: flowDocumentSchema,
 	nodes: z.array(flowDocumentNodeSchema),
+	groups: z.array(flowDocumentGroupSchema).default([]),
 	edges: z.array(flowDocumentEdgeSchema),
 	runs: z.array(flowDocumentRunSchema),
 	latestNodeResults: z.array(flowDocumentNodeRunSchema).optional(),
@@ -1361,6 +1376,12 @@ export const flowOperationSchema = z.discriminatedUnion("kind", [
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.move"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, x: z.number().finite(), y: z.number().finite() }).strict() }).strict(),
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.collapse"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, collapsed: z.boolean() }).strict() }).strict(),
 	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("node.resize"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodeId: flowIdentifierSchema, width: z.number().finite().positive().max(10_000), height: z.number().finite().positive().max(10_000) }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.create"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ groupId: flowIdentifierSchema, title: z.string().trim().min(1).max(120), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), parentGroupId: flowIdentifierSchema.nullable(), x: z.number().finite(), y: z.number().finite(), width: z.number().finite().positive().max(10_000), height: z.number().finite().positive().max(10_000) }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.rename"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ groupId: flowIdentifierSchema, title: z.string().trim().min(1).max(120) }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.move"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ groupId: flowIdentifierSchema, x: z.number().finite(), y: z.number().finite() }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.reparent"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ nodes: z.array(z.object({ nodeId: flowIdentifierSchema, groupId: flowIdentifierSchema.nullable() }).strict()).max(10_000), groups: z.array(z.object({ groupId: flowIdentifierSchema, parentGroupId: flowIdentifierSchema.nullable() }).strict()).max(10_000) }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.dissolve"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ groupId: flowIdentifierSchema }).strict() }).strict(),
+	z.object({ mutationId: flowIdentifierSchema, kind: z.literal("group.delete"), baseLayoutRevision: z.number().int().positive().optional(), payload: z.object({ groupId: flowIdentifierSchema }).strict() }).strict(),
 	z.object({
 		mutationId: flowIdentifierSchema,
 		kind: z.literal("edge.create"),

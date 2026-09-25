@@ -5,6 +5,7 @@ import type {
 	clientRequestSchema,
 	flowDocumentEdgeSchema,
 	flowDocumentNodeSchema,
+	flowDocumentGroupSchema,
 	flowNodeTypeIdSchema,
 	flowDocumentNodeRunSchema,
 	flowBatchItemRunSchema,
@@ -91,6 +92,7 @@ export type FlowTreeOrder = z.infer<typeof flowTreeOrderSchema>;
 export type FlowDocument = z.infer<typeof flowDocumentSchema>;
 export type FlowNodeTypeId = z.infer<typeof flowNodeTypeIdSchema>;
 export type FlowDocumentNode = z.infer<typeof flowDocumentNodeSchema>;
+export type FlowDocumentGroup = z.infer<typeof flowDocumentGroupSchema>;
 export type FlowDocumentEdge = z.infer<typeof flowDocumentEdgeSchema>;
 export type FlowDocumentRun = z.infer<typeof flowDocumentRunSchema>;
 export type FlowDocumentNodeRun = z.infer<typeof flowDocumentNodeRunSchema>;

@@ -64,6 +64,18 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.equal(saveVideosInput?.mode, "connection");
 	if (saveVideosInput?.mode === "connection") assert.deepEqual(saveVideosInput.dataTypes, ["video"]);
 	const llm = definitions.find((definition): boolean => definition.typeId === "builtin/llm")!;
+	assert.equal(definitions.find((definition): boolean => definition.typeId === "builtin/text")?.category, "parameters");
+	for (const [typeId, ids] of [
+		["builtin/text-to-image", ["prompt", "negativePrompt", "seed", "count"]],
+		["builtin/image-to-image", ["prompt", "negativePrompt", "seed", "count"]],
+		["builtin/text-to-video", ["prompt", "negativePrompt", "width", "height", "durationMs", "fps", "seed", "count"]],
+		["builtin/image-to-video", ["prompt", "negativePrompt", "width", "height", "durationMs", "fps", "seed", "count"]],
+	] as const) {
+		const definition = definitions.find((candidate): boolean => candidate.typeId === typeId)!;
+		for (const id of ids) assert.equal(definition.parameters.find((parameter): boolean => parameter.id === id)?.mode, "hybrid", `${typeId}.${id} should accept a connected value`);
+		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "provider")?.mode, "fixed");
+		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "model")?.mode, "fixed");
+	}
 	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
 		{ id: "user-prompt", mode: "hybrid" },
 		{ id: "system-prompt", mode: "hybrid" },

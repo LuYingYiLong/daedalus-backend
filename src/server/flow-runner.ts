@@ -33,7 +33,7 @@ import {
 	updateFlowNodeProviderJobIdDocument,
 	updateFlowRunDocument,
 } from "../session/flow-document-store.js";
-import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition, resolveFlowNodeParameters } from "./flow-node-registry.js";
+import { findFlowNodeTypeDefinition, getFlowNodeTypeDefinition, normalizeFlowNodeConfig, resolveFlowNodeParameters } from "./flow-node-registry.js";
 import {
 	executeRegisteredFlowNode,
 	resolveApprovedFlowResult,
@@ -354,8 +354,19 @@ function parseToolContent(content: string): unknown {
 }
 
 async function executeMediaNode(params: { resumeProviderJobId?: string | undefined; node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
-	const provider = typeof params.node.config.provider === "string" ? params.node.config.provider.trim() : "";
-	const model = typeof params.node.config.model === "string" ? params.node.config.model.trim() : "";
+	const config = { ...params.node.config };
+	for (const parameter of resolveFlowNodeParameters(params.node)) {
+		if (parameter.mode === "hybrid" && Object.prototype.hasOwnProperty.call(params.inputs, parameter.id))
+			config[parameter.configField] = params.inputs[parameter.id];
+	}
+	const schemaProperties = getFlowNodeTypeDefinition(params.node.typeId).configSchema.properties;
+	const schemaConfig = Object.fromEntries(
+		Object.entries(config).filter(([key]): boolean => schemaProperties !== null && typeof schemaProperties === "object" && Object.prototype.hasOwnProperty.call(schemaProperties, key)),
+	);
+	const validatedConfig = normalizeFlowNodeConfig(params.node.typeId, schemaConfig);
+	Object.assign(config, validatedConfig);
+	const provider = typeof config.provider === "string" ? config.provider.trim() : "";
+	const model = typeof config.model === "string" ? config.model.trim() : "";
 	if (provider.length === 0 || model.length === 0) throw Object.assign(new Error("Media node requires a provider and model."), { code: "media_model_required" });
 	const kind = params.node.typeId === "builtin/text-to-video" || params.node.typeId === "builtin/image-to-video" ? "videoGeneration" : params.node.typeId === "builtin/image-to-image" ? "imageEdit" : "imageGeneration";
 	const sourceRefs: Array<{ artifactId: string }> = [];
@@ -369,8 +380,8 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		}
 	};
 	collectSourceRefs(params.inputs.image);
-	const prompt = typeof params.inputs.prompt === "string" ? params.inputs.prompt : typeof params.node.config.prompt === "string" ? params.node.config.prompt : "";
-	const negativePrompt = typeof params.node.config.negativePrompt === "string" ? params.node.config.negativePrompt : undefined;
+	const prompt = typeof config.prompt === "string" ? config.prompt : "";
+	const negativePrompt = typeof config.negativePrompt === "string" ? config.negativePrompt : undefined;
 	const sourceImages = sourceRefs.length === 0
 		? undefined
 		: await Promise.all(sourceRefs.map(async (ref): Promise<{ mimeType: string; bytes: Buffer }> => {
@@ -383,15 +394,15 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 		model,
 		prompt,
 		negativePrompt,
-		width: typeof params.node.config.width === "number" ? params.node.config.width : undefined,
-		height: typeof params.node.config.height === "number" ? params.node.config.height : undefined,
-		durationMs: typeof params.node.config.durationMs === "number" ? params.node.config.durationMs : undefined,
-		fps: typeof params.node.config.fps === "number" ? params.node.config.fps : undefined,
-		aspectRatio: typeof params.node.config.aspectRatio === "string" ? params.node.config.aspectRatio : undefined,
-		style: typeof params.node.config.style === "string" ? params.node.config.style : undefined,
-		seed: typeof params.node.config.seed === "number" ? params.node.config.seed : undefined,
-		count: typeof params.node.config.count === "number" ? params.node.config.count : undefined,
-		outputFormat: typeof params.node.config.outputFormat === "string" ? params.node.config.outputFormat : undefined,
+		width: typeof config.width === "number" ? config.width : undefined,
+		height: typeof config.height === "number" ? config.height : undefined,
+		durationMs: typeof config.durationMs === "number" ? config.durationMs : undefined,
+		fps: typeof config.fps === "number" ? config.fps : undefined,
+		aspectRatio: typeof config.aspectRatio === "string" ? config.aspectRatio : undefined,
+		style: typeof config.style === "string" ? config.style : undefined,
+		seed: typeof config.seed === "number" ? config.seed : undefined,
+		count: typeof config.count === "number" ? config.count : undefined,
+		outputFormat: typeof config.outputFormat === "string" ? config.outputFormat : undefined,
 		sourceImages,
 	}, params.signal, {
 		async save(input) {
@@ -406,13 +417,13 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 			if (artifact.mimeType.startsWith("image/")) artifact = { ...artifact, ...await processImage(artifact.bytes, { kind: "convert", format: artifact.mimeType === "image/jpeg" ? "jpeg" : artifact.mimeType === "image/webp" ? "webp" : "png" }, params.signal) };
 			refs.push(await saveFlowArtifact({ flowId: params.flow.flowId, runId: params.runId, nodeId: params.node.nodeId, bytes: artifact.bytes, mimeType: artifact.mimeType, ...(artifact.width === undefined ? {} : { width: artifact.width }), ...(artifact.height === undefined ? {} : { height: artifact.height }), ...(artifact.durationMs === undefined ? {} : { durationMs: artifact.durationMs }), ...(artifact.fps === undefined ? {} : { fps: artifact.fps }), metadata: {
 				...artifact.metadata,
-				itemId: params.node.config.id,
+				itemId: config.id,
 				imageIndex,
 				outputIndex: imageIndex,
-				seed: params.node.config.seed,
-				rowIndex: params.node.config.rowIndex,
-				width: params.node.config.width,
-				height: params.node.config.height,
+				seed: config.seed,
+				rowIndex: config.rowIndex,
+				width: config.width,
+				height: config.height,
 				provenance: {
 					kind: "ai-generation",
 					generationType: kind,
@@ -422,15 +433,15 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 					...(negativePrompt === undefined ? {} : { negativePrompt }),
 					inputArtifactIds: sourceRefs.map((ref): string => ref.artifactId),
 					request: {
-						width: params.node.config.width,
-						height: params.node.config.height,
-						durationMs: params.node.config.durationMs,
-						fps: params.node.config.fps,
-						aspectRatio: params.node.config.aspectRatio,
-						style: params.node.config.style,
-						seed: params.node.config.seed,
-						count: params.node.config.count,
-						outputFormat: params.node.config.outputFormat,
+						width: config.width,
+						height: config.height,
+						durationMs: config.durationMs,
+						fps: config.fps,
+						aspectRatio: config.aspectRatio,
+						style: config.style,
+						seed: config.seed,
+						count: config.count,
+						outputFormat: config.outputFormat,
 					},
 				},
 			} }));

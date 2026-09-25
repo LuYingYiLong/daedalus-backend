@@ -106,24 +106,32 @@ test("AI image and video artifacts retain immutable Flow generation provenance",
 	process.env.USERPROFILE = directory;
 	await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
 	const provider = "fixture-provenance";
+	const mediaRequests: Array<Record<string, unknown>> = [];
 	registerMediaGenerationAdapter({
 		provider,
 		supports: ["imageGeneration", "videoGeneration"],
-		generate: async request => ({
-			status: "completed",
-			provider,
-			model: request.model,
-			artifacts: request.kind === "videoGeneration"
-				? [{ bytes: Buffer.from("fixture-video"), mimeType: "video/mp4", width: 1280, height: 720, durationMs: 2_000, fps: 24 }]
-				: [{ bytes: createMockPng([30, 80, 120]), mimeType: "image/png", width: 32, height: 32 }],
-		}),
+		generate: async request => {
+			mediaRequests.push({ kind: request.kind, prompt: request.prompt, negativePrompt: request.negativePrompt, width: request.width, height: request.height, durationMs: request.durationMs, fps: request.fps, seed: request.seed, count: request.count });
+			return {
+				status: "completed",
+				provider,
+				model: request.model,
+				artifacts: request.kind === "videoGeneration"
+					? [{ bytes: Buffer.from("fixture-video"), mimeType: "video/mp4", width: 1280, height: 720, durationMs: 2_000, fps: 24 }]
+					: [{ bytes: createMockPng([30, 80, 120]), mimeType: "image/png", width: 32, height: 32 }],
+			};
+		},
 	});
 	try {
 		let snapshot = await createFlowDocument({ title: "Media provenance" });
 		const nodes: Record<string, string> = {};
 		for (const [key, typeId, config] of [
 			["prompt", "builtin/text", { text: "wired image prompt" }],
+			["negative", "builtin/text", { text: "wired image negative prompt" }],
+			["imageCount", "builtin/number", { value: 2 }],
 			["image", "builtin/text-to-image", { provider, model: "fixture-image", prompt: "fallback" }],
+			["videoNegative", "builtin/text", { text: "wired video negative prompt" }],
+			["videoDuration", "builtin/number", { value: 2_500 }],
 			["video", "builtin/image-to-video", { provider, model: "fixture-video", prompt: "animate the source" }],
 			["output", "builtin/media-output", {}],
 		] as Array<[string, string, Record<string, unknown>]>) {
@@ -133,13 +141,21 @@ test("AI image and video artifacts retain immutable Flow generation provenance",
 		}
 		for (const [sourceNodeId, sourcePort, targetNodeId, targetPort, dataType] of [
 			[nodes.prompt!, "output", nodes.image!, "prompt", "text"],
+			[nodes.negative!, "output", nodes.image!, "negativePrompt", "text"],
+			[nodes.imageCount!, "value", nodes.image!, "count", "number"],
 			[nodes.image!, "image", nodes.video!, "image", "image"],
+			[nodes.videoNegative!, "output", nodes.video!, "negativePrompt", "text"],
+			[nodes.videoDuration!, "value", nodes.video!, "durationMs", "number"],
 			[nodes.video!, "video", nodes.output!, "input", "video"],
 		] as const) {
 			snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId, sourcePort, targetNodeId, targetPort, dataType });
 		}
 		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
 		assert.equal(run.status, "completed", JSON.stringify(run.nodes));
+		assert.deepEqual(mediaRequests.map(({ kind, prompt, negativePrompt, durationMs, count }) => ({ kind, prompt, negativePrompt, durationMs, count })), [
+			{ kind: "imageGeneration", prompt: "wired image prompt", negativePrompt: "wired image negative prompt", durationMs: undefined, count: 2 },
+			{ kind: "videoGeneration", prompt: "animate the source", negativePrompt: "wired video negative prompt", durationMs: 2_500, count: 1 },
+		]);
 		const imageOutput = run.nodes.find(node => node.nodeId === nodes.image)!.output as { image: { artifactId: string } };
 		const videoOutput = run.nodes.find(node => node.nodeId === nodes.video)!.output as { video: { artifactId: string } };
 		const imageArtifact = await getFlowArtifact(imageOutput.image.artifactId);
@@ -155,6 +171,7 @@ test("AI image and video artifacts retain immutable Flow generation provenance",
 		assert.equal(videoProvenance.generationType, "videoGeneration");
 		assert.equal(videoProvenance.prompt, "animate the source");
 		assert.deepEqual(videoProvenance.inputArtifactIds, [imageOutput.image.artifactId]);
+		assert.equal((videoProvenance.request as Record<string, unknown>).durationMs, 2_500);
 		const generated = await listFlowGeneratedArtifacts(snapshot.flow.flowId, 1);
 		assert.equal(generated.total, 2);
 		assert.equal(generated.artifacts.length, 1);
@@ -168,6 +185,46 @@ test("AI image and video artifacts retain immutable Flow generation provenance",
 		assert.equal(inferredProvenance.generationType, "videoGeneration");
 		assert.equal(inferredProvenance.provider, provider);
 		assert.equal(inferredProvenance.model, "fixture-video");
+	} finally {
+		unregisterMediaGenerationAdapter(provider);
+		await resetSessionDatabaseForTests();
+		if (previousProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousProfile;
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("connected media parameters are schema-validated before calling the provider", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "flow-connected-parameter-validation-"));
+	const previousProfile = process.env.USERPROFILE;
+	process.env.USERPROFILE = directory;
+	await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+	const provider = "fixture-connected-parameter-validation";
+	let calls = 0;
+	registerMediaGenerationAdapter({
+		provider,
+		supports: ["videoGeneration"],
+		generate: async request => {
+			calls += 1;
+			return { status: "completed", provider, model: request.model, artifacts: [{ bytes: Buffer.from("video"), mimeType: "video/mp4", width: 64, height: 64 }] };
+		},
+	});
+	try {
+		let snapshot = await createFlowDocument({ title: "Invalid connected parameter" });
+		const nodes: Record<string, string> = {};
+		for (const [key, typeId, config] of [
+			["width", "builtin/number", { value: 0 }],
+			["video", "builtin/text-to-video", { provider, model: "fixture-video", prompt: "test" }],
+		] as Array<[string, string, Record<string, unknown>]>) {
+			const before = new Set(snapshot.nodes.map(node => node.nodeId));
+			snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId, x: 0, y: 0, config });
+			nodes[key] = snapshot.nodes.find(node => !before.has(node.nodeId))!.nodeId;
+		}
+		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: nodes.width!, sourcePort: "value", targetNodeId: nodes.video!, targetPort: "width", dataType: "number" });
+		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(run.status, "failed");
+		assert.equal(calls, 0, "invalid connected values must be rejected before a provider request");
+		assert.match(run.nodes.find(node => node.nodeId === nodes.video)?.error ?? "", /Too small|greater than or equal to/i);
 	} finally {
 		unregisterMediaGenerationAdapter(provider);
 		await resetSessionDatabaseForTests();

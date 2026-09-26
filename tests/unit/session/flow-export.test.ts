@@ -196,8 +196,9 @@ test("Flow Input media is copied into the archive and restored with its node val
 		const restored = await getFlowDocument(snapshot.flow.flowId);
 		assert.deepEqual(restored.nodes.find((item) => item.nodeId === node.nodeId)?.config.defaultValue, ref);
 		assert.deepEqual((await getFlowArtifact(ref.artifactId)).ref, ref);
-		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: restored.flow.graphRevision, mcpHost: {} as McpHost });
+		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: restored.flow.graphRevision, ...selection, mcpHost: {} as McpHost });
 		assert.equal(run.status, "completed", JSON.stringify(run.nodes));
+		assert.equal(run.nodes.some((item) => item.typeId === "builtin/llm"), false);
 		assert.deepEqual(run.nodes.find((item) => item.nodeId === output.nodeId)?.output, { result: ref });
 		const archive = await open(destination, "r+");
 		try {

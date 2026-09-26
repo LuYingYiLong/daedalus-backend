@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { getSessionDatabase, resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
 import { createFlowDocument, createFlowNodeDocument, createFlowEdgeDocument, getFlowRunDocument, listFlowApprovalsDocument } from "../../../src/session/flow-document-store.js";
-import { startFlowRunDocument, resolveFlowRunApproval } from "../../../src/server/flow-runner.js";
+import { startFlowRunDocument, resolveFlowRunApproval, reconcileInterruptedFlowRuns } from "../../../src/server/flow-runner.js";
 import { registerMediaGenerationAdapter, unregisterMediaGenerationAdapter } from "../../../src/providers/media-generation.js";
 import { listFlowBatchItems } from "../../../src/session/flow-batch-store.js";
 import { createMockPng } from "../../../src/providers/mock-image.js";
@@ -16,6 +16,10 @@ import { ensurePluginRuntime, stopAllPluginRuntimes } from "../../../src/plugins
 import { getSandboxAvailability } from "../../../src/mcp/terminal/sandbox-runner.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 import { ImageGenerationError } from "../../../src/providers/image-generation.js";
+import { latestFlowMediaAttempt } from "../../../src/session/flow-media-attempt-store.js";
+import { handleConversationFlowRequest } from "../../../src/server/handlers/conversation-flow-handlers.js";
+import type { ClientRequest } from "../../../src/protocol/types.js";
+import type WebSocket from "ws";
 
 const pluginSandbox = getSandboxAvailability();
 // 插件 Worker 必须运行在 OS sandbox 中，CI runner 不具备该能力时保留为环境跳过，而不是把安全边界误报成业务回归
@@ -45,6 +49,104 @@ async function graph(provider: string, workspaceId?: string, tail = "builtin/med
 		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: ids[i]!, sourcePort, targetNodeId: ids[i+1]!, targetPort, dataType });
 	return { snapshot, ids, start: (forceNodeIds?: string[], runId?: string) => startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost, ...(forceNodeIds ? { forceNodeIds } : {}), ...(runId ? { runId } : {}) }) };
 }
+
+async function singleMediaGraph(provider: string) {
+	let snapshot = await createFlowDocument({ title: "Single media recovery" });
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/text-to-image", config: { provider, model: "fixture", prompt: "test" }, x: 0, y: 0 });
+	const mediaId = snapshot.nodes[0]!.nodeId;
+	snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/media-output", config: {}, x: 400, y: 0 });
+	const outputId = snapshot.nodes.find(node => node.nodeId !== mediaId)!.nodeId;
+	snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: mediaId, sourcePort: "image", targetNodeId: outputId, targetPort: "input", dataType: "image" });
+	return { snapshot, mediaId, outputId };
+}
+
+test("single media submission intent without a Job ID is not resubmitted on restart", async () => fixture(async directory => {
+	let calls = 0;
+	registerMediaGenerationAdapter({ provider: "fixture-single-uncertain", supports: ["imageGeneration"], generate: async () => { calls++; throw new Error("transport lost after submission"); } });
+	try {
+		const graph = await singleMediaGraph("fixture-single-uncertain");
+		const first = await startFlowRunDocument({ flowId: graph.snapshot.flow.flowId, revision: graph.snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(calls, 1);
+		assert.equal((await latestFlowMediaAttempt(first.runId, graph.mediaId))?.status, "uncertain");
+		const db = await getSessionDatabase();
+		db.prepare("UPDATE flow_runs SET status='running',finished_at=NULL WHERE run_id=?").run(first.runId);
+		db.prepare("UPDATE flow_node_runs SET status='running' WHERE run_id=? AND node_id=?").run(first.runId,graph.mediaId);
+		await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+		assert.deepEqual(await reconcileInterruptedFlowRuns(), []);
+		const recovered = await getFlowRunDocument(first.flowId, first.runId);
+		assert.equal(recovered.status, "failed");
+		assert.match(recovered.nodes.find(node => node.nodeId === graph.mediaId)?.error ?? "", /media_submission_uncertain/u);
+		assert.equal(calls, 1);
+		const replies: string[] = [];
+		const socket = { readyState: 1, send: (payload: string): void => { replies.push(payload); } } as unknown as WebSocket;
+		const request = { type: "request", id: "retry-uncertain", method: "flow.run.retry", params: { flowId: first.flowId, runId: first.runId } } as ClientRequest;
+		await handleConversationFlowRequest(socket, request, {} as never, {} as McpHost);
+		assert.equal((JSON.parse(replies[0]!) as { error: { code: string } }).error.code, "flow_paid_retry_confirmation_required");
+		assert.equal(calls, 1);
+	} finally { unregisterMediaGenerationAdapter("fixture-single-uncertain"); }
+}));
+
+test("legacy running media without submission intent is classified as uncertain", async () => fixture(async directory => {
+	const graph = await singleMediaGraph("fixture-legacy-submission");
+	const run = await startFlowRunDocument({ flowId: graph.snapshot.flow.flowId, revision: graph.snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+	const db = await getSessionDatabase();
+	db.prepare("DELETE FROM flow_media_attempts WHERE run_id=? AND node_id=?").run(run.runId, graph.mediaId);
+	db.prepare("UPDATE flow_runs SET status='running',finished_at=NULL WHERE run_id=?").run(run.runId);
+	db.prepare("UPDATE flow_node_runs SET status='running',provider_job_id=NULL WHERE run_id=? AND node_id=?").run(run.runId, graph.mediaId);
+	await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+	assert.deepEqual(await reconcileInterruptedFlowRuns(), []);
+	assert.equal((await latestFlowMediaAttempt(run.runId, graph.mediaId))?.status, "uncertain");
+	assert.match((await getFlowRunDocument(run.flowId, run.runId)).nodes.find(node => node.nodeId === graph.mediaId)?.error ?? "", /media_submission_uncertain/u);
+}));
+
+test("single media with a known Job ID resumes by querying only", async () => fixture(async directory => {
+	let creates = 0; let queryFails = true;
+	registerMediaGenerationAdapter({ provider: "fixture-single-job", supports: ["imageGeneration"], pollIntervalMs: 1,
+		generate: async () => { throw new Error("must query task"); },
+		createTask: async () => { creates++; return { providerJobId: "single-job", status: "running" }; },
+		getTask: async id => { if (queryFails) throw new Error("temporary query outage"); return { providerJobId: id, status: "completed", result: { status: "completed", provider: "fixture-single-job", model: "fixture", artifacts: [{ bytes: createMockPng([60,70,80]), mimeType: "image/png" }] } }; },
+	});
+	try {
+		const graph = await singleMediaGraph("fixture-single-job");
+		const run = await startFlowRunDocument({ flowId: graph.snapshot.flow.flowId, revision: graph.snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(creates,1);
+		const db = await getSessionDatabase();
+		db.prepare("UPDATE flow_runs SET status='running',finished_at=NULL WHERE run_id=?").run(run.runId);
+		db.prepare("UPDATE flow_node_runs SET provider_job_id='single-job',status='running' WHERE run_id=? AND node_id=?").run(run.runId,graph.mediaId);
+		db.prepare("UPDATE flow_node_runs SET status='queued' WHERE run_id=? AND node_id=?").run(run.runId,graph.outputId);
+		await resetSessionDatabaseForTests(join(directory,"sessions.sqlite"));
+		await reconcileInterruptedFlowRuns();
+		queryFails = false;
+		const recovered = await startFlowRunDocument({ flowId: run.flowId, revision: run.revision, runId: run.runId, mcpHost: {} as McpHost });
+		assert.equal(recovered.status,"completed",JSON.stringify(recovered.nodes));
+		assert.equal(creates,1);
+	} finally { unregisterMediaGenerationAdapter("fixture-single-job"); }
+}));
+
+test("saved media result is adopted after restart without resubmission or duplicate artifact", async () => fixture(async directory => {
+	let calls = 0;
+	registerMediaGenerationAdapter({ provider: "fixture-saved-result", supports: ["imageGeneration"], generate: async () => {
+		calls++;
+		return { status: "completed", provider: "fixture-saved-result", model: "fixture", artifacts: [{ bytes: createMockPng([20,80,140]), mimeType: "image/png" }] };
+	} });
+	try {
+		const graph = await singleMediaGraph("fixture-saved-result");
+		const first = await startFlowRunDocument({ flowId: graph.snapshot.flow.flowId, revision: graph.snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(first.status,"completed");
+		const db = await getSessionDatabase();
+		const before = Number((db.prepare("SELECT count(*) AS n FROM flow_artifacts WHERE run_id=?").get(first.runId) as { n: number }).n);
+		db.prepare("UPDATE flow_runs SET status='running',finished_at=NULL WHERE run_id=?").run(first.runId);
+		db.prepare("UPDATE flow_node_runs SET status='running',output_json=NULL WHERE run_id=? AND node_id=?").run(first.runId,graph.mediaId);
+		db.prepare("UPDATE flow_node_runs SET status='queued',output_json=NULL WHERE run_id=? AND node_id=?").run(first.runId,graph.outputId);
+		db.prepare("UPDATE flow_media_attempts SET status='result_ready' WHERE run_id=? AND node_id=?").run(first.runId,graph.mediaId);
+		await resetSessionDatabaseForTests(join(directory,"sessions.sqlite"));
+		await reconcileInterruptedFlowRuns();
+		const recovered = await startFlowRunDocument({ flowId: first.flowId, revision: first.revision, runId: first.runId, mcpHost: {} as McpHost });
+		assert.equal(recovered.status,"completed",JSON.stringify(recovered.nodes));
+		assert.equal(calls,1);
+		assert.equal((await getSessionDatabase()).prepare("SELECT count(*) AS n FROM flow_artifacts WHERE run_id=?").get(first.runId)?.n,before);
+	} finally { unregisterMediaGenerationAdapter("fixture-saved-result"); }
+}));
 
 test("unknown paid submission is retained; only an explicit force resubmits it", async () => fixture(async () => {
 	let calls = 0;
@@ -90,6 +192,7 @@ test("restart resumes a known Provider Job ID without creating another request",
 		db.prepare("UPDATE flow_node_runs SET status='queued' WHERE run_id=? AND node_id=?").run(first.runId, flow.ids[2]!);
 		db.prepare("UPDATE flow_batch_items SET status='running',payload_json=json_set(payload_json,'$.status','running') WHERE run_id=?").run(first.runId);
 		await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+		await reconcileInterruptedFlowRuns();
 		assert.equal((await getFlowRunDocument(flow.snapshot.flow.flowId, first.runId)).status, "queued");
 		failQuery = false;
 		const resumed = await flow.start(undefined, first.runId);

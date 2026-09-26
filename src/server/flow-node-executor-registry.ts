@@ -18,7 +18,10 @@ export type FlowNodeExecutionContext = {
 	mcpHost: McpHost;
 	signal: AbortSignal;
 	force?: boolean;
+	confirmPossibleDuplicateCharge?: boolean;
 	resumeProviderJobId?: string | undefined;
+	onMediaSubmissionStarted?: (() => Promise<void>) | undefined;
+	onMediaResultSaved?: ((output: FlowNodeOutputs) => Promise<void>) | undefined;
 	onPartialFailure?: (count: number) => void;
 	onBatchItem?: ((item: FlowBatchItemRun) => void) | undefined;
 	onProgress?: ((progress: number) => void) | undefined;

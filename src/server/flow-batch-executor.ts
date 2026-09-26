@@ -27,7 +27,7 @@ export async function executeFlowBatch(context: FlowNodeExecutionContext, execut
 						item.output = previous.output; item.status = "completed"; await persist(item); continue;
 					} catch { /* 已清理的产物不能命中缓存 */ }
 				}
-				if (previous !== null && ["submitting", "uncertain"].includes(previous.status) && !previous.providerJobId) {
+			if (previous !== null && ["submitting", "uncertain"].includes(previous.status) && !previous.providerJobId && context.confirmPossibleDuplicateCharge !== true) {
 					item.status = "uncertain"; throw new Error("media_submission_uncertain: explicitly force a new generation to avoid duplicate billing");
 				}
 				context.signal.throwIfAborted();

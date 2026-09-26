@@ -1,5 +1,5 @@
 import { broadcastGlobalEvent } from "./client-connections.js";
-import { getSessionDatabase } from "../session/session-database.js";
+import { getSessionDatabase, runSessionTransaction } from "../session/session-database.js";
 import { processImage, IMAGE_ENGINE_FINGERPRINT } from "../media/image-processing.js";
 import { assertFlowPortValue, FLOW_VALUE_TYPES, type FlowValueType } from "../protocol/flow-value-types.js";
 import { registerComposableExecutors } from "./flow-composable-executors.js";
@@ -20,7 +20,9 @@ import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { createWorkspaceToolCatalog } from "../tools/tool-catalog.js";
 import { dispatchToolCalls, ToolApprovalRequiredError } from "../tools/tool-dispatcher.js";
 import { generateMedia, mediaAdapterFingerprint } from "../providers/media-generation.js";
-import { deleteFlowArtifact, getFlowArtifact, saveFlowArtifact } from "../session/flow-artifact-store.js";
+import { beginFlowMediaAttempt, latestFlowMediaAttempt, setFlowMediaAttemptResult, updateFlowMediaAttempt } from "../session/flow-media-attempt-store.js";
+import { recordFlowRunEvent } from "../session/flow-run-diagnostics.js";
+import { getFlowArtifact, saveFlowArtifact } from "../session/flow-artifact-store.js";
 import {
 	cancelPendingFlowApprovalsDocument,
 	createFlowApprovalDocument,
@@ -45,6 +47,7 @@ import {
 
 type PortOutputs = Record<string, unknown>;
 type NodeInputs = Record<string, unknown>;
+const SINGLE_MEDIA_NODE_TYPES = new Set(["builtin/text-to-image", "builtin/image-to-image", "builtin/text-to-video", "builtin/image-to-video"]);
 export type FlowRunSelection = {
 	entryNodeIds?: readonly string[];
 	targetNodeIds?: readonly string[];
@@ -367,7 +370,7 @@ function parseToolContent(content: string): unknown {
 	try { return JSON.parse(content) as unknown; } catch { return content; }
 }
 
-async function executeMediaNode(params: { resumeProviderJobId?: string | undefined; node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
+async function executeMediaNode(params: { resumeProviderJobId?: string | undefined; onMediaSubmissionStarted?: (() => Promise<void>) | undefined; onMediaResultSaved?: ((output: PortOutputs) => Promise<void>) | undefined; node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; signal: AbortSignal; onProgress?: ((progress: number) => void) | undefined; onProviderJobId?: ((providerJobId: string) => Promise<void> | void) | undefined }): Promise<PortOutputs> {
 	const config = { ...params.node.config };
 	for (const parameter of resolveFlowNodeParameters(params.node)) {
 		if (parameter.mode === "hybrid" && Object.prototype.hasOwnProperty.call(params.inputs, parameter.id))
@@ -405,6 +408,7 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 			const artifact = await getFlowArtifact(ref.artifactId);
 			return { mimeType: artifact.ref.mimeType, bytes: artifact.bytes };
 		}));
+	if (params.resumeProviderJobId === undefined) await params.onMediaSubmissionStarted?.();
 	const result = await generateMedia({
 		kind,
 		provider,
@@ -462,12 +466,15 @@ async function executeMediaNode(params: { resumeProviderJobId?: string | undefin
 					},
 				},
 			} }));
+			await recordFlowRunEvent(params.runId, params.node.nodeId, "artifact_saved", { outputIndex: imageIndex, byteSize: artifact.bytes.byteLength });
 		}
 	} catch (error: unknown) {
-		await Promise.allSettled(refs.map((ref): Promise<void> => deleteFlowArtifact(ref.artifactId)));
+		// Keep already committed files for audit and manual recovery if a later write fails.
 		throw error;
 	}
-	return kind.startsWith("video") ? { video: refs.length === 1 ? refs[0] : refs } : { image: refs[0], images: refs };
+	const output = kind.startsWith("video") ? { video: refs.length === 1 ? refs[0] : refs } : { image: refs[0], images: refs };
+	await params.onMediaResultSaved?.(output);
+	return output;
 }
 
 async function executeToolNode(params: { node: FlowDocumentNode; inputs: NodeInputs; flow: FlowDocument; runId: string; gateway: ApprovalGateway; mcpHost: McpHost; signal: AbortSignal }): Promise<PortOutputs> {
@@ -596,6 +603,7 @@ export async function startFlowRunDocument(params: {
 	forceNodeIds?: readonly string[];
 	forceAllSelected?: boolean;
 	retryFailedItemsOnly?: boolean;
+	confirmPossibleDuplicateCharge?: boolean;
 	entryNodeIds?: readonly string[];
 	targetNodeIds?: readonly string[];
 	inputValues?: Readonly<Record<string, unknown>>;
@@ -697,20 +705,62 @@ export async function startFlowRunDocument(params: {
 							outputs.set(node.nodeId, cached as PortOutputs);
 							await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "cached", inputFingerprint: fingerprintKey, output: cached, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
 							completed.add(node.nodeId);
+							await recordFlowRunEvent(run.runId, node.nodeId, "cache_hit");
 							params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 							return;
 						}
 					}
+					const priorMediaAttempt = SINGLE_MEDIA_NODE_TYPES.has(node.typeId)
+						? await latestFlowMediaAttempt(run.runId, node.nodeId) : null;
+					if (priorMediaAttempt?.output !== null && priorMediaAttempt?.output !== undefined && (priorMediaAttempt.status === "result_ready" || priorMediaAttempt.status === "completed")) {
+						if (priorMediaAttempt.requestFingerprint !== fingerprintKey || !await cachedArtifactsAvailable(priorMediaAttempt.output, params.flowId)) {
+							failed.add(node.nodeId);
+							await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "failed", inputFingerprint: fingerprintKey, error: "media_result_recovery_invalid: Saved media output is missing or changed.", finishedAt: new Date().toISOString() });
+							params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+							return;
+						}
+						outputs.set(node.nodeId, priorMediaAttempt.output);
+						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "completed", inputFingerprint: fingerprintKey, output: priorMediaAttempt.output, finishedAt: new Date().toISOString() });
+						await updateFlowMediaAttempt(priorMediaAttempt, "completed");
+						await recordFlowRunEvent(run.runId, node.nodeId, "recovery_started", { savedResult: true });
+						completed.add(node.nodeId);
+						params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+						return;
+					}
+					const recoverJobId = priorMediaAttempt?.providerJobId ?? run.nodes.find(candidate => candidate.nodeId === node.nodeId)?.providerJobId ?? null;
+					if ((priorMediaAttempt?.status === "submitting" || priorMediaAttempt?.status === "uncertain") && priorMediaAttempt.providerJobId === null && !force.has(node.nodeId)) {
+						failed.add(node.nodeId);
+						await updateFlowMediaAttempt(priorMediaAttempt, "uncertain");
+						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "failed", inputFingerprint: fingerprintKey, error: "media_submission_uncertain: The previous paid submission may have succeeded. Force retry to submit again.", finishedAt: new Date().toISOString() });
+						params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
+						return;
+					}
+					if (recoverJobId && priorMediaAttempt?.requestFingerprint && priorMediaAttempt.requestFingerprint !== fingerprintKey)
+						throw new Error("media_recovery_fingerprint_changed");
+					let mediaAttempt = SINGLE_MEDIA_NODE_TYPES.has(node.typeId)
+						? recoverJobId && priorMediaAttempt?.requestFingerprint === fingerprintKey
+							? priorMediaAttempt : null
+						: null;
+					if (SINGLE_MEDIA_NODE_TYPES.has(node.typeId) && recoverJobId && mediaAttempt === null) {
+						mediaAttempt = await beginFlowMediaAttempt(run.runId, node.nodeId, fingerprintKey);
+						mediaAttempt.providerJobId = recoverJobId;
+						await updateFlowMediaAttempt(mediaAttempt, "running", recoverJobId);
+					}
 					const startedAt = new Date().toISOString();
 					await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "running", inputFingerprint: fingerprintKey, startedAt });
+					await recordFlowRunEvent(run.runId, node.nodeId, "started");
+					if (recoverJobId) await recordFlowRunEvent(run.runId, node.nodeId, "polling");
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 					try {
-						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal, force: params.forceNodeIds?.includes(node.nodeId) === true && params.retryFailedItemsOnly !== true, onPartialFailure: () => { partial.add(node.nodeId); }, onBatchItem: params.onBatchItem, onProgress: (progress): void => params.onNodeProgress?.(run.runId, node.nodeId, progress), onProviderJobId: (providerJobId): Promise<void> => updateFlowNodeProviderJobIdDocument(params.flowId, run.runId, node.nodeId, providerJobId) });
+						const output = await executeRegisteredFlowNode({ node, inputs: collected.inputs, runInputs: run.inputValues, flow: graph.flow, runId: run.runId, gateway, mcpHost: params.mcpHost, signal: controller.signal, force: params.forceNodeIds?.includes(node.nodeId) === true && params.retryFailedItemsOnly !== true, confirmPossibleDuplicateCharge: params.confirmPossibleDuplicateCharge === true, ...(mediaAttempt?.providerJobId ? { resumeProviderJobId: mediaAttempt.providerJobId } : {}), ...(SINGLE_MEDIA_NODE_TYPES.has(node.typeId) ? { onMediaSubmissionStarted: async (): Promise<void> => { mediaAttempt = await beginFlowMediaAttempt(run.runId, node.nodeId, fingerprintKey); if (mediaAttempt.attempt > 1) await recordFlowRunEvent(run.runId,node.nodeId,"retry",{ attempt: mediaAttempt.attempt }); await recordFlowRunEvent(run.runId,node.nodeId,"submission_started",{ attempt: mediaAttempt.attempt }); }, onMediaResultSaved: async (savedOutput): Promise<void> => { if (mediaAttempt) await setFlowMediaAttemptResult(mediaAttempt, savedOutput); } } : {}), onPartialFailure: () => { partial.add(node.nodeId); }, onBatchItem: params.onBatchItem, onProgress: (progress): void => params.onNodeProgress?.(run.runId, node.nodeId, progress), onProviderJobId: async (providerJobId): Promise<void> => { await updateFlowNodeProviderJobIdDocument(params.flowId, run.runId, node.nodeId, providerJobId); if (mediaAttempt) { mediaAttempt.providerJobId = providerJobId; mediaAttempt.status = "running"; await updateFlowMediaAttempt(mediaAttempt, "running", providerJobId); await recordFlowRunEvent(run.runId,node.nodeId,"provider_job_acquired",{ attempt: mediaAttempt.attempt }); if (!recoverJobId) await recordFlowRunEvent(run.runId,node.nodeId,"polling"); } } });
 						outputs.set(node.nodeId, output);
 						await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: partial.has(node.nodeId) ? "partial_failure" : "completed", error: partial.has(node.nodeId) ? "Some batch items failed. Successful results were retained." : null, inputFingerprint: fingerprintKey, output, startedAt, finishedAt: new Date().toISOString() }); completed.add(node.nodeId);
+						await recordFlowRunEvent(run.runId,node.nodeId,"completed");
+						if (mediaAttempt) await updateFlowMediaAttempt(mediaAttempt, "completed", mediaAttempt.providerJobId);
 					} catch (nodeError: unknown) {
+						if (mediaAttempt && mediaAttempt.status !== "result_ready" && mediaAttempt.status !== "completed") await updateFlowMediaAttempt(mediaAttempt, mediaAttempt.providerJobId === null ? "uncertain" : "failed", mediaAttempt.providerJobId);
 						if (nodeError instanceof ToolApprovalRequiredError) { await createFlowApprovalDocument({ flowId: params.flowId, runId: run.runId, nodeId: node.nodeId, pending: nodeError.pendingApproval }); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "waiting", inputFingerprint: fingerprintKey, startedAt }); waiting.add(node.nodeId); }
-						else { if (controller.signal.aborted) throw nodeError; failed.add(node.nodeId); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "failed", inputFingerprint: fingerprintKey, error: nodeError instanceof Error ? nodeError.message : String(nodeError), startedAt, finishedAt: new Date().toISOString() }); }
+						else { if (controller.signal.aborted) throw nodeError; failed.add(node.nodeId); await updateFlowNodeRunDocument(params.flowId, run.runId, node.nodeId, { status: "failed", inputFingerprint: fingerprintKey, error: nodeError instanceof Error ? nodeError.message : String(nodeError), startedAt, finishedAt: new Date().toISOString() }); await recordFlowRunEvent(run.runId,node.nodeId,"failed"); }
 					}
 					params.onNodeState?.(await getFlowRunDocument(params.flowId, run.runId), node.nodeId);
 				}));
@@ -759,9 +809,53 @@ export async function resolveFlowRunApproval(params: { flowId: string; runId: st
 	return startFlowRunDocument({ flowId: params.flowId, revision: graph.flow.graphRevision, runId: params.runId, mcpHost: params.mcpHost });
 }
 
-export async function recoverFlowMediaRuns(mcpHost: McpHost): Promise<void> {
+export async function reconcileInterruptedFlowRuns(): Promise<Array<{ run_id: string; flow_id: string; revision: number }>> {
 	const db = await getSessionDatabase();
-	const runs = db.prepare("SELECT run_id,flow_id,revision FROM flow_runs WHERE status='queued' AND run_id IN (SELECT run_id FROM flow_batch_items)").all() as Array<{ run_id: string; flow_id: string; revision: number }>;
+	const active = db.prepare("SELECT run_id,flow_id,revision,status FROM flow_runs WHERE status IN ('queued','running','waiting')").all() as Array<{ run_id: string; flow_id: string; revision: number; status: string }>;
+	const runs: Array<{ run_id: string; flow_id: string; revision: number }> = [];
+	runSessionTransaction(db, (): void => {
+		for (const run of active) {
+			const nodes = db.prepare("SELECT nr.node_id,nr.type_id,nr.status,nr.provider_job_id,nr.input_fingerprint FROM flow_node_runs nr WHERE nr.run_id=?").all(run.run_id) as Array<{ node_id: string; type_id: string; status: string; provider_job_id: string | null; input_fingerprint: string | null }>;
+			const hasPendingApproval = db.prepare("SELECT 1 FROM flow_approvals WHERE run_id=? AND status='pending' LIMIT 1").get(run.run_id) !== undefined;
+			if (run.status === "waiting" && hasPendingApproval) continue;
+			let resumable = false;
+			for (const node of nodes) {
+				if (node.status === "queued") { resumable = true; continue; }
+				if (node.status !== "running" && node.status !== "waiting") continue;
+				const batch = node.type_id === "builtin/batch-text-to-image" || node.type_id === "builtin/batch-image-to-image";
+				const attempt = db.prepare("SELECT attempt,status,provider_job_id FROM flow_media_attempts WHERE run_id=? AND node_id=? ORDER BY attempt DESC LIMIT 1").get(run.run_id,node.node_id) as { attempt: number; status: string; provider_job_id: string | null } | undefined;
+				const jobId = attempt?.provider_job_id ?? node.provider_job_id;
+					const canResume = batch || SINGLE_MEDIA_NODE_TYPES.has(node.type_id) && (jobId !== null || attempt?.status === "result_ready" || attempt?.status === "completed");
+				if (canResume) {
+					if (jobId !== null && node.provider_job_id === null) db.prepare("UPDATE flow_node_runs SET provider_job_id=? WHERE run_id=? AND node_id=?").run(jobId,run.run_id,node.node_id);
+					db.prepare("UPDATE flow_node_runs SET status='queued' WHERE run_id=? AND node_id=?").run(run.run_id,node.node_id);
+					resumable = true;
+				} else {
+					const message = SINGLE_MEDIA_NODE_TYPES.has(node.type_id) && jobId === null
+						? "media_submission_uncertain: The paid submission may have succeeded. Explicitly retry to submit again."
+						: jobId !== null ? "media_task_recovery_unsupported: Provider task cannot be queried." : "Flow node was interrupted before the backend restarted.";
+					db.prepare("UPDATE flow_node_runs SET status='failed',error=?,finished_at=? WHERE run_id=? AND node_id=?").run(message,new Date().toISOString(),run.run_id,node.node_id);
+					if (attempt && jobId === null) db.prepare("UPDATE flow_media_attempts SET status='uncertain',updated_at=? WHERE run_id=? AND node_id=? AND attempt=?").run(new Date().toISOString(),run.run_id,node.node_id,attempt.attempt);
+					else if (!attempt && SINGLE_MEDIA_NODE_TYPES.has(node.type_id) && jobId === null) {
+						const now = new Date().toISOString();
+						db.prepare("INSERT INTO flow_media_attempts(run_id,node_id,attempt,request_fingerprint,status,provider_job_id,created_at,updated_at) VALUES(?,?,1,?,'uncertain',NULL,?,?)").run(run.run_id,node.node_id,node.input_fingerprint ?? "legacy-unknown",now,now);
+					}
+				}
+			}
+			if (resumable) {
+				db.prepare("UPDATE flow_runs SET status='queued',error=NULL,finished_at=NULL WHERE run_id=?").run(run.run_id);
+				runs.push(run);
+			} else {
+				const failed = db.prepare("SELECT 1 FROM flow_node_runs WHERE run_id=? AND status='failed' LIMIT 1").get(run.run_id) !== undefined;
+				db.prepare("UPDATE flow_runs SET status=?,error=?,finished_at=? WHERE run_id=?").run(failed ? "failed" : "completed",failed ? "Flow run was interrupted; review failed nodes before retrying." : null,new Date().toISOString(),run.run_id);
+			}
+		}
+	});
+	return runs;
+}
+
+export async function recoverFlowMediaRuns(mcpHost: McpHost): Promise<void> {
+	const runs = await reconcileInterruptedFlowRuns();
 	for (const run of runs) {
 		void startFlowRunDocument({ flowId: run.flow_id, revision: run.revision, runId: run.run_id, mcpHost,
  onBatchItem: item => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),

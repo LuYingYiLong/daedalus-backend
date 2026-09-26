@@ -27,11 +27,15 @@ import {
 import { getFlowTreeOrder, updateFlowTreeOrder, type FlowTreeOrderInventory } from "../../session/flow-tree-order-store.js";
 import { createSession, getStoredSessionMetadata, openSession, saveSession, type SessionMetadata } from "../../session/session-store.js";
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
-import { cleanupFlowArtifacts, deleteFlowArtifact, exportFlowArtifacts, getFlowArtifact, importFlowInputArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
+import { auditFlowArtifacts, cleanupFlowArtifacts, exportFlowArtifacts, flowArtifactUsage, getFlowArtifact, getFlowArtifactReference, importFlowInputArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
+import { getFlowRunReport } from "../../session/flow-run-diagnostics.js";
+import { latestFlowMediaAttempt } from "../../session/flow-media-attempt-store.js";
+import { listFlowBatchItems } from "../../session/flow-batch-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
 import { getClientConnection, broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
 import { listFlowNodeTypeDefinitions } from "../flow-node-registry.js";
+import { preflightFlowRun } from "../flow-preflight.js";
 import { getActiveFlowRunIdDocument, prepareFlowRunDocument, resolveFlowRunApproval, startFlowRunDocument, stopFlowRunDocument } from "../flow-runner.js";
 import { sendJson } from "../send-json.js";
 
@@ -51,11 +55,15 @@ type FlowRequestMethod =
 	| "flow.approval.list"
 	| "flow.approval.resolve"
 	| "flow.run.start"
+	| "flow.run.preflight"
 	| "flow.run.stop"
 	| "flow.run.retry"
 	| "flow.run.get"
 	| "flow.run.list"
+	| "flow.run.report"
 	| "flow.artifact.list"
+	| "flow.artifact.usage"
+	| "flow.artifact.health"
 	| "flow.artifact.import"
 	| "flow.artifact.get"
 	| "flow.artifact.preview"
@@ -67,6 +75,7 @@ type FlowRequestMethod =
 	| "flow.import.fromSession"
 	| "flow.import"
 	| "flow.export"
+	| "flow.transfer.cancel"
 	| "flow.export.toSession";
 
 type FlowRequest = Extract<ClientRequest, { method: FlowRequestMethod }>;
@@ -81,6 +90,29 @@ async function loadFlowTreeOrderInventory(): Promise<FlowTreeOrderInventory> {
 
 function flowError(code: string, message: string): Error & { code: string } {
 	return Object.assign(new Error(message), { code });
+}
+
+const activeTransfers = new Map<string, { socket: WebSocket; controller: AbortController }>();
+
+async function runFlowTransfer<T>(socket: WebSocket, operationId: string | undefined, action: (signal: AbortSignal) => Promise<T>): Promise<T> {
+	if (operationId !== undefined && activeTransfers.has(operationId)) throw flowError("flow_transfer_busy", "This Flow transfer is already running.");
+	const controller = new AbortController();
+	if (operationId !== undefined) activeTransfers.set(operationId, { socket, controller });
+	try {
+		return await action(controller.signal);
+	} catch (error: unknown) {
+		if (controller.signal.aborted) throw flowError("flow_transfer_cancelled", "Flow transfer was cancelled.");
+		throw error;
+	} finally {
+		if (operationId !== undefined) activeTransfers.delete(operationId);
+	}
+}
+
+async function scopedArtifact(flowId: string, artifactId: string, maxBytes: number): Promise<Awaited<ReturnType<typeof getFlowArtifactReference>>> {
+	const ref = await getFlowArtifactReference(artifactId);
+	if (ref.flowId !== flowId) throw flowError("flow_artifact_scope_invalid", "Artifact does not belong to this Flow.");
+	if (ref.byteSize > maxBytes) throw flowError("flow_artifact_rpc_too_large", "This artifact is too large for a single RPC response. Use the media preview or export it to a file.");
+	return ref;
 }
 
 function errorCode(error: unknown): string {
@@ -139,10 +171,10 @@ async function importFlowFromSessionDocument(params: Extract<FlowRequest, { meth
 	return current;
 }
 
-async function importFlowDocumentFromSqlite(socket: WebSocket, params: Extract<FlowRequest, { method: "flow.import" }>["params"]): Promise<unknown> {
+async function importFlowDocumentFromSqlite(socket: WebSocket, params: Extract<FlowRequest, { method: "flow.import" }>["params"], signal?: AbortSignal): Promise<unknown> {
 	if (getClientConnection(socket)?.clientType !== "studio") throw flowError("studio_only", "flow.import is only available to Daedalus Studio.");
 	const workspaces = loadWorkspaces();
-	const imported = await importFlowFromSqlite(params.sourcePath, { validWorkspaceIds: new Set(workspaces.map(workspace => workspace.id)) });
+	const imported = await importFlowFromSqlite(params.sourcePath, { validWorkspaceIds: new Set(workspaces.map(workspace => workspace.id)), ...(signal === undefined ? {} : { signal }) });
 	const snapshot = await getFlowDocument(imported.flowId, imported.archived);
 	return { ...imported, flow: snapshot.flow };
 }
@@ -243,9 +275,17 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		case "flow.approval.resolve":
 			result = await resolveFlowRunApproval({ ...flowRequest.params, mcpHost });
 			break;
+		case "flow.run.preflight":
+			result = await preflightFlowRun({ flowId: flowRequest.params.flowId, revision: flowRequest.params.revision, selection: { ...(flowRequest.params.entryNodeIds === undefined ? {} : { entryNodeIds: flowRequest.params.entryNodeIds }), ...(flowRequest.params.targetNodeIds === undefined ? {} : { targetNodeIds: flowRequest.params.targetNodeIds }), ...(flowRequest.params.inputValues === undefined ? {} : { inputValues: flowRequest.params.inputValues }) }, requireOutputTargets: true });
+			break;
 		case "flow.run.start": {
 			const activeRunId = getActiveFlowRunIdDocument(flowRequest.params.flowId);
 			if (activeRunId !== null) throw Object.assign(new Error("Another Flow run is active."), { code: "flow_busy", activeRunId });
+			const preflight = await preflightFlowRun({ flowId: flowRequest.params.flowId, revision: flowRequest.params.revision, selection: { ...(flowRequest.params.entryNodeIds === undefined ? {} : { entryNodeIds: flowRequest.params.entryNodeIds }), ...(flowRequest.params.targetNodeIds === undefined ? {} : { targetNodeIds: flowRequest.params.targetNodeIds }), ...(flowRequest.params.inputValues === undefined ? {} : { inputValues: flowRequest.params.inputValues }) }, requireOutputTargets: true });
+			if (preflight.blockers.length > 0) {
+				const first = preflight.blockers[0]!;
+				throw Object.assign(new Error(first.message), { code: first.code, nodeId: first.nodeId, blockers: preflight.blockers });
+			}
 			const plan = await prepareFlowRunDocument({
 				flowId: flowRequest.params.flowId,
 				revision: flowRequest.params.revision,
@@ -293,15 +333,27 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			break;
 		case "flow.run.retry": {
 			const previous = await getFlowRunDocument(flowRequest.params.flowId, flowRequest.params.runId);
+			const uncertainMedia = (await Promise.all(previous.nodes.map((node) => latestFlowMediaAttempt(previous.runId, node.nodeId))))
+				.some((attempt) => attempt !== null && attempt.status === "uncertain" && attempt.providerJobId === null);
+			const uncertainBatch = (await listFlowBatchItems(previous.runId))
+				.some((item) => item.status === "uncertain" && item.providerJobId === null);
+			if ((uncertainMedia || uncertainBatch) && flowRequest.params.confirmPossibleDuplicateCharge !== true)
+				throw flowError("flow_paid_retry_confirmation_required", "A paid generation may already have been submitted. Confirm the risk of a duplicate charge before retrying.");
 			const revision = (await getFlowDocument(flowRequest.params.flowId)).flow.graphRevision;
+			const retrySelection = {
+				...(previous.entryNodeIds.length === 0 ? {} : { entryNodeIds: previous.entryNodeIds }),
+				...(previous.targetNodeIds.length === 0 ? {} : { targetNodeIds: previous.targetNodeIds }),
+				inputValues: previous.inputValues,
+			};
+			const preflight = await preflightFlowRun({ flowId: flowRequest.params.flowId, revision, selection: retrySelection, requireOutputTargets: true });
+			if (preflight.blockers.length > 0) {
+				const first = preflight.blockers[0]!;
+				throw Object.assign(new Error(first.message), { code: first.code, nodeId: first.nodeId, blockers: preflight.blockers });
+			}
 			const plan = await prepareFlowRunDocument({
 				flowId: flowRequest.params.flowId,
 				revision,
-				selection: {
-					...(previous.entryNodeIds.length === 0 ? {} : { entryNodeIds: previous.entryNodeIds }),
-					...(previous.targetNodeIds.length === 0 ? {} : { targetNodeIds: previous.targetNodeIds }),
-					inputValues: previous.inputValues,
-				},
+				selection: retrySelection,
 				requireOutputTargets: true,
 			});
 			result = await createFlowRunDocument(
@@ -316,6 +368,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				revision,
 				runId: retryRunId,
 				retryFailedItemsOnly: true,
+				confirmPossibleDuplicateCharge: flowRequest.params.confirmPossibleDuplicateCharge === true,
 				mcpHost,
 				...(flowRequest.params.nodeId === undefined ? {} : { forceNodeIds: [flowRequest.params.nodeId] }),
 				onBatchItem: (item): void => broadcastGlobalEvent(item.runId, "flow.batch.item.state", item),
@@ -341,6 +394,15 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		case "flow.run.list":
 			result = await listFlowRunsDocument(flowRequest.params.flowId, flowRequest.params.limit ?? 20);
 			break;
+		case "flow.run.report":
+			result = await getFlowRunReport(flowRequest.params.flowId, flowRequest.params.runId);
+			break;
+		case "flow.artifact.usage":
+			result = await flowArtifactUsage(flowRequest.params.flowId);
+			break;
+		case "flow.artifact.health":
+			result = await auditFlowArtifacts(flowRequest.params.flowId);
+			break;
 		case "flow.artifact.list":
 			result = flowRequest.params.aiGeneratedOnly === true
 				? await listFlowGeneratedArtifacts(flowRequest.params.flowId, flowRequest.params.limit ?? 3)
@@ -356,18 +418,21 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			break;
 		}
 		case "flow.artifact.get": {
-				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
-				result = { ref: artifact.ref, ...(flowRequest.params.includeData === true ? { dataBase64: artifact.bytes.toString("base64") } : {}) };
+				const ref = await scopedArtifact(flowRequest.params.flowId, flowRequest.params.artifactId, flowRequest.params.includeData === true ? 16 * 1024 * 1024 : Number.MAX_SAFE_INTEGER);
+				result = flowRequest.params.includeData === true ? { ref, dataBase64: (await getFlowArtifact(ref.artifactId)).bytes.toString("base64") } : { ref };
 				break;
 			}
 		case "flow.artifact.thumbnail": {
+			await scopedArtifact(flowRequest.params.flowId, flowRequest.params.artifactId, 64 * 1024 * 1024);
 			const artifact = await getFlowArtifact(flowRequest.params.artifactId);
+			if (!artifact.ref.mimeType.startsWith("image/")) throw flowError("flow_artifact_thumbnail_unsupported", "Only image artifacts can be resized as thumbnails.");
 			const thumbnail = await processImage(artifact.bytes, { kind: "resize", width: 256, height: 256, fit: "contain" }, AbortSignal.timeout(60000));
 			result = { ref: artifact.ref, dataBase64: thumbnail.bytes.toString("base64") };
 			break;
 		}
 		case "flow.artifact.preview":
 		case "flow.artifact.download": {
+				await scopedArtifact(flowRequest.params.flowId, flowRequest.params.artifactId, 16 * 1024 * 1024);
 				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
 				result = { ref: artifact.ref, dataBase64: artifact.bytes.toString("base64") };
 				break;
@@ -377,22 +442,29 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			result = await exportFlowArtifacts(flowRequest.params);
 			break;
 		case "flow.artifact.delete":
-			await deleteFlowArtifact(flowRequest.params.artifactId);
-			result = { deleted: true };
-			break;
+			throw flowError("flow_artifact_cleanup_required", "Review the affected runs and artifacts before deleting Flow media.");
 		case "flow.artifact.cleanup":
-			result = { removed: await cleanupFlowArtifacts(flowRequest.params.flowId, flowRequest.params.keepRunIds ?? []) };
+			if (getClientConnection(socket)?.clientType !== "studio") throw flowError("studio_only", "Flow artifact cleanup requires Daedalus Studio.");
+			result = await cleanupFlowArtifacts({ flowId: flowRequest.params.flowId, runIds: flowRequest.params.runIds, dryRun: flowRequest.params.dryRun, ...(flowRequest.params.expectedArtifactIds === undefined ? {} : { expectedArtifactIds: flowRequest.params.expectedArtifactIds }) });
 			break;
 		case "flow.import.fromSession":
 			result = await importFlowFromSessionDocument(flowRequest.params);
 			break;
 		case "flow.import":
-			result = await importFlowDocumentFromSqlite(socket, flowRequest.params);
+			result = await runFlowTransfer(socket, flowRequest.params.operationId, (signal) => importFlowDocumentFromSqlite(socket, flowRequest.params, signal));
 			break;
 		case "flow.export":
 			if (getClientConnection(socket)?.clientType !== "studio") throw Object.assign(new Error("flow.export is only available to Daedalus Studio."), { code: "studio_only" });
-			result = await exportFlowToSqlite(flowRequest.params.flowId, flowRequest.params.destinationPath);
+			result = await runFlowTransfer(socket, flowRequest.params.operationId, (signal) => exportFlowToSqlite(flowRequest.params.flowId, flowRequest.params.destinationPath, { signal }));
 			break;
+		case "flow.transfer.cancel": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw flowError("studio_only", "Flow transfer cancellation requires Daedalus Studio.");
+			const transfer = activeTransfers.get(flowRequest.params.operationId);
+			if (transfer === undefined || transfer.socket !== socket) throw flowError("flow_transfer_not_found", "Flow transfer is no longer active.");
+			transfer.controller.abort();
+			result = { cancelled: true };
+			break;
+		}
 		case "flow.export.toSession":
 			result = await exportFlowToSessionDocument(flowRequest.params);
 			break;

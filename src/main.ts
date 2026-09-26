@@ -1,4 +1,5 @@
 import { recoverFlowMediaRuns } from "./server/flow-runner.js";
+import { auditFlowArtifacts, flowArtifactUsage } from "./session/flow-artifact-store.js";
 import type WebSocket from "ws";
 import type { WebSocketServer } from "ws";
 import { markActiveAgentGoalsPaused } from "./session/agent-goal-store.js";
@@ -127,6 +128,14 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 		throw new Error(`Daedalus backend could not listen on 127.0.0.1:${port}: ${message}`);
 	}
 	await recoverFlowMediaRuns(mcpHost);
+	void (async (): Promise<void> => {
+		const health = await auditFlowArtifacts();
+		if (health.issues.length > 0 || health.stagingFiles > 0) logger.warn("flow", "startup_artifact_audit", { checked: health.checked, issues: health.issues, stagingFiles: health.stagingFiles });
+		const usage = await flowArtifactUsage();
+		if (usage.warning) logger.warn("flow", "artifact_storage_low", usage);
+	})().catch((error: unknown): void => {
+		logger.warn("flow", "startup_artifact_audit_failed", { error: error instanceof Error ? error.message : String(error) });
+	});
 	const runtimeConnectionId: string | null =
 		process.env[BACKEND_CONNECTION_ID_ENV]?.trim() || null;
 	const runtimeAuthToken: string | null =

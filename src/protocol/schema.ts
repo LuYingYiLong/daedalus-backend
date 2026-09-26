@@ -1869,6 +1869,18 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.run.preflight"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			revision: z.number().int().positive(),
+			entryNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
+			targetNodeIds: z.array(flowIdentifierSchema).min(1).max(2_000).optional(),
+			inputValues: z.record(flowIdentifierSchema, z.unknown()).optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.run.start"),
 		params: z.object({
 			flowId: flowIdentifierSchema,
@@ -1890,7 +1902,7 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.run.retry"),
-		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema, nodeId: flowIdentifierSchema.optional() }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema, nodeId: flowIdentifierSchema.optional(), confirmPossibleDuplicateCharge: z.boolean().optional() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
@@ -1901,8 +1913,26 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.run.report"),
+		params: z.object({ flowId: flowIdentifierSchema, runId: flowIdentifierSchema }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.run.list"),
 		params: z.object({ flowId: flowIdentifierSchema, limit: z.number().int().min(1).max(100).optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.usage"),
+		params: z.object({ flowId: flowIdentifierSchema.optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.health"),
+		params: z.object({ flowId: flowIdentifierSchema.optional() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
@@ -1930,25 +1960,25 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.get"),
-		params: z.object({ artifactId: flowIdentifierSchema, includeData: z.boolean().optional() }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, artifactId: flowIdentifierSchema, includeData: z.boolean().optional() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.preview"),
-		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, artifactId: flowIdentifierSchema }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.thumbnail"),
-		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, artifactId: flowIdentifierSchema }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.download"),
-		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, artifactId: flowIdentifierSchema }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
@@ -1965,13 +1995,13 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.delete"),
-		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, artifactId: flowIdentifierSchema }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.artifact.cleanup"),
-		params: z.object({ flowId: flowIdentifierSchema, keepRunIds: z.array(flowIdentifierSchema).max(100).optional() }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, runIds: z.array(flowIdentifierSchema).min(1).max(100), dryRun: z.boolean(), expectedArtifactIds: z.array(flowIdentifierSchema).max(10000).optional() }).strict().refine((value) => value.dryRun || value.expectedArtifactIds !== undefined, { message: "Cleanup requires an explicit artifact preview." }),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
@@ -1983,13 +2013,19 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.import"),
-		params: z.object({ sourcePath: z.string().trim().min(1).max(32768) }).strict(),
+		params: z.object({ sourcePath: z.string().trim().min(1).max(32768), operationId: z.string().uuid().optional() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.export"),
-		params: z.object({ flowId: flowIdentifierSchema, destinationPath: z.string().trim().min(1).max(32768) }).strict(),
+		params: z.object({ flowId: flowIdentifierSchema, destinationPath: z.string().trim().min(1).max(32768), operationId: z.string().uuid().optional() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.transfer.cancel"),
+		params: z.object({ operationId: z.string().uuid() }).strict(),
 	}).strict(),
 	z.object({
 		type: z.literal("request"),

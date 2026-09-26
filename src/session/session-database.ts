@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 29;
+const DB_SCHEMA_VERSION: number = 31;
 const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
@@ -618,9 +618,10 @@ function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/
 				(row): string => row.session_id,
 			);
 		db.exec("PRAGMA foreign_keys = OFF");
-		db.exec(`
+			db.exec(`
 			DROP TABLE IF EXISTS flow_video_saves;
 			DROP TABLE IF EXISTS flow_image_saves;
+			DROP TABLE IF EXISTS flow_media_attempts;
 			DROP TABLE IF EXISTS flow_batch_items;
 			DROP TABLE IF EXISTS flow_node_run_events;
 			DROP TABLE IF EXISTS flow_artifacts;
@@ -687,6 +688,9 @@ function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/
 		db.exec("UPDATE flow_documents SET revision = revision + 1, graph_revision = graph_revision + 1 WHERE flow_id IN (SELECT DISTINCT flow_id FROM flow_nodes)");
 	}
 	db.exec(`CREATE TABLE IF NOT EXISTS flow_batch_items(run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, item_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, request_fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(run_id,node_id,item_id)); CREATE INDEX IF NOT EXISTS idx_flow_batch_cache ON flow_batch_items(flow_id,node_id,item_id,request_fingerprint,updated_at);`);
+	db.exec(`CREATE TABLE IF NOT EXISTS flow_media_attempts(run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, attempt INTEGER NOT NULL, request_fingerprint TEXT NOT NULL, status TEXT NOT NULL, provider_job_id TEXT, output_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(run_id,node_id,attempt)); CREATE INDEX IF NOT EXISTS idx_flow_media_attempts_run ON flow_media_attempts(run_id,node_id,status);`);
+	const flowAttemptColumns = new Set((db.prepare("PRAGMA table_info(flow_media_attempts)").all() as Array<{ name: string }>).map(column => column.name));
+	if (!flowAttemptColumns.has("output_json")) db.exec("ALTER TABLE flow_media_attempts ADD COLUMN output_json TEXT");
 	db.exec("CREATE TABLE IF NOT EXISTS flow_image_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
 	db.exec("CREATE TABLE IF NOT EXISTS flow_video_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
 	const currentFlowNodeColumns = db.prepare("PRAGMA table_info(flow_nodes)").all() as Array<{ name: string }>;
@@ -697,20 +701,6 @@ function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/
 	if (!flowRunColumns.has("target_node_ids_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN target_node_ids_json TEXT NOT NULL DEFAULT '[]'");
 	if (!flowRunColumns.has("input_values_json")) db.exec("ALTER TABLE flow_runs ADD COLUMN input_values_json TEXT NOT NULL DEFAULT '{}'");
 	db.exec("UPDATE flow_nodes SET config_json = json_remove(config_json, '$.required') WHERE type_id = 'builtin/flow-input' AND json_type(config_json, '$.required') IS NOT NULL");
-	db.exec(`
-		CREATE TEMP TABLE recoverable_flow_runs AS SELECT DISTINCT r.run_id FROM flow_runs r JOIN flow_batch_items b ON b.run_id=r.run_id WHERE r.status IN ('queued','running') AND b.status IN ('running','submitting') AND json_extract(b.payload_json,'$.providerJobId') IS NOT NULL;
-		UPDATE flow_node_runs
-		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-		WHERE status IN ('queued', 'running', 'waiting')
-			AND NOT (run_id IN (SELECT run_id FROM recoverable_flow_runs) AND (status='queued' OR node_id IN (SELECT node_id FROM flow_batch_items WHERE flow_batch_items.run_id=flow_node_runs.run_id)))
-			AND run_id IN (SELECT run_id FROM flow_runs WHERE status IN ('queued', 'running', 'waiting'));
-		UPDATE flow_runs
-		SET status = 'failed', error = COALESCE(error, 'Flow run was interrupted before the backend restarted.'), finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-		WHERE status IN ('queued', 'running', 'waiting') AND run_id NOT IN (SELECT run_id FROM recoverable_flow_runs);
-		UPDATE flow_node_runs SET status='queued' WHERE run_id IN (SELECT run_id FROM recoverable_flow_runs) AND status IN ('running','waiting');
-		UPDATE flow_runs SET status='queued' WHERE run_id IN (SELECT run_id FROM recoverable_flow_runs);
-		DROP TABLE recoverable_flow_runs;
-	`);
 	const selectionAskMessageColumns = db.prepare("PRAGMA table_info(selection_ask_messages)").all() as Record<string, unknown>[];
 	if (!selectionAskMessageColumns.some((column: Record<string, unknown>): boolean => String(column.name) === "error_message")) {
 		db.exec("ALTER TABLE selection_ask_messages ADD COLUMN error_message TEXT");

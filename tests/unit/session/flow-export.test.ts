@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,11 +8,14 @@ import sharp from "sharp";
 import { getDaedalusPath } from "../../../src/app-paths.js";
 import { createFlowDocument, createFlowNodeDocument, createFlowEdgeDocument, updateFlowNodeDocument, commitFlowOperationsDocument, getFlowDocument, createFlowRunDocument, updateFlowRunDocument } from "../../../src/session/flow-document-store.js";
 import { getSessionDatabase, resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
-import { exportFlowArtifacts, getFlowArtifact, importFlowInputArtifact, saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
+import { auditFlowArtifacts, cleanupFlowArtifacts, exportFlowArtifacts, flowArtifactUsage, getFlowArtifact, importFlowInputArtifact, saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
 import { exportFlowToSqlite } from "../../../src/session/flow-export.js";
 import { importFlowFromSqlite } from "../../../src/session/flow-import.js";
+import { extractFlowArchiveSlice, FLOW_ARCHIVE_HEADER_BYTES, readFlowArchiveHeader } from "../../../src/session/flow-archive-format.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
+import { preflightFlowRun } from "../../../src/server/flow-preflight.js";
+import { getFlowRunReport, recordFlowRunEvent } from "../../../src/session/flow-run-diagnostics.js";
 import type { McpHost } from "../../../src/mcp/mcp-host.js";
 
 test("Flow layout survives reopening and exports a consistent isolated archive with media", async () => {
@@ -43,6 +46,11 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		assert.deepEqual(restored.groups.map(group => [group.groupId, group.title, group.nodeIds]), [["group-export", "Exported group", [node.nodeId]]]);
 		const run = await createFlowRunDocument(flow.flow.flowId, ack.graphRevision, [node.nodeId]);
 		await updateFlowRunDocument(flow.flow.flowId, run.runId, { status: "completed" });
+		await recordFlowRunEvent(run.runId, node.nodeId, "failed", { attempt: 2, prompt: "private prompt", apiKey: "private key" });
+		const report = await getFlowRunReport(flow.flow.flowId, run.runId);
+		assert.deepEqual(report.nodes.find(item => item.nodeId === node.nodeId)?.events[0]?.details, { attempt: 2 });
+		assert.equal(JSON.stringify(report).includes("private"), false);
+		assert.equal(JSON.stringify((await getSessionDatabase()).prepare("SELECT payload_json FROM flow_node_run_events WHERE run_id=?").get(run.runId)).includes("private"), false);
 		const bytes = Buffer.from("test media payload");
 		const artifact = await saveFlowArtifact({ flowId: flow.flow.flowId, runId: run.runId, nodeId: node.nodeId, bytes, mimeType: "image/png" });
 		const singlePath = join(profile, "single.png");
@@ -57,11 +65,16 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		assert.notEqual(nextBatch.exportedPaths[0], batch.exportedPaths[0]);
 		assert.deepEqual(await readFile(batch.exportedPaths[0]!), bytes);
 		assert.deepEqual(await readFile(nextBatch.exportedPaths[0]!), bytes);
-		const destination = join(profile, "exports", "flow.sqlite");
+		const destination = join(profile, "exports", "flow.daedalus-flow");
 		const result = await exportFlowToSqlite(flow.flow.flowId, destination);
 		assert.equal(result.embeddedFileCount, 1);
 		assert.equal(result.missingFileCount, 0);
-		const exported = new DatabaseSync(destination, { readOnly: true });
+		const archive = await open(destination, "r");
+		const manifestBytes = await readFlowArchiveHeader(archive, (await archive.stat()).size);
+		const manifestPath = join(profile, "export-manifest.sqlite");
+		await extractFlowArchiveSlice(archive, FLOW_ARCHIVE_HEADER_BYTES, manifestBytes, manifestPath);
+		await archive.close();
+		const exported = new DatabaseSync(manifestPath, { readOnly: true });
 		try {
 			assert.equal(exported.prepare("SELECT count(*) AS n FROM flow_documents").get()?.n, 1);
 			assert.equal(exported.prepare("SELECT * FROM flow_documents WHERE flow_id = ?").get(other.flow.flowId), undefined);
@@ -69,8 +82,7 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 			assert.deepEqual({ ...exported.prepare("SELECT group_id, flow_id, parent_group_id, title, color, x, y, width, height FROM flow_groups").get() }, { group_id: "group-export", flow_id: flow.flow.flowId, parent_group_id: null, title: "Exported group", color: "#5577aa", x: 120, y: -100, width: 600, height: 520 });
 			assert.deepEqual({ ...exported.prepare("SELECT node_id, group_id FROM flow_group_nodes").get() }, { node_id: node.nodeId, group_id: "group-export" });
 			assert.deepEqual(exported.prepare("SELECT * FROM flow_edges ORDER BY edge_id").all(), (await getSessionDatabase()).prepare("SELECT * FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flow.flow.flowId));
-			assert.deepEqual(Buffer.from(exported.prepare("SELECT content FROM daedalus_flow_export_files WHERE artifact_id = ?").get(artifact.artifactId)!.content as Uint8Array), bytes);
-			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 2);
+			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 3);
 			assert.equal(exported.prepare("SELECT name FROM sqlite_master WHERE name IN ('sessions', 'flow_approvals', 'flow_operations')").all().length, 0);
 		} finally { exported.close(); }
 		importProfile = await mkdtemp(join(tmpdir(), "flow-import-"));
@@ -85,6 +97,9 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		assert.deepEqual(importedSnapshot.nodes.map(n => [n.nodeId, n.x, n.y, n.width, n.height, n.collapsed]).find(n => n[0] === node.nodeId), [node.nodeId, 135, -74, 560, 490, true]);
 		assert.deepEqual((await getFlowArtifact(artifact.artifactId)).bytes, bytes);
 		await assert.rejects(importFlowFromSqlite(destination), /already exists/i);
+		const legacyExport = join(importProfile, "legacy-flow.sqlite");
+		await writeFile(legacyExport, await readFile(manifestPath));
+		await assert.rejects(importFlowFromSqlite(legacyExport), /Unsupported Flow archive format/i);
 		await resetSessionDatabaseForTests();
 		process.env.USERPROFILE = profile;
 		await rm(importProfile, { recursive: true, force: true });
@@ -103,6 +118,45 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
 		if (importProfile !== undefined) await rm(importProfile, { recursive: true, force: true });
 		await rm(profile, { recursive: true, force: true });
+	}
+});
+
+test("cancelling Flow archive transfer preserves the prior export and rolls back imported media", async () => {
+	const profile = await mkdtemp(join(tmpdir(), "flow-cancel-source-"));
+	const importProfile = await mkdtemp(join(tmpdir(), "flow-cancel-target-"));
+	const previous = process.env.USERPROFILE;
+	try {
+		process.env.USERPROFILE = profile;
+		await resetSessionDatabaseForTests(join(profile, "sessions.sqlite"));
+		const flow = await createFlowDocument({ title: "Cancel", starterGraph: {} });
+		await saveFlowArtifact({ flowId: flow.flow.flowId, nodeId: flow.nodes[0]!.nodeId, bytes: Buffer.alloc(16 * 1024 * 1024, 1), mimeType: "image/png" });
+		const destination = join(profile, "cancel.daedalus-flow");
+		await exportFlowToSqlite(flow.flow.flowId, destination);
+		const original = await readFile(destination);
+		const exportController = new AbortController();
+		let exportChecks = 0;
+		const exportThrow = exportController.signal.throwIfAborted.bind(exportController.signal);
+		Object.defineProperty(exportController.signal, "throwIfAborted", { value: (): void => { if (++exportChecks === 10) exportController.abort(); exportThrow(); } });
+		await assert.rejects(exportFlowToSqlite(flow.flow.flowId, destination, { signal: exportController.signal }), { name: "AbortError" });
+		assert.deepEqual(await readFile(destination), original);
+		assert.equal((await readdir(profile)).some(name => name.endsWith(".staging") || name.endsWith(".manifest")), false);
+
+		await resetSessionDatabaseForTests();
+		process.env.USERPROFILE = importProfile;
+		await resetSessionDatabaseForTests(join(importProfile, "sessions.sqlite"));
+		const importController = new AbortController();
+		let importChecks = 0;
+		const importThrow = importController.signal.throwIfAborted.bind(importController.signal);
+		Object.defineProperty(importController.signal, "throwIfAborted", { value: (): void => { if (++importChecks === 8) importController.abort(); importThrow(); } });
+		await assert.rejects(importFlowFromSqlite(destination, { signal: importController.signal }), { name: "AbortError" });
+		assert.equal((await getSessionDatabase()).prepare("SELECT 1 FROM flow_documents WHERE flow_id=?").get(flow.flow.flowId), undefined);
+		const artifactRoot = getDaedalusPath("flow.artifacts.root");
+		assert.deepEqual(await readdir(artifactRoot), []);
+	} finally {
+		await resetSessionDatabaseForTests();
+		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
+		await rm(profile, { recursive: true, force: true });
+		await rm(importProfile, { recursive: true, force: true });
 	}
 });
 
@@ -127,7 +181,13 @@ test("Flow Input media is copied into the archive and restored with its node val
 		assert.deepEqual(snapshot.nodes.find((item) => item.nodeId === node.nodeId)?.ports.map((port) => [port.id, port.dataTypes, port.cardinality]), [["output", ["image"], "one"]]);
 		assert.equal(output.ports.some((port) => port.id === "input" && port.dataTypes.includes("image")), true);
 		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: node.nodeId, sourcePort: "output", targetNodeId: output.nodeId, targetPort: "input", dataType: "image" });
-		const destination = join(profile, "shared-flow.sqlite");
+		const selection = { entryNodeIds: [node.nodeId], targetNodeIds: [output.nodeId] };
+		assert.deepEqual((await preflightFlowRun({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, selection, requireOutputTargets: true })).blockers, []);
+		const savedInput = await readFile(join(getDaedalusPath("flow.artifacts.root"), ref.storagePath));
+		await writeFile(join(getDaedalusPath("flow.artifacts.root"), ref.storagePath), Buffer.alloc(savedInput.length, 0));
+		assert.equal((await preflightFlowRun({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, selection, requireOutputTargets: true })).blockers[0]?.code, "flow_artifact_checksum_mismatch");
+		await writeFile(join(getDaedalusPath("flow.artifacts.root"), ref.storagePath), savedInput);
+		const destination = join(profile, "shared-flow.daedalus-flow");
 		assert.equal((await exportFlowToSqlite(snapshot.flow.flowId, destination)).embeddedFileCount, 1);
 		await resetSessionDatabaseForTests();
 		process.env.USERPROFILE = importedProfile;
@@ -139,9 +199,11 @@ test("Flow Input media is copied into the archive and restored with its node val
 		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: restored.flow.graphRevision, mcpHost: {} as McpHost });
 		assert.equal(run.status, "completed", JSON.stringify(run.nodes));
 		assert.deepEqual(run.nodes.find((item) => item.nodeId === output.nodeId)?.output, { result: ref });
-		const archive = new DatabaseSync(destination);
-		try { archive.prepare("UPDATE daedalus_flow_export_files SET content = ? WHERE artifact_id = ?").run(Buffer.from("corrupt"), ref.artifactId); }
-		finally { archive.close(); }
+		const archive = await open(destination, "r+");
+		try {
+			const manifestBytes = await readFlowArchiveHeader(archive, (await archive.stat()).size);
+			await archive.write(Buffer.from("corrupt"), 0, 7, FLOW_ARCHIVE_HEADER_BYTES + manifestBytes);
+		} finally { await archive.close(); }
 		await resetSessionDatabaseForTests();
 		await assert.rejects(importFlowFromSqlite(destination), /invalid size|checksum/i);
 	} finally {
@@ -157,6 +219,37 @@ test("Flow collapse and export requests reject malformed payloads", () => {
 	assert.equal(clientRequestSchema.safeParse(patch).success, true);
 	assert.equal(clientRequestSchema.safeParse({ ...patch, params: { ...patch.params, operations: [{ ...patch.params.operations[0], payload: { nodeId: "node-test", collapsed: "true" } }] } }).success, false);
 	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "export", method: "flow.export", params: { flowId: "flow-test", destinationPath: "/tmp/test.sqlite" } }).success, true);
+});
+
+test("artifact audit reports damage and cleanup requires a reviewed run plan", async () => {
+	const profile = await mkdtemp(join(tmpdir(), "flow-artifact-audit-"));
+	const previous = process.env.USERPROFILE;
+	process.env.USERPROFILE = profile;
+	try {
+		const flow = await createFlowDocument({ title: "Storage", starterGraph: {} });
+		const nodeId = flow.nodes[0]!.nodeId;
+		const run = await createFlowRunDocument(flow.flow.flowId, flow.flow.graphRevision, [nodeId]);
+		await updateFlowRunDocument(flow.flow.flowId, run.runId, { status: "completed", finishedAt: new Date().toISOString() });
+		const historical = await saveFlowArtifact({ flowId: flow.flow.flowId, runId: run.runId, nodeId, bytes: Buffer.from("historical"), mimeType: "application/octet-stream" });
+		const input = await saveFlowArtifact({ flowId: flow.flow.flowId, nodeId, bytes: Buffer.from("shared-input"), mimeType: "application/octet-stream" });
+		assert.equal((await flowArtifactUsage(flow.flow.flowId)).byteSize, historical.byteSize + input.byteSize);
+		const preview = await cleanupFlowArtifacts({ flowId: flow.flow.flowId, runIds: [run.runId], dryRun: true });
+		assert.deepEqual(preview.artifacts.map(artifact => artifact.artifactId), [historical.artifactId]);
+		assert.equal((await getFlowArtifact(historical.artifactId)).ref.artifactId, historical.artifactId);
+		await assert.rejects(cleanupFlowArtifacts({ flowId: flow.flow.flowId, runIds: [run.runId], dryRun: false, expectedArtifactIds: [] }), /preview changed/i);
+		const removed = await cleanupFlowArtifacts({ flowId: flow.flow.flowId, runIds: [run.runId], dryRun: false, expectedArtifactIds: [historical.artifactId] });
+		assert.equal(removed.removed, 1);
+		await assert.rejects(getFlowArtifact(historical.artifactId), /not found/i);
+		assert.equal((await getFlowArtifact(input.artifactId)).ref.artifactId, input.artifactId);
+		await writeFile(`${join(getDaedalusPath("flow.artifacts.root"), input.storagePath)}.interrupted.staging`, "partial");
+		assert.equal((await auditFlowArtifacts(flow.flow.flowId)).stagingFiles, 1);
+		await writeFile(join(getDaedalusPath("flow.artifacts.root"), input.storagePath), "shared-outpt");
+		assert.deepEqual((await auditFlowArtifacts(flow.flow.flowId)).issues.map(issue => issue.code), ["checksum_mismatch"]);
+	} finally {
+		await resetSessionDatabaseForTests();
+		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
+		await rm(profile, { recursive: true, force: true });
+	}
 });
 
 test("Flow composable migration resets old documents without reusing old node contracts", async () => {

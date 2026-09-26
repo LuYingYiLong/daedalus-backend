@@ -27,7 +27,7 @@ import {
 import { getFlowTreeOrder, updateFlowTreeOrder, type FlowTreeOrderInventory } from "../../session/flow-tree-order-store.js";
 import { createSession, getStoredSessionMetadata, openSession, saveSession, type SessionMetadata } from "../../session/session-store.js";
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
-import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, importFlowInputArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
+import { cleanupFlowArtifacts, deleteFlowArtifact, exportFlowArtifacts, getFlowArtifact, importFlowInputArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
 import { getClientConnection, broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
@@ -61,6 +61,7 @@ type FlowRequestMethod =
 	| "flow.artifact.preview"
 	| "flow.artifact.thumbnail"
 	| "flow.artifact.download"
+	| "flow.artifact.export"
 	| "flow.artifact.delete"
 	| "flow.artifact.cleanup"
 	| "flow.import.fromSession"
@@ -371,6 +372,10 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				result = { ref: artifact.ref, dataBase64: artifact.bytes.toString("base64") };
 				break;
 			}
+		case "flow.artifact.export":
+			if (getClientConnection(socket)?.clientType !== "studio") throw Object.assign(new Error("flow.artifact.export is only available to Daedalus Studio."), { code: "studio_only" });
+			result = await exportFlowArtifacts(flowRequest.params);
+			break;
 		case "flow.artifact.delete":
 			await deleteFlowArtifact(flowRequest.params.artifactId);
 			result = { deleted: true };

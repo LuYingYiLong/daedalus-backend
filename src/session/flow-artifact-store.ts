@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { processImage } from "../media/image-processing.js";
 import { getDaedalusPath } from "../app-paths.js";
 import type { FlowMediaArtifactRef } from "../protocol/types.js";
@@ -176,6 +176,54 @@ export async function getFlowArtifact(artifactId: string): Promise<{ ref: FlowMe
 	const bytes = await readFile(artifactPath(row.artifact_id, row.mime_type));
 	if (bytes.byteLength !== ref.byteSize || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw Object.assign(new Error("Flow artifact integrity check failed."), { code: "flow_artifact_corrupt" });
 	return { ref, bytes };
+}
+
+export async function exportFlowArtifacts(input: {
+	flowId: string;
+	artifactIds: string[];
+	destinationPath: string;
+	directory: boolean;
+}): Promise<{ exportedPaths: string[] }> {
+	if (!isAbsolute(input.destinationPath) || input.artifactIds.length === 0 || input.artifactIds.length > 100 ||
+		(!input.directory && input.artifactIds.length !== 1))
+		throw Object.assign(new Error("Invalid Flow artifact export destination."), { code: "flow_artifact_export_invalid" });
+	const artifacts = await Promise.all(input.artifactIds.map(async (artifactId) => {
+		const artifact = await getFlowArtifact(artifactId);
+		if (artifact.ref.flowId !== input.flowId)
+			throw Object.assign(new Error("Artifact does not belong to this Flow."), { code: "flow_artifact_export_scope" });
+		return artifact;
+	}));
+	if (input.directory) {
+		if (!(await stat(input.destinationPath)).isDirectory())
+			throw Object.assign(new Error("Export destination is not a directory."), { code: "flow_artifact_export_invalid" });
+	} else if (!(await stat(dirname(input.destinationPath))).isDirectory())
+		throw Object.assign(new Error("Export destination directory is missing."), { code: "flow_artifact_export_invalid" });
+	const exportedPaths: string[] = [];
+	for (const [index, artifact] of artifacts.entries()) {
+		const extension = artifact.ref.mimeType === "image/jpeg" ? "jpg" :
+			artifact.ref.mimeType === "video/quicktime" ? "mov" :
+			artifact.ref.mimeType.split("/")[1]?.replace(/[^a-z0-9]/giu, "").slice(0, 12) || "bin";
+		if (!input.directory) {
+			await writeFile(input.destinationPath, artifact.bytes);
+			exportedPaths.push(input.destinationPath);
+			continue;
+		}
+		const name = `${String(index + 1).padStart(2, "0")}-${artifact.ref.artifactId}`;
+		let saved = false;
+		for (let suffix = 0; suffix < 10000; suffix++) {
+			const destination = join(input.destinationPath, `${name}${suffix === 0 ? "" : `-${suffix}`}.${extension}`);
+			try {
+				await writeFile(destination, artifact.bytes, { flag: "wx" });
+				exportedPaths.push(destination);
+				saved = true;
+				break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
+		}
+		if (!saved) throw Object.assign(new Error("Flow artifact export names exhausted."), { code: "flow_artifact_export_name_limit" });
+	}
+	return { exportedPaths };
 }
 
 export async function listFlowArtifacts(flowId: string, runId?: string): Promise<FlowMediaArtifactRef[]> {

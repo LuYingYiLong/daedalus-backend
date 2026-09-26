@@ -1953,6 +1953,17 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.artifact.export"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			artifactIds: z.array(flowIdentifierSchema).min(1).max(100),
+			destinationPath: z.string().min(1).max(32768),
+			directory: z.boolean(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.artifact.delete"),
 		params: z.object({ artifactId: flowIdentifierSchema }).strict(),
 	}).strict(),

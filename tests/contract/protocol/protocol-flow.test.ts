@@ -22,6 +22,7 @@ test("Flow RPC payloads are strict and exclude the removed conversation branch m
 		{ method: "flow.archive", params: { flowId: "flow-a", revision: 1 } },
 		{ method: "flow.import.fromSession", params: { sourceSessionId: "session-a", title: "Flow" } },
 		{ method: "flow.import", params: { sourcePath: "C:\\exports\\flow.sqlite" } },
+		{ method: "flow.artifact.export", params: { flowId: "flow-a", artifactIds: ["flow-artifact-a"], destinationPath: "C:\\exports\\image.png", directory: false } },
 		{ method: "flow.export.toSession", params: { flowId: "flow-a", outputNodeId: "node-a", title: "Chat" } },
 	] as const;
 	for (const request of valid) {
@@ -31,4 +32,5 @@ test("Flow RPC payloads are strict and exclude the removed conversation branch m
 		assert.equal(clientRequestSchema.safeParse({ type: "request", id: `removed-${method}`, method, params: {} }).success, false, method);
 	}
 	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "empty-flow-import", method: "flow.import", params: { sourcePath: "" } }).success, false);
+	assert.equal(clientRequestSchema.safeParse({ type: "request", id: "bad-artifact-export", method: "flow.artifact.export", params: { flowId: "flow-a", artifactIds: [], destinationPath: "C:\\exports", directory: true } }).success, false);
 });

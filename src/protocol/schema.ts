@@ -1959,6 +1959,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.import"),
+		params: z.object({ sourcePath: z.string().trim().min(1).max(32768) }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.export"),
 		params: z.object({ flowId: flowIdentifierSchema, destinationPath: z.string().trim().min(1).max(32768) }).strict(),
 	}).strict(),

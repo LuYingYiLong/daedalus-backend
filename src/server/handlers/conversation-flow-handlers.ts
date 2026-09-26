@@ -1,6 +1,7 @@
 import { processImage } from "../../media/image-processing.js";
 import { FLOW_STORAGE_GENERATION, FLOW_TYPE_PRESENTATION } from "../../protocol/flow-value-types.js";
 import { exportFlowToSqlite } from "../../session/flow-export.js";
+import { importFlowFromSqlite } from "../../session/flow-import.js";
 import type WebSocket from "ws";
 import type { McpHost } from "../../mcp/mcp-host.js";
 import { ensureFlowNodePluginRuntimes } from "../../plugins/runtime/manager.js";
@@ -62,6 +63,7 @@ type FlowRequestMethod =
 	| "flow.artifact.delete"
 	| "flow.artifact.cleanup"
 	| "flow.import.fromSession"
+	| "flow.import"
 	| "flow.export"
 	| "flow.export.toSession";
 
@@ -133,6 +135,14 @@ async function importFlowFromSessionDocument(params: Extract<FlowRequest, { meth
 		}
 	}
 	return current;
+}
+
+async function importFlowDocumentFromSqlite(socket: WebSocket, params: Extract<FlowRequest, { method: "flow.import" }>["params"]): Promise<unknown> {
+	if (getClientConnection(socket)?.clientType !== "studio") throw flowError("studio_only", "flow.import is only available to Daedalus Studio.");
+	const workspaces = loadWorkspaces();
+	const imported = await importFlowFromSqlite(params.sourcePath, { validWorkspaceIds: new Set(workspaces.map(workspace => workspace.id)) });
+	const snapshot = await getFlowDocument(imported.flowId, imported.archived);
+	return { ...imported, flow: snapshot.flow };
 }
 
 async function exportFlowToSessionDocument(params: Extract<FlowRequest, { method: "flow.export.toSession" }>["params"]): Promise<unknown> {
@@ -361,6 +371,9 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 		case "flow.import.fromSession":
 			result = await importFlowFromSessionDocument(flowRequest.params);
 			break;
+		case "flow.import":
+			result = await importFlowDocumentFromSqlite(socket, flowRequest.params);
+			break;
 		case "flow.export":
 			if (getClientConnection(socket)?.clientType !== "studio") throw Object.assign(new Error("flow.export is only available to Daedalus Studio."), { code: "studio_only" });
 			result = await exportFlowToSqlite(flowRequest.params.flowId, flowRequest.params.destinationPath);
@@ -377,7 +390,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			const ack = result as { flowId: string; graphRevision: number; layoutRevision: number; acceptedMutationIds: string[]; operations: unknown[] };
 			broadcastGlobalEvent(request.id, "flow.patch.applied", { flowId: ack.flowId, clientId: flowRequest.params.clientId, graphRevision: ack.graphRevision, layoutRevision: ack.layoutRevision, acceptedMutationIds: ack.acceptedMutationIds, operations: ack.operations });
 		}
-		if (["flow.create", "flow.rename", "flow.archive", "flow.workspace.move", "flow.settings.update", "flow.import.fromSession"].includes(flowRequest.method)) {
+		if (["flow.create", "flow.rename", "flow.archive", "flow.workspace.move", "flow.settings.update", "flow.import.fromSession", "flow.import"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
 		}

@@ -15,7 +15,9 @@ export type FlowExportResult = {
 	missingFileCount: number;
 };
 
-const TABLES = ["flow_documents", "flow_nodes", "flow_groups", "flow_group_nodes", "flow_edges", "flow_runs", "flow_node_runs", "flow_artifacts", "flow_batch_items"] as const;
+export const FLOW_EXPORT_FORMAT = "daedalus-flow-sqlite";
+export const FLOW_EXPORT_FORMAT_VERSION = 1;
+export const FLOW_EXPORT_TABLES = ["flow_documents", "flow_nodes", "flow_groups", "flow_group_nodes", "flow_edges", "flow_runs", "flow_node_runs", "flow_artifacts", "flow_batch_items"] as const;
 function inside(root: string, file: string): boolean {
 	const path = relative(root, file);
 	return path === "" || (!path.startsWith("..") && !isAbsolute(path));
@@ -47,7 +49,7 @@ export async function exportFlowToSqlite(flowId: string, destinationPath: string
 			if (!source.prepare("SELECT 1 FROM flow_documents WHERE flow_id = ?").get(flowId))
 				throw Object.assign(new Error("Flow not found."), { code: "flow_not_found" });
 			target.exec("BEGIN");
-			for (const table of TABLES) {
+			for (const table of FLOW_EXPORT_TABLES) {
 				const schema = source.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string };
 				target.exec(schema.sql);
 				const predicate = table === "flow_node_runs" ? "run_id IN (SELECT run_id FROM flow_runs WHERE flow_id = ?)" : "flow_id = ?";
@@ -60,7 +62,7 @@ export async function exportFlowToSqlite(flowId: string, destinationPath: string
 				}
 			}
 			target.exec("CREATE TABLE daedalus_flow_export_metadata (format TEXT NOT NULL, format_version INTEGER NOT NULL, flow_id TEXT NOT NULL, exported_at TEXT NOT NULL, embedded_file_count INTEGER NOT NULL DEFAULT 0, missing_file_count INTEGER NOT NULL DEFAULT 0); CREATE TABLE daedalus_flow_export_files (artifact_id TEXT PRIMARY KEY REFERENCES flow_artifacts(artifact_id), sha256 TEXT NOT NULL, content BLOB NOT NULL);");
-			target.prepare("INSERT INTO daedalus_flow_export_metadata (format, format_version, flow_id, exported_at) VALUES (?, 1, ?, ?)").run("daedalus-flow-sqlite", flowId, new Date().toISOString());
+			target.prepare("INSERT INTO daedalus_flow_export_metadata (format, format_version, flow_id, exported_at) VALUES (?, ?, ?, ?)").run(FLOW_EXPORT_FORMAT, FLOW_EXPORT_FORMAT_VERSION, flowId, new Date().toISOString());
 			const schemaVersion = Number(source.prepare("PRAGMA user_version").get()?.user_version ?? 0);
 			target.exec(`PRAGMA user_version = ${schemaVersion};`);
 			target.exec("COMMIT");

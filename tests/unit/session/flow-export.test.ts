@@ -7,12 +7,14 @@ import test from "node:test";
 import { getDaedalusPath } from "../../../src/app-paths.js";
 import { createFlowDocument, commitFlowOperationsDocument, getFlowDocument, createFlowRunDocument, updateFlowRunDocument } from "../../../src/session/flow-document-store.js";
 import { getSessionDatabase, resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
-import { saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
+import { getFlowArtifact, saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
 import { exportFlowToSqlite } from "../../../src/session/flow-export.js";
+import { importFlowFromSqlite } from "../../../src/session/flow-import.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
 
 test("Flow layout survives reopening and exports a consistent isolated archive with media", async () => {
 	const profile = await mkdtemp(join(tmpdir(), "flow-export-"));
+	let importProfile: string | undefined;
 	const previous = process.env.USERPROFILE;
 	process.env.USERPROFILE = profile;
 	try {
@@ -56,6 +58,21 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 1);
 			assert.equal(exported.prepare("SELECT name FROM sqlite_master WHERE name IN ('sessions', 'flow_approvals', 'flow_operations')").all().length, 0);
 		} finally { exported.close(); }
+		importProfile = await mkdtemp(join(tmpdir(), "flow-import-"));
+		await resetSessionDatabaseForTests();
+		process.env.USERPROFILE = importProfile;
+		await resetSessionDatabaseForTests(join(importProfile, "sessions.sqlite"));
+		const imported = await importFlowFromSqlite(destination);
+		assert.equal(imported.flowId, flow.flow.flowId);
+		assert.equal(imported.restoredArtifactCount, 1);
+		assert.equal(imported.missingArtifactCount, 0);
+		const importedSnapshot = await getFlowDocument(flow.flow.flowId);
+		assert.deepEqual(importedSnapshot.nodes.map(n => [n.nodeId, n.x, n.y, n.width, n.height, n.collapsed]).find(n => n[0] === node.nodeId), [node.nodeId, 135, -74, 560, 490, true]);
+		assert.deepEqual((await getFlowArtifact(artifact.artifactId)).bytes, bytes);
+		await assert.rejects(importFlowFromSqlite(destination), /already exists/i);
+		await resetSessionDatabaseForTests();
+		process.env.USERPROFILE = profile;
+		await rm(importProfile, { recursive: true, force: true });
 		const before = await readFile(destination);
 		await assert.rejects(exportFlowToSqlite("flow-missing", destination));
 		assert.deepEqual(await readFile(destination), before);
@@ -68,6 +85,7 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 	} finally {
 		await resetSessionDatabaseForTests();
 		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
+		if (importProfile !== undefined) await rm(importProfile, { recursive: true, force: true });
 		await rm(profile, { recursive: true, force: true });
 	}
 });

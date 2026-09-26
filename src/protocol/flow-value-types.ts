@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const FLOW_STORAGE_GENERATION = "flow-composable-1";
+export const FLOW_STORAGE_GENERATION = "flow-parameters-2";
 export const FLOW_VALUE_TYPES = ["text", "json", "image", "video", "audio", "frames", "artifact", "number", "boolean", "color", "size", "mask"] as const;
 export type FlowValueType = typeof FLOW_VALUE_TYPES[number];
 export type FlowCardinality = "one" | "many" | "one-or-many";
@@ -8,7 +8,7 @@ export const flowColorSchema = z.object({ r: z.number().min(0).max(1), g: z.numb
 export const flowSizeSchema = z.object({ width: z.number().int().positive().max(16000), height: z.number().int().positive().max(16000) }).strict();
 const mediaRef = z.object({
 	artifactId: z.string().regex(/^flow-artifact-[a-zA-Z0-9_-]+$/u), mimeType: z.string().max(160), sha256: z.string().regex(/^[a-f0-9]{64}$/u),
-	flowId: z.string().optional(), runId: z.string().optional(), nodeId: z.string().optional(),
+	flowId: z.string().optional(), runId: z.string().nullable().optional(), nodeId: z.string().optional(),
 	width: z.number().int().positive().optional(), height: z.number().int().positive().optional(), byteSize: z.number().int().positive().optional(),
 	durationMs: z.number().nonnegative().optional(), fps: z.number().positive().optional(),
 	previewArtifactId: z.string().optional(), storagePath: z.string().optional(), createdAt: z.string().optional(), metadata: z.record(z.string(), z.json()).optional(),

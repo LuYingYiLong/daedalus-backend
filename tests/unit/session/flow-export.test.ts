@@ -4,13 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import sharp from "sharp";
 import { getDaedalusPath } from "../../../src/app-paths.js";
-import { createFlowDocument, commitFlowOperationsDocument, getFlowDocument, createFlowRunDocument, updateFlowRunDocument } from "../../../src/session/flow-document-store.js";
+import { createFlowDocument, createFlowNodeDocument, createFlowEdgeDocument, updateFlowNodeDocument, commitFlowOperationsDocument, getFlowDocument, createFlowRunDocument, updateFlowRunDocument } from "../../../src/session/flow-document-store.js";
 import { getSessionDatabase, resetSessionDatabaseForTests } from "../../../src/session/session-database.js";
-import { getFlowArtifact, saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
+import { getFlowArtifact, importFlowInputArtifact, saveFlowArtifact } from "../../../src/session/flow-artifact-store.js";
 import { exportFlowToSqlite } from "../../../src/session/flow-export.js";
 import { importFlowFromSqlite } from "../../../src/session/flow-import.js";
 import { clientRequestSchema } from "../../../src/protocol/schema.js";
+import { startFlowRunDocument } from "../../../src/server/flow-runner.js";
+import type { McpHost } from "../../../src/mcp/mcp-host.js";
 
 test("Flow layout survives reopening and exports a consistent isolated archive with media", async () => {
 	const profile = await mkdtemp(join(tmpdir(), "flow-export-"));
@@ -55,7 +58,7 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 			assert.deepEqual({ ...exported.prepare("SELECT node_id, group_id FROM flow_group_nodes").get() }, { node_id: node.nodeId, group_id: "group-export" });
 			assert.deepEqual(exported.prepare("SELECT * FROM flow_edges ORDER BY edge_id").all(), (await getSessionDatabase()).prepare("SELECT * FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flow.flow.flowId));
 			assert.deepEqual(Buffer.from(exported.prepare("SELECT content FROM daedalus_flow_export_files WHERE artifact_id = ?").get(artifact.artifactId)!.content as Uint8Array), bytes);
-			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 1);
+			assert.equal(exported.prepare("SELECT format_version FROM daedalus_flow_export_metadata").get()?.format_version, 2);
 			assert.equal(exported.prepare("SELECT name FROM sqlite_master WHERE name IN ('sessions', 'flow_approvals', 'flow_operations')").all().length, 0);
 		} finally { exported.close(); }
 		importProfile = await mkdtemp(join(tmpdir(), "flow-import-"));
@@ -81,12 +84,59 @@ test("Flow layout survives reopening and exports a consistent isolated archive w
 		await assert.rejects(exportFlowToSqlite(flow.flow.flowId, destination));
 		assert.deepEqual(await readFile(destination), before);
 		await rm(join(getDaedalusPath("flow.artifacts.root"), artifact.storagePath));
-		assert.equal((await exportFlowToSqlite(flow.flow.flowId, destination)).missingFileCount, 1);
+		await assert.rejects(exportFlowToSqlite(flow.flow.flowId, destination), /missing/i);
+		assert.deepEqual(await readFile(destination), before);
 	} finally {
 		await resetSessionDatabaseForTests();
 		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
 		if (importProfile !== undefined) await rm(importProfile, { recursive: true, force: true });
 		await rm(profile, { recursive: true, force: true });
+	}
+});
+
+test("Flow Input media is copied into the archive and restored with its node value", async () => {
+	const profile = await mkdtemp(join(tmpdir(), "flow-input-export-"));
+	const importedProfile = await mkdtemp(join(tmpdir(), "flow-input-import-"));
+	const previous = process.env.USERPROFILE;
+	process.env.USERPROFILE = profile;
+	try {
+		let snapshot = await createFlowDocument({ title: "Shared input", starterGraph: {} });
+		const originalNodeIds = new Set(snapshot.nodes.map((item) => item.nodeId));
+		snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/flow-input", x: 0, y: 0, config: { label: "Image", dataType: "image", defaultValue: null } });
+		const node = snapshot.nodes.find((item) => !originalNodeIds.has(item.nodeId))!;
+		const sourcePath = join(profile, "outside-workspace.png");
+		await writeFile(sourcePath, await sharp({ create: { width: 2, height: 2, channels: 4, background: "#ff0000" } }).png().toBuffer());
+		const ref = await importFlowInputArtifact({ flowId: snapshot.flow.flowId, nodeId: node.nodeId, sourcePath, kind: "image" });
+		assert.equal(ref.runId, null);
+		snapshot = await updateFlowNodeDocument({ flowId: snapshot.flow.flowId, nodeId: node.nodeId, revision: snapshot.flow.graphRevision, patch: { config: { ...node.config, defaultValue: ref } } });
+		const beforeOutputIds = new Set(snapshot.nodes.map((item) => item.nodeId));
+		snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId: "builtin/media-output", x: 320, y: 0 });
+		const output = snapshot.nodes.find((item) => !beforeOutputIds.has(item.nodeId))!;
+		assert.deepEqual(snapshot.nodes.find((item) => item.nodeId === node.nodeId)?.ports.map((port) => [port.id, port.dataTypes, port.cardinality]), [["output", ["image"], "one"]]);
+		assert.equal(output.ports.some((port) => port.id === "input" && port.dataTypes.includes("image")), true);
+		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: node.nodeId, sourcePort: "output", targetNodeId: output.nodeId, targetPort: "input", dataType: "image" });
+		const destination = join(profile, "shared-flow.sqlite");
+		assert.equal((await exportFlowToSqlite(snapshot.flow.flowId, destination)).embeddedFileCount, 1);
+		await resetSessionDatabaseForTests();
+		process.env.USERPROFILE = importedProfile;
+		await resetSessionDatabaseForTests(join(importedProfile, "sessions.sqlite"));
+		await importFlowFromSqlite(destination);
+		const restored = await getFlowDocument(snapshot.flow.flowId);
+		assert.deepEqual(restored.nodes.find((item) => item.nodeId === node.nodeId)?.config.defaultValue, ref);
+		assert.deepEqual((await getFlowArtifact(ref.artifactId)).ref, ref);
+		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: restored.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(run.status, "completed", JSON.stringify(run.nodes));
+		assert.deepEqual(run.nodes.find((item) => item.nodeId === output.nodeId)?.output, { result: ref });
+		const archive = new DatabaseSync(destination);
+		try { archive.prepare("UPDATE daedalus_flow_export_files SET content = ? WHERE artifact_id = ?").run(Buffer.from("corrupt"), ref.artifactId); }
+		finally { archive.close(); }
+		await resetSessionDatabaseForTests();
+		await assert.rejects(importFlowFromSqlite(destination), /invalid size|checksum/i);
+	} finally {
+		await resetSessionDatabaseForTests();
+		if (previous === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = previous;
+		await rm(profile, { recursive: true, force: true });
+		await rm(importedProfile, { recursive: true, force: true });
 	}
 });
 

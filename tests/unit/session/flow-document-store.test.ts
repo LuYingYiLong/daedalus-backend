@@ -39,7 +39,7 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
 	const definitions = listFlowNodeTypeDefinitions(true);
-	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/batch-image-to-image", "builtin/batch-text-to-image", "builtin/boolean", "builtin/color", "builtin/image-composite", "builtin/image-convert", "builtin/image-crop", "builtin/image-input", "builtin/image-resize", "builtin/image-rotate", "builtin/list", "builtin/list-item", "builtin/list-merge", "builtin/number", "builtin/parameter-sets", "builtin/save-images", "builtin/save-videos", "builtin/size", "builtin/text-replace", "builtin/to-text", "builtin/command", "builtin/condition", "builtin/file-input", "builtin/flow-input", "builtin/image-to-image", "builtin/image-to-video", "builtin/json-extract", "builtin/llm", "builtin/media-output", "builtin/merge", "builtin/note", "builtin/output", "builtin/system-prompt", "builtin/template", "builtin/text", "builtin/text-to-image", "builtin/text-to-video", "builtin/tool", "builtin/user-prompt"].sort((a,b) => a.localeCompare(b)));
+	assert.deepEqual(definitions.map((definition): string => definition.typeId), ["builtin/batch-image-to-image", "builtin/batch-text-to-image", "builtin/boolean", "builtin/color", "builtin/image-composite", "builtin/image-convert", "builtin/image-crop", "builtin/image-input", "builtin/image-resize", "builtin/image-rotate", "builtin/list", "builtin/list-item", "builtin/list-merge", "builtin/number", "builtin/parameter-sets", "builtin/provider", "builtin/model", "builtin/save-images", "builtin/save-videos", "builtin/size", "builtin/text-replace", "builtin/to-text", "builtin/command", "builtin/condition", "builtin/file-input", "builtin/flow-input", "builtin/image-to-image", "builtin/image-to-video", "builtin/json-extract", "builtin/llm", "builtin/media-output", "builtin/merge", "builtin/note", "builtin/output", "builtin/system-prompt", "builtin/template", "builtin/text", "builtin/text-to-image", "builtin/text-to-video", "builtin/tool", "builtin/user-prompt"].sort((a,b) => a.localeCompare(b)));
 	const llmProperties = definitions.find((definition): boolean => definition.typeId === "builtin/llm")?.configSchema.properties as Record<string, Record<string, unknown>>;
 	assert.equal(llmProperties.provider?.["x-daedalus-control"], "provider");
 	assert.equal(llmProperties.model?.["x-daedalus-control"], "model");
@@ -84,15 +84,15 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 			assert.deepEqual(definition.defaultConfig.size, { width: 1280, height: 720 });
 			assert.equal(definition.configVersion, 5);
 		}
-		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "provider")?.mode, "fixed");
-		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "model")?.mode, "fixed");
+		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "provider")?.mode, "hybrid");
+		assert.equal(definition.parameters.find((parameter): boolean => parameter.id === "model")?.mode, "hybrid");
 	}
 	assert.deepEqual(llm.parameters.map((parameter) => ({ id: parameter.id, mode: parameter.mode })), [
 		{ id: "user-prompt", mode: "hybrid" },
 		{ id: "system-prompt", mode: "hybrid" },
-		{ id: "provider", mode: "fixed" },
-		{ id: "model", mode: "fixed" },
-		{ id: "reasoningEffort", mode: "fixed" },
+		{ id: "provider", mode: "hybrid" },
+		{ id: "model", mode: "hybrid" },
+		{ id: "reasoningEffort", mode: "hybrid" },
 	]);
 	assert.deepEqual(llm.outputs.map((output): string => output.id), ["output"]);
 	assert.equal("ports" in llm, false);
@@ -100,11 +100,19 @@ test("Flow node registry exposes strict defaults and all mature node types", ():
 	assert.deepEqual(llmPorts.map((port): [string, string] => [port.direction, port.id]), [
 		["input", "user-prompt"],
 		["input", "system-prompt"],
+		["input", "provider"],
+		["input", "model"],
+		["input", "reasoningEffort"],
 		["output", "output"],
 	]);
+	for (const dataType of ["text", "json", "image", "video", "audio", "frames", "artifact", "number", "boolean", "color", "size", "mask"] as const) {
+		const ports = resolveFlowNodePorts({ typeId: "builtin/flow-input", config: { label: "Input", dataType, cardinality: "many", defaultValue: [] }, ports: [] });
+		assert.deepEqual(ports.map((port) => [port.id, port.dataTypes, port.cardinality]), [["output", [dataType], "many"]]);
+	}
 	assert.throws((): Record<string, unknown> => normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok", unexpected: true }), /unrecognized/i);
 	assert.equal(normalizeFlowNodeConfig("builtin/command", { commandLine: "echo ok" }).timeoutMs, 30_000);
-	assert.deepEqual(normalizeFlowNodeConfig("builtin/flow-input", { label: "Input", dataType: "text", defaultValue: "", required: false }), { label: "Input", dataType: "text", defaultValue: "" });
+	assert.deepEqual(normalizeFlowNodeConfig("builtin/text-to-image", { hiddenInputPorts: ["seed", "invalid", "seed"] }).hiddenInputPorts, ["seed"]);
+	assert.deepEqual(normalizeFlowNodeConfig("builtin/flow-input", { label: "Input", dataType: "text", defaultValue: "", required: false }), { label: "Input", dataType: "text", cardinality: "one", defaultValue: "" });
 });
 
 test("Flow creation can atomically seed User and System Prompt nodes into LLM and Output", async (): Promise<void> => withDatabase(async (): Promise<void> => {

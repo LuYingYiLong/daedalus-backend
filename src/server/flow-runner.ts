@@ -1,6 +1,7 @@
 import { broadcastGlobalEvent } from "./client-connections.js";
 import { getSessionDatabase } from "../session/session-database.js";
 import { processImage, IMAGE_ENGINE_FINGERPRINT } from "../media/image-processing.js";
+import { assertFlowPortValue, FLOW_VALUE_TYPES, type FlowValueType } from "../protocol/flow-value-types.js";
 import { registerComposableExecutors } from "./flow-composable-executors.js";
 import type { FlowBatchItemRun } from "../session/flow-batch-store.js";
 import { createHash } from "node:crypto";
@@ -38,6 +39,7 @@ import {
 	executeRegisteredFlowNode,
 	resolveApprovedFlowResult,
 	registerFlowNodeExecutor,
+	validateFlowArtifactValues,
 	type FlowNodeExecutionContext,
 } from "./flow-node-executor-registry.js";
 
@@ -101,6 +103,9 @@ function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readon
 	for (const parameter of resolveFlowNodeParameters(node)) {
 		if (parameter.mode === "hybrid" && connectedInputIds.has(parameter.id)) delete effectiveConfig[parameter.configField];
 	}
+	delete effectiveConfig.hiddenInputPorts;
+	const effectiveProvider = typeof inputs.provider === "string" ? inputs.provider : node.config.provider;
+	const effectiveModel = typeof inputs.model === "string" ? inputs.model : node.config.model;
 	return createHash("sha256").update(JSON.stringify({
 		typeId: node.typeId,
 		pluginVersion: node.pluginVersion,
@@ -110,9 +115,9 @@ function fingerprint(node: FlowDocumentNode, inputs: NodeInputs, inbound: readon
 		inputs: fingerprintValue(inputs),
 		runtimeInput,
 		ports: inbound.map((edge): string[] => [edge.sourcePort, edge.targetPort, edge.dataType]),
-		adapterVersion: typeof node.config.provider === "string" ? mediaAdapterFingerprint(node.config.provider) : undefined,
-		provider: node.config.provider,
-		model: node.config.model,
+		adapterVersion: typeof effectiveProvider === "string" ? mediaAdapterFingerprint(effectiveProvider) : undefined,
+		provider: effectiveProvider,
+		model: effectiveModel,
 		reasoningEffort: node.config.reasoningEffort,
 	})).digest("hex");
 }
@@ -154,22 +159,26 @@ function reachableNodeIdsFromEntries(
 }
 
 function normalizeRunInput(node: FlowDocumentNode, supplied: unknown, suppliedValue: boolean): unknown {
-	const fallback = typeof node.config.defaultValue === "string" ? node.config.defaultValue : "";
-	const value = suppliedValue ? supplied : fallback;
+	const value = suppliedValue ? supplied : node.config.defaultValue;
 	const label = typeof node.config.label === "string" ? node.config.label : node.title;
-	if (node.config.dataType === "json") {
+	const dataType: FlowValueType = FLOW_VALUE_TYPES.includes(node.config.dataType as FlowValueType)
+		? node.config.dataType as FlowValueType
+		: "text";
+	const cardinality = node.config.cardinality === "many" ? "many" : "one";
+	let parsed: unknown = value;
+	if (dataType === "json" && cardinality === "one") {
 		if (typeof value === "string") {
-			if (value.trim().length === 0) return null;
-			try { return JSON.parse(value) as unknown; } catch {
+			if (value.trim().length === 0) parsed = null;
+			else try { parsed = JSON.parse(value) as unknown; } catch {
 				throw Object.assign(new Error(`Flow input must contain valid JSON: ${label}.`), { code: "flow_input_json_invalid", nodeId: node.nodeId });
 			}
 		}
-		if (value === undefined || value === null) return null;
-		return structuredClone(value);
 	}
-	if (typeof value !== "string")
-		throw Object.assign(new Error(`Flow input must be text: ${label}.`), { code: "flow_input_type_invalid", nodeId: node.nodeId });
-	return value;
+	try { assertFlowPortValue({ id: label, dataTypes: [dataType], cardinality }, parsed); }
+	catch {
+		throw Object.assign(new Error(`Flow input ${label} must be ${cardinality === "many" ? "a list of " : ""}${dataType}.`), { code: "flow_input_type_invalid", nodeId: node.nodeId });
+	}
+	return structuredClone(parsed);
 }
 
 export async function prepareFlowRunDocument(params: {
@@ -227,6 +236,7 @@ export async function prepareFlowRunDocument(params: {
 	for (const node of nodes.filter((candidate): boolean => candidate.typeId === "builtin/flow-input")) {
 		const supplied = Object.prototype.hasOwnProperty.call(suppliedInputs, node.nodeId);
 		inputValues[node.nodeId] = normalizeRunInput(node, suppliedInputs[node.nodeId], supplied);
+		await validateFlowArtifactValues(inputValues[node.nodeId], graph.flow.flowId);
 	}
 	return { flow: graph.flow, nodes, edges, entryNodeIds, targetNodeIds, inputValues };
 }
@@ -255,13 +265,17 @@ function collectInputs(
 			inputs[edge.targetPort] = [...values, sourceOutputs[edge.sourcePort]];
 		} else inputs[edge.targetPort] = sourceOutputs[edge.sourcePort];
 	}
-	for (const parameter of parameters) {
+	// Plugin executors receive their declared hybrid fallback through inputs for compatibility.
+	// Built-in executors read local fields from node.config, so passing them as inputs would
+	// make unrelated controls appear as connected values (for example Merge mode).
+	if (node.pluginId !== "builtin") for (const parameter of parameters) {
 		if (parameter.mode !== "hybrid" || connectedInputIds.has(parameter.id)) continue;
 		if (Object.prototype.hasOwnProperty.call(node.config, parameter.configField))
 			inputs[parameter.id] = node.config[parameter.configField];
 	}
 	const missing = parameters.flatMap((parameter): string[] =>
 		parameter.mode !== "fixed" && parameter.required && !Object.prototype.hasOwnProperty.call(inputs, parameter.id)
+			&& !(parameter.mode === "hybrid" && !connectedInputIds.has(parameter.id) && Object.prototype.hasOwnProperty.call(node.config, parameter.configField))
 			? [parameter.label]
 			: [],
 	);

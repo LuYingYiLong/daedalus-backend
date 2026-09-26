@@ -283,6 +283,21 @@ function readEdges(db: DatabaseSync, flowId: string): FlowDocumentEdge[] {
 	return (db.prepare("SELECT edge_id, flow_id, source_node_id, source_port, target_node_id, target_port, data_type FROM flow_edges WHERE flow_id = ? ORDER BY edge_id").all(flowId) as EdgeRow[]).map(mapEdge);
 }
 
+function pruneIncompatibleNodeEdges(db: DatabaseSync, flowId: string, nodeId: string, nextPorts: FlowDocumentNode["ports"]): void {
+	const nodes = new Map(readNodes(db, flowId).map((node) => [node.nodeId, node]));
+	for (const edge of readEdges(db, flowId)) {
+		if (edge.sourceNodeId !== nodeId && edge.targetNodeId !== nodeId) continue;
+		const source = edge.sourceNodeId === nodeId
+			? nextPorts.find((port) => port.direction === "output" && port.id === edge.sourcePort)
+			: getFlowNodePort(nodes.get(edge.sourceNodeId)!, edge.sourcePort, "output");
+		const target = edge.targetNodeId === nodeId
+			? nextPorts.find((port) => port.direction === "input" && port.id === edge.targetPort)
+			: getFlowNodePort(nodes.get(edge.targetNodeId)!, edge.targetPort, "input");
+		if (source === undefined || target === undefined || !areFlowPortsCompatible(source, target, edge.dataType))
+			db.prepare("DELETE FROM flow_edges WHERE edge_id = ?").run(edge.edgeId);
+	}
+}
+
 function readGroups(db: DatabaseSync, flowId: string): FlowDocumentGroup[] {
 	const groups = db.prepare("SELECT group_id, flow_id, parent_group_id, title, color, x, y, width, height, created_at, updated_at FROM flow_groups WHERE flow_id = ? ORDER BY created_at, group_id").all(flowId) as GroupRow[];
 	const members = db.prepare("SELECT group_id, node_id FROM flow_group_nodes WHERE flow_id = ? ORDER BY group_id, node_id").all(flowId) as Array<{ group_id: string; node_id: string }>;
@@ -495,14 +510,7 @@ export async function updateFlowNodeDocument(params: { flowId: string; nodeId: s
 			const normalizedConfig = normalizeFlowNodeConfig(current.type_id, params.patch.config);
 			const normalizedPorts = resolveFlowNodePorts({ typeId: current.type_id, config: normalizedConfig, ports: parseSqlJson<FlowDocumentNode["ports"]>(current.ports_json) });
 			fields.push("config_json = ?", "ports_json = ?"); values.push(sqlJson(normalizedConfig), sqlJson(normalizedPorts));
-			const nextNode = { ...mapNode(current), config: normalizedConfig };
-			const inputIds = new Set(resolveFlowNodePorts(nextNode).filter((port): boolean => port.direction === "input").map((port): string => port.id));
-			const outputIds = new Set(resolveFlowNodePorts(nextNode).filter((port): boolean => port.direction === "output").map((port): string => port.id));
-			for (const edge of readEdges(db, params.flowId)) {
-				if ((edge.targetNodeId === params.nodeId && !inputIds.has(edge.targetPort)) || (edge.sourceNodeId === params.nodeId && !outputIds.has(edge.sourcePort))) {
-					db.prepare("DELETE FROM flow_edges WHERE edge_id = ?").run(edge.edgeId);
-				}
-			}
+			pruneIncompatibleNodeEdges(db, params.flowId, params.nodeId, normalizedPorts);
 		}
 		if (fields.length > 0) {
 			fields.push("updated_at = ?"); values.push(now(), params.flowId, params.nodeId);
@@ -759,9 +767,7 @@ export async function commitFlowOperationsDocument(params: { flowId: string; cli
 					const config = normalizeFlowNodeConfig(current.type_id, operation.payload.config);
 					const ports = resolveFlowNodePorts({ typeId: current.type_id, config, ports: parseSqlJson<FlowDocumentNode["ports"]>(current.ports_json) });
 					fields.push("config_json = ?", "ports_json = ?"); values.push(sqlJson(config), sqlJson(ports));
-					const inputIds = new Set(ports.filter((port): boolean => port.direction === "input").map((port): string => port.id));
-					const outputIds = new Set(ports.filter((port): boolean => port.direction === "output").map((port): string => port.id));
-					for (const edge of readEdges(db, params.flowId)) if (edge.targetNodeId === operation.payload.nodeId && !inputIds.has(edge.targetPort) || edge.sourceNodeId === operation.payload.nodeId && !outputIds.has(edge.sourcePort)) db.prepare("DELETE FROM flow_edges WHERE edge_id = ?").run(edge.edgeId);
+					pruneIncompatibleNodeEdges(db, params.flowId, operation.payload.nodeId, ports);
 				}
 				if (fields.length > 0) { fields.push("updated_at = ?"); values.push(now(), params.flowId, operation.payload.nodeId); db.prepare(`UPDATE flow_nodes SET ${fields.join(", ")} WHERE flow_id = ? AND node_id = ?`).run(...values); }
 			} else if (operation.kind === "node.delete") {

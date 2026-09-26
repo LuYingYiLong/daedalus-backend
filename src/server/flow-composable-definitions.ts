@@ -24,6 +24,8 @@ export function registerComposableDefinitions(register: typeof registerBuiltin):
 		["number", 0, z.number()], ["boolean", false, z.boolean()],
 		["color", { r: 1, g: 1, b: 1, a: 1 }, flowColorSchema], ["size", { width: 1024, height: 1024 }, flowSizeSchema],
 	] as const) register(type, "parameters", type, { value }, [fixed("value")], [output("value", [type])], z.object({ value: schema }).strict(), { fieldControls: { value: type } });
+	register("provider", "parameters", "Provider", { provider: "" }, [fixed("provider")], [output("provider", ["text"])], z.object({ provider: z.string().max(120) }).strict(), { fieldControls: { provider: "provider" } });
+	register("model", "parameters", "Model", { provider: "", model: "" }, [fixed("provider"), fixed("model")], [output("model", ["text"])], z.object({ provider: z.string().max(120), model: z.string().max(240) }).strict(), { fieldControls: { provider: "provider", model: "model" } });
 	register("text-replace", "basic", "Text Replace", { text: "", search: "", replacement: "" }, [hybrid("text", "text"), fixed("search"), fixed("replacement")], [output("text", ["text"])], z.object({ text: z.string(), search: z.string(), replacement: z.string() }).strict());
 	register("to-text", "basic", "To Text", {}, [input("value", FLOW_VALUE_TYPES)], [output("text", ["text"])], z.object({}).strict());
 	register("image-input", "media-input", "Image Input", { path: "" }, [fixed("path")], [output("image", ["image"]), output("size", ["size"])], z.object({ path: z.string().max(4000) }).strict(), { workspaceRequired: true, cachePolicy: "never", fieldControls: { path: "workspace-file" }, fieldFileKinds: { path: "image" }, fieldPreviews: { path: "image" } });

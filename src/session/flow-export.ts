@@ -16,7 +16,7 @@ export type FlowExportResult = {
 };
 
 export const FLOW_EXPORT_FORMAT = "daedalus-flow-sqlite";
-export const FLOW_EXPORT_FORMAT_VERSION = 1;
+export const FLOW_EXPORT_FORMAT_VERSION = 2;
 export const FLOW_EXPORT_TABLES = ["flow_documents", "flow_nodes", "flow_groups", "flow_group_nodes", "flow_edges", "flow_runs", "flow_node_runs", "flow_artifacts", "flow_batch_items"] as const;
 function inside(root: string, file: string): boolean {
 	const path = relative(root, file);
@@ -82,7 +82,7 @@ export async function exportFlowToSqlite(flowId: string, destinationPath: string
 				embeddedFileCount++;
 			} catch (error: unknown) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				missingFileCount++;
+				throw new Error(`Flow artifact file is missing: ${artifact.artifact_id}.`);
 			}
 		}
 		target.prepare("UPDATE daedalus_flow_export_metadata SET embedded_file_count = ?, missing_file_count = ?").run(embeddedFileCount, missingFileCount);

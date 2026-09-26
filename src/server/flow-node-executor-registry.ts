@@ -1,7 +1,7 @@
 import { assertFlowPortValue } from "../protocol/flow-value-types.js";
 import { getFlowArtifactReference } from "../session/flow-artifact-store.js";
 import type { FlowBatchItemRun } from "../session/flow-batch-store.js";
-import { resolveFlowNodePorts, getFlowNodeTypeDefinition } from "./flow-node-registry.js";
+import { resolveFlowNodePorts, getFlowNodeTypeDefinition, normalizeFlowNodeConfig, resolveFlowNodeParameters } from "./flow-node-registry.js";
 import type { McpHost } from "../mcp/mcp-host.js";
 import type { FlowDocument, FlowDocumentNode, FlowNodeTypeId } from "../protocol/types.js";
 import type { ApprovalGateway } from "../tools/approval-gateway.js";
@@ -64,7 +64,29 @@ export async function executeRegisteredFlowNode(context: FlowNodeExecutionContex
 		if (value === undefined) continue;
 		if (port.multiple && Array.isArray(value)) for (const item of value) assertFlowPortValue(port, item); else assertFlowPortValue(port, value);
 	}
-	const result = await executor.execute(context);
+	const effectiveConfig = { ...context.node.config };
+	for (const parameter of resolveFlowNodeParameters(context.node)) {
+		if (parameter.mode === "hybrid" && Object.prototype.hasOwnProperty.call(context.inputs, parameter.id))
+			effectiveConfig[parameter.configField] = context.inputs[parameter.id];
+	}
+	const effectiveNode = { ...context.node, config: normalizeFlowNodeConfig(context.node.typeId, effectiveConfig) };
+	if (Object.prototype.hasOwnProperty.call(context.inputs, "provider") || Object.prototype.hasOwnProperty.call(context.inputs, "model")) {
+		const [{ isProviderId }, { listProviderModels }] = await Promise.all([
+			import("../providers/provider-registry.js"),
+			import("../providers/provider-models.js"),
+		]);
+		const provider = effectiveNode.config.provider;
+		const model = effectiveNode.config.model;
+		if (!isProviderId(provider) || typeof model !== "string" || model.length === 0)
+			throw Object.assign(new Error("Connected provider and model must resolve to a configured pair."), { code: "flow_model_selection_invalid" });
+		const selected = (await listProviderModels(provider, undefined, undefined)).models.find((candidate) => candidate.id === model);
+		if (selected === undefined)
+			throw Object.assign(new Error(`Model ${model} is not available for provider ${provider}.`), { code: "flow_model_selection_invalid" });
+		const capability = getFlowNodeTypeDefinition(effectiveNode.typeId).modelCapability;
+		if (capability !== undefined && selected.capabilities[capability] !== true)
+			throw Object.assign(new Error(`Model ${provider}/${model} does not support ${capability}.`), { code: "flow_model_capability_invalid" });
+	}
+	const result = await executor.execute({ ...context, node: effectiveNode });
 	for (const output of getFlowNodeTypeDefinition(context.node.typeId).outputs) {
 		if (!output.optional && !Object.prototype.hasOwnProperty.call(result, output.id)) throw new Error(`Missing output port: ${output.id}`);
 	}

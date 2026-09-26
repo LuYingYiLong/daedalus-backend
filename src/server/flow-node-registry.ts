@@ -140,7 +140,10 @@ function resolveDeclaredPorts(definition: FlowNodeTypeDefinition, config: Record
 		...(definition.cardinality === undefined ? {} : { cardinality: definition.cardinality }),
 	}));
 	const ports = [...inputs, ...outputs];
-	if (definition.typeId === "builtin/flow-input") for (const port of ports) if (port.direction === "output") port.dataTypes = [config.dataType === "json" ? "json" : "text"];
+	if (definition.typeId === "builtin/flow-input") for (const port of ports) if (port.direction === "output") {
+		port.dataTypes = [FLOW_VALUE_TYPES.includes(config.dataType as FlowValueType) ? config.dataType as FlowValueType : "text"];
+		port.cardinality = config.cardinality === "many" ? "many" : "one";
+	}
 	if (typeof config.elementType === "string" && FLOW_VALUE_TYPES.includes(config.elementType as FlowValueType))
 		for (const port of ports) if (port.id !== "index") port.dataTypes = [config.elementType as FlowValueType];
 	return ports;
@@ -173,6 +176,18 @@ function schemaRecord(schema: ZodType): Record<string, unknown> {
 	return z.toJSONSchema(schema, { unrepresentable: "any" }) as Record<string, unknown>;
 }
 
+function connectableType(field: string, schema: Record<string, unknown>, control: string | undefined): FlowValueType | null {
+	if (["flow-input-value", "parameter-sets", "typed-list"].includes(control ?? "")) return null;
+	if (control === "provider" || control === "model") return "text";
+	if (control === "color" || control === "size") return control;
+	if (schema.type === "number" || schema.type === "integer") return "number";
+	if (schema.type === "boolean") return "boolean";
+	if (Array.isArray(schema.enum) && schema.enum.length > 0 && schema.enum.every((value) => typeof value === "number")) return "number";
+	if (schema.type === "string" || Array.isArray(schema.enum)) return "text";
+	if (field === "value" && schema.type === undefined) return "json";
+	return null;
+}
+
 export function registerBuiltin(
 	name: string,
 	category: string,
@@ -200,6 +215,18 @@ export function registerBuiltin(
 ): void {
 	const typeId = `builtin/${name}`;
 	const configSchemaDefinition = schemaRecord(configSchema);
+	const schemaProperties = configSchemaDefinition.properties;
+	const properties = schemaProperties !== null && typeof schemaProperties === "object" && !Array.isArray(schemaProperties)
+		? schemaProperties as Record<string, unknown>
+		: {};
+	const connectableParameters = parameters.map((parameter): FlowNodeParameterDefinition => {
+		if (parameter.mode !== "fixed" || category === "parameters" || name === "flow-input" || name === "note" || name === "command" || name === "tool") return parameter;
+		if (["inputs", "rows", "values", "elementType", "bindings", "args", "env"].includes(parameter.configField)) return parameter;
+		const schema = properties[parameter.configField];
+		if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return parameter;
+		const dataType = connectableType(parameter.configField, schema as Record<string, unknown>, options.fieldControls?.[parameter.configField]);
+		return dataType === null ? parameter : hybrid(parameter.id, parameter.label, parameter.configField, [dataType]);
+	});
 	if (options.fieldControls !== undefined) {
 		const properties = configSchemaDefinition.properties;
 		if (properties !== null && typeof properties === "object" && !Array.isArray(properties)) {
@@ -261,11 +288,18 @@ export function registerBuiltin(
 		configSchema: configSchemaDefinition,
 		summaryFields: options.summaryFields ?? [],
 		ui: { kind: "schema" },
-		parameters,
+		parameters: connectableParameters,
 		outputs,
 		...(options.dynamicParameters === undefined ? {} : { dynamicParameters: options.dynamicParameters }),
 		parseConfig(value): Record<string, unknown> {
-			return configSchema.parse({ ...structuredClone(defaultConfig), ...value }) as Record<string, unknown>;
+			const { hiddenInputPorts, ...fields } = value;
+			const normalized = configSchema.parse({ ...structuredClone(defaultConfig), ...fields }) as Record<string, unknown>;
+			if (Array.isArray(hiddenInputPorts)) {
+				const allowed = new Set(connectableParameters.filter((parameter) => parameter.mode === "hybrid").map((parameter) => parameter.id));
+				const hidden = [...new Set(hiddenInputPorts.filter((id): id is string => typeof id === "string" && allowed.has(id)))];
+				if (hidden.length > 0) normalized.hiddenInputPorts = hidden;
+			}
+			return normalized;
 		},
 	});
 }
@@ -289,7 +323,7 @@ registerBuiltin("merge", "basic", "Merge", { mode: "concat", separator: "\n", in
 registerBuiltin("json-extract", "basic", "JSON Extract", { pointer: "/" }, [connection("input", "JSON", ["text", "json"], true, true), fixed("pointer", "Pointer")], [output("output", "Value", ["json"], true)], flowDocumentNodeConfigSchemas["builtin/json-extract"], { summaryFields: ["pointer"] });
 registerBuiltin("condition", "basic", "Condition", { pointer: "/", operator: "equals" }, [connection("input", "Value", ["text", "json"], true, true), fixed("pointer", "Pointer"), fixed("operator", "Operator"), fixed("value", "Expected value")], [{ ...output("true", "True", ["text", "json"], true), optional: true }, { ...output("false", "False", ["text", "json"]), optional: true }], flowDocumentNodeConfigSchemas["builtin/condition"], { summaryFields: ["operator", "pointer"] });
 registerBuiltin("file-input", "workspace", "File Input", { path: "", mode: "text" }, [fixed("path", "Path"), fixed("mode", "Mode")], [output("output", "File", ALL_TYPES, true)], flowDocumentNodeConfigSchemas["builtin/file-input"], { workspaceRequired: true, summaryFields: ["path"], fieldControls: { path: "workspace-file" } });
-registerBuiltin("flow-input", "basic", "Flow Input", { label: "Input", dataType: "text", defaultValue: "" }, [fixed("label", "Name"), fixed("dataType", "Type"), fixed("defaultValue", "Default value")], [output("output", "Value", ["text", "json"], true)], flowDocumentNodeConfigSchemas["builtin/flow-input"], { cachePolicy: "never", summaryFields: ["label", "dataType"] });
+registerBuiltin("flow-input", "basic", "Flow Input", { label: "Input", dataType: "text", cardinality: "one", defaultValue: "" }, [fixed("label", "Name"), fixed("dataType", "Type"), fixed("cardinality", "Cardinality"), fixed("defaultValue", "Default value")], [output("output", "Value", [...FLOW_VALUE_TYPES], true)], flowDocumentNodeConfigSchemas["builtin/flow-input"], { cachePolicy: "never", summaryFields: ["label", "dataType"], fieldControls: { defaultValue: "flow-input-value" } });
 registerBuiltin("llm", "ai", "LLM", { provider: "", model: "", reasoningEffort: "", userPrompt: "", systemPrompt: "" }, [hybrid("user-prompt", "User prompt", "userPrompt", ["text"], false, true), hybrid("system-prompt", "System prompt", "systemPrompt", ["text"], false), fixed("provider", "Provider"), fixed("model", "Model"), fixed("reasoningEffort", "Reasoning effort")], [output("output", "Response", ["text"], true)], flowDocumentNodeConfigSchemas["builtin/llm"], { summaryFields: ["provider", "model"], fieldControls: { provider: "provider", model: "model", reasoningEffort: "reasoning-effort" } });
 registerBuiltin("tool", "workspace", "Tool", { toolName: "", args: {}, bindings: [] }, [connection("input", "Arguments", ["text"], false, true), fixed("toolName", "Tool"), fixed("args", "Arguments"), fixed("bindings", "Bindings")], [output("result", "Result", ["json"], true), output("text", "Text", ["text"]), output("artifact", "Artifact", ["artifact"])], flowDocumentNodeConfigSchemas["builtin/tool"], { sideEffecting: true, cachePolicy: "read-only", summaryFields: ["toolName"] });
 registerBuiltin("command", "workspace", "Command", { commandLine: "", cwd: "", env: {}, timeoutMs: 30_000, stdin: "" }, [hybrid("stdin", "stdin", "stdin", ["text"], false, true), fixed("commandLine", "Command"), fixed("cwd", "Working directory"), fixed("env", "Environment"), fixed("timeoutMs", "Timeout")], [output("result", "Result", ["json"], true), output("stdout", "stdout", ["text"]), output("stderr", "stderr", ["text"])], flowDocumentNodeConfigSchemas["builtin/command"], { workspaceRequired: true, sideEffecting: true, cachePolicy: "never", summaryFields: ["commandLine"] });

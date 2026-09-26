@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 28;
+const DB_SCHEMA_VERSION: number = 29;
 const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
@@ -18,7 +18,7 @@ function resolveDatabasePath(): string {
 	return testDatabasePath ?? getSessionsDatabasePath();
 }
 
-function migrateSchema(db: DatabaseSync): void {
+function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/flow-node-registry.js") | null): void {
 	const previousSchemaVersion: number = Number(
 		(db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined)?.user_version ?? 0,
 	);
@@ -645,7 +645,7 @@ function migrateSchema(db: DatabaseSync): void {
 			CREATE INDEX idx_flow_groups_flow_parent ON flow_groups (flow_id, parent_group_id, created_at);
 			CREATE TABLE flow_group_nodes (node_id TEXT PRIMARY KEY REFERENCES flow_nodes(node_id) ON DELETE CASCADE, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, group_id TEXT NOT NULL REFERENCES flow_groups(group_id) ON DELETE CASCADE, FOREIGN KEY(flow_id, group_id) REFERENCES flow_groups(flow_id, group_id) ON DELETE CASCADE);
 			CREATE INDEX idx_flow_group_nodes_group ON flow_group_nodes (flow_id, group_id, node_id);
-			CREATE TABLE flow_artifacts (artifact_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER, height INTEGER, duration_ms INTEGER, fps REAL, preview_artifact_id TEXT, storage_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+			CREATE TABLE flow_artifacts (artifact_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER, height INTEGER, duration_ms INTEGER, fps REAL, preview_artifact_id TEXT, storage_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 			CREATE INDEX idx_flow_artifacts_flow_run ON flow_artifacts (flow_id, run_id, node_id, created_at DESC);
 			CREATE TABLE flow_edges (edge_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, source_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, source_port TEXT NOT NULL, target_node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, target_port TEXT NOT NULL, data_type TEXT NOT NULL CHECK(data_type IN ('text', 'json', 'image', 'video', 'audio', 'frames', 'artifact', 'number', 'boolean', 'color', 'size', 'mask')), UNIQUE(flow_id, target_node_id, target_port));
 			CREATE INDEX idx_flow_edges_flow ON flow_edges (flow_id, edge_id);
@@ -662,6 +662,29 @@ function migrateSchema(db: DatabaseSync): void {
 		db.exec("PRAGMA foreign_keys = ON");
 		const deleteLegacySession = db.prepare("DELETE FROM sessions WHERE session_id = ?");
 		for (const sessionId of legacyFlowBranchSessionIds) deleteLegacySession.run(sessionId);
+	}
+	if (previousSchemaVersion > 0 && previousSchemaVersion < 29 && flowNodeColumns.has("type_id")) {
+		if (flowRegistry === null) throw new Error("Flow parameter migration requires the node registry.");
+		// Input media belongs to the Flow document and has no originating run.
+		db.exec(`
+			PRAGMA foreign_keys = OFF;
+			BEGIN;
+			CREATE TABLE flow_artifacts_next (artifact_id TEXT PRIMARY KEY, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, run_id TEXT REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, mime_type TEXT NOT NULL, byte_size INTEGER NOT NULL, sha256 TEXT NOT NULL, width INTEGER, height INTEGER, duration_ms INTEGER, fps REAL, preview_artifact_id TEXT, storage_path TEXT NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+			INSERT INTO flow_artifacts_next SELECT * FROM flow_artifacts;
+			DROP TABLE flow_artifacts;
+			ALTER TABLE flow_artifacts_next RENAME TO flow_artifacts;
+			CREATE INDEX idx_flow_artifacts_flow_run ON flow_artifacts (flow_id, run_id, node_id, created_at DESC);
+			COMMIT;
+			PRAGMA foreign_keys = ON;
+		`);
+		const nodes = db.prepare("SELECT node_id, type_id, config_json, ports_json FROM flow_nodes WHERE type_id LIKE 'builtin/%'").all() as Array<{ node_id: string; type_id: string; config_json: string; ports_json: string }>;
+		const updateNode = db.prepare("UPDATE flow_nodes SET config_json = ?, ports_json = ? WHERE node_id = ?");
+		for (const node of nodes) {
+			const config = flowRegistry.normalizeFlowNodeConfig(node.type_id, JSON.parse(node.config_json) as Record<string, unknown>);
+			const ports = flowRegistry.resolveFlowNodePorts({ typeId: node.type_id, config, ports: JSON.parse(node.ports_json) });
+			updateNode.run(JSON.stringify(config), JSON.stringify(ports), node.node_id);
+		}
+		db.exec("UPDATE flow_documents SET revision = revision + 1, graph_revision = graph_revision + 1 WHERE flow_id IN (SELECT DISTINCT flow_id FROM flow_nodes)");
 	}
 	db.exec(`CREATE TABLE IF NOT EXISTS flow_batch_items(run_id TEXT NOT NULL REFERENCES flow_runs(run_id) ON DELETE CASCADE, node_id TEXT NOT NULL REFERENCES flow_nodes(node_id) ON DELETE CASCADE, item_id TEXT NOT NULL, flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, request_fingerprint TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(run_id,node_id,item_id)); CREATE INDEX IF NOT EXISTS idx_flow_batch_cache ON flow_batch_items(flow_id,node_id,item_id,request_fingerprint,updated_at);`);
 	db.exec("CREATE TABLE IF NOT EXISTS flow_image_saves(save_id TEXT NOT NULL,item_index INTEGER NOT NULL,flow_id TEXT NOT NULL REFERENCES flow_documents(flow_id) ON DELETE CASCADE,relative_path TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(save_id,item_index))");
@@ -728,7 +751,10 @@ async function openDatabase(): Promise<SessionDatabaseState> {
 		const previousVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
 		db.exec("CREATE TABLE IF NOT EXISTS flow_storage_maintenance(key TEXT PRIMARY KEY, pending INTEGER NOT NULL)");
 		if (previousVersion > 0 && previousVersion < 27) db.exec("INSERT OR REPLACE INTO flow_storage_maintenance VALUES('composable-reset',1)");
-		migrateSchema(db);
+		const flowRegistry = previousVersion > 0 && previousVersion < 29
+			? await import("../server/flow-node-registry.js")
+			: null;
+		migrateSchema(db, flowRegistry);
 		if (db.prepare("SELECT key FROM flow_storage_maintenance WHERE key='composable-reset' AND pending=1").get() && testDatabasePath === null) {
 			await rm(getDaedalusPath("flow.artifacts.root"), { recursive: true, force: true });
 			await rm(getDaedalusPath("config.flowTreeOrder"), { force: true });

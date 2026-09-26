@@ -32,6 +32,8 @@ export async function transformFlowImage(context: FlowNodeExecutionContext, valu
 export function registerComposableExecutors(register: typeof registerFlowNodeExecutor, media: FlowNodeExecutor, tool: FlowNodeExecutor): void {
 	const add = (name: string, execute: FlowNodeExecutor, approvedResult?: (value: unknown) => FlowApprovedResult): void => register(`builtin/${name}`, "builtin", execute, approvedResult);
 	for (const name of ["number", "boolean", "color", "size"]) add(name, async ({ node }) => ({ value: node.config.value }));
+	add("provider", async ({ node }) => ({ provider: node.config.provider }));
+	add("model", async ({ node }) => ({ model: node.config.model }));
 	add("text-replace", async ({ node, inputs }) => ({ text: String(inputs.text ?? node.config.text).replaceAll(String(node.config.search), String(node.config.replacement)) }));
 	add("to-text", async ({ inputs }) => ({ text: typeof inputs.value === "string" ? inputs.value : JSON.stringify(inputs.value) }));
 	add("list", async ({ node }) => {

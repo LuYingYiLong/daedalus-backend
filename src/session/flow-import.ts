@@ -252,7 +252,9 @@ async function restoreArtifacts(source: DatabaseSync, target: DatabaseSync): Pro
 			artifactsById.delete(file.artifact_id);
 			restoredCount++;
 		}
-		return { paths, missingCount: artifactsById.size };
+		if (artifactsById.size > 0)
+			throw importError("flow_import_file_invalid", `Flow export is missing ${artifactsById.size} artifact file(s).`);
+		return { paths, missingCount: 0 };
 	} catch (error: unknown) {
 		await Promise.all(paths.map(path => rm(path, { force: true }).catch((): void => {})));
 		throw error;

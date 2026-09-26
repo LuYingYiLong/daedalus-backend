@@ -27,7 +27,7 @@ import {
 import { getFlowTreeOrder, updateFlowTreeOrder, type FlowTreeOrderInventory } from "../../session/flow-tree-order-store.js";
 import { createSession, getStoredSessionMetadata, openSession, saveSession, type SessionMetadata } from "../../session/session-store.js";
 import { createWorkspaceToolCatalog } from "../../tools/tool-catalog.js";
-import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
+import { cleanupFlowArtifacts, deleteFlowArtifact, getFlowArtifact, importFlowInputArtifact, listFlowArtifacts, listFlowGeneratedArtifacts } from "../../session/flow-artifact-store.js";
 import { loadWorkspaces } from "../../workspace/registry.js";
 import { getClientConnection, broadcastGlobalEvent, getSessionRuntime } from "../client-connections.js";
 import type { ClientSession } from "../client-session.js";
@@ -56,6 +56,7 @@ type FlowRequestMethod =
 	| "flow.run.get"
 	| "flow.run.list"
 	| "flow.artifact.list"
+	| "flow.artifact.import"
 	| "flow.artifact.get"
 	| "flow.artifact.preview"
 	| "flow.artifact.thumbnail"
@@ -344,6 +345,15 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 				? await listFlowGeneratedArtifacts(flowRequest.params.flowId, flowRequest.params.limit ?? 3)
 				: { artifacts: await listFlowArtifacts(flowRequest.params.flowId, flowRequest.params.runId) };
 			break;
+		case "flow.artifact.import": {
+			if (getClientConnection(socket)?.clientType !== "studio") throw flowError("studio_only", "Flow media import requires Daedalus Studio.");
+			const snapshot = await getFlowDocument(flowRequest.params.flowId);
+			const node = snapshot.nodes.find((candidate) => candidate.nodeId === flowRequest.params.nodeId);
+			if (node?.typeId !== "builtin/flow-input" || node.config.dataType !== flowRequest.params.kind)
+				throw flowError("flow_input_type_invalid", "Select a matching Flow Input node before importing media.");
+			result = { ref: await importFlowInputArtifact(flowRequest.params) };
+			break;
+		}
 		case "flow.artifact.get": {
 				const artifact = await getFlowArtifact(flowRequest.params.artifactId);
 				result = { ref: artifact.ref, ...(flowRequest.params.includeData === true ? { dataBase64: artifact.bytes.toString("base64") } : {}) };

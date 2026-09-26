@@ -1035,7 +1035,7 @@ export const flowDocumentPortTypeSchema = z.enum(FLOW_VALUE_TYPES);
 export const flowMediaArtifactRefSchema = z.object({
 	artifactId: flowIdentifierSchema,
 	flowId: flowIdentifierSchema,
-	runId: flowIdentifierSchema,
+	runId: flowIdentifierSchema.nullable(),
 	nodeId: flowIdentifierSchema,
 	mimeType: z.string().trim().min(1).max(160),
 	byteSize: z.number().int().positive(),
@@ -1083,8 +1083,9 @@ const flowFileInputConfigSchema = z.object({
 }).strict();
 const flowInputConfigSchema = z.object({
 	label: z.string().trim().min(1).max(120).default("Input"),
-	dataType: z.enum(["text", "json"]).default("text"),
-	defaultValue: z.string().max(200_000).default(""),
+	dataType: flowDocumentPortTypeSchema.default("text"),
+	cardinality: z.enum(["one", "many"]).default("one"),
+	defaultValue: z.json().default(""),
 }).strict();
 const flowLlmConfigSchema = z.object({
 	provider: z.string().max(120).default(""),
@@ -1912,6 +1913,17 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 			runId: flowIdentifierSchema.optional(),
 			aiGeneratedOnly: z.boolean().optional(),
 			limit: z.number().int().min(1).max(500).optional(),
+		}).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("flow.artifact.import"),
+		params: z.object({
+			flowId: flowIdentifierSchema,
+			nodeId: flowIdentifierSchema,
+			sourcePath: z.string().min(1).max(4_000),
+			kind: z.enum(["image", "video", "audio", "mask", "frames", "artifact"]),
 		}).strict(),
 	}).strict(),
 	z.object({

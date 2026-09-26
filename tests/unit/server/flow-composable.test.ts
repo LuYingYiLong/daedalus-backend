@@ -21,6 +21,10 @@ test("typed values reject non-finite numbers, malformed colors and scalar/list m
 	assert.throws(() => assertFlowPortValue({ id: "color", dataTypes: ["color"] }, { r: 256, g: 0, b: 0, a: 1 }));
 	assert.throws(() => assertFlowPortValue({ id: "images", dataTypes: ["image"], cardinality: "many" }, [{ artifactId: "bad" }]));
 	assertFlowPortValue({ id: "numbers", dataTypes: ["number"], cardinality: "many" }, [1, 2]);
+	assertFlowPortValue({ id: "flags", dataTypes: ["boolean"], cardinality: "many" }, [true, false]);
+	assertFlowPortValue({ id: "size", dataTypes: ["size"] }, { width: 1280, height: 720 });
+	assertFlowPortValue({ id: "image", dataTypes: ["image"] }, { artifactId: "flow-artifact-input", mimeType: "image/png", sha256: "a".repeat(64), runId: null });
+	assert.throws(() => assertFlowPortValue({ id: "image", dataTypes: ["image"] }, { artifactId: "flow-artifact-video", mimeType: "video/mp4", sha256: "a".repeat(64) }));
 	assert.equal(acceptsFlowCardinality("many", "one"), false);
 	assert.equal(acceptsFlowCardinality("many", "one-or-many"), true);
 	assert.throws(() => assertFlowPortValue({ id: "image", dataTypes: ["image"] }, { artifactId: "flow-artifact-x", mimeType: "image/png", sha256: "a".repeat(64), dataBase64: "pixels" }));
@@ -228,6 +232,36 @@ test("connected media parameters are schema-validated before calling the provide
 		assert.match(run.nodes.find(node => node.nodeId === nodes.video)?.error ?? "", /Too big|less than or equal to/i);
 	} finally {
 		unregisterMediaGenerationAdapter(provider);
+		await resetSessionDatabaseForTests();
+		if (previousProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousProfile;
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("connected provider and model parameters reject a mismatched catalog pair", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "flow-connected-model-validation-"));
+	const previousProfile = process.env.USERPROFILE;
+	process.env.USERPROFILE = directory;
+	await resetSessionDatabaseForTests(join(directory, "sessions.sqlite"));
+	try {
+		let snapshot = await createFlowDocument({ title: "Connected provider/model validation" });
+		const nodes: Record<string, string> = {};
+		for (const [key, typeId, config] of [
+			["provider", "builtin/provider", { provider: "openai" }],
+			["model", "builtin/model", { provider: "dashscope", model: "wan3.0-video" }],
+			["video", "builtin/text-to-video", { provider: "dashscope", model: "wan3.0-video", prompt: "test" }],
+		] as Array<[string, string, Record<string, unknown>]>) {
+			const before = new Set(snapshot.nodes.map(node => node.nodeId));
+			snapshot = await createFlowNodeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, typeId, x: 0, y: 0, config });
+			nodes[key] = snapshot.nodes.find(node => !before.has(node.nodeId))!.nodeId;
+		}
+		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: nodes.provider!, sourcePort: "provider", targetNodeId: nodes.video!, targetPort: "provider", dataType: "text" });
+		snapshot = await createFlowEdgeDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, sourceNodeId: nodes.model!, sourcePort: "model", targetNodeId: nodes.video!, targetPort: "model", dataType: "text" });
+		const run = await startFlowRunDocument({ flowId: snapshot.flow.flowId, revision: snapshot.flow.graphRevision, mcpHost: {} as McpHost });
+		assert.equal(run.status, "failed");
+		assert.match(run.nodes.find(node => node.nodeId === nodes.video)?.error ?? "", /not available for provider openai/i);
+	} finally {
 		await resetSessionDatabaseForTests();
 		if (previousProfile === undefined) delete process.env.USERPROFILE;
 		else process.env.USERPROFILE = previousProfile;

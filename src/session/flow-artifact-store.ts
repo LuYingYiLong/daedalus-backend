@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { basename, isAbsolute, join, relative } from "node:path";
+import { processImage } from "../media/image-processing.js";
 import { getDaedalusPath } from "../app-paths.js";
 import type { FlowMediaArtifactRef } from "../protocol/types.js";
 import { getSessionDatabase, parseSqlJson, runSessionTransaction, sqlJson } from "./session-database.js";
@@ -11,7 +12,7 @@ const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 type ArtifactRow = {
 	artifact_id: string;
 	flow_id: string;
-	run_id: string;
+	run_id: string | null;
 	node_id: string;
 	mime_type: string;
 	byte_size: number;
@@ -28,7 +29,7 @@ type ArtifactRow = {
 
 export type SaveFlowArtifactInput = {
 	flowId: string;
-	runId: string;
+	runId?: string | null | undefined;
 	nodeId: string;
 	bytes: Uint8Array;
 	mimeType: string;
@@ -82,7 +83,7 @@ export async function saveFlowArtifact(input: SaveFlowArtifactInput): Promise<Fl
 	const metadata: FlowMediaArtifactRef = {
 		artifactId,
 		flowId: input.flowId,
-		runId: input.runId,
+		runId: input.runId ?? null,
 		nodeId: input.nodeId,
 		mimeType,
 		byteSize: bytes.byteLength,
@@ -104,7 +105,7 @@ export async function saveFlowArtifact(input: SaveFlowArtifactInput): Promise<Fl
 			db.prepare("INSERT INTO flow_artifacts(artifact_id, flow_id, run_id, node_id, mime_type, byte_size, sha256, width, height, duration_ms, fps, preview_artifact_id, storage_path, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
 				artifactId,
 				input.flowId,
-				input.runId,
+				input.runId ?? null,
 				input.nodeId,
 				mimeType,
 				bytes.byteLength,
@@ -124,6 +125,40 @@ export async function saveFlowArtifact(input: SaveFlowArtifactInput): Promise<Fl
 		throw error;
 	}
 	return metadata;
+}
+
+export async function importFlowInputArtifact(input: {
+	flowId: string;
+	nodeId: string;
+	sourcePath: string;
+	kind: "image" | "video" | "audio" | "mask" | "frames" | "artifact";
+}): Promise<FlowMediaArtifactRef> {
+	if (!isAbsolute(input.sourcePath)) throw Object.assign(new Error("Choose an absolute media file path."), { code: "flow_input_file_invalid" });
+	const sourcePath = await realpath(input.sourcePath);
+	const info = await stat(sourcePath);
+	if (!info.isFile() || info.size === 0 || info.size > MAX_ARTIFACT_BYTES)
+		throw Object.assign(new Error("Flow input file is empty or exceeds 512 MiB."), { code: "flow_input_file_invalid" });
+	const bytes = await readFile(sourcePath);
+	const metadata = { source: "flow-input", originalName: basename(sourcePath) };
+	if (input.kind === "image" || input.kind === "mask" || input.kind === "frames") {
+		if (bytes.byteLength > 64 * 1024 * 1024) throw Object.assign(new Error("Flow image input exceeds 64 MiB."), { code: "flow_input_file_invalid" });
+		const image = await processImage(bytes, { kind: "normalize" }, AbortSignal.timeout(60_000));
+		return saveFlowArtifact({ flowId: input.flowId, nodeId: input.nodeId, ...image, metadata });
+	}
+	let mimeType: string;
+	if (input.kind === "video") {
+		const isMp4 = bytes.toString("ascii", 4, 8) === "ftyp";
+		const isWebm = bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+		if (!isMp4 && !isWebm) throw Object.assign(new Error("Choose an MP4 or WebM video."), { code: "flow_input_media_invalid" });
+		mimeType = isWebm ? "video/webm" : "video/mp4";
+	} else if (input.kind === "audio") {
+		const isWav = bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WAVE";
+		const isMp3 = bytes.toString("ascii", 0, 3) === "ID3" || bytes[0] === 0xff && (bytes[1]! & 0xe0) === 0xe0;
+		const isOgg = bytes.toString("ascii", 0, 4) === "OggS";
+		if (!isWav && !isMp3 && !isOgg) throw Object.assign(new Error("Choose a WAV, MP3 or Ogg audio file."), { code: "flow_input_media_invalid" });
+		mimeType = isWav ? "audio/wav" : isOgg ? "audio/ogg" : "audio/mpeg";
+	} else mimeType = "application/octet-stream";
+	return saveFlowArtifact({ flowId: input.flowId, nodeId: input.nodeId, bytes, mimeType, metadata });
 }
 
 export async function getFlowArtifactReference(artifactId: string): Promise<FlowMediaArtifactRef> {
@@ -222,10 +257,10 @@ export async function deleteFlowArtifact(artifactId: string): Promise<void> {
 
 export async function cleanupFlowArtifacts(flowId: string, keepRunIds: readonly string[] = []): Promise<number> {
 	const db = await getSessionDatabase();
-	const rows = db.prepare("SELECT artifact_id, mime_type, run_id FROM flow_artifacts WHERE flow_id = ?").all(flowId) as Array<{ artifact_id: string; mime_type: string; run_id: string }>;
+	const rows = db.prepare("SELECT artifact_id, mime_type, run_id FROM flow_artifacts WHERE flow_id = ?").all(flowId) as Array<{ artifact_id: string; mime_type: string; run_id: string | null }>;
 	let removed = 0;
 	for (const row of rows) {
-		if (keepRunIds.includes(row.run_id)) continue;
+		if (row.run_id === null || keepRunIds.includes(row.run_id)) continue;
 		db.prepare("DELETE FROM flow_artifacts WHERE artifact_id = ?").run(row.artifact_id);
 		await rm(artifactPath(row.artifact_id, row.mime_type), { force: true });
 		removed += 1;

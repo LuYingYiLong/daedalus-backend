@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { StructuredToolError } from "../tools/tool-failure.js";
+import { extractDocxParagraphs } from "./docx.js";
 
 export const DEFAULT_WORKSPACE_TEXT_FILE_BYTES: number = 512 * 1024;
 export const DEFAULT_WORKSPACE_NEW_FILE_BYTES: number = 64 * 1024;
 export const DEFAULT_WORKSPACE_DOWNLOAD_BYTES: number = 100 * 1024 * 1024;
+export const DEFAULT_WORKSPACE_DOCX_BYTES: number = 32 * 1024 * 1024;
 const DEFAULT_WORKSPACE_DOWNLOAD_TIMEOUT_MS: number = 60_000;
 const MAX_WORKSPACE_DOWNLOAD_REDIRECTS: number = 5;
 
@@ -50,6 +52,7 @@ export type WorkspaceFileServiceOptions = {
 	readMaxBytes?: number | undefined;
 	newFileMaxBytes?: number | undefined;
 	writeMaxBytes?: number | undefined;
+	docxMaxBytes?: number | undefined;
 	ignoredDirectories?: ReadonlySet<string> | undefined;
 	protectedReadDirectories?: ReadonlySet<string> | undefined;
 	protectedWriteDirectories?: ReadonlySet<string> | undefined;
@@ -83,6 +86,22 @@ export type WorkspaceTextFileReadOptions = {
 	startLine?: number | undefined;
 	/** 1-based inclusive line number. */
 	endLine?: number | undefined;
+};
+
+export type WorkspaceDocxReadOptions = {
+	/** 1-based inclusive paragraph number. */
+	startParagraph?: number | undefined;
+	/** 1-based inclusive paragraph number. */
+	endParagraph?: number | undefined;
+};
+
+export type WorkspaceDocxReadResult = {
+	path: string;
+	paragraphCount: number;
+	startParagraph: number;
+	endParagraph: number;
+	charCount: number;
+	text: string;
 };
 
 type ResolvedWorkspacePath = {
@@ -180,6 +199,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 	const readMaxBytes: number = options.readMaxBytes ?? DEFAULT_WORKSPACE_TEXT_FILE_BYTES;
 	const newFileMaxBytes: number = options.newFileMaxBytes ?? DEFAULT_WORKSPACE_NEW_FILE_BYTES;
 	const writeMaxBytes: number = options.writeMaxBytes ?? readMaxBytes;
+	const docxMaxBytes: number = options.docxMaxBytes ?? DEFAULT_WORKSPACE_DOCX_BYTES;
 	const downloadMaxBytes: number = Math.max(writeMaxBytes, DEFAULT_WORKSPACE_DOWNLOAD_BYTES);
 
 	function createDownloadFailure(
@@ -326,6 +346,59 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 			? lineStarts[lastLine] ?? content.length
 			: content.length;
 		return content.slice(startOffset, endOffset);
+	}
+
+	async function readDocx(relativePath: string, options: WorkspaceDocxReadOptions = {}): Promise<WorkspaceDocxReadResult> {
+		const resolved = await resolveReadPath(relativePath);
+		if (path.extname(resolved.relativePath).toLowerCase() !== ".docx") {
+			throw new Error(`read_docx only supports .docx files: ${resolved.relativePath}`);
+		}
+		const stat = await fs.stat(resolved.absolutePath);
+		if (!stat.isFile()) {
+			throw new Error(`Not a file: ${resolved.relativePath}`);
+		}
+		if (stat.size > docxMaxBytes) {
+			throw new Error(`File too large: ${resolved.relativePath} (${stat.size} bytes, max ${docxMaxBytes})`);
+		}
+
+		const { startParagraph, endParagraph } = options;
+		if (startParagraph !== undefined && (!Number.isInteger(startParagraph) || startParagraph < 1)) {
+			throw new Error("startParagraph must be a 1-based positive integer");
+		}
+		if (endParagraph !== undefined && (!Number.isInteger(endParagraph) || endParagraph < 1)) {
+			throw new Error("endParagraph must be a 1-based positive integer");
+		}
+		if (startParagraph !== undefined && endParagraph !== undefined && endParagraph < startParagraph) {
+			throw new Error("endParagraph must be greater than or equal to startParagraph");
+		}
+
+		const paragraphs: string[] = extractDocxParagraphs(await fs.readFile(resolved.absolutePath));
+		const paragraphCount: number = paragraphs.length;
+		if (paragraphCount === 0) {
+			return {
+				path: resolved.relativePath,
+				paragraphCount,
+				startParagraph: 0,
+				endParagraph: 0,
+				charCount: 0,
+				text: ""
+			};
+		}
+
+		const firstParagraph: number = startParagraph ?? 1;
+		const lastParagraph: number = Math.min(endParagraph ?? paragraphCount, paragraphCount);
+		const selected: string[] = firstParagraph > paragraphCount
+			? []
+			: paragraphs.slice(firstParagraph - 1, lastParagraph);
+		const text: string = selected.join("\n");
+		return {
+			path: resolved.relativePath,
+			paragraphCount,
+			startParagraph: firstParagraph,
+			endParagraph: lastParagraph,
+			charCount: text.length,
+			text
+		};
 	}
 
 	async function listFilesDetailed(input?: WorkspaceListFilesInput): Promise<WorkspaceListFilesResult> {
@@ -723,6 +796,7 @@ export function createWorkspaceFileService(options: WorkspaceFileServiceOptions)
 		listFilesDetailed,
 		searchText,
 		readTextFile,
+		readDocx,
 		validateNewTextFile,
 		createTextFile,
 		validateOverwriteTextFile,

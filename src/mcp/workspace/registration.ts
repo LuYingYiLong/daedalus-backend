@@ -40,6 +40,12 @@ const readFileSchema = z.object({
 	endLine: z.number().int().positive().optional().describe("Optional 1-based last line to read, inclusive.")
 });
 
+const readDocxSchema = z.object({
+	relativePath: z.string().min(1).describe("Workspace relative path of a .docx document."),
+	startParagraph: z.number().int().positive().optional().describe("Optional 1-based first paragraph to return."),
+	endParagraph: z.number().int().positive().optional().describe("Optional 1-based last paragraph to return, inclusive.")
+});
+
 const searchTextSchema = z.object({
 	query: z.string().min(1).describe("Text to search for."),
 	extensions: z.array(z.string()).optional().describe("Optional extension filter."),
@@ -103,6 +109,16 @@ export function registerWorkspaceTools(server: McpServer): void {
 			inputSchema: searchTextSchema
 		},
 		async (input) => asJsonTextResult({ matches: await service.searchText(input) })
+	);
+
+	server.registerTool(
+		"read_docx",
+		{
+			title: "Read Workspace DOCX",
+			description: "Extract the paragraph text of a .docx document inside the active workspace. Read-only: the OOXML archive is parsed in-process and never executed.",
+			inputSchema: readDocxSchema
+		},
+		async (input) => asJsonTextResult(await service.readDocx(input.relativePath, input))
 	);
 
 	server.registerTool(

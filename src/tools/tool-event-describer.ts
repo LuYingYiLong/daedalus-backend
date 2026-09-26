@@ -217,6 +217,14 @@ export function describeToolEvent(toolName: string, args: Record<string, unknown
 				label: filePath
 			});
 		}
+		if (toolName.includes("read_docx")) {
+				const documentPath: string = formatSourcePath(args, relativePath ?? "unknown document");
+			return createDisplay("workspace", "Workspace", "read", "Read document", `Read ${documentPath}`, {
+				kind: "file",
+				path: documentPath,
+				label: documentPath
+			});
+		}
 		if (toolName.includes("search_text")) {
 			const query: string = getStringArg(args, "query") ?? "search";
 			return createDisplay("workspace", "Workspace", "search", "Search files", `Search: ${query.slice(0, 100)}`, {

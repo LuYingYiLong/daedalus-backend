@@ -424,6 +424,16 @@ const WORKSPACE_TOOL_DEFINITIONS: ChatCompletionTool[] = [
 		["relativePath"]
 	),
 	createSceneToolDefinition(
+		"mcp_workspace_read_docx",
+		"读取当前 workspace 内的 .docx 文档正文（按段落）。只读工具：在进程内解析 OOXML，不执行文档内容，也不支持旧版二进制 .doc。文档较长时可先用段落范围读取局部。",
+		{
+			relativePath: { type: "string", description: "workspace 相对 .docx 文件路径" },
+			startParagraph: { type: "integer", minimum: 1, description: "可选，起始段落号（从 1 开始，包含该段）" },
+			endParagraph: { type: "integer", minimum: 1, description: "可选，结束段落号（从 1 开始，包含该段）" }
+		},
+		["relativePath"]
+	),
+	createSceneToolDefinition(
 		"mcp_workspace_search_text",
 		"在当前 workspace 的文本文件中搜索关键词，返回匹配文件和行号。",
 		{

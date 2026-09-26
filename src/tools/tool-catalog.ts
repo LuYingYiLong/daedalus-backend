@@ -120,6 +120,7 @@ const DEFAULT_WORKFLOW_TOOL_NAMES: Record<WorkflowToolGroup, readonly string[]> 
 		"mcp_workspace_get_source_context",
 		"mcp_workspace_get_git_history",
 		"mcp_workspace_read_text_file",
+		"mcp_workspace_read_docx",
 		"mcp_workspace_search_text",
 		"mcp_godot_runtime_status",
 		"mcp_godot_runtime_observe",

@@ -566,6 +566,7 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["flow.get", handleConversationFlowRequest],
 	["flow.rename", handleConversationFlowRequest],
 	["flow.archive", handleConversationFlowRequest],
+	["flow.restore", handleConversationFlowRequest],
 	["flow.node.types.list", handleConversationFlowRequest],
 	["flow.patch.commit", handleConversationFlowRequest],
 	["flow.settings.update", handleConversationFlowRequest],

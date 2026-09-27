@@ -56,7 +56,23 @@ async function readDocument<T>(path: string, fallback: T): Promise<T> {
 
 function normalizePlugins(value: PluginStoreDocument): PluginStoreDocument {
 	if (value.schemaVersion !== 1 || !Array.isArray(value.plugins)) return structuredClone(EMPTY_PLUGIN_STORE);
-	return { schemaVersion: 1, plugins: value.plugins.filter(isPluginRecord) };
+	const plugins: PluginRecord[] = [];
+	for (const candidate of value.plugins.filter(isPluginRecord)) {
+		const raw = candidate as PluginRecord & Record<string, unknown>;
+		const rawCompatibility: Record<string, unknown> = isRecord(raw.compatibility) ? raw.compatibility : {};
+		const legacyFields: boolean = Object.hasOwn(raw, "harnessBundle") || Object.hasOwn(raw, "harnessRuntimeFingerprint") || rawCompatibility.harnessBundle === true || rawCompatibility.harnessClient === true || ["harness-bundle", "harness-client", "both"].includes(String(rawCompatibility.classification));
+		if (legacyFields && raw.nativePlugin === undefined) continue;
+		const { harnessBundle: _bundle, harnessRuntimeFingerprint: _runtimeFingerprint, ...record } = raw;
+		const { harnessBundle: _compatBundle, harnessClient: _compatClient, patchPath: _patchPath, patchExists: _patchExists, ...compatibility } = rawCompatibility;
+		plugins.push({
+			...record,
+			compatibility: {
+				...compatibility,
+				...(legacyFields ? { daedalus: "native", classification: "native" } : {}),
+			} as PluginRecord["compatibility"]
+		});
+	}
+	return { schemaVersion: 1, plugins };
 }
 
 function normalizeProfiles(value: PluginProfileStoreDocument): PluginProfileStoreDocument {

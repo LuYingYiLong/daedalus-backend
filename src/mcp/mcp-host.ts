@@ -1076,7 +1076,7 @@ export class McpHost {
 		let routedSourceFolderId: string | undefined = sourceFolderId;
 		if (serverId === "skills" && name === "load" && workspace !== undefined) {
 			const ref: string = typeof args.ref === "string" ? args.ref : "";
-			if (ref.startsWith("plugin:") || ref.startsWith("harness:")) {
+			if (ref.startsWith("plugin:")) {
 				const pluginId: string | undefined = ref.split(":")[1];
 				if (pluginId !== undefined) await ensurePluginRuntime(pluginId, { sessionId: sessionId ?? workspace.id, workspaceId: workspace.id, workspaceRoot: workspace.rootPath });
 			}

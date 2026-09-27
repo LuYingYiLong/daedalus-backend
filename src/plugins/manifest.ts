@@ -3,7 +3,6 @@ import { lstat, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { PLUGIN_CAPABILITIES, type NativePluginDeclaration, type PluginCompatibility, type PluginPackageManifest, type PluginPresentation, type PluginScanResult } from "./types.js";
-import { parseHarnessBundlePatch } from "./harness/patch-parser.js";
 import { pluginP2ManifestSchema, type PluginP2Manifest } from "./extensions/protocol.js";
 import { flowNodeTypeDefinitionSchema } from "../protocol/schema.js";
 
@@ -12,7 +11,6 @@ const nativeFlowNodeDeclarationSchema = flowNodeTypeDefinitionSchema.omit({ plug
 });
 
 const MAX_MANIFEST_BYTES: number = 256 * 1024;
-const MAX_PATCH_BYTES: number = 512 * 1024;
 const MAX_PACKAGE_FILES: number = 10_000;
 const MAX_PACKAGE_BYTES: number = 128 * 1024 * 1024;
 const MAX_PRESENTATION_TEXT_BYTES: number = 128 * 1024;
@@ -118,6 +116,9 @@ function createManifest(value: unknown): PluginPackageManifest {
 	if (!isRecord(value)) {
 		throw Object.assign(new Error("package.json must contain a JSON object."), { code: "plugin_manifest_invalid" });
 	}
+	if (Object.hasOwn(value, "dsh")) {
+		throw Object.assign(new Error("This plugin format is no longer supported. Install a Daedalus Native plugin instead."), { code: "plugin_legacy_manifest_unsupported" });
+	}
 	const name: string | undefined = readString(value.name);
 	const version: string | undefined = readString(value.version);
 	if (name === undefined || version === undefined) {
@@ -132,7 +133,6 @@ function createManifest(value: unknown): PluginPackageManifest {
 		...(value.exports === undefined ? {} : { exports: value.exports }),
 		...(value.files === undefined ? {} : { files: value.files }),
 		...(value.engines === undefined ? {} : { engines: value.engines }),
-		...(value.dsh === undefined ? {} : { dsh: value.dsh }),
 		...(value.daedalus === undefined ? {} : { daedalus: value.daedalus })
 	};
 }
@@ -213,73 +213,20 @@ async function existsFile(path: string): Promise<boolean> {
 }
 
 async function analyzeCompatibility(root: string, manifest: PluginPackageManifest): Promise<PluginCompatibility> {
-	const dsh: Record<string, unknown> | undefined = isRecord(manifest.dsh) ? manifest.dsh : undefined;
-	const bundleDeclaration: unknown = dsh?.bundle;
-	const bundle: Record<string, unknown> | undefined = isRecord(bundleDeclaration) ? bundleDeclaration : undefined;
-	const harnessBundle: boolean = bundleDeclaration !== undefined;
-	const harnessClient: boolean = dsh?.client !== undefined;
 	const daedalusRoot: Record<string, unknown> | undefined = isRecord(manifest.daedalus) ? manifest.daedalus : undefined;
 	const daedalusPlugin: Record<string, unknown> | undefined = isRecord(daedalusRoot?.plugin) ? daedalusRoot.plugin : undefined;
 	const daedalusEntry: string | undefined = readString(daedalusPlugin?.entry);
-	const harnessClientValue: unknown = dsh?.client;
-	const harnessClientEntry: string | undefined = readString(harnessClientValue) ?? (isRecord(harnessClientValue) ? readString(harnessClientValue.entry) : undefined);
-	const entryPaths: string[] = resolveEntryPaths(root, manifest, [daedalusEntry, harnessClientEntry]);
+	const entryPaths: string[] = resolveEntryPaths(root, manifest, [daedalusEntry]);
 	const warnings: string[] = [];
 	const unsupportedFeatures: string[] = [];
-	let patchPath: string | undefined;
-	let patchExists: boolean = false;
-	if (harnessBundle) {
-		if (bundle === undefined) {
-			warnings.push("dsh.bundle must be an object.");
-			unsupportedFeatures.push("invalid dsh.bundle declaration");
-		}
-		patchPath = readString(bundle?.patch);
-		if (patchPath === undefined) {
-			warnings.push("dsh.bundle is missing a patch path.");
-		} else if (!patchPath.startsWith(".")) {
-			unsupportedFeatures.push("absolute or package-external Cordis patch path");
-		} else {
-			const patchAbsolutePath: string = resolve(root, patchPath);
-			assertInside(root, patchAbsolutePath);
-			patchExists = await existsFile(patchAbsolutePath);
-			if (!patchExists) warnings.push(`Cordis patch file not found: ${patchPath}`);
-			if (patchExists) {
-				const patchContent: Buffer = await readFile(patchAbsolutePath);
-				if (patchContent.byteLength > MAX_PATCH_BYTES) warnings.push(`Cordis patch file exceeds ${MAX_PATCH_BYTES} bytes.`);
-				else {
-					const text: string = patchContent.toString("utf8");
-					if (/!!js\b/iu.test(text)) warnings.push("Cordis patch contains !!js expressions that execute only inside the trusted Harness Sidecar.");
-					if (/^\s*inject\s*:/imu.test(text)) warnings.push("Cordis patch declares service injection.");
-					if (/\b(?:dynamic|group|include)\s*:/iu.test(text)) warnings.push("Cordis patch contains dynamic composition that may not be bridgeable.");
-					for (const operation of ["insert", "replace", "override"]) {
-						if (new RegExp(`\\b${operation}\\s*:`, "iu").test(text)) warnings.push(`Cordis patch declares ${operation}.`);
-					}
-				}
-			}
-		}
-	}
-	if (harnessClient) {
-		warnings.push("Harness client modules require a Harness-compatible client runtime.");
-		if (harnessClientEntry === undefined) warnings.push("dsh.client does not declare a statically inspectable entry path.");
-	}
 	if (daedalusPlugin !== undefined && daedalusEntry === undefined) warnings.push("daedalus.plugin is missing an entry path.");
 	for (const entryPath of entryPaths) {
 		if (!(await existsFile(resolve(root, entryPath)))) warnings.push(`Declared entry file not found: ${entryPath}`);
 	}
 	const native: boolean = daedalusPlugin !== undefined && daedalusEntry !== undefined;
-	let classification: PluginCompatibility["classification"];
-	if (unsupportedFeatures.length > 0) classification = "unsupported";
-	else if (native && harnessBundle) classification = "both";
-	else if (native) classification = "native";
-	else if (harnessBundle) classification = "harness-bundle";
-	else if (harnessClient) classification = "harness-client";
-	else classification = "metadata-only";
+	const classification: PluginCompatibility["classification"] = unsupportedFeatures.length > 0 ? "unsupported" : native ? "native" : "metadata-only";
 	return {
 		daedalus: native ? "native" : "unknown",
-		harnessBundle,
-		harnessClient,
-		...(patchPath === undefined ? {} : { patchPath }),
-		patchExists,
 		entryPaths,
 		unsupportedFeatures,
 		warnings,
@@ -351,9 +298,6 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 	}
 	const presentation: PluginPresentation | undefined = await readPresentation(normalizedRoot, manifest);
 	const compatibility: PluginCompatibility = await analyzeCompatibility(normalizedRoot, manifest);
-	const harnessBundle = compatibility.harnessBundle && compatibility.patchPath !== undefined && compatibility.patchExists
-		? await parseHarnessBundlePatch(normalizedRoot, compatibility.patchPath)
-		: undefined;
 	return {
 		packageName: manifest.name,
 		version: manifest.version,
@@ -365,7 +309,6 @@ export async function analyzePluginDirectory(root: string): Promise<PluginScanRe
 		...(nativePlugin === undefined ? {} : { nativePlugin }),
 		...(p2 === undefined ? {} : { p2 }),
 		...(dependencyLockHash === undefined ? {} : { dependencyLockHash }),
-		...(harnessBundle === undefined ? {} : { harnessBundle }),
 		packageRoot: normalizedRoot
 	};
 }

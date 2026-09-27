@@ -13,7 +13,7 @@ import { registerFlowNodeDefinition, unregisterFlowNodeDefinition } from "../../
 import { registerFlowNodeExecutor, unregisterPluginFlowNodeExecutors } from "../../server/flow-node-executor-registry.js";
 import type { PluginCommandRegistration, PluginFlowNodeRegistration, PluginHookRegistration, PluginMcpRegistration, PluginSkillRegistration, PluginToolRegistration, PluginToolRisk } from "./worker-protocol.js";
 
-export type PluginRegistryNamespace = "plugin" | "harness";
+export type PluginRegistryNamespace = "plugin";
 export type RegisteredPluginTool = PluginToolRegistration & { llmToolName: string; pluginId: string; namespace: PluginRegistryNamespace; mapping: ToolMapping };
 export type RegisteredPluginSkill = PluginSkillRegistration & { pluginId: string; namespace: PluginRegistryNamespace; ref: string };
 export type RegisteredPluginHook = PluginHookRegistration & { pluginId: string; namespace: PluginRegistryNamespace; handlerName: string };

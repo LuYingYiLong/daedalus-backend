@@ -31,7 +31,7 @@ export const skillIdSchema = z.enum([
 export const skillRefSchema = z.string()
 	.min(3)
 	.max(320)
-	.regex(/^(?:(?:builtin|personal):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?|project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:@[a-f0-9]{12})?|(?:plugin|harness):[A-Za-z0-9@._:-]+:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/u, "Invalid skill reference.");
+	.regex(/^(?:(?:builtin|personal):[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?|project:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:@[a-f0-9]{12})?|plugin:[A-Za-z0-9@._:-]+:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)$/u, "Invalid skill reference.");
 
 const skillTargetSchema = z.object({
 	workspaceId: z.string().min(1).max(200).optional(),
@@ -2479,31 +2479,6 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.clear_quarantine"), params: z.object({ pluginId: z.string().min(1).max(240), sessionId: z.string().min(1).max(240).optional() }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.logs.list"), params: z.object({ pluginId: z.string().min(1).max(240).optional(), limit: z.number().int().min(1).max(100).optional() }).strict().optional() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.runtime.dependencies.install"), params: z.object({ pluginId: z.string().min(1).max(240), allowNetwork: z.boolean() }).strict() }),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.config.get"), params: z.object({}).strict().optional() }),
-	z.object({
-		type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.config.update"),
-		params: z.object({
-			expectedRevision: z.string().length(64),
-			enabled: z.boolean(),
-			executablePath: z.string().trim().min(1).max(4096).nullable(),
-			sourceRoot: z.string().trim().min(1).max(4096).nullable(),
-			launchMode: z.enum(["installed", "source"])
-		}).strict()
-	}),
-	z.object({
-		type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.detect"),
-		params: z.object({
-			// Detection may inspect the values currently being edited in Studio without persisting them.
-			draft: z.object({
-				enabled: z.boolean(),
-				executablePath: z.string().trim().max(4096).nullable(),
-				sourceRoot: z.string().trim().max(4096).nullable(),
-				launchMode: z.enum(["installed", "source"]),
-			}).strict().optional(),
-		}).strict().optional(),
-	}),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.preview"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.runtime.status"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.extensions.registry.get"), params: z.object({}).strict().optional() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.command.resolve"), params: z.object({ command: z.string().min(1).max(160), args: z.record(z.string().min(1).max(64), z.unknown()).optional() }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.ui.panel.create"), params: z.object({ panelId: z.string().min(1).max(240), location: z.enum(["side", "bottom"]), state: z.record(z.string(), z.unknown()).optional() }).strict() }),
@@ -2519,8 +2494,6 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.events.subscribe"), params: z.object({ pluginId: z.string().min(1).max(240), topic: z.string().min(1).max(240), cursor: z.string().max(160).optional() }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.events.ack"), params: z.object({ pluginId: z.string().min(1).max(240), topic: z.string().min(1).max(240), cursor: z.string().min(1).max(160) }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.timeline.append"), params: z.object({ pluginId: z.string().min(1).max(240), partType: z.string().min(1).max(240), title: z.string().max(200).optional(), summary: z.string().max(1200).optional(), icon: z.string().max(80).optional(), status: z.enum(["info", "success", "warning", "error"]).optional(), data: z.record(z.string(), z.unknown()) }).strict() }),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.convert.preview"), params: z.object({ pluginId: z.string().min(1).max(240) }).strict() }),
-	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.harness.convert.activate"), params: z.object({ pluginId: z.string().min(1).max(240), expectedFingerprint: z.string().length(64) }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.development.status.get"), params: z.object({ slug: z.string().regex(/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u).optional() }).strict().optional() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.update.preview"), params: z.object({ pluginId: z.string().min(1).max(240), expectedFingerprint: z.string().length(64), source: pluginSourceSchema }).strict() }),
 	z.object({ type: z.literal("request"), id: z.string(), method: z.literal("plugin.update.operation.get"), params: z.object({ operationId: z.string().min(1).max(240) }).strict() }),

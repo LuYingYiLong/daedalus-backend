@@ -39,8 +39,6 @@ export type DaedalusPathKey =
 	| "plugins.versions"
 	| "plugins.runtime"
 	| "plugins.dependencies"
-	| "plugins.harnessConfig"
-	| "plugins.harnessRuntime"
 	| "plugins.events"
 	| "plugins.developmentRuns"
 	| "plugins.maintenance"
@@ -113,8 +111,6 @@ function buildDaedalusPathRegistry(): DaedalusPathRegistry {
 		"plugins.versions": join(root, "plugins", "versions"),
 		"plugins.runtime": join(root, "plugins", "runtime"),
 		"plugins.dependencies": join(root, "plugins", "dependencies"),
-		"plugins.harnessConfig": join(root, "plugins", "harness.json"),
-		"plugins.harnessRuntime": join(root, "plugins", "harness-runtime"),
 		"plugins.events": join(root, "plugins", "events.json"),
 		"plugins.developmentRuns": join(root, "plugins", "development-runs.json"),
 		"plugins.maintenance": join(root, "plugins", "maintenance.json"),

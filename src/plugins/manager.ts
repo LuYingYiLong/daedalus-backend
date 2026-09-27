@@ -17,9 +17,6 @@ import {
 	updatePluginTrust
 } from "./store.js";
 import type { PluginCatalogResult, PluginCompatibility, PluginProfile, PluginRecord, PluginScanResult, PluginSource, PluginTrustStatus, PluginVersionRecord } from "./types.js";
-import { readHarnessRuntimeConfig } from "./harness/config-store.js";
-import { detectHarnessInstallation } from "./harness/installation.js";
-import { createHarnessRuntimeFingerprint } from "./harness/trust.js";
 import { archivePluginVersion, getPluginVersion, listPluginVersions } from "./versions.js";
 
 const MAX_PROCESS_OUTPUT: number = 2 * 1024 * 1024;
@@ -191,12 +188,12 @@ function createPluginId(packageName: string, version: string, contentHash: strin
 	return `${packageName}@${version}:${contentHash.slice(0, 12)}`;
 }
 
-function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility, nativePlugin?: unknown, dependencyLockHash?: string, harnessBundle?: unknown, p2?: unknown): string {
-	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash, harnessBundle, p2 })).digest("hex");
+function createFingerprint(source: PluginSource, contentHash: string, manifestHash: string, compatibility: PluginCompatibility, nativePlugin?: unknown, dependencyLockHash?: string, p2?: unknown): string {
+	return createHash("sha256").update(JSON.stringify({ source, contentHash, manifestHash, compatibility, nativePlugin, dependencyLockHash, p2 })).digest("hex");
 }
 
-export function computePluginFingerprint(scan: Pick<PluginScanResult, "contentHash" | "manifestHash" | "compatibility" | "nativePlugin" | "dependencyLockHash" | "harnessBundle" | "p2">, source: PluginSource): string {
-	return createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle, scan.p2);
+export function computePluginFingerprint(scan: Pick<PluginScanResult, "contentHash" | "manifestHash" | "compatibility" | "nativePlugin" | "dependencyLockHash" | "p2">, source: PluginSource): string {
+	return createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.p2);
 }
 
 async function copyPreparedPackage(sourceRoot: string, packageId: string, contentHash: string): Promise<string> {
@@ -250,7 +247,7 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 		const packageRoot: string = await copyPreparedPackage(prepared.root, id, scan.contentHash);
 		const now: string = new Date().toISOString();
 		const trust = await readPluginTrust();
-		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle, scan.p2);
+		const fingerprint: string = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.p2);
 		const trustEntry = trust[id];
 		const trustStatus: PluginTrustStatus = trustEntry?.fingerprint === fingerprint ? trustEntry.status : "review_required";
 		const record: PluginRecord = {
@@ -271,7 +268,6 @@ export async function installPlugin(source: PluginSource): Promise<PluginRecord>
 			...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
 			...(scan.p2 === undefined ? {} : { p2: scan.p2 }),
 			...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash }),
-			...(scan.harnessBundle === undefined ? {} : { harnessBundle: scan.harnessBundle })
 		};
 		const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => {
 			const index: number = current.findIndex((candidate): boolean => candidate.id === id);
@@ -297,7 +293,7 @@ export async function updatePluginFromSource(pluginId: string, source: PluginSou
 	try {
 	const scan = await analyzePluginDirectory(prepared.root);
 		if (scan.packageName !== current.packageName) throw Object.assign(new Error("Plugin update must keep the existing package name."), { code: "plugin_package_name_changed" });
-		const fingerprint = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.harnessBundle, scan.p2);
+		const fingerprint = createFingerprint(source, scan.contentHash, scan.manifestHash, scan.compatibility, scan.nativePlugin, scan.dependencyLockHash, scan.p2);
 		const stagingRoot = join(getDaedalusPath("plugins.root"), "staging", randomUUID());
 		await mkdir(join(getDaedalusPath("plugins.root"), "staging"), { recursive: true });
 		try {
@@ -326,8 +322,6 @@ export async function updatePluginFromSource(pluginId: string, source: PluginSou
 				...(scan.nativePlugin === undefined ? {} : { nativePlugin: scan.nativePlugin }),
 				...(scan.p2 === undefined ? { p2: undefined } : { p2: scan.p2 }),
 				...(scan.dependencyLockHash === undefined ? {} : { dependencyLockHash: scan.dependencyLockHash }),
-				...(scan.harnessBundle === undefined ? {} : { harnessBundle: scan.harnessBundle }),
-				harnessRuntimeFingerprint: undefined,
 				isolation: undefined,
 				lastError: undefined
 			};
@@ -409,21 +403,13 @@ export async function removePlugin(pluginId: string): Promise<void> {
 export async function updatePluginTrustStatus(pluginId: string, fingerprint: string, status: Exclude<PluginTrustStatus, "review_required">): Promise<PluginRecord> {
 	const record: PluginRecord | undefined = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw Object.assign(new Error("Plugin not found."), { code: "plugin_not_found" });
-	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.harnessBundle, record.p2);
+	const expected: string = createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.p2);
 	if (expected !== fingerprint) throw Object.assign(new Error("Plugin fingerprint is stale. Rescan the plugin before updating trust."), { code: "plugin_fingerprint_stale" });
 	const updatedAt: string = new Date().toISOString();
-	let harnessRuntimeFingerprint: string | undefined;
-	if (status === "trusted" && record.compatibility.harnessBundle) {
-		const config = await readHarnessRuntimeConfig();
-		const installation = await detectHarnessInstallation(config);
-		if (installation.status !== "detected") throw Object.assign(new Error(installation.error ?? "Configure a compatible Harness runtime before trusting this Bundle."), { code: "plugin_harness_unavailable" });
-		harnessRuntimeFingerprint = createHarnessRuntimeFingerprint(record, config, installation);
-	}
 	await updatePluginTrust((entries): typeof entries => ({ ...entries, [pluginId]: { fingerprint, status, updatedAt } }));
 	const records: PluginRecord[] = await updatePluginState((current): PluginRecord[] => current.map((candidate): PluginRecord => {
 		if (candidate.id !== pluginId) return candidate;
-		const { harnessRuntimeFingerprint: _previous, ...rest } = candidate;
-		return { ...rest, trust: status, enabled: status === "trusted", updatedAt, ...(harnessRuntimeFingerprint === undefined ? {} : { harnessRuntimeFingerprint }) };
+		return { ...candidate, trust: status, enabled: status === "trusted", updatedAt };
 	}));
 	await updatePluginProfiles((profiles): PluginProfile[] => profiles.map((profile): PluginProfile => {
 		const active: boolean = profile.active;
@@ -480,5 +466,5 @@ export async function getPluginCatalog(): Promise<PluginCatalogResult> {
 }
 
 export function pluginFingerprint(record: PluginRecord): string {
-	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.harnessBundle, record.p2);
+	return createFingerprint(record.source, record.contentHash, record.manifestHash, record.compatibility, record.nativePlugin, record.dependencyLockHash, record.p2);
 }

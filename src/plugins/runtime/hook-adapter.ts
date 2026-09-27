@@ -35,7 +35,7 @@ export async function runPluginHooks(request: HookRunRequest, onEvent?: ((event:
 	const outputs: Array<Record<string, unknown>> = [];
 	const matcherValue = request.matcherValue ?? String(request.input.tool_name ?? request.input.prompt ?? "");
 	for (const record of records) {
-		const hookCapable: boolean = record.nativePlugin?.capabilities.includes("hooks") === true || record.compatibility.harnessBundle;
+		const hookCapable: boolean = record.nativePlugin?.capabilities.includes("hooks") === true;
 		if (!record.enabled || record.trust !== "trusted" || !hookCapable) continue;
 		try {
 			await ensurePluginRuntime(record.id, {

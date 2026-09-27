@@ -12,19 +12,6 @@ import { getPluginCatalog, pluginFingerprint } from "../manager.js";
 import { readPluginRecords } from "../store.js";
 import type { NativeFlowNodeDeclaration, PluginRecord, PluginRuntimeSnapshot } from "../types.js";
 import {
-	ensureHarnessRuntime,
-	clearHarnessPluginQuarantine,
-	getHarnessRuntimeSnapshot,
-	hasHarnessHandle,
-	invokeHarnessPlugin,
-	listHarnessRuntimeSnapshots,
-	countHarnessSessionRuntimes,
-	restartHarnessPlugin,
-	stopAllHarnessRuntimes,
-	stopHarnessPlugin
-} from "../harness/manager.js";
-import type { HarnessHandle } from "../harness/runner.js";
-import {
 	clearPluginRegistrations,
 	registerPluginCommand,
 	registerPluginFlowNode,
@@ -450,13 +437,12 @@ async function startWorker(record: PluginRecord, context: PluginRuntimeContext):
 	return handle;
 }
 
-export type PluginRuntimeHandle = WorkerHandle | HarnessHandle;
+export type PluginRuntimeHandle = WorkerHandle;
 
 export async function ensurePluginRuntime(pluginId: string, context: Omit<PluginRuntimeContext, "pluginId" | "capabilities">): Promise<PluginRuntimeHandle> {
 	const record = (await readPluginRecords()).find((candidate): boolean => candidate.id === pluginId);
 	if (record === undefined) throw new Error("Plugin not found.");
-	if ([...handles.values()].filter((handle): boolean => handle.sessionId === context.sessionId).length + countHarnessSessionRuntimes(context.sessionId) >= MAX_PLUGIN_SESSIONS && !handles.has(key(pluginId, context.sessionId)) && !hasHarnessHandle(pluginId, context.sessionId)) throw Object.assign(new Error("Plugin session runtime limit reached."), { code: "plugin_runtime_session_limit" });
-	if (record.compatibility.harnessBundle && ["harness-bundle", "both"].includes(record.compatibility.classification)) return await ensureHarnessRuntime(pluginId, context);
+	if ([...handles.values()].filter((handle): boolean => handle.sessionId === context.sessionId).length >= MAX_PLUGIN_SESSIONS && !handles.has(key(pluginId, context.sessionId))) throw Object.assign(new Error("Plugin session runtime limit reached."), { code: "plugin_runtime_session_limit" });
 	await validateRecord(record, context.sessionId);
 	const dependency = await installPluginDependencies(record, false);
 	setSnapshot(pluginId, { dependencyStatus: dependency.status });
@@ -505,10 +491,6 @@ export async function installPluginRuntimeDependencies(pluginId: string, allowNe
 }
 
 export async function invokePlugin(pluginId: string, sessionId: string, kind: PluginInvocationKind, name: string, args: Record<string, unknown>, timeoutMs: number = PLUGIN_CALL_TIMEOUT_MS, signal?: AbortSignal, hostRequest?: PluginHostRequestHandler): Promise<unknown> {
-	if (hasHarnessHandle(pluginId, sessionId)) {
-		if (kind === "flow_node") throw new Error("Harness plugins cannot execute Flow nodes.");
-		return await invokeHarnessPlugin(pluginId, sessionId, kind, name, args, timeoutMs);
-	}
 	const handle = handles.get(key(pluginId, sessionId));
 	if (handle === undefined) throw new Error("Plugin runtime is not running.");
 	const id = randomUUID();
@@ -554,7 +536,6 @@ export async function invokePlugin(pluginId: string, sessionId: string, kind: Pl
 }
 
 export async function stopPlugin(pluginId: string, sessionId?: string, status: "stopped" | "disabled" = "stopped"): Promise<void> {
-	await stopHarnessPlugin(pluginId, sessionId, status);
 	stopPluginLanguageServicesForPlugin(pluginId, sessionId);
 	const targets = [...handles.values()].filter((handle): boolean => handle.pluginId === pluginId && (sessionId === undefined || handle.sessionId === sessionId));
 	for (const handle of targets) {
@@ -574,7 +555,6 @@ export async function stopPlugin(pluginId: string, sessionId?: string, status: "
 
 export async function clearPluginRuntimeQuarantine(pluginId: string, sessionId?: string): Promise<void> {
 	await clearPluginQuarantine(pluginId, sessionId);
-	await clearHarnessPluginQuarantine(pluginId, sessionId);
 	setSnapshot(pluginId, { status: "stopped", isolation: { status: "none", failureCount: 0, updatedAt: new Date().toISOString() }, lastError: undefined });
 }
 
@@ -583,10 +563,6 @@ export async function listPluginRuntimeQuarantine(pluginId?: string): Promise<un
 }
 
 export async function restartPlugin(pluginId: string): Promise<void> {
-	if (getHarnessRuntimeSnapshot(pluginId) !== undefined) {
-		await restartHarnessPlugin(pluginId);
-		return;
-	}
 	const contexts: PluginRuntimeContext[] = [...handles.values()].filter((handle): boolean => handle.pluginId === pluginId).map((handle): PluginRuntimeContext => handle.context);
 	await stopPlugin(pluginId);
 	for (const context of contexts) {
@@ -596,23 +572,19 @@ export async function restartPlugin(pluginId: string): Promise<void> {
 }
 
 export function listPluginRuntimeSnapshots(): PluginRuntimeSnapshot[] {
-	const merged = new Map<string, PluginRuntimeSnapshot>();
-	for (const snapshot of snapshots.values()) merged.set(snapshot.pluginId, structuredClone(snapshot));
-	for (const snapshot of listHarnessRuntimeSnapshots()) merged.set(snapshot.pluginId, snapshot);
-	return [...merged.values()];
+	return [...snapshots.values()].map((snapshot): PluginRuntimeSnapshot => structuredClone(snapshot));
 }
 
-export function getPluginRuntimeSnapshot(pluginId: string): PluginRuntimeSnapshot | undefined { return getHarnessRuntimeSnapshot(pluginId) ?? snapshots.get(pluginId); }
+export function getPluginRuntimeSnapshot(pluginId: string): PluginRuntimeSnapshot | undefined { return snapshots.get(pluginId); }
 
 export async function stopAllPluginRuntimes(): Promise<void> {
-	await stopAllHarnessRuntimes();
 	stopAllPluginLanguageServices();
 	for (const pluginId of new Set([...handles.values()].map((handle): string => handle.pluginId))) await stopPlugin(pluginId);
 }
 
 /** Backend restarts never revive child processes; remove their abandoned sandboxes before serving requests. */
 export async function recoverPluginRuntimeState(): Promise<void> {
-	for (const path of [getDaedalusPath("plugins.runtime"), getDaedalusPath("plugins.harnessRuntime"), join(getDaedalusPath("plugins.root"), "staging")]) {
+	for (const path of [getDaedalusPath("plugins.runtime"), join(getDaedalusPath("plugins.root"), "staging")]) {
 		try {
 			for (const entry of await readdir(path)) await rm(join(path, entry), { recursive: true, force: true });
 		} catch (error: unknown) {
@@ -626,7 +598,7 @@ export async function recoverPluginRuntimeState(): Promise<void> {
 
 export async function ensureSessionPluginRuntimes(context: { sessionId: string; workspaceId?: string | undefined; workspaceRoot?: string | undefined }): Promise<void> {
 	const catalog = await getPluginCatalog();
-	for (const plugin of catalog.plugins.filter((candidate): boolean => candidate.enabled && (candidate.nativePlugin !== undefined || candidate.compatibility.harnessBundle))) {
+	for (const plugin of catalog.plugins.filter((candidate): boolean => candidate.enabled && candidate.nativePlugin !== undefined)) {
 		try {
 			await ensurePluginRuntime(plugin.id, context);
 		} catch (error: unknown) {

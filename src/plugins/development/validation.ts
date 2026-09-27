@@ -105,7 +105,6 @@ export async function validatePluginDevelopmentDirectory(root: string): Promise<
 	try {
 		scan = await analyzePluginDirectory(root);
 		if (scan.nativePlugin === undefined || scan.nativePlugin.apiVersion !== 1) diagnostics.push({ code: "plugin_native_manifest_required", message: "A Daedalus Native API v1 declaration is required.", severity: "error", stage: "static", retryable: true, path: "package.json" });
-		if (scan.compatibility.harnessBundle || scan.compatibility.harnessClient) diagnostics.push({ code: "plugin_harness_not_supported", message: "@plugin-creator P0 does not generate Harness Bundle or Client plugins.", severity: "error", stage: "static", retryable: false, path: "package.json" });
 		diagnostics.push(...validateManifest(scan.manifest as Record<string, unknown>));
 	} catch (error: unknown) {
 		diagnostics.push(diagnostic(error));

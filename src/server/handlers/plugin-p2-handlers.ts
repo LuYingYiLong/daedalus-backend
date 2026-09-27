@@ -11,9 +11,7 @@ import { acknowledgePluginEvent, publishPluginEvent, subscribePluginEvents } fro
 import { sendStudioPersistentSessionEvent } from "../session-events.js";
 import { studioBrowserRuntime } from "../studio-browser-runtime.js";
 import { BROWSER_TOOL_NAMES, type BrowserToolName } from "../../tools/browser-tools.js";
-import { getPluginCatalog } from "../../plugins/manager.js";
 import { getPluginUiState, updatePluginUiState } from "../../plugins/extensions/ui-state.js";
-import { createNativeConversionReport } from "../../plugins/extensions/native-converter.js";
 import { startPluginLanguageService, stopPluginLanguageService } from "../../plugins/extensions/language-service.js";
 
 type PluginP2Request = Extract<ClientRequest, { method: `plugin.${string}` }>;
@@ -119,12 +117,6 @@ export async function handlePluginP2Request(socket: WebSocket, request: ClientRe
 	} else if (p2Request.method === "plugin.language-service.stop") {
 		if (session.sessionId === undefined) throw Object.assign(new Error("A session is required to stop a language service."), { code: "session_required" });
 		result = stopPluginLanguageService({ serviceId: p2Request.params.serviceId, sessionId: session.sessionId });
-	} else if (p2Request.method === "plugin.harness.convert.preview" || p2Request.method === "plugin.harness.convert.activate") {
-		const record = (await getPluginCatalog()).plugins.find((candidate): boolean => candidate.id === p2Request.params.pluginId);
-		if (record === undefined) throw Object.assign(new Error("Plugin was not found."), { code: "plugin_not_found" });
-		const report = createNativeConversionReport(record);
-		if (p2Request.method === "plugin.harness.convert.activate" && report.fingerprint !== p2Request.params.expectedFingerprint) throw Object.assign(new Error("Plugin fingerprint changed; rescan before activating conversion."), { code: "plugin_fingerprint_conflict" });
-		result = { ...report, activated: p2Request.method === "plugin.harness.convert.activate" && report.activationReady };
 	} else if (p2Request.method === "plugin.events.publish") {
 		result = await publishPluginEvent({
 			pluginId: p2Request.params.pluginId,

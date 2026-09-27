@@ -27,7 +27,7 @@ Backend 是本机常驻的 TypeScript 服务，Studio、Godot 插件、CLI 和�
 | `src/workspace/` | Workspace/source folder、Git、Worktree 和路径边界 |
 | `src/mcp/` | 内置 MCP、custom MCP、终端和 Godot bridge |
 | `src/hooks/` | 命令 Hook 配置、信任、沙箱执行和生命周期决策 |
-| `src/plugins/` | 插件发现、信任、Worker、Harness Sidecar；`extensions/` 管理命令、声明式 UI、语言服务与事件扩展注册 |
+| `src/plugins/` | 插件发现、信任与隔离 Worker；`extensions/` 管理命令、声明式 UI、语言服务与事件扩展注册 |
 | `src/prompts/`、`src/skills/` | 系统提示、内置 Skill 和工具集合 |
 | `src/app-paths.ts` | Daedalus 配置、会话、插件、日志和临时目录的 Path Registry |
 
@@ -52,14 +52,14 @@ Backend 是本机常驻的 TypeScript 服务，Studio、Godot 插件、CLI 和�
 
 1. 扫描来源并计算 manifest/content fingerprint。
 2. 用户整包审核并加入全局 Profile。
-3. 首次需要能力时启动 Native Worker 或 Harness Sidecar。
+3. 首次需要能力时启动隔离的 Native Worker。
 4. 先在临时 registry 收集注册，校验通过后原子替换正式 registry。
 5. 会话切换、禁用、取消、断线或空闲回收时清理进程与 pending calls。
 
-沙箱不可用时插件、Hook、Harness 和语言服务一律拒绝执行，绝不使用宿主机回退。插件故障按 `pluginId + sessionId` 统计，5 分钟内达到 3 次启动失败、崩溃、超时或协议错误后自动隔离。
+沙箱不可用时插件、Hook 和语言服务一律拒绝执行，绝不使用宿主机回退。插件故障按 `pluginId + sessionId` 统计，5 分钟内达到 3 次启动失败、崩溃、超时或协议错误后自动隔离。
 
 ## 启动与关闭
 
 启动时加载 Path Registry、配置和插件静态记录，清理无活动 Runtime 的临时目录，并恢复可验证的 Workspace/Worktree 状态。不会恢复运行中的 Worker、Sidecar 或 Agent Run。
 
-关闭时先取消 pending calls、后台 Hook、Browser/语言服务和插件 Runtime，再关闭会话与 WebSocket。关闭流程不得写入 secret 或完整工具结果日志。
+关闭时先取消 pending calls、后台 Hook、Browser/语言服务和插件 Worker，再关闭会话与 WebSocket。关闭流程不得写入 secret 或完整工具结果日志。

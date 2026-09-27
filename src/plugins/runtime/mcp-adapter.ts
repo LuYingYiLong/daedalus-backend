@@ -1,7 +1,7 @@
 import { invokePlugin } from "./manager.js";
 import { getPluginMcp } from "./registries.js";
 
-export function isPluginMcpServer(serverId: string): boolean { return serverId.startsWith("plugin:") || serverId.startsWith("harness:"); }
+export function isPluginMcpServer(serverId: string): boolean { return serverId.startsWith("plugin:"); }
 
 function requireServer(serverId: string) {
 	const server = getPluginMcp(serverId);

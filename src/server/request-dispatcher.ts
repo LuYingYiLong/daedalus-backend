@@ -137,10 +137,6 @@ const handlePluginRuntimeRequest: RequestHandler = createLazyHandler(async (): P
 	return (await import("./handlers/plugin-runtime-handlers.js")).handlePluginRuntimeRequest;
 });
 
-const handlePluginHarnessRequest: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
-	return (await import("./handlers/plugin-harness-handlers.js")).handlePluginHarnessRequest;
-});
-
 const handlePluginP2Request: RequestHandler = createLazyHandler(async (): Promise<RequestHandler> => {
 	return (await import("./handlers/plugin-p2-handlers.js")).handlePluginP2Request;
 });
@@ -287,11 +283,6 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"plugin.runtime.clear_quarantine",
 	"plugin.runtime.logs.list",
 	"plugin.runtime.dependencies.install",
-	"plugin.harness.config.get",
-	"plugin.harness.config.update",
-	"plugin.harness.detect",
-	"plugin.harness.preview",
-	"plugin.harness.runtime.status",
 	"plugin.extensions.registry.get",
 	"plugin.command.resolve",
 	"plugin.ui.panel.create",
@@ -307,8 +298,6 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"plugin.events.subscribe",
 	"plugin.events.ack",
 	"plugin.timeline.append",
-	"plugin.harness.convert.preview",
-	"plugin.harness.convert.activate",
 	"plugin.development.status.get",
 	"plugin.update.preview",
 	"plugin.update.operation.get",
@@ -500,11 +489,6 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["plugin.runtime.clear_quarantine", handlePluginRuntimeRequest],
 	["plugin.runtime.logs.list", handlePluginRuntimeRequest],
 	["plugin.runtime.dependencies.install", handlePluginRuntimeRequest],
-	["plugin.harness.config.get", handlePluginHarnessRequest],
-	["plugin.harness.config.update", handlePluginHarnessRequest],
-	["plugin.harness.detect", handlePluginHarnessRequest],
-	["plugin.harness.preview", handlePluginHarnessRequest],
-	["plugin.harness.runtime.status", handlePluginHarnessRequest],
 	["plugin.extensions.registry.get", handlePluginP2Request],
 	["plugin.command.resolve", handlePluginP2Request],
 	["plugin.ui.panel.create", handlePluginP2Request],
@@ -520,8 +504,6 @@ export const REQUEST_HANDLERS: ReadonlyMap<ClientRequest["method"], RequestHandl
 	["plugin.events.subscribe", handlePluginP2Request],
 	["plugin.events.ack", handlePluginP2Request],
 	["plugin.timeline.append", handlePluginP2Request],
-	["plugin.harness.convert.preview", handlePluginP2Request],
-	["plugin.harness.convert.activate", handlePluginP2Request],
 	["plugin.development.status.get", handlePluginDevelopmentRequest],
 	["plugin.update.preview", handlePluginMaintenanceRequest],
 	["plugin.update.operation.get", handlePluginMaintenanceRequest],

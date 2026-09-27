@@ -9,7 +9,7 @@ npm run typecheck
 npm test
 ```
 
-协议、Provider、MCP、路径、审批、插件、Worktree、调度和持久化改动还要执行对应的 contract/integration tests。测试不应依赖真实 Provider Key、真实 Cookie、真实 MCP Header、真实 Harness 账号或用户工作区。
+协议、Provider、MCP、路径、审批、插件、Worktree、调度和持久化改动还要执行对应的 contract/integration tests。测试不应依赖真实 Provider Key、真实 Cookie、真实 MCP Header 或用户工作区。
 
 ## 测试分层
 
@@ -18,19 +18,18 @@ npm test
 | 纯函数、schema、store、registry | `tests/unit/<domain>/` |
 | RPC payload、dispatcher、错误码 | `tests/contract/protocol/` |
 | WebSocket、sandbox、MCP、运行时边界 | `tests/integration/<domain>/` |
-| 插件、Harness、Worker、P2 | `tests/unit/plugins/` 与对应 runtime integration |
+| 插件 Worker、P2 | `tests/unit/plugins/` 与对应 runtime integration |
 | 可复用 fixture | `tests/fixtures/` |
 
-插件 fixture 必须覆盖：安装不执行生命周期脚本、manifest/fingerprint、整包信任、registry 原子提交、非法协议、sandbox unavailable、超时/崩溃熔断、P2 能力和 Harness 未知 Patch 警告。CI 使用假的 Worker/Sidecar，不要求本机安装 DeepSeek Harness。
+插件 fixture 必须覆盖：安装不执行生命周期脚本、manifest/fingerprint、整包信任、registry 原子提交、非法协议、sandbox unavailable、超时/崩溃熔断和 P2 能力。CI 使用假的 Worker，不依赖任何外部插件运行环境。
 
 ## 安全回归清单
 
-- 沙箱不可用时所有插件、Hook、Harness、语言服务都拒绝执行。
+- 沙箱不可用时所有插件、Hook 和语言服务都拒绝执行。
 - 网络默认关闭，明确授权才可在安装流程临时开启。
 - secret 不进入子进程环境、stdin、stdout、RPC 或日志。
 - 插件工具仍经过 Tool Policy、Approval Gateway 和 Agent Loop。
 - 整包信任、fingerprint 失效、Profile 启停和自动隔离行为正确。
-- Harness 未知 Patch、动态 Cordis 和 `!!js` 只警告，不执行。
 - 路径 traversal、符号链接/junction 逃逸、tarball 覆盖和工作区越界被拒绝。
 
 ## 发布前检查

@@ -12,11 +12,11 @@ import type {
 } from "./protocol.js";
 import { PLUGIN_P2_API_VERSION } from "./protocol.js";
 
-export type RegisteredPluginCommand = PluginCommandDefinition & { pluginId: string; runtime: "native" | "harness" };
-export type RegisteredPluginPanel = PluginPanelDefinition & { pluginId: string; runtime: "native" | "harness" };
-export type RegisteredPluginSettings = PluginSettingsDefinition & { pluginId: string; runtime: "native" | "harness" };
-export type RegisteredPluginTimelinePart = PluginTimelinePartDefinition & { pluginId: string; runtime: "native" | "harness" };
-export type RegisteredPluginBrowser = PluginBrowserDefinition & { pluginId: string; runtime: "native" | "harness" };
+export type RegisteredPluginCommand = PluginCommandDefinition & { pluginId: string };
+export type RegisteredPluginPanel = PluginPanelDefinition & { pluginId: string };
+export type RegisteredPluginSettings = PluginSettingsDefinition & { pluginId: string };
+export type RegisteredPluginTimelinePart = PluginTimelinePartDefinition & { pluginId: string };
+export type RegisteredPluginBrowser = PluginBrowserDefinition & { pluginId: string };
 
 export type PluginP2RegistrySnapshot = {
 	apiVersion: typeof PLUGIN_P2_API_VERSION;
@@ -25,17 +25,10 @@ export type PluginP2RegistrySnapshot = {
 	settings: RegisteredPluginSettings[];
 	timelineParts: RegisteredPluginTimelinePart[];
 	browser: RegisteredPluginBrowser[];
-	languageServices: Array<PluginLanguageServiceDefinition & { pluginId: string; runtime: "native" | "harness" }>;
-	events: Array<PluginEventDeclaration & { pluginId: string; runtime: "native" | "harness" }>;
+	languageServices: Array<PluginLanguageServiceDefinition & { pluginId: string }>;
+	events: Array<PluginEventDeclaration & { pluginId: string }>;
 	warnings: string[];
 };
-
-function runtimeFor(record: PluginRecord): "native" | "harness" {
-	// A static Bundle report is not executable Native code by itself.  Keep
-	// Harness-only packages on the Sidecar until a generated Native entry is
-	// actually persisted and fingerprinted.
-	return record.nativePlugin !== undefined ? "native" : "harness";
-}
 
 function isEligible(record: PluginRecord): boolean {
 	return record.trust === "trusted"
@@ -72,7 +65,6 @@ export async function buildPluginP2Registry(): Promise<PluginP2RegistrySnapshot>
 	const catalog = await getPluginCatalog();
 	for (const record of catalog.plugins.filter(isEligible)) {
 		const manifest: PluginP2Manifest = record.p2!;
-		const runtime = runtimeFor(record);
 		for (const capability of Object.keys(manifest.capabilities)) {
 			if (!supports(manifest, capability)) snapshot.warnings.push(`Plugin ${record.id} declares unsupported P2 capability version for ${capability}.`);
 		}
@@ -83,38 +75,38 @@ export async function buildPluginP2Registry(): Promise<PluginP2RegistrySnapshot>
 				continue;
 			}
 			seenCommands.add(id);
-			snapshot.commands.push({ ...command, id, command: command.command, pluginId: record.id, runtime });
+			snapshot.commands.push({ ...command, id, command: command.command, pluginId: record.id });
 		}
 		for (const panel of supports(manifest, "panels") ? (manifest.declarations.panels ?? []) : []) {
 			const id = `plugin:${record.id}:${panel.panelId}`;
 			if (seenPanels.has(id)) { snapshot.warnings.push(`Plugin panel conflict: ${id}`); continue; }
 			seenPanels.add(id);
-			snapshot.panels.push({ ...panel, panelId: id, pluginId: record.id, runtime });
+			snapshot.panels.push({ ...panel, panelId: id, pluginId: record.id });
 		}
 		for (const settings of supports(manifest, "settings") ? (manifest.declarations.settings ?? []) : []) {
 			const id = `plugin:${record.id}:${settings.settingsId}`;
 			if (seenSettings.has(id)) { snapshot.warnings.push(`Plugin settings conflict: ${id}`); continue; }
 			seenSettings.add(id);
-			snapshot.settings.push({ ...settings, settingsId: id, pluginId: record.id, runtime });
+			snapshot.settings.push({ ...settings, settingsId: id, pluginId: record.id });
 		}
 		for (const part of supports(manifest, "timelineParts") ? (manifest.declarations.timelineParts ?? []) : []) {
 			const id = `plugin:${record.id}:${part.partType}`;
 			if (seenTimeline.has(id)) { snapshot.warnings.push(`Plugin timeline part conflict: ${id}`); continue; }
 			seenTimeline.add(id);
-			snapshot.timelineParts.push({ ...part, partType: id, pluginId: record.id, runtime });
+			snapshot.timelineParts.push({ ...part, partType: id, pluginId: record.id });
 		}
-		if (supports(manifest, "browser") && manifest.declarations.browser !== undefined) snapshot.browser.push({ ...manifest.declarations.browser, pluginId: record.id, runtime });
+		if (supports(manifest, "browser") && manifest.declarations.browser !== undefined) snapshot.browser.push({ ...manifest.declarations.browser, pluginId: record.id });
 		for (const language of supports(manifest, "languageServices") ? (manifest.declarations.languageServices ?? []) : []) {
 			const id = `plugin:${record.id}:${language.id}`;
 			if (seenLanguages.has(id)) { snapshot.warnings.push(`Plugin language service conflict: ${id}`); continue; }
 			seenLanguages.add(id);
-			snapshot.languageServices.push({ ...language, id, pluginId: record.id, runtime });
+			snapshot.languageServices.push({ ...language, id, pluginId: record.id });
 		}
 		for (const event of supports(manifest, "events") ? (manifest.declarations.events ?? []) : []) {
 			const topic = `plugin:${record.id}:${event.topic}`;
 			if (seenEvents.has(topic)) { snapshot.warnings.push(`Plugin event declaration conflict: ${topic}`); continue; }
 			seenEvents.add(topic);
-			snapshot.events.push({ ...event, topic, pluginId: record.id, runtime });
+			snapshot.events.push({ ...event, topic, pluginId: record.id });
 		}
 	}
 	return snapshot;

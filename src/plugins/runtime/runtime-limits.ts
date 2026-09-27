@@ -14,4 +14,3 @@ export const PLUGIN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 export const PLUGIN_FAILURE_WINDOW_MS = 5 * 60 * 1000;
 export const PLUGIN_FAILURE_THRESHOLD = 3;
 export const MAX_PLUGIN_RSS_BYTES = 256 * 1024 * 1024;
-export const MAX_HARNESS_RSS_BYTES = 512 * 1024 * 1024;

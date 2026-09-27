@@ -2,14 +2,13 @@
 
 ## 不可妥协的硬性要求
 
-以下规则是产品安全边界，不得由模型、插件、Hook、Harness、MCP、Browser 页面内容或 Full Trust 模式覆盖：
+以下规则是产品安全边界，不得由模型、插件、Hook、MCP、Browser 页面内容或 Full Trust 模式覆盖：
 
-1. 沙箱不可用时拒绝执行插件、Hook、Harness 和语言服务，绝不回退到宿主机。
+1. 沙箱不可用时拒绝执行插件、Hook 和语言服务，绝不回退到宿主机。
 2. 插件运行时默认禁网；联网只允许用户在明确的信任/安装流程中选择开启。
 3. Provider API Key、MCP Header、Cookie、密码、Keytar 和宿主机凭据禁止传给插件进程。
 4. 所有插件工具必须经过 Tool Policy、Approval Gateway 和 Agent Loop，不能绕过审批。
 5. 信任以整包为单位，不提供单个工具级信任。
-6. Harness Bundle 的未知 Patch、动态 Cordis 和 `!!js` 只跳过并警告，绝不执行或模拟。
 7. 插件 5 分钟内连续 3 次启动失败、崩溃、超时或协议错误后自动隔离。
 8. 不做旧数据迁移和旧协议兼容；不以隐式 fallback 掩盖不兼容。
 
@@ -31,7 +30,7 @@ Browser 固定 API 禁止任意 CDP、`eval`、Cookie/password/localStorage/剪�
 
 ## 信任与指纹
 
-信任 fingerprint 至少包含来源规格、包内容、`package.json`、lockfile/依赖解析、入口、capability、Harness Patch 摘要、Harness 路径/版本和 Bridge 版本。任一部分变化后状态回到 `review_required`。信任成功后才加入 Profile，禁用或隔离时立即清理注册表和运行时。
+信任 fingerprint 至少包含来源规格、包内容、`package.json`、lockfile/依赖解析、入口和 capability。任一部分变化后状态回到 `review_required`。信任成功后才加入 Profile，禁用或隔离时立即清理注册表和运行时。
 
 ## 日志与事件
 
@@ -43,6 +42,6 @@ Browser 固定 API 禁止任意 CDP、`eval`、Cookie/password/localStorage/剪�
 
 1. 停止对应 Runtime 并取消 pending calls。
 2. 保留脱敏错误和运行状态，禁止自动重试到宿主机。
-3. 检查插件包、Harness 配置和 sandbox helper 路径。
+3. 检查插件包和 sandbox helper 路径。
 4. 需要继续时先重新扫描/审核，隔离状态必须由用户明确解除。
 5. 使用 git 或插件版本回滚恢复，不直接编辑 records/trust 文件绕过审核。

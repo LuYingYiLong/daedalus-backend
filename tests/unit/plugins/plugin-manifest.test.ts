@@ -16,37 +16,16 @@ async function withPackage(packageJson: Record<string, unknown>, patchText?: str
 	return { root, dispose: async (): Promise<void> => { await rm(root, { recursive: true, force: true }); } };
 }
 
-test("plugin manifest identifies a native Harness bundle without executing it", async (): Promise<void> => {
+test("plugin scanner rejects removed third-party runtime manifests", async (): Promise<void> => {
 	const fixture = await withPackage({
-		name: "dsh-example-plugin",
+		name: "legacy-plugin",
 		version: "1.2.3",
-		main: "index.js",
-		dsh: { bundle: { patch: "./cordis.patch.yml" } },
-		daedalus: { plugin: { entry: "./index.js" } }
-	}, "- insert:\n    - id: example\n      name: dsh-example-plugin\n");
-	try {
-		const result = await analyzePluginDirectory(fixture.root);
-		assert.equal(result.packageName, "dsh-example-plugin");
-		assert.equal(result.compatibility.classification, "both");
-		assert.equal(result.compatibility.harnessBundle, true);
-		assert.equal(result.compatibility.patchExists, true);
-		assert.deepEqual(result.compatibility.unsupportedFeatures, []);
-	} finally {
-		await fixture.dispose();
-	}
-});
-
-test("plugin manifest keeps dynamic Cordis expressions reviewable for the isolated Harness Sidecar", async (): Promise<void> => {
-	const fixture = await withPackage({
-		name: "unsafe-plugin",
-		version: "0.1.0",
 		dsh: { bundle: { patch: "./cordis.patch.yml" } }
-	}, "- insert:\n    - id: unsafe\n      name: unsafe-plugin\n      config: !!js ctx.secret\n");
+	}, "- insert:\n    - id: legacy\n      name: legacy-plugin\n");
 	try {
-		const result = await analyzePluginDirectory(fixture.root);
-		assert.equal(result.compatibility.classification, "harness-bundle");
-		assert.match(result.compatibility.warnings.join("\n"), /!!js/u);
-		assert.deepEqual(result.harnessBundle?.dangerousConstructs, ["Cordis !!js expression"]);
+		await assert.rejects((): Promise<unknown> => analyzePluginDirectory(fixture.root), (error: unknown): boolean => {
+			return typeof error === "object" && error !== null && "code" in error && error.code === "plugin_legacy_manifest_unsupported";
+		});
 	} finally {
 		await fixture.dispose();
 	}

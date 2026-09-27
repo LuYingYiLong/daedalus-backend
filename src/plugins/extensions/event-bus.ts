@@ -50,7 +50,7 @@ function queueWrite(mutator: (events: StoredEvent[]) => StoredEvent[]): Promise<
 }
 
 function resolveDeclaration(events: Awaited<ReturnType<typeof getPluginP2Snapshot>>["events"], pluginId: string, topic: string) {
-	const namespaced = topic.startsWith("plugin:") || topic.startsWith("harness:") ? topic : `plugin:${pluginId}:${topic}`;
+	const namespaced = topic.startsWith("plugin:") ? topic : `plugin:${pluginId}:${topic}`;
 	return { declaration: events.find((event): boolean => event.pluginId === pluginId && event.topic === namespaced), topic: namespaced };
 }
 

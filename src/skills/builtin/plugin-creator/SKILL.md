@@ -9,7 +9,7 @@ description: 根据用户明确描述的目标创建或迭代 Daedalus Native �
 
 ## 默认工程
 
-- 只生成 Daedalus Native API v1，不生成 Harness Bundle
+- 只生成 Daedalus Native API v1
 - 使用无第三方依赖的 JavaScript ESM，不添加 lifecycle scripts
 - 必须包含 `package.json`、`index.js`、`README.md`、`CHANGELOG.md` 和 `tests/daedalus.plugin-tests.json`
 - 按目标声明最小能力集合；可使用 Tools、Skills、Hooks、MCP、Commands、Context Providers、Panel、Settings、Timeline Part、Browser、Language Service 和 Event Bus

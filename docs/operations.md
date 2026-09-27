@@ -10,7 +10,7 @@ config/                  Provider、模型、Workspace、Hooks 等非 secret 配
 sessions/                Session metadata、timeline、附件和 Agent Run
 plugins/packages/        当前已安装插件包
 plugins/versions/        手动更新保留的历史版本
-plugins/runtime/         Worker/Harness 隔离运行目录
+plugins/runtime/         插件 Worker 隔离运行目录
 plugins/quarantine/      隔离记录
 plugins/events.json      有界 Plugin Event Bus 记录
 logs/                    脱敏运行诊断
@@ -26,25 +26,21 @@ Backend 启动时会：
 - 清理没有活动 Runtime 的临时目录。
 - 恢复可验证的 Worktree runtime workspace；缺失时标记 unavailable/recovery-required。
 - 清理不存在插件 ID 的 Profile 项。
-- 不恢复运行中的 Worker、Harness Sidecar、Hook 或 Agent Run。
+- 不恢复运行中的 Worker、Hook 或 Agent Run。
 
 ## 常见状态
 
 ### `sandbox_unavailable`
 
-表示 OS sandbox helper 未配置、路径非法或不可执行。插件、Hook、Harness 和语言服务会拒绝启动，这是硬性安全行为，不是可通过宿主机回退解决的普通警告。Windows 发布包会随 Backend 一起携带 `daedalus-windows-sandbox-helper.exe`，Studio 启动时自动注入其绝对路径；源码开发时先执行 `npm run build:sandbox-helper:win`，再重启 Backend。Backend 也只会在受控的 `build/`、SEA payload 或可执行文件旁边自动发现固定文件名的 helper。辅助程序遇到 `Program Files` 中的 Node 等系统运行时，会先复制到临时受控目录再启动，避免修改系统目录 ACL。也可以显式设置 `DAEDALUS_WINDOWS_SANDBOX_HELPER`，但必须指向绝对、非符号链接的 helper 文件。
+表示 OS sandbox helper 未配置、路径非法或不可执行。插件、Hook 和语言服务会拒绝启动，这是硬性安全行为，不是可通过宿主机回退解决的普通警告。Windows 发布包会随 Backend 一起携带 `daedalus-windows-sandbox-helper.exe`，Studio 启动时自动注入其绝对路径；源码开发时先执行 `npm run build:sandbox-helper:win`，再重启 Backend。Backend 也只会在受控的 `build/`、SEA payload 或可执行文件旁边自动发现固定文件名的 helper。辅助程序遇到 `Program Files` 中的 Node 等系统运行时，会先复制到临时受控目录再启动，避免修改系统目录 ACL。也可以显式设置 `DAEDALUS_WINDOWS_SANDBOX_HELPER`，但必须指向绝对、非符号链接的 helper 文件。
 
 ### `review_required` 或 fingerprint 失效
 
-包内容、入口、lockfile、Harness 配置、Bridge 版本或 capability 发生变化后需要重新审核。不要直接修改 trust 文件；重新扫描并在 Studio 的信任审核中确认整包能力。
+包内容、入口、lockfile 或 capability 发生变化后需要重新审核。不要直接修改 trust 文件；重新扫描并在 Studio 的信任审核中确认整包能力。
 
 ### `quarantined`
 
 同一插件/会话 5 分钟内达到 3 次启动失败、崩溃、超时或协议错误后进入隔离。先查看脱敏运行日志和资源统计，修复包或配置后使用“解除隔离并重试”。重复达到阈值会再次隔离。
-
-### Harness `needs_setup`
-
-Backend 只检测用户明确配置的已安装 Harness 或源码目录，不自动下载或执行 `npm/pnpm install`。缺少入口、依赖或 Bridge 时显示 needs_setup；用户修复后重新检测。运行期间网络仍默认关闭。
 
 ## 运行时诊断
 

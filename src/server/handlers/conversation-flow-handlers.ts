@@ -20,6 +20,7 @@ import {
 	listFlowsDocument,
 	moveFlowWorkspaceDocument,
 	renameFlowDocument,
+	restoreFlowDocument,
 	updateFlowRunDocument,
 	updateFlowPinnedStatesDocument,
 	updateFlowSettingsDocument,
@@ -48,6 +49,7 @@ type FlowRequestMethod =
 	| "flow.get"
 	| "flow.rename"
 	| "flow.archive"
+	| "flow.restore"
 	| "flow.node.types.list"
 	| "flow.patch.commit"
 	| "flow.settings.update"
@@ -248,6 +250,9 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			break;
 		case "flow.archive":
 			result = await archiveFlowDocument(flowRequest.params.flowId, flowRequest.params.revision);
+			break;
+		case "flow.restore":
+			result = await restoreFlowDocument(flowRequest.params.flowId, flowRequest.params.revision);
 			break;
 		case "flow.node.types.list": {
 			const flow = flowRequest.params.flowId === undefined ? null : (await getFlowDocument(flowRequest.params.flowId)).flow;
@@ -477,7 +482,7 @@ export async function handleConversationFlowRequest(socket: WebSocket, request: 
 			const ack = result as { flowId: string; graphRevision: number; layoutRevision: number; acceptedMutationIds: string[]; operations: unknown[] };
 			broadcastGlobalEvent(request.id, "flow.patch.applied", { flowId: ack.flowId, clientId: flowRequest.params.clientId, graphRevision: ack.graphRevision, layoutRevision: ack.layoutRevision, acceptedMutationIds: ack.acceptedMutationIds, operations: ack.operations });
 		}
-		if (["flow.create", "flow.rename", "flow.archive", "flow.workspace.move", "flow.settings.update", "flow.import.fromSession", "flow.import"].includes(flowRequest.method)) {
+		if (["flow.create", "flow.rename", "flow.archive", "flow.restore", "flow.workspace.move", "flow.settings.update", "flow.import.fromSession", "flow.import"].includes(flowRequest.method)) {
 			const updated = readFlowRevision(result);
 			if (updated !== null) broadcastGlobalEvent(request.id, "flow.updated", updated);
 		}

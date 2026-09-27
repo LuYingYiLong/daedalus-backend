@@ -20,6 +20,7 @@ test("Flow RPC payloads are strict and exclude the removed conversation branch m
 		{ method: "flow.get", params: { flowId: "flow-a" } },
 		{ method: "flow.rename", params: { flowId: "flow-a", title: "Renamed", revision: 1 } },
 		{ method: "flow.archive", params: { flowId: "flow-a", revision: 1 } },
+		{ method: "flow.restore", params: { flowId: "flow-a", revision: 2 } },
 		{ method: "flow.import.fromSession", params: { sourceSessionId: "session-a", title: "Flow" } },
 		{ method: "flow.import", params: { sourcePath: "C:\\exports\\flow.daedalus-flow" } },
 		{ method: "flow.export", params: { flowId: "flow-a", destinationPath: "C:\\exports\\flow.daedalus-flow", operationId: "99ef6040-2769-4c2d-a4ba-a34fc34d63cf" } },

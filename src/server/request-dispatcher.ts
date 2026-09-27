@@ -188,6 +188,7 @@ export const REQUEST_HANDLER_METHODS: readonly ClientRequest["method"][] = [
 	"flow.get",
 	"flow.rename",
 	"flow.archive",
+	"flow.restore",
 	"flow.node.types.list",
 	"flow.patch.commit",
 	"flow.settings.update",

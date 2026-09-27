@@ -24,6 +24,9 @@ import {
 	createFlowRunDocument,
 	getFlowDocument,
 	moveFlowWorkspaceDocument,
+	archiveFlowDocument,
+	listFlowsDocument,
+	restoreFlowDocument,
 	updateFlowRunDocument,
 	updateFlowNodeRunDocument,
 	updateFlowNodeDocument,
@@ -36,6 +39,19 @@ async function withDatabase(run: () => Promise<void>): Promise<void> {
 	await resetSessionDatabaseForTests(path.join(directory, "sessions.sqlite"));
 	try { await run(); } finally { await resetSessionDatabaseForTests(); await fs.rm(directory, { recursive: true, force: true }); }
 }
+
+test("archived Flows are listed separately and can be restored with revision checks", async (): Promise<void> => withDatabase(async (): Promise<void> => {
+	const created = await createFlowDocument({ title: "Archived Flow", workspaceId: "workspace-a" });
+	const archived = await archiveFlowDocument(created.flow.flowId, created.flow.revision);
+	assert.ok(archived.archivedAt);
+	assert.deepEqual((await listFlowsDocument({ archived: true })).map((flow) => flow.flowId), [created.flow.flowId]);
+	assert.deepEqual(await listFlowsDocument(), []);
+	await assert.rejects((): Promise<unknown> => restoreFlowDocument(created.flow.flowId, archived.revision - 1), /changed elsewhere/u);
+	const restored = await restoreFlowDocument(created.flow.flowId, archived.revision);
+	assert.equal(restored.archivedAt, null);
+	assert.deepEqual((await listFlowsDocument({ archived: true })).map((flow) => flow.flowId), []);
+	assert.deepEqual((await listFlowsDocument()).map((flow) => flow.flowId), [created.flow.flowId]);
+}));
 
 test("Flow node registry exposes strict defaults and all mature node types", (): void => {
 	const definitions = listFlowNodeTypeDefinitions(true);

@@ -479,6 +479,17 @@ export async function archiveFlowDocument(flowId: string, revision: number): Pro
 	return (await getFlowDocument(flowId, true)).flow;
 }
 
+export async function restoreFlowDocument(flowId: string, revision: number): Promise<FlowDocument> {
+	const db = await getSessionDatabase();
+	runSessionTransaction(db, (): void => {
+		const flow = requireFlow(db, flowId, true);
+		if (flow.archivedAt === null) throw flowDocumentError("flow_not_archived", "This Flow is not archived.");
+		const updated = db.prepare("UPDATE flow_documents SET archived_at = NULL, updated_at = ?, revision = revision + 1 WHERE flow_id = ? AND revision = ? AND archived_at IS NOT NULL").run(now(), flowId, revision);
+		if (Number(updated.changes) !== 1) throw flowDocumentError("flow_revision_conflict", "The Flow changed elsewhere. Reload and try again.");
+	});
+	return (await getFlowDocument(flowId)).flow;
+}
+
 export async function createFlowNodeDocument(params: { flowId: string; revision: number; typeId: FlowNodeTypeId; title?: string | undefined; x: number; y: number; config?: Record<string, unknown> | undefined }): Promise<FlowDocumentSnapshot> {
 	const db = await getSessionDatabase();
 	assertNodeType(params.typeId);

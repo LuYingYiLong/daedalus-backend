@@ -1822,6 +1822,12 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("flow.restore"),
+		params: z.object({ flowId: flowIdentifierSchema, revision: z.number().int().positive() }).strict(),
+	}).strict(),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("flow.node.types.list"),
 		params: z.object({ flowId: flowIdentifierSchema.optional(), workspaceId: z.string().min(1).max(200).optional() }).strict(),
 	}).strict(),

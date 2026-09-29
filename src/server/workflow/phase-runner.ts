@@ -13,7 +13,7 @@ import { applyToolEventToWorkflowObservations } from "../../workflow/outcome.js"
 import { createPhasePrompt } from "../../workflow/runner.js";
 import type { WorkflowPhase, WorkflowToolObservation } from "../../workflow/types.js";
 import type { ClientSession } from "../client-session.js";
-import { logPromptTrace } from "../prompt-trace.js";
+import { logPromptCacheDiagnostics, logPromptTrace } from "../prompt-trace.js";
 import { createAdditionalContextPromptSection } from "../additional-context.js";
 import { createMcpSystemContext, createProviderRuntimeContext } from "../prompt-context.js";
 import { createAgentToolEventForwarder, createEmptyWorkflowPhaseToolStats, updateWorkflowPhaseToolStats } from "./tool-events.js";
@@ -23,6 +23,7 @@ import { createSceneViewToolResultEnricher } from "./scene-view-enricher.js";
 import { filterToolNamesForWorkspace } from "../../tools/tool-catalog.js";
 import { isWebSearchToolAvailable } from "../../web-search-settings-store.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
+import { resolvePromptVariant } from "../../usage/prompt-cache-policy.js";
 import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 import { getClientConnection } from "../client-connections.js";
 import { hasGodotWorkspaceCapability } from "../../workspace/capabilities.js";
@@ -142,7 +143,7 @@ export async function createWorkflowPhasePrompt(
 		requestedPromptId,
 		session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
 	);
-	const systemPrompt: string = await composeSystemPrompt(promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode);
+	const systemPrompt: string = await composeSystemPrompt(promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode, undefined, resolvePromptVariant(session.sessionId));
 	const runtimePhase: WorkflowPhase = await createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session);
 	const phaseSkillPrompt: string = await composeSkillPrompt(phase.skillId);
 	const skillWorkspace: SkillWorkspace = session.activeWorkspace !== undefined
@@ -173,6 +174,13 @@ export async function createWorkflowPhasePrompt(
 		additionalContextSection,
 		guidePromptSection,
 		fullSystemPrompt
+	});
+	logPromptCacheDiagnostics({
+		requestId,
+		sessionId: session.sessionId,
+		operation: "workflow_phase",
+		variant: resolvePromptVariant(session.sessionId),
+		sections: { systemPrompt, skillPrompt, mcpSystemContext, additionalContextSection, guidePromptSection, fullSystemPrompt }
 	});
 	return fullSystemPrompt;
 }

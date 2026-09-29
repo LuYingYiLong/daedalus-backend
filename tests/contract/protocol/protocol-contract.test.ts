@@ -640,6 +640,8 @@ test("usage metrics requests are accepted", (): void => {
 			sessionId: "session-a",
 			workspaceId: "workspace-a",
 			operation: "workflow_phase",
+			operationClass: "conversation",
+			promptVariant: "optimized",
 			status: "success",
 			usageSource: "provider"
 		}

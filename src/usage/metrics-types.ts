@@ -1,4 +1,5 @@
 import type { AdapterFamily, EndpointType } from "../providers/provider-types.js";
+import type { PromptVariant } from "./prompt-cache-policy.js";
 
 export type UsageSource = "provider" | "estimated" | "missing";
 
@@ -7,6 +8,7 @@ export type UsageMetricsStatus = "success" | "error" | "cancelled";
 export type UsageInputTokenSemantics = "fresh" | "total";
 
 export type UsageTrendBucket = "hour" | "day";
+export type UsageOperationClass = "conversation" | "review" | "auxiliary";
 
 export type ProviderUsageContext = {
 	requestId: string;
@@ -15,6 +17,7 @@ export type ProviderUsageContext = {
 	workspaceId?: string | undefined;
 	operation: string;
 	phaseId?: string | undefined;
+	promptVariant?: PromptVariant | undefined;
 };
 
 export type NormalizedLlmUsage = {
@@ -52,6 +55,8 @@ export type UsageMetricsLog = {
 	sessionId?: string | undefined;
 	workspaceId?: string | undefined;
 	operation: string;
+	operationClass: UsageOperationClass;
+	promptVariant: PromptVariant | "unknown";
 	phaseId?: string | undefined;
 	provider: string;
 	model: string;
@@ -85,6 +90,8 @@ export type UsageMetricsFilters = {
 	sessionId?: string | undefined;
 	workspaceId?: string | undefined;
 	operation?: string | undefined;
+	operationClass?: UsageOperationClass | undefined;
+	promptVariant?: PromptVariant | "unknown" | undefined;
 	status?: UsageMetricsStatus | undefined;
 	usageSource?: UsageSource | undefined;
 };

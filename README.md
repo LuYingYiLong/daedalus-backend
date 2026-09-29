@@ -66,6 +66,12 @@ flowchart LR
 
 The WebSocket server is the public runtime boundary. Incoming payloads are validated with Zod, associated with an authenticated client and workspace, and dispatched into session, provider, tool, approval, or lifecycle services. The backend never treats model output as authority to bypass tool policy.
 
+### Prompt cache rollout
+
+`DAEDALUS_PROMPT_CACHE_POLICY` controls the internal prompt layout. The default `legacy` preserves the existing layout. `canary` assigns 10% of sessions to `optimized` using a stable hash of the session ID; requests without a session ID remain on `legacy`. Set `optimized` to use the new layout for all sessions, or return to `legacy` and restart Backend to roll back. The review policy and required context are unchanged. The selected variant is stored with each new usage record; older records appear as `unknown` in Studio statistics.
+
+For short-term diagnostics, set `DAEDALUS_PROMPT_CACHE_DIAGNOSTICS=1`. Backend then logs changed prompt section names and approximate token counts, without logging prompt text or credentials. Disable it when the comparison is complete. Evaluate cache hit rates with Provider-reported usage for the same Provider, model, and workload; estimated or missing usage cannot prove a hit-rate improvement.
+
 ## Compatibility
 
 The current release line is coordinated through checked manifests:

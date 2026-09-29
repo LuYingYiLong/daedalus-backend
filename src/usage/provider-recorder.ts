@@ -7,6 +7,7 @@ import type { NormalizedLlmUsage, ProviderUsageContext, UsageMetricsStatus } fro
 import { createEstimatedUsage, createMissingUsage } from "./usage-parser.js";
 import { recordUsageMetrics } from "./metrics-store.js";
 import { recordActiveProviderTraceUsage } from "../trace/trace-recorder.js";
+import { resolvePromptVariant } from "./prompt-cache-policy.js";
 
 type ProviderUsageRecordParams = {
 	options: ProviderChatOptions;
@@ -85,6 +86,7 @@ export function withProviderUsageContext(options: ProviderChatOptions, contextPa
 	const existing: ProviderUsageContext | undefined = options.usageContext;
 	const requestId: string | undefined = contextPatch.requestId ?? existing?.requestId;
 	const operation: string | undefined = contextPatch.operation ?? existing?.operation;
+	const sessionId: string | undefined = contextPatch.sessionId ?? existing?.sessionId;
 	if (requestId === undefined || operation === undefined) {
 		return { ...options };
 	}
@@ -93,10 +95,11 @@ export function withProviderUsageContext(options: ProviderChatOptions, contextPa
 		usageContext: {
 			requestId,
 			runId: contextPatch.runId ?? existing?.runId,
-			sessionId: contextPatch.sessionId ?? existing?.sessionId,
+			sessionId,
 			workspaceId: contextPatch.workspaceId ?? existing?.workspaceId,
 			operation,
-			phaseId: contextPatch.phaseId ?? existing?.phaseId
+			phaseId: contextPatch.phaseId ?? existing?.phaseId,
+			promptVariant: contextPatch.promptVariant ?? existing?.promptVariant ?? resolvePromptVariant(sessionId)
 		}
 	};
 }
@@ -118,6 +121,7 @@ export async function recordProviderUsage(params: ProviderUsageRecordParams): Pr
 			workspaceId: context.workspaceId,
 			operation: context.operation,
 			phaseId: context.phaseId,
+			promptVariant: context.promptVariant ?? resolvePromptVariant(context.sessionId),
 			provider: params.options.provider,
 			model: resolveUsageModel(params.options),
 			endpointType: resolveProviderEndpointType(params.options),

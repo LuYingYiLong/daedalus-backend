@@ -589,6 +589,8 @@ const usageMetricsFiltersSchema = z
 		sessionId: z.string().min(1).optional(),
 		workspaceId: z.string().min(1).optional(),
 		operation: z.string().min(1).max(120).optional(),
+		operationClass: z.enum(["conversation", "review", "auxiliary"]).optional(),
+		promptVariant: z.enum(["legacy", "optimized", "unknown"]).optional(),
 		status: usageMetricsStatusSchema.optional(),
 		usageSource: usageMetricsSourceSchema.optional()
 	})

@@ -1,5 +1,6 @@
 import type { PromptId } from "../protocol/types.js";
 import { getRuntimeAssetKeyForSourcePath, readRuntimeAssetText } from "../runtime/runtime-assets.js";
+import type { PromptVariant } from "../usage/prompt-cache-policy.js";
 
 export type PromptTemplate = {
 	id: PromptId;
@@ -148,7 +149,9 @@ export async function composeSystemPrompt(
 	extraSystemPrompt: string | undefined,
 	runtimeContext: string = "",
 	chatMode: "agent" | "ask" | "plan" | "goal" | undefined = undefined,
-	workspaceHasGodotCapability: boolean | undefined = undefined
+	workspaceHasGodotCapability: boolean | undefined = undefined,
+	promptVariant: PromptVariant = "legacy",
+	runtimeDate: Date = new Date()
 ): Promise<string> {
 	const effectivePromptId: PromptId = resolvePromptIdForWorkspace(promptId, workspaceHasGodotCapability);
 	const templateContent: string = await loadPromptTemplate(effectivePromptId);
@@ -178,8 +181,10 @@ export async function composeSystemPrompt(
 		? `\n\n## 当前对话模式\n\n${modePrompt}`
 		: "";
 	const corePrompt: string = await loadCorePrompt();
-	const runtimeDatePrompt: string = createRuntimeDatePrompt();
-	const prioritizedTemplateContent: string = `${corePrompt}\n\n${runtimeDatePrompt}\n\n${templateContent}${runtimeContextSection}${modeFactSection.length > 0 ? `\n\n${modeFactSection}` : ""}${modeSection}`;
+	const runtimeDatePrompt: string = createRuntimeDatePrompt(runtimeDate);
+	const prioritizedTemplateContent: string = promptVariant === "optimized"
+		? `${corePrompt}\n\n${templateContent}${modeSection}\n\n${runtimeDatePrompt}${runtimeContextSection}${modeFactSection.length > 0 ? `\n\n${modeFactSection}` : ""}`
+		: `${corePrompt}\n\n${runtimeDatePrompt}\n\n${templateContent}${runtimeContextSection}${modeFactSection.length > 0 ? `\n\n${modeFactSection}` : ""}${modeSection}`;
 
 	if (trimmedExtraPrompt.length === 0) {
 		return prioritizedTemplateContent;

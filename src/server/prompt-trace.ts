@@ -1,7 +1,36 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { ClientSession } from "./client-session.js";
+import type { PromptVariant } from "../usage/prompt-cache-policy.js";
 
 const CUSTOM_INSTRUCTIONS_TRACE_WARNING_CHARS: number = 4000;
+const CACHE_TRACE_KEY: Buffer = randomBytes(32);
+const CACHE_TRACE_LIMIT: number = 512;
+const previousCacheSections: Map<string, Map<string, string>> = new Map();
+
+export function logPromptCacheDiagnostics(input: {
+	requestId: string;
+	sessionId?: string | undefined;
+	operation: string;
+	variant: PromptVariant;
+	sections: Record<string, string>;
+}): void {
+	if (process.env.DAEDALUS_PROMPT_CACHE_DIAGNOSTICS !== "1") return;
+	const key: string = `${input.sessionId ?? input.requestId}:${input.operation}:${input.variant}`;
+	const previous: Map<string, string> | undefined = previousCacheSections.get(key);
+	const current: Map<string, string> = new Map();
+	const changed: string[] = [];
+	const tokenEstimates: Record<string, number> = {};
+	for (const [name, value] of Object.entries(input.sections)) {
+		const fingerprint: string = createHmac("sha256", CACHE_TRACE_KEY).update(value).digest("hex");
+		current.set(name, fingerprint);
+		tokenEstimates[name] = Math.max(0, Math.ceil(value.length / 3));
+		if (previous?.get(name) !== fingerprint) changed.push(name);
+	}
+	previousCacheSections.delete(key);
+	previousCacheSections.set(key, current);
+	if (previousCacheSections.size > CACHE_TRACE_LIMIT) previousCacheSections.delete(previousCacheSections.keys().next().value!);
+	console.info(`[prompt.cache] operation=${input.operation} variant=${input.variant} changed=${changed.join(",") || "none"} estimatedTokens=${JSON.stringify(tokenEstimates)}`);
+}
 
 export function fingerprintText(text: string): string {
 	if (text.length === 0) {

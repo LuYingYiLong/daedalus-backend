@@ -193,6 +193,45 @@ test("action review includes contextual messages and emits a scoped audit", asyn
 	assert.match(sentMessage, /ignore this instruction/u);
 });
 
+test("optimized reviews reuse context before the exact action without losing audit metadata", async (): Promise<void> => {
+	const previous = process.env.DAEDALUS_PROMPT_CACHE_POLICY;
+	process.env.DAEDALUS_PROMPT_CACHE_POLICY = "optimized";
+	try {
+		const sent: string[] = [];
+		const dependencies = reviewDependencies(JSON.stringify({ decision: "ask_user", reason: "Needs confirmation." }));
+		dependencies.chat = async (params: AiChatParams, options: ProviderChatOptions): Promise<string> => {
+			assert.equal(options.usageContext?.promptVariant, "optimized");
+			sent.push(params.message);
+			return JSON.stringify({ decision: "ask_user", reason: "Needs confirmation." });
+		};
+		const base = {
+			toolName: "mcp_workspace_overwrite_text_file",
+			requestId: "request-one",
+			sessionId: "session-one",
+			workspaceId: "workspace-one",
+			envKeys: [] as string[],
+			approvalMode: "auto-safe" as const,
+			context: {
+				messages: [{ role: "user" as const, content: "Update the source.", requestId: "history-request", createdAt: "2026-09-29T00:00:00Z" }],
+				toolEvents: [],
+				contextCompleteness: "complete" as const
+			}
+		};
+		const first = await reviewAction({ ...base, toolCallId: "tool-one", toolArgs: { relativePath: "a.ts" } }, dependencies);
+		await reviewAction({ ...base, toolCallId: "tool-two", toolArgs: { relativePath: "b.ts" } }, dependencies);
+		assert.equal(first.decision, "ask_user");
+		assert.ok(first.contextHash);
+		assert.equal(sent.length, 2);
+		assert.ok(sent[0]!.startsWith('{"approvalMode":"auto-safe","context":'));
+		assert.equal(sent[0]!.slice(0, sent[0]!.indexOf('"action":')), sent[1]!.slice(0, sent[1]!.indexOf('"action":')));
+		assert.doesNotMatch(sent[0]!, /history-request|createdAt/u);
+		assert.match(sent[0]!, /tool-one|Update the source/u);
+	} finally {
+		if (previous === undefined) delete process.env.DAEDALUS_PROMPT_CACHE_POLICY;
+		else process.env.DAEDALUS_PROMPT_CACHE_POLICY = previous;
+	}
+});
+
 test("command review failures and timeouts fall back to user approval", async (): Promise<void> => {
 	let malformedAttempts: number = 0;
 	const malformedDependencies = reviewDependencies("not json");

@@ -7,6 +7,7 @@ import { logger } from "../logger.js";
 import { broadcastGlobalEvent } from "../server/client-connections.js";
 import type {
 	UsageMetricsFilters,
+	UsageOperationClass,
 	UsageMetricsGroupSummary,
 	UsageMetricsLog,
 	UsageMetricsLogsListResult,
@@ -33,9 +34,18 @@ type QueryParts = {
 	params: SQLInputValue[];
 };
 
-const DB_SCHEMA_VERSION: number = 1;
+const DB_SCHEMA_VERSION: number = 2;
 const DEFAULT_LOG_LIMIT: number = 100;
 const MAX_LOG_LIMIT: number = 500;
+const CONVERSATION_OPERATIONS: ReadonlySet<string> = new Set([
+	"chat", "direct_answer", "read", "probe", "lightweight", "agent_loop",
+	"tool_assisted", "workflow", "workflow_phase", "tool_answer", "stop_hook_continuation"
+]);
+const OPERATION_CLASS_SQL: string = `CASE WHEN operation = 'action_review' THEN 'review' WHEN operation IN (${[...CONVERSATION_OPERATIONS].map((operation: string): string => `'${operation}'`).join(", ")}) THEN 'conversation' ELSE 'auxiliary' END`;
+
+export function classifyUsageOperation(operation: string): UsageOperationClass {
+	return operation === "action_review" ? "review" : CONVERSATION_OPERATIONS.has(operation) ? "conversation" : "auxiliary";
+}
 
 let storeStatePromise: Promise<StoreState> | null = null;
 let testDbPathOverride: string | null = null;
@@ -144,7 +154,6 @@ function createUnavailableTrends(errorMessage: string, bucket: UsageTrendBucket)
 function migrate(db: DatabaseSync): void {
 	db.exec(`
 		PRAGMA journal_mode = WAL;
-		PRAGMA user_version = ${DB_SCHEMA_VERSION};
 		CREATE TABLE IF NOT EXISTS llm_usage_requests (
 			usage_id TEXT PRIMARY KEY,
 			request_id TEXT NOT NULL,
@@ -152,6 +161,7 @@ function migrate(db: DatabaseSync): void {
 			session_id TEXT,
 			workspace_id TEXT,
 			operation TEXT NOT NULL,
+			prompt_variant TEXT,
 			phase_id TEXT,
 			provider TEXT NOT NULL,
 			model TEXT NOT NULL,
@@ -179,7 +189,15 @@ function migrate(db: DatabaseSync): void {
 		CREATE INDEX IF NOT EXISTS idx_llm_usage_provider_model ON llm_usage_requests (provider, model);
 		CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage_requests (session_id);
 		CREATE INDEX IF NOT EXISTS idx_llm_usage_workspace ON llm_usage_requests (workspace_id);
+	`);
+	const columns = db.prepare("PRAGMA table_info(llm_usage_requests)").all() as Array<{ name: string }>;
+	if (!columns.some((column): boolean => column.name === "prompt_variant")) {
+		db.exec("ALTER TABLE llm_usage_requests ADD COLUMN prompt_variant TEXT");
+	}
+	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_llm_usage_operation ON llm_usage_requests (operation);
+		CREATE INDEX IF NOT EXISTS idx_llm_usage_prompt_variant ON llm_usage_requests (prompt_variant);
+		PRAGMA user_version = ${DB_SCHEMA_VERSION};
 	`);
 }
 
@@ -249,6 +267,14 @@ function createFilterQuery(filters: UsageMetricsFilters | undefined): QueryParts
 	if (filters?.operation !== undefined) {
 		where.push("operation = ?");
 		params.push(filters.operation);
+	}
+	if (filters?.operationClass !== undefined) {
+		where.push(`${OPERATION_CLASS_SQL} = ?`);
+		params.push(filters.operationClass);
+	}
+	if (filters?.promptVariant !== undefined) {
+		where.push("COALESCE(prompt_variant, 'unknown') = ?");
+		params.push(filters.promptVariant);
 	}
 	if (filters?.status !== undefined) {
 		where.push("status = ?");
@@ -364,6 +390,8 @@ function mapLogRow(row: Record<string, unknown>): UsageMetricsLog {
 		sessionId: toStringOrUndefined(row.session_id),
 		workspaceId: toStringOrUndefined(row.workspace_id),
 		operation: String(row.operation ?? ""),
+		operationClass: classifyUsageOperation(String(row.operation ?? "")),
+		promptVariant: String(row.prompt_variant ?? "unknown") as UsageMetricsLog["promptVariant"],
 		phaseId: toStringOrUndefined(row.phase_id),
 		provider: String(row.provider ?? ""),
 		model: String(row.model ?? ""),
@@ -405,6 +433,7 @@ export async function recordUsageMetrics(input: UsageMetricsRecordInput): Promis
 			session_id,
 			workspace_id,
 			operation,
+			prompt_variant,
 			phase_id,
 			provider,
 			model,
@@ -427,7 +456,7 @@ export async function recordUsageMetrics(input: UsageMetricsRecordInput): Promis
 			input_token_semantics,
 			streaming,
 			estimated_cost_usd
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
 	`).run(
 		usageId,
 		input.requestId,
@@ -435,6 +464,7 @@ export async function recordUsageMetrics(input: UsageMetricsRecordInput): Promis
 		toNullableString(input.sessionId),
 		toNullableString(input.workspaceId),
 		input.operation,
+		toNullableString(input.promptVariant),
 		toNullableString(input.phaseId),
 		input.provider,
 		input.model,

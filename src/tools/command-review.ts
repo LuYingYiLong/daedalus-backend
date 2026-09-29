@@ -8,6 +8,8 @@ import { parseJsonObjectFromLlm } from "../providers/llm-json.js";
 import { resolveConfiguredProviderTaskModelOptions, resolveProviderTaskModelOptions } from "../providers/task-model-routing.js";
 import { getUserPromptConfig } from "../user-prompt-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
+import { resolvePromptVariant, type PromptVariant } from "../usage/prompt-cache-policy.js";
+import { logPromptCacheDiagnostics } from "../server/prompt-trace.js";
 import type { ToolReviewAudit } from "./tool-policy.js";
 import { findWorkspace, isPathInsideWorkspaceSources } from "../workspace/registry.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
@@ -289,20 +291,31 @@ function createToolCallFingerprint(input: ActionReviewInput): string {
 	})).digest("hex");
 }
 
-function createReviewParams(input: ActionReviewInput): AiChatParams {
+function createReviewParams(input: ActionReviewInput, variant: PromptVariant): AiChatParams {
 	const context: ActionReviewContextSnapshot | undefined = sanitizeReviewContext(input.context);
+	const action = {
+		toolName: input.toolName,
+		toolCallId: input.toolCallId,
+		args: sanitizeReviewValue(input.toolArgs),
+		commandLine: input.commandLine ?? null,
+		cwd: input.cwd?.trim() || ".",
+		envKeys: input.envKeys,
+		reason: input.reason?.trim() || null,
+		workspaceId: input.workspaceId ?? null
+	};
+	const optimizedContext = context === undefined ? null : {
+		...context,
+		messages: context.messages.map(({ role, content }: ActionReviewMessage): Pick<ActionReviewMessage, "role" | "content"> => ({ role, content }))
+	};
 	return {
-		message: JSON.stringify({
-			action: {
-				toolName: input.toolName,
-				toolCallId: input.toolCallId,
-				args: sanitizeReviewValue(input.toolArgs),
-				commandLine: input.commandLine ?? null,
-				cwd: input.cwd?.trim() || ".",
-				envKeys: input.envKeys,
-				reason: input.reason?.trim() || null,
-				workspaceId: input.workspaceId ?? null
-			},
+		message: JSON.stringify(variant === "optimized" ? {
+			approvalMode: input.approvalMode,
+			context: optimizedContext,
+			action,
+			policyFacts: sanitizeReviewValue(input.policyFacts ?? {}),
+			contextHash: createReviewContextHash(input)
+		} : {
+			action,
 			approvalMode: input.approvalMode,
 			context: context ?? null,
 			policyFacts: sanitizeReviewValue(input.policyFacts ?? {}),
@@ -347,6 +360,7 @@ export async function reviewAction(
 		]);
 		provider = resolved.provider;
 		model = resolved.model;
+		const promptVariant: PromptVariant = resolved.options.usageContext?.promptVariant ?? resolvePromptVariant(input.sessionId);
 		const controller = new AbortController();
 		const timeout = setTimeout(
 			(): void => controller.abort(),
@@ -356,19 +370,32 @@ export async function reviewAction(
 			let lastError: unknown;
 			for (let attempt: number = 0; attempt < COMMAND_REVIEW_MAX_ATTEMPTS; attempt += 1) {
 				try {
+					const reviewParams: AiChatParams = createReviewParams(input, promptVariant);
+					const reviewSystemPrompt: string = createSystemPrompt(basePrompt, promptConfig.commandReviewPrompt);
+					if (process.env.DAEDALUS_PROMPT_CACHE_DIAGNOSTICS === "1") {
+						const reviewPayload: { context?: unknown } = JSON.parse(reviewParams.message) as { context?: unknown };
+						logPromptCacheDiagnostics({
+							requestId: input.requestId ?? input.toolCallId,
+							sessionId: input.sessionId,
+							operation: "action_review",
+							variant: promptVariant,
+							sections: { systemPrompt: reviewSystemPrompt, context: JSON.stringify(reviewPayload.context ?? null), request: reviewParams.message }
+						});
+					}
 					const text: string = await chat(
-						createReviewParams(input),
+						reviewParams,
 					{
 						...withProviderUsageContext(resolved.options, {
 							requestId: input.requestId ?? input.toolCallId,
 							sessionId: input.sessionId,
 							workspaceId: input.workspaceId,
-							operation: "action_review"
+							operation: "action_review",
+							promptVariant
 						}),
 						reasoningMode: "disabled"
 					},
 						[],
-						createSystemPrompt(basePrompt, promptConfig.commandReviewPrompt),
+						reviewSystemPrompt,
 						controller.signal
 					);
 					const parsed = commandReviewResponseSchema.parse(

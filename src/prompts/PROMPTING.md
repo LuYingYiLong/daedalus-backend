@@ -75,8 +75,8 @@ Chat Completions 映射：
 
 1. CORE 核心行为准则 fragment。
 2. base 模板。
-3. Runtime 当前模型上下文。
-4. mode overlay，例如 Agent 模式或 Ask 模式。
+3. mode overlay，例如 Agent 模式或 Ask 模式。
+4. Runtime 日期、当前模型上下文和会话模式事实。
 5. Settings 用户提示词边界 fragment。
 6. Settings 用户提示词正文。
 

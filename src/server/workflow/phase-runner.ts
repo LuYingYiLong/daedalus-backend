@@ -23,7 +23,6 @@ import { createSceneViewToolResultEnricher } from "./scene-view-enricher.js";
 import { filterToolNamesForWorkspace } from "../../tools/tool-catalog.js";
 import { isWebSearchToolAvailable } from "../../web-search-settings-store.js";
 import { withProviderUsageContext } from "../../usage/provider-recorder.js";
-import { resolvePromptVariant } from "../../usage/prompt-cache-policy.js";
 import { awaitWithAbort, throwIfAborted } from "../request-lifecycle.js";
 import { getClientConnection } from "../client-connections.js";
 import { hasGodotWorkspaceCapability } from "../../workspace/capabilities.js";
@@ -143,7 +142,7 @@ export async function createWorkflowPhasePrompt(
 		requestedPromptId,
 		session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
 	);
-	const systemPrompt: string = await composeSystemPrompt(promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode, undefined, resolvePromptVariant(session.sessionId));
+	const systemPrompt: string = await composeSystemPrompt(promptId, params.systemPrompt, createProviderRuntimeContext(session), params.mode);
 	const runtimePhase: WorkflowPhase = await createSearchAwareRuntimeWorkflowPhase(phase, mcpHost, session);
 	const phaseSkillPrompt: string = await composeSkillPrompt(phase.skillId);
 	const skillWorkspace: SkillWorkspace = session.activeWorkspace !== undefined
@@ -179,7 +178,6 @@ export async function createWorkflowPhasePrompt(
 		requestId,
 		sessionId: session.sessionId,
 		operation: "workflow_phase",
-		variant: resolvePromptVariant(session.sessionId),
 		sections: { systemPrompt, skillPrompt, mcpSystemContext, additionalContextSection, guidePromptSection, fullSystemPrompt }
 	});
 	return fullSystemPrompt;

@@ -194,6 +194,7 @@ test("provider recorder estimates missing usage without failing the caller", asy
 		const logs = await listUsageMetricsLogs({ sessionId: "session-estimated" });
 		assert.equal(logs.logs.length, 1);
 		assert.equal(logs.logs[0]?.usageSource, "estimated");
+		assert.equal(logs.logs[0]?.promptVariant, "optimized");
 		assert.ok((logs.logs[0]?.realTotalTokens ?? 0) > 0);
 	} finally {
 		resetUsageMetricsStoreForTests(null);

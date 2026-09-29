@@ -1,5 +1,6 @@
 import type { AdapterFamily, EndpointType } from "../providers/provider-types.js";
-import type { PromptVariant } from "./prompt-cache-policy.js";
+export type PromptVariant = "legacy" | "optimized";
+export const CURRENT_PROMPT_VARIANT: PromptVariant = "optimized";
 
 export type UsageSource = "provider" | "estimated" | "missing";
 
@@ -17,7 +18,6 @@ export type ProviderUsageContext = {
 	workspaceId?: string | undefined;
 	operation: string;
 	phaseId?: string | undefined;
-	promptVariant?: PromptVariant | undefined;
 };
 
 export type NormalizedLlmUsage = {
@@ -34,6 +34,7 @@ export type NormalizedLlmUsage = {
 
 export type UsageMetricsRecordInput = ProviderUsageContext & {
 	usageId?: string | undefined;
+	promptVariant?: PromptVariant | undefined;
 	provider: string;
 	model: string;
 	endpointType: EndpointType;

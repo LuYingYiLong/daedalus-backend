@@ -3,11 +3,10 @@ import { resolveProviderAdapterFamily, resolveProviderEndpointType } from "../pr
 import { getProviderDefaultModel } from "../providers/provider-registry.js";
 import { createTokenCounter } from "../tokens/token-counter-factory.js";
 import { logger } from "../logger.js";
-import type { NormalizedLlmUsage, ProviderUsageContext, UsageMetricsStatus } from "./metrics-types.js";
+import { CURRENT_PROMPT_VARIANT, type NormalizedLlmUsage, type ProviderUsageContext, type UsageMetricsStatus } from "./metrics-types.js";
 import { createEstimatedUsage, createMissingUsage } from "./usage-parser.js";
 import { recordUsageMetrics } from "./metrics-store.js";
 import { recordActiveProviderTraceUsage } from "../trace/trace-recorder.js";
-import { resolvePromptVariant } from "./prompt-cache-policy.js";
 
 type ProviderUsageRecordParams = {
 	options: ProviderChatOptions;
@@ -98,8 +97,7 @@ export function withProviderUsageContext(options: ProviderChatOptions, contextPa
 			sessionId,
 			workspaceId: contextPatch.workspaceId ?? existing?.workspaceId,
 			operation,
-			phaseId: contextPatch.phaseId ?? existing?.phaseId,
-			promptVariant: contextPatch.promptVariant ?? existing?.promptVariant ?? resolvePromptVariant(sessionId)
+			phaseId: contextPatch.phaseId ?? existing?.phaseId
 		}
 	};
 }
@@ -121,7 +119,7 @@ export async function recordProviderUsage(params: ProviderUsageRecordParams): Pr
 			workspaceId: context.workspaceId,
 			operation: context.operation,
 			phaseId: context.phaseId,
-			promptVariant: context.promptVariant ?? resolvePromptVariant(context.sessionId),
+			promptVariant: CURRENT_PROMPT_VARIANT,
 			provider: params.options.provider,
 			model: resolveUsageModel(params.options),
 			endpointType: resolveProviderEndpointType(params.options),

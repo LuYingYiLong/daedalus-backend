@@ -1,6 +1,5 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import type { ClientSession } from "./client-session.js";
-import type { PromptVariant } from "../usage/prompt-cache-policy.js";
 
 const CUSTOM_INSTRUCTIONS_TRACE_WARNING_CHARS: number = 4000;
 const CACHE_TRACE_KEY: Buffer = randomBytes(32);
@@ -11,11 +10,10 @@ export function logPromptCacheDiagnostics(input: {
 	requestId: string;
 	sessionId?: string | undefined;
 	operation: string;
-	variant: PromptVariant;
 	sections: Record<string, string>;
 }): void {
 	if (process.env.DAEDALUS_PROMPT_CACHE_DIAGNOSTICS !== "1") return;
-	const key: string = `${input.sessionId ?? input.requestId}:${input.operation}:${input.variant}`;
+	const key: string = `${input.sessionId ?? input.requestId}:${input.operation}`;
 	const previous: Map<string, string> | undefined = previousCacheSections.get(key);
 	const current: Map<string, string> = new Map();
 	const changed: string[] = [];
@@ -29,7 +27,7 @@ export function logPromptCacheDiagnostics(input: {
 	previousCacheSections.delete(key);
 	previousCacheSections.set(key, current);
 	if (previousCacheSections.size > CACHE_TRACE_LIMIT) previousCacheSections.delete(previousCacheSections.keys().next().value!);
-	console.info(`[prompt.cache] operation=${input.operation} variant=${input.variant} changed=${changed.join(",") || "none"} estimatedTokens=${JSON.stringify(tokenEstimates)}`);
+	console.info(`[prompt.cache] operation=${input.operation} variant=optimized changed=${changed.join(",") || "none"} estimatedTokens=${JSON.stringify(tokenEstimates)}`);
 }
 
 export function fingerprintText(text: string): string {

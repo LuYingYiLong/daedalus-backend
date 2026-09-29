@@ -194,13 +194,10 @@ test("action review includes contextual messages and emits a scoped audit", asyn
 });
 
 test("optimized reviews reuse context before the exact action without losing audit metadata", async (): Promise<void> => {
-	const previous = process.env.DAEDALUS_PROMPT_CACHE_POLICY;
-	process.env.DAEDALUS_PROMPT_CACHE_POLICY = "optimized";
-	try {
 		const sent: string[] = [];
 		const dependencies = reviewDependencies(JSON.stringify({ decision: "ask_user", reason: "Needs confirmation." }));
 		dependencies.chat = async (params: AiChatParams, options: ProviderChatOptions): Promise<string> => {
-			assert.equal(options.usageContext?.promptVariant, "optimized");
+			assert.equal(options.usageContext?.operation, "action_review");
 			sent.push(params.message);
 			return JSON.stringify({ decision: "ask_user", reason: "Needs confirmation." });
 		};
@@ -226,10 +223,6 @@ test("optimized reviews reuse context before the exact action without losing aud
 		assert.equal(sent[0]!.slice(0, sent[0]!.indexOf('"action":')), sent[1]!.slice(0, sent[1]!.indexOf('"action":')));
 		assert.doesNotMatch(sent[0]!, /history-request|createdAt/u);
 		assert.match(sent[0]!, /tool-one|Update the source/u);
-	} finally {
-		if (previous === undefined) delete process.env.DAEDALUS_PROMPT_CACHE_POLICY;
-		else process.env.DAEDALUS_PROMPT_CACHE_POLICY = previous;
-	}
 });
 
 test("command review failures and timeouts fall back to user approval", async (): Promise<void> => {

@@ -231,7 +231,6 @@ import { completeAgentTodoSnapshot } from "../tools/todo-control.js";
 import { consumeHookDeveloperContext, runUserPromptSubmitHooks } from "./hook-lifecycle.js";
 import { getWebSearchSettingsStatus, isWebSearchEnabled, isWebSearchToolAvailable } from "../web-search-settings-store.js";
 import { withProviderUsageContext } from "../usage/provider-recorder.js";
-import { resolvePromptVariant } from "../usage/prompt-cache-policy.js";
 import {
 	beginAgentRun,
 	getAgentRun,
@@ -2909,8 +2908,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 						runId: request.id,
 						sessionId: session.sessionId,
 						workspaceId: session.activeWorkspace?.id,
-						operation: "chat",
-						promptVariant: resolvePromptVariant(session.sessionId)
+						operation: "chat"
 					}),
 					traceRequestId
 				};
@@ -3073,9 +3071,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					promptId,
 					effectiveParams.systemPrompt,
 					createProviderRuntimeContext(session),
-					effectiveParams.mode,
-					undefined,
-					options.usageContext?.promptVariant
+					effectiveParams.mode
 				);
 				const skillPrompt: string = composeExplicitSkillPrompt(explicitSkills);
 				const skillCatalogPrompt: string = await composeSkillCatalogPrompt(skillWorkspace);
@@ -3175,7 +3171,6 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					requestId: request.id,
 					sessionId: session.sessionId,
 					operation: "conversation",
-					variant: options.usageContext?.promptVariant ?? "legacy",
 					sections: { systemPrompt, skillPrompt, skillCatalogPrompt, mcpSystemContext, additionalContextSection, guidePromptSection, fullSystemPrompt }
 				});
 				const historyBudgetTokens: number = await computeHistoryBudget(

@@ -68,7 +68,7 @@ The WebSocket server is the public runtime boundary. Incoming payloads are valid
 
 ### Prompt cache rollout
 
-`DAEDALUS_PROMPT_CACHE_POLICY` controls the internal prompt layout. The default `legacy` preserves the existing layout. `canary` assigns 10% of sessions to `optimized` using a stable hash of the session ID; requests without a session ID remain on `legacy`. Set `optimized` to use the new layout for all sessions, or return to `legacy` and restart Backend to roll back. The review policy and required context are unchanged. The selected variant is stored with each new usage record; older records appear as `unknown` in Studio statistics.
+Backend uses a stable-prefix prompt layout for every request. The review policy and required context are unchanged. New usage records are marked `optimized`; historical `legacy` and `unknown` records remain available in Studio statistics.
 
 For short-term diagnostics, set `DAEDALUS_PROMPT_CACHE_DIAGNOSTICS=1`. Backend then logs changed prompt section names and approximate token counts, without logging prompt text or credentials. Disable it when the comparison is complete. Evaluate cache hit rates with Provider-reported usage for the same Provider, model, and workload; estimated or missing usage cannot prove a hit-rate improvement.
 

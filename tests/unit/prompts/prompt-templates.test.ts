@@ -193,29 +193,25 @@ test("system prompts include the backend local calendar date as a runtime fact",
 	assert.ok(prompt.indexOf("# CORE") < prompt.indexOf("## Runtime current date"));
 });
 
-test("optimized prompts keep fixed role and mode instructions before changing runtime facts", async (): Promise<void> => {
-	const first = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false, "optimized");
-	const second = await composeSystemPrompt("workspace.assistant", undefined, "model B", "agent", false, "optimized");
+test("system prompts keep fixed role and mode instructions before changing runtime facts", async (): Promise<void> => {
+	const first = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false);
+	const second = await composeSystemPrompt("workspace.assistant", undefined, "model B", "agent", false);
 	assert.ok(first.indexOf("## 当前对话模式") < first.indexOf("## Runtime current date"));
 	assert.ok(first.indexOf("## Runtime current date") < first.indexOf("model A"));
 	assert.equal(first.slice(0, first.indexOf("model A")), second.slice(0, second.indexOf("model B")));
-	const legacy = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false, "legacy");
-	assert.ok(legacy.indexOf("## Runtime current date") < legacy.indexOf("## 当前对话模式"));
 });
 
-test("optimized serialized prompts share a longer prefix across dates and workspace facts", async (): Promise<void> => {
+test("serialized prompts share the fixed role and mode prefix across dates and workspace facts", async (): Promise<void> => {
 	const earlier = new Date(2026, 8, 28);
 	const later = new Date(2026, 8, 29);
-	const legacyA = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false, "legacy", earlier);
-	const legacyB = await composeSystemPrompt("workspace.assistant", undefined, "model B", "agent", false, "legacy", later);
-	const optimizedA = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false, "optimized", earlier);
-	const optimizedB = await composeSystemPrompt("workspace.assistant", undefined, "model B", "agent", false, "optimized", later);
+	const optimizedA = await composeSystemPrompt("workspace.assistant", undefined, "model A", "agent", false, earlier);
+	const optimizedB = await composeSystemPrompt("workspace.assistant", undefined, "model B", "agent", false, later);
 	const prefixLength = (left: string, right: string): number => {
 		let index = 0;
 		while (index < Math.min(left.length, right.length) && left[index] === right[index]) index += 1;
 		return index;
 	};
-	assert.ok(prefixLength(optimizedA, optimizedB) > prefixLength(legacyA, legacyB));
+	assert.ok(prefixLength(optimizedA, optimizedB) > optimizedA.indexOf("## 当前对话模式"));
 	assert.match(optimizedA, /Today's 2026-9-28/u);
 	assert.match(optimizedB, /Today's 2026-9-29/u);
 	assert.match(optimizedA, /model A/u);

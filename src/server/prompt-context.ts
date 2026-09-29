@@ -1,5 +1,4 @@
 import WebSocket from "ws";
-import { resolvePromptVariant } from "../usage/prompt-cache-policy.js";
 import { composeSystemPrompt, listPromptTemplates } from "../prompts/registry.js";
 import type { AdditionalContextItem, AiChatParams, ChatMessage, ClientRequest, ModelProfile, ProviderId, ServerEvent } from "../protocol/types.js";
 import type { OnToolEvent, ToolEvent } from "../tools/tool-dispatcher.js";
@@ -258,7 +257,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 	await mcpHost.ensureGlobalCustomServers();
 	const workspaceId: string | undefined = session.activeWorkspace?.id;
 	const serverIds: string[] = mcpHost.getConnectedServerIds(workspaceId);
-	if (resolvePromptVariant(session.sessionId) === "optimized") serverIds.sort((left, right): number => left.localeCompare(right, "en"));
+	serverIds.sort((left, right): number => left.localeCompare(right, "en"));
 	const workspaceHasGodot: boolean = hasGodotWorkspaceCapability(session.activeWorkspace);
 	const shouldIncludeGodotContext: boolean = session.activeWorkspace === undefined
 		? session.godotExecutablePath !== undefined
@@ -278,9 +277,7 @@ export async function createMcpSystemContext(mcpHost: McpHost, session: ClientSe
 		sections.push("## Workspace 工具规则");
 		sections.push(`- 当前 workspace：\`${session.activeWorkspace.name}\`，根目录：\`${session.activeWorkspace.rootPath}\`。`);
 		sections.push(`- 主 Source folder ID：\`${session.activeWorkspace.primarySourceFolderId}\`。不传 \`sourceFolderId\` 时所有路径工具默认使用该目录。`);
-		const sourceFolders = resolvePromptVariant(session.sessionId) === "optimized"
-			? [...session.activeWorkspace.sourceFolders].sort((left, right): number => left.id.localeCompare(right.id, "en"))
-			: session.activeWorkspace.sourceFolders;
+		const sourceFolders = [...session.activeWorkspace.sourceFolders].sort((left, right): number => left.id.localeCompare(right.id, "en"));
 		for (const source of sourceFolders) {
 			const capabilities: string = [
 				"files",

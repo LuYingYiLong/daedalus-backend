@@ -63,26 +63,18 @@ test("workspace tool catalog keeps dynamic MCP definitions isolated", (): void =
 	}
 });
 
-test("optimized tool catalogs stabilize dynamic tool order without changing the legacy order", (): void => {
-	const previous = process.env.DAEDALUS_PROMPT_CACHE_POLICY;
+test("tool catalogs stabilize dynamic tool order", (): void => {
 	const workspaceId = "cache-order-workspace";
 	replaceDynamicMcpToolsForWorkspace(workspaceId, [
 		{ serverId: "z-server", serverName: "Z", toolName: "last", planAccess: "read" },
 		{ serverId: "a-server", serverName: "A", toolName: "first", planAccess: "read" }
 	]);
 	try {
-		process.env.DAEDALUS_PROMPT_CACHE_POLICY = "legacy";
-		const legacy = createWorkspaceToolCatalog({ workspaceId, sessionId: "cache-session" })
-			.getDefinitionsForNames([CUSTOM_MCP_TOOLS_SENTINEL]).map(getFunctionToolName);
-		process.env.DAEDALUS_PROMPT_CACHE_POLICY = "optimized";
 		const optimized = createWorkspaceToolCatalog({ workspaceId, sessionId: "cache-session" })
 			.getDefinitionsForNames([CUSTOM_MCP_TOOLS_SENTINEL]).map(getFunctionToolName);
-		assert.deepEqual(new Set(optimized), new Set(legacy));
 		assert.deepEqual(optimized, [...optimized].sort((left, right) => left.localeCompare(right, "en")));
 	} finally {
 		clearDynamicMcpToolsForWorkspace(workspaceId);
-		if (previous === undefined) delete process.env.DAEDALUS_PROMPT_CACHE_POLICY;
-		else process.env.DAEDALUS_PROMPT_CACHE_POLICY = previous;
 	}
 });
 

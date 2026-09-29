@@ -11,7 +11,6 @@ import { BUILTIN_TOOL_MAPPINGS, type ToolMapping } from "./tool-mapping.js";
 import { TOOL_POLICIES } from "./tool-policy-table.js";
 import type { ToolPolicy, ToolRisk } from "./tool-policy.js";
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "./tool-sentinels.js";
-import { resolvePromptVariant } from "../usage/prompt-cache-policy.js";
 import {
 	EXECUTION_CONTROL_TOOL_DEFINITION,
 	EXECUTION_CONTROL_TOOL_NAME,
@@ -539,10 +538,8 @@ export class WorkspaceToolCatalog {
 			...getPluginToolEntries(this.context.workspaceId).map(createPluginEntry),
 			...(this.context.workspaceId === undefined ? [] : listPluginMcpTools().map(createPluginMcpEntry))
 		];
-		if (resolvePromptVariant(this.context.sessionId) === "optimized") {
-			dynamicEntries.sort((left, right): number => left.id.localeCompare(right.id, "en"));
-			pluginEntries.sort((left, right): number => left.id.localeCompare(right.id, "en"));
-		}
+		dynamicEntries.sort((left, right): number => left.id.localeCompare(right.id, "en"));
+		pluginEntries.sort((left, right): number => left.id.localeCompare(right.id, "en"));
 		const executionControlEntries: ToolCatalogEntry[] = this.context.executionControl === undefined || this.context.executionControlAvailable === false
 			? []
 			: [createExecutionControlEntry()];

@@ -21,9 +21,15 @@ A backend tag publishes:
 - `daedalus-backend-win32-x64.zip`
 - `daedalus-backend-win32-x64.json`
 - `daedalus-backend-win32-x64.cdx.json`
-- `SHA256SUMS.txt`
+- `daedalus-backend-linux-x64.zip`
+- `daedalus-backend-linux-x64.json`
+- `daedalus-backend-linux-x64.cdx.json`
+- `daedalus-backend_<version>_amd64.deb`
+- platform-specific SHA-256 checksum files
 
-The ZIP contains `daedalus-backend.exe`, the signed-by-manifest `daedalus-windows-sandbox-helper.exe`, and `backend-manifest.json`. Studio pins a concrete backend version, validates both binaries and their hashes, runs `self-test`, then activates the candidate through a recoverable pending-update transaction. Studio injects the helper path into the Backend process automatically; it never falls back to an unsandboxed process.
+The Windows ZIP contains `daedalus-backend.exe`, the signed-by-manifest `daedalus-windows-sandbox-helper.exe`, `backend-manifest.json`, and the bundled image processing runtime. Studio pins a concrete backend version, validates both binaries and their hashes, runs `self-test`, then activates the candidate through a recoverable pending-update transaction. Studio injects the helper path into the Backend process automatically; it never falls back to an unsandboxed process.
+
+The Linux deb installs the SEA executable, `backend-manifest.json`, and the bundled image processing runtime under `/usr/lib/daedalus-backend`, with a launcher at `/usr/bin/daedalus-backend`. The Linux ZIP contains the same runtime for clients that manage Backend installation themselves.
 
 ## Runtime Authentication
 

@@ -77,7 +77,7 @@ The current release line is coordinated through checked manifests:
 | Daedalus Bridge | Optional Editor Bridge Protocol v4 |
 | Godot | 4.5 or newer when using the Godot integration |
 | Source runtime | Node.js 24.18.0 or newer |
-| Production binary | Windows x64 SEA |
+| Production binary | Windows x64 and Linux x64 SEA; Linux amd64 deb |
 
 The authoritative values live in `package.json` under `daedalusBinary` and in each release manifest. Studio refuses incompatible binaries and Editor Bridge protocol versions instead of attempting a best-effort connection.
 
@@ -118,6 +118,17 @@ Download and extract `daedalus-backend-win32-x64.zip` from a [backend release](h
 ```
 
 Release assets include the payload/release manifests, SHA-256 checksums, and a CycloneDX SBOM. See [docs/production-binary.md](./docs/production-binary.md) for the binary contract and Studio update transaction.
+
+### Install the Linux deb package
+
+Download `daedalus-backend_<version>_amd64.deb` from a [backend release](https://github.com/LuYingYiLong/daedalus-backend/releases/latest), then run:
+
+```bash
+sudo apt install ./daedalus-backend_<version>_amd64.deb
+daedalus-backend version --json
+```
+
+The package includes the Linux SEA executable and its image processing runtime. It installs the command at `/usr/bin/daedalus-backend` and the runtime under `/usr/lib/daedalus-backend`.
 
 ## Provider Layer
 

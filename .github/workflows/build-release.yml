@@ -111,7 +111,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-x64:
-    name: Build Linux x64 SEA
+    name: Build Linux x64 SEA and deb
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -130,7 +130,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap build-essential libsecret-1-dev pkg-config zip
+          sudo apt-get install -y bubblewrap build-essential dpkg-dev libsecret-1-dev pkg-config zip
 
       - name: Install dependencies
         run: npm ci --include=optional
@@ -154,16 +154,22 @@ jobs:
       - name: Build and smoke test SEA
         run: npm run build:sea:linux
 
+      - name: Build Linux deb package
+        run: npm run build:deb:linux
+
       - name: Verify release files
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync, statSync } from "node:fs";
 
           const releaseDir = "dist/sea-linux-x64/release";
+          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
+          const debVersion = packageJson.version.replace("-", "~");
           const required = [
             "daedalus-backend-linux-x64.zip",
             "daedalus-backend-linux-x64.json",
             "daedalus-backend-linux-x64.cdx.json",
+            `daedalus-backend_${debVersion}_amd64.deb`,
             "SHA256SUMS.txt"
           ];
           for (const name of required) {
@@ -173,7 +179,6 @@ jobs:
             }
           }
           const manifest = JSON.parse(readFileSync(`${releaseDir}/daedalus-backend-linux-x64.json`, "utf8"));
-          const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
           if (manifest.platform !== "linux" || manifest.arch !== "x64") {
             throw new Error("Unexpected backend manifest target.");
           }
@@ -188,6 +193,26 @@ jobs:
           }
           console.log(`Verified Linux release assets in ${releaseDir}`);
           NODE
+
+      - name: Verify Linux deb package
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="dist/sea-linux-x64/release"
+          version="$(node -p "require('./package.json').version.replace('-', '~')")"
+          deb="$release_dir/daedalus-backend_${version}_amd64.deb"
+          test -f "$deb"
+          test "$(dpkg-deb -f "$deb" Package)" = "daedalus-backend"
+          test "$(dpkg-deb -f "$deb" Version)" = "$version"
+          dpkg-deb --info "$deb"
+          extracted="$(mktemp -d)"
+          dpkg-deb --extract "$deb" "$extracted"
+          test -x "$extracted/usr/lib/daedalus-backend/daedalus-backend"
+          test -x "$extracted/usr/lib/daedalus-backend/media/node"
+          test -f "$extracted/usr/lib/daedalus-backend/media/image-worker.cjs"
+          test -f "$extracted/usr/lib/daedalus-backend/media/node_modules/sharp/package.json"
+          "$extracted/usr/lib/daedalus-backend/daedalus-backend" version --json
+          (cd "$release_dir" && sha256sum -c SHA256SUMS.txt)
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -223,6 +248,7 @@ jobs:
           mkdir -p release-assets/publish
           cp release-assets/win32/daedalus-backend-win32-x64.* release-assets/publish/
           cp release-assets/linux/daedalus-backend-linux-x64.* release-assets/publish/
+          cp release-assets/linux/*.deb release-assets/publish/
           cp release-assets/win32/SHA256SUMS.txt release-assets/publish/SHA256SUMS-win32-x64.txt
           cp release-assets/linux/SHA256SUMS.txt release-assets/publish/SHA256SUMS-linux-x64.txt
           find release-assets/publish -maxdepth 1 -type f -printf '%f\n' | sort

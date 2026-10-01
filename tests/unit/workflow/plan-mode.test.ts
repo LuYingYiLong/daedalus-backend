@@ -6,6 +6,7 @@ import { createPlanMetadata } from "../../../src/server/plan-store.js";
 import type { StoredPlan } from "../../../src/server/plan-store.js";
 import type { ProviderChatOptions } from "../../../src/providers/deepseek-client.js";
 import { shouldPersistSessionEvent } from "../../../src/server/session-events.js";
+import { extractPlanMarkdownDraft } from "../../../src/server/plan-draft-stream.js";
 
 const DUMMY_PROVIDER: ProviderChatOptions = {
 	provider: "deepseek",
@@ -138,11 +139,12 @@ test("non-Godot plan prompts do not identify the planner as Godot-specific", asy
 	assert.doesNotMatch(prompt, /你是 Godot Daedalus 的 Plan 模式规划器/);
 });
 
-test("plan mode keeps internal planner deltas out of the user timeline", async (): Promise<void> => {
-	const planModeSource: string = await readFile(new URL("../../../src/server/plan-mode.ts", import.meta.url), "utf8");
-
-	assert.match(planModeSource, /event\.type === "ai\.delta"[\s\S]*internal JSON protocol[\s\S]*return;/);
-	assert.doesNotMatch(planModeSource, /createPlanVisibleDeltaFilter/);
+test("plan draft streaming exposes Markdown without the internal planner envelope", (): void => {
+	const response = '{"decision":"plan_ready","title":"Test","planMarkdown":"# Steps\\n- One"}';
+	assert.equal(extractPlanMarkdownDraft(response), "# Steps\n- One");
+	assert.equal(extractPlanMarkdownDraft('{"decision":"needs_clarification","question":"Why?"}'), null);
+	assert.equal(shouldPersistSessionEvent("plan.draft"), false);
+	assert.equal(shouldPersistSessionEvent("plan.draft.closed"), false);
 });
 
 test("plan mode retries malformed JSON with a strict protocol and recovers without a run error", async (): Promise<void> => {

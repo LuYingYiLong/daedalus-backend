@@ -187,6 +187,9 @@ function shouldSuppressDuplicateTerminalEvent(session: ClientSession, eventName:
 
 export function shouldPersistSessionEvent(eventName: ServerEventNameInput): boolean {
 	const canonicalEventName: CanonicalServerEventName = canonicalizeServerEventName(eventName);
+	if (canonicalEventName === "plan.draft" || canonicalEventName === "plan.draft.closed") {
+		return false;
+	}
 	return canonicalEventName.startsWith("agent.")
 		|| eventName.startsWith("terminal.")
 		|| eventName.startsWith("guide.")
@@ -777,7 +780,7 @@ export function sendTransientSessionEvent(
 	socket: WebSocket,
 	requestId: string,
 	session: ClientSession,
-	eventName: Extract<CanonicalServerEventName, "agent.tool.progress">,
+	eventName: Extract<CanonicalServerEventName, "agent.tool.progress" | "plan.draft" | "plan.draft.closed">,
 	data: unknown,
 	persistRequestId: string = requestId,
 	sessionIdOverride?: string | undefined

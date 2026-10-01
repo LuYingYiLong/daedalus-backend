@@ -1225,7 +1225,7 @@ function buildAssistantBodyParts(
 					actionId: `retry_agent_run:${asString(eventData.runId)}`
 				});
 			}
-		} else if (event.event === "plan.generated" || event.event === "plan.revised") {
+		} else if (event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.edited") {
 			const planPart: TimelinePlanPart | null = createPlanPart(eventData);
 			if (planPart !== null) {
 				replaceOrAppendPlanPart(parts, planPart);
@@ -1543,7 +1543,7 @@ function shouldClearPlanClarificationForEvent(event: StoredSessionEvent, clarifi
 		return false;
 	}
 
-	if (event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.approved" || event.event === "plan.execution.started" || event.event === "plan.error") {
+	if (event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.edited" || event.event === "plan.approved" || event.event === "plan.execution.started" || event.event === "plan.error") {
 		const planId: string = asString(event.data.planId);
 		return planId.length === 0 || planId === clarification.planId;
 	}
@@ -1602,13 +1602,13 @@ function findLatestSnapshots(events: StoredSessionEvent[]): { latestWorkflowSnap
 			latestPlanClarification = createPlanClarificationSnapshot(event.data);
 			latestPlanApproval = null;
 		}
-		if ((event.event === "plan.generated" || event.event === "plan.revised") && isRecord(event.data)) {
+		if ((event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.edited") && isRecord(event.data)) {
 			latestPlanApproval = createPlanApprovalSnapshot(event.data);
 		}
 		if (shouldClearPlanClarificationForEvent(event, latestPlanClarification)) {
 			latestPlanClarification = null;
 		}
-		if ((event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.approved" || event.event === "plan.execution.started") && isRecord(event.data)) {
+		if ((event.event === "plan.generated" || event.event === "plan.revised" || event.event === "plan.edited" || event.event === "plan.approved" || event.event === "plan.execution.started") && isRecord(event.data)) {
 			const planId: string = asString(event.data.planId);
 			if ((event.event === "plan.approved" || event.event === "plan.execution.started") && (planId.length === 0 || planId === latestPlanApproval?.planId)) {
 				latestPlanApproval = null;

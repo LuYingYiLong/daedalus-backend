@@ -7,6 +7,7 @@ import type { ClientSession } from "./client-session.js";
 import { clipTextByChars, cloneAdditionalContextItems } from "./additional-context.js";
 import {
 	createPlanEventPayload,
+	createPlanId,
 	createPlanMetadata,
 	type PlanRecommendedReply,
 	type PlanSkippedClarification,
@@ -15,7 +16,8 @@ import {
 	updateStoredPlan,
 	writeStoredPlan
 } from "./plan-store.js";
-import { sendSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
+import { sendSessionEvent, sendTransientSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
+import { extractPlanMarkdownDraft } from "./plan-draft-stream.js";
 import { appendTranscriptOnlyChatTurnToSession } from "./transcript-history.js";
 import { logger } from "../logger.js";
 import { runProviderAgentStreaming } from "../providers/provider-agent.js";
@@ -463,7 +465,15 @@ export async function createPlanDecision(
 	let lastPlanReadyDecision: PlanDecision | null = null;
 	let lastToolCallCount: number = 0;
 	let formatRetryInstruction: string | undefined;
+	const previousPreviewMarkdown: string = currentPlanMarkdown === undefined ? "" : createPlanPreview(currentPlanMarkdown);
 	for (let attempt: number = 0; attempt < PLAN_RUNNER_MAX_ATTEMPTS; attempt += 1) {
+		if (attempt > 0 && runtime.planId !== undefined) {
+			sendTransientSessionEvent(runtime.socket, runtime.requestId, runtime.session, "plan.draft.closed", {
+				planId: runtime.planId,
+				requestId: runtime.requestId,
+				previousPreviewMarkdown
+			});
+		}
 		const extraInstruction: string | undefined = formatRetryInstruction;
 		let result: { decision: PlanDecision; toolCallCount: number };
 		try {
@@ -589,14 +599,45 @@ async function runPlanAgentDecision(
 		{ persistFileEditBatches: false }
 	);
 	let toolCallCount: number = 0;
+	let rawDraft = "";
+	let lastDraftLength = 0;
+	let lastDraftSentAt = 0;
+	const previousPreviewMarkdown: string = currentPlanMarkdown === undefined ? "" : createPlanPreview(currentPlanMarkdown);
 	const onEvent: OnToolEvent = (event: ToolEvent): void => {
 		if (event.type === "ai.delta") {
-			// Planner output is an internal JSON protocol. Forwarding a partial
-			// response can create user-visible Markdown or malformed JSON parts.
+			// Only expose the decoded Markdown field, never the internal decision JSON.
+			rawDraft += event.text;
+			if (rawDraft.length > 256_000 || runtime.planId === undefined) return;
+			const markdown: string | null = extractPlanMarkdownDraft(rawDraft);
+			if (markdown === null || markdown.length <= lastDraftLength) return;
+			const now = Date.now();
+			if (lastDraftLength > 0 && markdown.length - lastDraftLength < 40 && now - lastDraftSentAt < 80) return;
+			lastDraftLength = markdown.length;
+			lastDraftSentAt = now;
+			sendTransientSessionEvent(runtime.socket, runtime.requestId, runtime.session, "plan.draft", {
+				planId: runtime.planId,
+				requestId: runtime.requestId,
+				operationRequestId,
+				status: "streaming",
+				title: "Plan",
+				previewMarkdown: createPlanPreview(markdown),
+				markdown,
+				previousPreviewMarkdown
+			});
 			return;
 		}
 		if (event.type === "tool.call") {
 			toolCallCount += 1;
+			if (lastDraftLength > 0 && runtime.planId !== undefined) {
+				sendTransientSessionEvent(runtime.socket, runtime.requestId, runtime.session, "plan.draft.closed", {
+					planId: runtime.planId,
+					requestId: runtime.requestId,
+					previousPreviewMarkdown
+				});
+			}
+			rawDraft = "";
+			lastDraftLength = 0;
+			lastDraftSentAt = 0;
 		}
 		baseForwarder(event);
 	};
@@ -669,10 +710,12 @@ export async function createInitialPlan(
 	if (!session.sessionId) {
 		throw new Error("Plan mode requires an active session.");
 	}
+	const planId: string = createPlanId();
 	const decision: PlanDecision = await createPlanDecision(params, options, [], [], [], undefined, {
 		socket,
 		requestId,
 		operationRequestId: requestId,
+		planId,
 		session,
 		mcpHost
 	}, abortSignal);
@@ -682,6 +725,7 @@ export async function createInitialPlan(
 	let eventName: "plan.clarification.required" | "plan.generated";
 	if (decision.decision === "needs_clarification") {
 		metadata = createPlanMetadata({
+			planId,
 			sessionId: session.sessionId,
 			requestId,
 			status: "clarification_required",
@@ -696,6 +740,7 @@ export async function createInitialPlan(
 	} else {
 		markdown = decision.planMarkdown;
 		metadata = createPlanMetadata({
+			planId,
 			sessionId: session.sessionId,
 			requestId,
 			status: "ready",
@@ -708,6 +753,9 @@ export async function createInitialPlan(
 	}
 
 	const storedPlan: StoredPlan = await writeStoredPlan(metadata, markdown);
+	if (eventName === "plan.clarification.required") {
+		sendTransientSessionEvent(socket, requestId, session, "plan.draft.closed", { planId, requestId });
+	}
 	sendSessionEvent(socket, requestId, session, eventName, {
 		...createPlanEventPayload(storedPlan),
 		operationRequestId: requestId

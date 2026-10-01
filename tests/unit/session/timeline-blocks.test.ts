@@ -624,6 +624,13 @@ test("canonical timeline replaces an existing plan part when the same plan is re
 				status: "ready",
 				title: "修订计划",
 				previewMarkdown: "改做网页。"
+			}),
+			event("event-edited", "request-plan", "plan.edited", "2026-07-09T00:00:03.000Z", {
+				planId: "plan-a",
+				requestId: "request-plan",
+				status: "ready",
+				title: "修订计划",
+				previewMarkdown: "手动调整。"
 			})
 		]
 	);
@@ -634,7 +641,7 @@ test("canonical timeline replaces an existing plan part when the same plan is re
 
 	assert.equal(planParts.length, 1);
 	assert.equal(planParts[0]?.type === "plan" ? planParts[0].title : "", "修订计划");
-	assert.equal(planParts[0]?.type === "plan" ? planParts[0].previewMarkdown : "", "改做网页。");
+	assert.equal(planParts[0]?.type === "plan" ? planParts[0].previewMarkdown : "", "手动调整。");
 });
 
 test("canonical timeline keeps plan execution as independent blocks with tools and inline diff", (): void => {

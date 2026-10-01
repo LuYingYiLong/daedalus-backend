@@ -677,6 +677,7 @@ function readLatestTimelineSnapshots(db: DatabaseSync, sessionId: string): Retur
 		"plan.clarification.required",
 		"plan.generated",
 		"plan.revised",
+		"plan.edited",
 		"plan.approved",
 		"plan.execution.started",
 		"plan.error"

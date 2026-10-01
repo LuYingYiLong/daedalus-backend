@@ -60,6 +60,7 @@ export function getPlanDir(sessionId: string, planId: string): string {
 }
 
 export function createPlanMetadata(params: {
+	planId?: string | undefined;
 	sessionId: string;
 	requestId: string;
 	status: PlanStatus;
@@ -73,7 +74,7 @@ export function createPlanMetadata(params: {
 	revisions?: string[] | undefined;
 	now?: string | undefined;
 }): StoredPlanMetadata {
-	const planId: string = createPlanId();
+	const planId: string = params.planId ?? createPlanId();
 	const timestamp: string = params.now ?? new Date().toISOString();
 	return {
 		schemaVersion: 1,
@@ -166,9 +167,56 @@ export async function updateStoredPlan(
 	const next: StoredPlan = await update(current);
 	const updatedMetadata: StoredPlanMetadata = {
 		...next.metadata,
-		updatedAt: new Date().toISOString()
+		updatedAt: new Date(Math.max(Date.now(), Date.parse(current.metadata.updatedAt) + 1)).toISOString()
 	};
-	return writeStoredPlan(updatedMetadata, next.markdown);
+	const db = await getSessionDatabase();
+	const result = db.prepare(`
+		UPDATE plans SET request_id = ?, status = ?, metadata_json = ?, markdown = ?, updated_at = ?
+		WHERE session_id = ? AND plan_id = ? AND updated_at = ?
+	`).run(
+		updatedMetadata.requestId,
+		updatedMetadata.status,
+		sqlJson(updatedMetadata),
+		next.markdown,
+		updatedMetadata.updatedAt,
+		sessionId,
+		planId,
+		current.metadata.updatedAt
+	);
+	if (result.changes !== 1) {
+		throw new Error("The plan changed during the update.");
+	}
+	return { metadata: updatedMetadata, markdown: next.markdown };
+}
+
+export async function saveEditedPlan(
+	sessionId: string,
+	planId: string,
+	expectedUpdatedAt: string,
+	markdown: string
+): Promise<StoredPlan> {
+	const current: StoredPlan = await readStoredPlan(sessionId, planId);
+	if (current.metadata.status !== "ready") {
+		throw new Error("Only ready plans can be edited.");
+	}
+	if (current.metadata.updatedAt !== expectedUpdatedAt) {
+		throw new Error("The plan changed while it was being edited. Reopen it before saving.");
+	}
+	const updatedAt: string = new Date(Math.max(Date.now(), Date.parse(expectedUpdatedAt) + 1)).toISOString();
+	const metadata: StoredPlanMetadata = {
+		...current.metadata,
+		previewMarkdown: markdown.trim().slice(0, 1600),
+		updatedAt
+	};
+	const db = await getSessionDatabase();
+	const result = db.prepare(`
+		UPDATE plans SET metadata_json = ?, markdown = ?, updated_at = ?
+		WHERE session_id = ? AND plan_id = ? AND updated_at = ? AND status = 'ready'
+	`).run(sqlJson(metadata), markdown, updatedAt, sessionId, planId, expectedUpdatedAt);
+	if (result.changes !== 1) {
+		throw new Error("The plan changed while it was being edited. Reopen it before saving.");
+	}
+	return { metadata, markdown };
 }
 
 export function createPlanEventPayload(plan: StoredPlan): Record<string, unknown> {

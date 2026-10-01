@@ -10,6 +10,7 @@ import {
 	createPlanEventPayload,
 	createPlanGetResult,
 	readStoredPlan,
+	saveEditedPlan,
 	type StoredPlan,
 	updateStoredPlan
 } from "../plan-store.js";
@@ -20,7 +21,7 @@ import {
 	sendPlanMessageDone,
 	type PlanClarificationInput
 } from "../plan-mode.js";
-import { sendSessionEvent } from "../session-events.js";
+import { sendSessionEvent, sendTransientSessionEvent } from "../session-events.js";
 import { handleChatRequest } from "../chat-orchestrator.js";
 import {
 	beginSessionRun,
@@ -86,6 +87,7 @@ async function emitPlanUpdate(socket: WebSocket, requestId: string, session: Cli
 		...(actor === undefined ? {} : { actor })
 	};
 	if (plan.metadata.status === "clarification_required") {
+		sendTransientSessionEvent(socket, plan.metadata.requestId, session, "plan.draft.closed", { planId: plan.metadata.planId, requestId: plan.metadata.requestId });
 		sendSessionEvent(socket, plan.metadata.requestId, session, "plan.clarification.required", payload);
 		sendPlanMessageDone(socket, plan.metadata.requestId, session, plan.metadata.planId, plan.metadata.requestId, requestId);
 		return;
@@ -198,6 +200,26 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 				}
 				const plan: StoredPlan = await readStoredPlan(sessionId, request.params.planId);
 				sendPlanResponse(socket, request.id, plan);
+				return;
+			}
+
+			case "plan.update": {
+				const sessionId: string | undefined = getActiveSessionId(session, request.params.sessionId);
+				if (sessionId === undefined) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "session_mismatch", message: "Plans can only be edited for the active session." } });
+					return;
+				}
+				if (session.activeRunRequestId !== undefined || getActiveSessionRunRequestId(sessionId) !== undefined) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "session_busy", message: "Wait for the current run to finish before editing the plan." } });
+					return;
+				}
+				try {
+					const updatedPlan: StoredPlan = await saveEditedPlan(sessionId, request.params.planId, request.params.expectedUpdatedAt, request.params.markdown);
+					sendSessionEvent(socket, updatedPlan.metadata.requestId, session, "plan.edited", createPlanEventPayload(updatedPlan));
+					sendPlanResponse(socket, request.id, updatedPlan);
+				} catch (error: unknown) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "plan_edit_conflict", message: error instanceof Error ? error.message : String(error) } });
+				}
 				return;
 			}
 
@@ -385,7 +407,7 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 				});
 
 				const executionParams: AiChatParams = createApprovedPlanExecutionParams(
-					plan,
+					executingPlan,
 					session.activeProvider,
 					session.providerModel ?? session.modelProfile.model,
 					session.activeWorkspace === undefined ? undefined : hasGodotWorkspaceCapability(session.activeWorkspace)
@@ -429,6 +451,9 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 		}
 	} catch (error: unknown) {
 		const message: string = error instanceof Error ? error.message : String(error);
+		if (failedRunRequestId !== undefined) {
+			sendTransientSessionEvent(socket, failedRunRequestId, session, "plan.draft.closed", { planId: failedPlanId ?? null, requestId: failedRunRequestId });
+		}
 		if (activePlanOperation !== null) {
 			finishPlanOperationRun(socket, session, activePlanOperation);
 			activePlanOperation = null;

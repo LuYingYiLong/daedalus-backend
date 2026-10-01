@@ -3196,6 +3196,17 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("plan.update"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			planId: z.string().min(1),
+			expectedUpdatedAt: z.string().min(1),
+			markdown: z.string().max(200_000).refine((value: string): boolean => value.trim().length > 0),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("plan.clarify"),
 		params: z.object({
 			planId: z.string().min(1),

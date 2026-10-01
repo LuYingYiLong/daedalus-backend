@@ -12,6 +12,9 @@ import { createClientSession, type ClientSession } from "../../../src/server/cli
 import { createSlashHelpText, handleSlashCommand, listSlashCommands } from "../../../src/server/slash-commands.js";
 import { registerClientConnection, unregisterClientConnection, updateClientConnection, type ClientType } from "../../../src/server/client-connections.js";
 import { computerOverlayPreviewSchema } from "../../../src/protocol/computer-overlay-preview.js";
+import { createSession } from "../../../src/session/session-store.js";
+import { readStoredPlan } from "../../../src/server/plan-store.js";
+import { handlePlanRequest } from "../../../src/server/handlers/plan-handlers.js";
 
 function createSocketMock(): WebSocket & { sent: unknown[] } {
 	const sent: unknown[] = [];
@@ -96,6 +99,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/test-approval",
 			"/test-message-queue",
 			"/test-todo-list",
+			"/test-plan",
 			"/test-subagent",
 			"/ask",
 			"/agent",
@@ -277,6 +281,78 @@ test("/test-todo-list sends a harmless workflow todo snapshot in development mod
 		assert.equal(Array.isArray(stateEvent?.data?.todo?.phases), true);
 		assert.equal(stateEvent?.data?.todo?.phases?.length, 4);
 		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.run.snapshot"), false);
+	});
+});
+
+test("/test-plan creates a readable sample plan without calling a model", async (): Promise<void> => {
+	await withTempUserProfile(async (): Promise<void> => {
+		await withBackendMode("development", async (): Promise<void> => {
+			const socket = createSocketMock();
+			const session: ClientSession = createClientSession(undefined);
+			session.sessionId = (await createSession("Test plan session")).id;
+			const request: ClientRequest = {
+				type: "request",
+				id: "slash-test-plan",
+				method: "ai.chat",
+				params: { message: "/test-plan", options: { stream: true } }
+			} as ClientRequest;
+
+			assert.deepEqual(await handleSlashCommand({
+				socket,
+				request,
+				session,
+				mcpHost: {} as McpHost,
+				createSessionInfo: (): Record<string, unknown> => ({ ok: true })
+			}), { type: "handled" });
+
+			const generated = socket.sent.find((message): boolean => (message as { event?: string }).event === "plan.generated") as {
+				data?: { planId?: string; status?: string; previewMarkdown?: string }
+			} | undefined;
+			assert.equal(generated?.data?.status, "ready");
+			assert.match(generated?.data?.previewMarkdown ?? "", /示例计划/u);
+			const drafts = socket.sent.filter((message): boolean => (message as { event?: string }).event === "plan.draft") as Array<{ data?: { markdown?: string } }>;
+			assert.equal(drafts.length, 5);
+			assert.equal(drafts.at(-1)?.data?.markdown, generated?.data?.previewMarkdown);
+			const plan = await readStoredPlan(session.sessionId, generated?.data?.planId ?? "");
+			assert.equal(plan.markdown, generated?.data?.previewMarkdown);
+			assert.equal(plan.metadata.requestId, request.id);
+			assert.equal(plan.metadata.testOnly, true);
+			assert.equal(session.messages.every((message): boolean => message.excludeFromLlmContext === true), true);
+			assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.message.done"), true);
+			assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.tool.call"), false);
+			const approveSocket = createSocketMock();
+			await handlePlanRequest(approveSocket, {
+				type: "request",
+				id: "slash-test-plan-approve",
+				method: "plan.approve",
+				params: { planId: plan.metadata.planId }
+			} as ClientRequest, session, {} as McpHost);
+			const approval = approveSocket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { error?: { code?: string } } | undefined;
+			assert.equal(approval?.error?.code, "test_plan_only");
+		});
+	});
+});
+
+test("/test-plan cannot create a plan outside development mode", async (): Promise<void> => {
+	await withBackendMode("runtime", async (): Promise<void> => {
+		const socket = createSocketMock();
+		const session: ClientSession = createClientSession(undefined);
+		const request: ClientRequest = {
+			type: "request",
+			id: "slash-test-plan-runtime",
+			method: "ai.chat",
+			params: { message: "/test-plan", options: { stream: true } }
+		} as ClientRequest;
+		assert.deepEqual(await handleSlashCommand({
+			socket,
+			request,
+			session,
+			mcpHost: {} as McpHost,
+			createSessionInfo: (): Record<string, unknown> => ({ ok: true })
+		}), { type: "handled" });
+		assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "plan.generated"), false);
+		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { result?: { text?: string } } | undefined;
+		assert.match(response?.result?.text ?? "", /Unknown command: `\/test-plan`/u);
 	});
 });
 

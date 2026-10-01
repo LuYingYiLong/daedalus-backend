@@ -37,6 +37,7 @@ export type StoredPlanMetadata = {
 	approvedAt?: string | undefined;
 	executedRequestId?: string | undefined;
 	planPath: string;
+	testOnly?: true | undefined;
 };
 
 export type StoredPlan = {
@@ -67,6 +68,7 @@ export function createPlanMetadata(params: {
 	title: string;
 	originalMessage: string;
 	previewMarkdown?: string | undefined;
+	testOnly?: true | undefined;
 	clarificationQuestion?: string | undefined;
 	recommendedReplies?: PlanRecommendedReply[] | undefined;
 	clarifications?: string[] | undefined;
@@ -92,7 +94,8 @@ export function createPlanMetadata(params: {
 		revisions: params.revisions ?? [],
 		createdAt: timestamp,
 		updatedAt: timestamp,
-		planPath: `plans/${planId}/PLAN.md`
+		planPath: `plans/${planId}/PLAN.md`,
+		...(params.testOnly ? { testOnly: true as const } : {})
 	};
 }
 

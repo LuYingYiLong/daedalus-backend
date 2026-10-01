@@ -11,12 +11,15 @@ import { createPersistedApprovalRequestedData } from "../session/approval-persis
 import { getBackendRuntimeMode } from "./backend-runtime.js";
 import { enqueueMessage, emitMessageQueueUpdated, persistMessageQueueEvent, serializeQueuedMessage } from "./message-queue.js";
 import { bumpWorkbenchRevision, emitWorkbenchUpdated } from "./workbench.js";
-import { sendSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
+import { sendSessionEvent, sendTransientSessionEvent, waitForSessionEventPersistence } from "./session-events.js";
 import { createGlobalSkillWorkspace } from "../skills/runtime.js";
 import { beginAgentRun, updateAgentRun } from "./agent-run-controller.js";
 import type { WorkflowTodoSnapshot } from "../workflow/types.js";
 import { getPluginP2Snapshot } from "../plugins/extensions/registry.js";
 import { getClientConnection } from "./client-connections.js";
+import { createPlanEventPayload, createPlanMetadata, writeStoredPlan } from "./plan-store.js";
+import { sendPlanMessageDone } from "./plan-mode.js";
+import { appendTranscriptOnlyChatTurnToSession } from "./transcript-history.js";
 import { computerOverlayPreviewActionSchema, computerOverlayPreviewSchema, type ComputerOverlayPreview } from "../protocol/computer-overlay-preview.js";
 import {
 	assertValidSubagentGraphSnapshot,
@@ -205,6 +208,14 @@ const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		examples: ["/test-todo-list"]
 	},
 	{
+		command: "/test-plan",
+		usage: "/test-plan",
+		insertText: "/test-plan",
+		description: "Create a sample Plan card in the current Studio session without calling a model or tool.",
+		requiresArgument: false,
+		examples: ["/test-plan"]
+	},
+	{
 		command: "/test-subagent",
 		usage: "/test-subagent",
 		insertText: "/test-subagent",
@@ -351,6 +362,62 @@ async function createTestMessageQueue(socket: WebSocket, request: ClientRequest,
 	await waitForSessionEventPersistence(session);
 
 	return `Created ${items.length} message-queue UI test items. They will not start automatically.`;
+}
+
+async function createTestPlan(socket: WebSocket, request: ClientRequest, session: ClientSession, message: string): Promise<string> {
+	if (session.sessionId === undefined) {
+		return "Open or create a Studio session before generating a test plan.";
+	}
+
+	const markdown: string = [
+		"# 示例计划（开发测试）",
+		"",
+		"此计划仅用于检查 Studio 的计划展示与编辑界面，不代表真实任务。",
+		"",
+		"## 目标",
+		"- 验证计划卡片、Markdown 排版和源码编辑。",
+		"",
+		"## 步骤",
+		"1. 查看计划卡片中的标题和列表。",
+		"2. 打开计划并尝试修改内容。",
+		"3. 保存后确认预览同步更新。",
+		"",
+		"## 验收",
+		"- [ ] 计划内容正常展示。",
+		"- [ ] 编辑和保存后内容保持一致。"
+	].join("\n");
+	const metadata = createPlanMetadata({
+		sessionId: session.sessionId,
+		requestId: request.id,
+		status: "ready",
+		testOnly: true,
+		title: "示例计划（开发测试）",
+		originalMessage: message,
+		previewMarkdown: markdown
+	});
+	const plan = await writeStoredPlan(metadata, markdown);
+	let draft: string = "";
+	for (const section of markdown.split("\n\n")) {
+		draft += `${draft.length > 0 ? "\n\n" : ""}${section}`;
+		sendTransientSessionEvent(socket, request.id, session, "plan.draft", {
+			planId: metadata.planId,
+			requestId: request.id,
+			operationRequestId: request.id,
+			status: "streaming",
+			title: metadata.title,
+			previewMarkdown: draft,
+			markdown: draft
+		});
+		await new Promise<void>((resolve: () => void): void => { setTimeout(resolve, 90); });
+	}
+	sendSessionEvent(socket, request.id, session, "plan.generated", {
+		...createPlanEventPayload(plan),
+		operationRequestId: request.id
+	});
+	sendPlanMessageDone(socket, request.id, session, metadata.planId, request.id);
+	await waitForSessionEventPersistence(session);
+	await appendTranscriptOnlyChatTurnToSession(session, message, metadata.previewMarkdown, request.id);
+	return `Created sample plan \`${metadata.planId}\`. No model or tool was called.`;
 }
 
 async function emitTestTodoListSnapshot(socket: WebSocket, request: ClientRequest, session: ClientSession): Promise<void> {
@@ -860,6 +927,25 @@ export async function handleSlashCommand(params: {
 		}
 		await sendChatText(socket, request, "Sent the Todo overlay UI test snapshot. No model or tool was called.", session, mcpHost, createSessionInfo);
 		await emitTestTodoListSnapshot(socket, request, session);
+		return { type: "handled" };
+	}
+
+	if (command === "/test-plan") {
+		if (!isDevelopmentSlashCommandEnabled()) {
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		if (session.sessionId === undefined) {
+			await sendChatText(socket, request, "Open or create a Studio session before generating a test plan.", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		const text: string = await createTestPlan(socket, request, session, inputText);
+		sendJson(socket, {
+			type: "response",
+			id: request.id,
+			ok: true,
+			result: { text, context: createSessionInfo(session, mcpHost) }
+		});
 		return { type: "handled" };
 	}
 

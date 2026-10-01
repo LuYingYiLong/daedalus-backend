@@ -236,6 +236,10 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 				const plan: StoredPlan = await readStoredPlan(sessionId, request.params.planId);
 				failedRunRequestId = plan.metadata.requestId;
 				failedPlanId = plan.metadata.planId;
+				if (plan.metadata.testOnly === true) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "test_plan_only", message: "This sample plan is for UI testing and cannot be clarified by a model." } });
+					return;
+				}
 				activePlanOperation = beginPlanOperationRun(socket, request.id, session, plan);
 				if (activePlanOperation === null) {
 					return;
@@ -296,6 +300,10 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 				const plan: StoredPlan = await readStoredPlan(sessionId, request.params.planId);
 				failedRunRequestId = plan.metadata.requestId;
 				failedPlanId = plan.metadata.planId;
+				if (plan.metadata.testOnly === true) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "test_plan_only", message: "This sample plan is for UI testing and cannot be revised by a model." } });
+					return;
+				}
 				activePlanOperation = beginPlanOperationRun(socket, request.id, session, plan);
 				if (activePlanOperation === null) {
 					return;
@@ -346,6 +354,10 @@ export async function handlePlanRequest(socket: WebSocket, request: ClientReques
 					throw new Error("Plan approval requires an active session.");
 				}
 				const plan: StoredPlan = await readStoredPlan(sessionId, request.params.planId);
+				if (plan.metadata.testOnly === true) {
+					sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "test_plan_only", message: "This sample plan is for UI testing and cannot be executed." } });
+					return;
+				}
 				if (plan.metadata.status !== "ready") {
 					sendJson(socket, {
 						type: "response",

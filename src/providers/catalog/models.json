@@ -166,100 +166,6 @@
     "ownedBy": "moonshot"
   },
   {
-    "id": "kimi-k2.5",
-    "displayName": "Kimi K2.5",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 256000,
-    "maxOutputTokens": 32000,
-    "capabilities": {
-      "imageInput": true,
-      "reasoning": true,
-      "tools": true,
-      "vision": true
-    },
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-8k",
-    "displayName": "Moonshot v1 8K",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 8192,
-    "maxOutputTokens": 4096,
-    "capabilities": {},
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-32k",
-    "displayName": "Moonshot v1 32K",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 32768,
-    "maxOutputTokens": 8192,
-    "capabilities": {},
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-128k",
-    "displayName": "Moonshot v1 128K",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 131072,
-    "maxOutputTokens": 8192,
-    "capabilities": {},
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-auto",
-    "displayName": "Moonshot v1 Auto",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 128000,
-    "maxOutputTokens": 8192,
-    "capabilities": {},
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-8k-vision-preview",
-    "displayName": "Moonshot v1 8K Vision Preview",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 8192,
-    "maxOutputTokens": 4096,
-    "capabilities": {
-      "imageInput": true,
-      "vision": true
-    },
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-32k-vision-preview",
-    "displayName": "Moonshot v1 32K Vision Preview",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 32768,
-    "maxOutputTokens": 8192,
-    "capabilities": {
-      "imageInput": true,
-      "vision": true
-    },
-    "ownedBy": "moonshot"
-  },
-  {
-    "id": "moonshot-v1-128k-vision-preview",
-    "displayName": "Moonshot v1 128K Vision Preview",
-    "provider": "moonshot",
-    "endpointType": "openai-chat-completions",
-    "contextWindowTokens": 131072,
-    "maxOutputTokens": 8192,
-    "capabilities": {
-      "imageInput": true,
-      "vision": true
-    },
-    "ownedBy": "moonshot"
-  },
-  {
     "id": "gpt-6-astra",
     "displayName": "GPT-6 Astra",
     "provider": "openai",
@@ -277,6 +183,131 @@
         {
           "id": "medium",
           "fallback": "medium"
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
+      "tools": true,
+      "webSearch": true,
+      "vision": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-6.1-sol",
+    "displayName": "GPT-6.1 Sol",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 1050000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+      "reasoningEfforts": [
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium",
+          "default": true
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
+      "tools": true,
+      "webSearch": true,
+      "vision": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-6-luna",
+    "displayName": "GPT-6 Luna",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 1050000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+      "reasoningEfforts": [
+        {
+          "id": "none",
+          "fallback": "low"
+        },
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium",
+          "default": true
+        },
+        {
+          "id": "high",
+          "fallback": "high"
+        },
+        {
+          "id": "xhigh",
+          "fallback": "high"
+        },
+        {
+          "id": "max",
+          "fallback": "max"
+        }
+      ],
+      "tools": true,
+      "webSearch": true,
+      "vision": true
+    },
+    "ownedBy": "openai"
+  },
+  {
+    "id": "gpt-6-sol",
+    "displayName": "GPT-6 Sol",
+    "provider": "openai",
+    "endpointType": "openai-responses",
+    "contextWindowTokens": 1050000,
+    "maxOutputTokens": 128000,
+    "capabilities": {
+      "imageInput": true,
+      "reasoning": true,
+      "reasoningEfforts": [
+        {
+          "id": "none",
+          "fallback": "low"
+        },
+        {
+          "id": "low",
+          "fallback": "low"
+        },
+        {
+          "id": "medium",
+          "fallback": "medium",
+          "default": true
         },
         {
           "id": "high",

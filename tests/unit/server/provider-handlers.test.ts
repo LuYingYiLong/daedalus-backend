@@ -34,7 +34,7 @@ test("provider settings reads and task-routing writes do not replace an active s
 		await saveProviderConfig({
 			provider: "moonshot",
 			apiKey: "moonshot-key",
-			model: "moonshot-v1-128k",
+			model: "kimi-k2.6",
 		});
 
 		const session: ClientSession = createClientSession(undefined);

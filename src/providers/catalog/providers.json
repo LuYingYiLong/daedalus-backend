@@ -23,6 +23,7 @@
     "authType": "api-key",
     "defaultModel": "kimi-k3",
     "defaultEndpointType": "openai-chat-completions",
+    "modelListMode": "catalog-recommended",
     "endpointConfigs": {
       "openai-chat-completions": {
         "baseUrl": "https://api.moonshot.cn/v1",

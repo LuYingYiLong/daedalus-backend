@@ -296,18 +296,17 @@ test("configured imageRecognition route wins even when the current model support
 	});
 });
 
-test("unavailable or text-only configured routes fail closed without current-model fallback", async (t): Promise<void> => {
+test("retired configured routes are rejected and unavailable current models fail closed", async (t): Promise<void> => {
 	await withProviderFixture(t, async (): Promise<void> => {
 		const chat = t.mock.method(resolveProviderAdapter(CURRENT_OPTIONS), "chat", async (): Promise<string> => JSON.stringify(PIXEL_VISUAL));
-		await saveProviderConfig({ provider: "moonshot", apiKey: "fixture", model: "kimi-k2.6",
-			modelRouting: { imageRecognition: { provider: "moonshot", model: "moonshot-v1-8k" } } });
-		await assert.rejects(groundComputerFrame(request()), { code: "computer_grounding_model_unavailable", message: "computer_grounding_model_unavailable" });
+		await assert.rejects(saveProviderConfig({ provider: "moonshot", apiKey: "fixture", model: "kimi-k2.6",
+			modelRouting: { imageRecognition: { provider: "moonshot", model: "moonshot-v1-8k" } } }), /provider_model_not_found/);
 		await assert.rejects(groundComputerFrame(request({ options: { ...CURRENT_OPTIONS, model: "moonshot-v1-8k" } })), /computer_grounding_model_unavailable/);
 		assert.equal(chat.mock.callCount(), 0);
 	});
 });
 
-test("an unconfigured text-only current route also fails before a model request", async (t): Promise<void> => {
+test("an unconfigured retired current route also fails before a model request", async (t): Promise<void> => {
 	await withProviderFixture(t, async (): Promise<void> => {
 		await assert.rejects(groundComputerFrame(request({ options: { provider: "moonshot", apiKey: "fixture", model: "moonshot-v1-8k" } })), /model_unavailable/);
 	});

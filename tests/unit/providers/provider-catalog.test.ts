@@ -67,6 +67,7 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(getProviderAdapterFamily("openai"), "openai-responses");
 	assert.equal(getProviderDefinition("openai").modelListMode, "catalog-recommended");
 	assert.equal(getProviderDefaultModel("moonshot"), "kimi-k3");
+	assert.equal(getProviderDefinition("moonshot").modelListMode, "catalog-recommended");
 	assert.equal(getProviderDefaultEndpointType("moonshot"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("moonshot"), "openai-compatible");
 	const moonshotModels = getProviderFallbackModels("moonshot");
@@ -91,9 +92,12 @@ test("provider catalog exposes valid built-in providers and model references", (
 		assert.equal(model?.capabilities.vision, true);
 	}
 	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.6")?.capabilities.tools, true);
-	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.imageInput, true);
-	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.tools, true);
-	assert.equal(moonshotModels.find((model) => model.id === "kimi-k2.5")?.capabilities.vision, true);
+	assert.deepEqual(moonshotModels.map((model) => model.id), [
+		"kimi-k3",
+		"kimi-k2.7-code",
+		"kimi-k2.7-code-highspeed",
+		"kimi-k2.6"
+	]);
 	assert.equal(getProviderDefaultModel("zhipu"), "glm-5.2");
 	assert.equal(getProviderDefaultEndpointType("zhipu"), "openai-chat-completions");
 	assert.equal(getProviderAdapterFamily("zhipu"), "openai-compatible");
@@ -312,6 +316,17 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(openaiModels.find((model) => model.id === "gpt-6-astra")?.maxOutputTokens, 128_000);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-6-astra")?.capabilities.webSearch, true);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-6-astra")?.capabilities.reasoningEfforts?.some((item) => item.id === "max"), true);
+	for (const modelId of ["gpt-6.1-sol", "gpt-6-luna", "gpt-6-sol"]) {
+		const model = openaiModels.find((candidate) => candidate.id === modelId);
+		assert.equal(model?.contextWindowTokens, 1_050_000);
+		assert.equal(model?.maxOutputTokens, 128_000);
+		assert.equal(model?.capabilities.imageInput, true);
+		assert.equal(model?.capabilities.tools, true);
+		assert.equal(model?.capabilities.webSearch, true);
+	}
+	assert.deepEqual(openaiModels.find((model) => model.id === "gpt-6.1-sol")?.capabilities.reasoningEfforts?.map((item) => item.id), ["low", "medium", "high", "xhigh", "max"]);
+	assert.deepEqual(openaiModels.find((model) => model.id === "gpt-6-luna")?.capabilities.reasoningEfforts?.map((item) => item.id), ["none", "low", "medium", "high", "xhigh", "max"]);
+	assert.deepEqual(openaiModels.find((model) => model.id === "gpt-6-sol")?.capabilities.reasoningEfforts?.map((item) => item.id), ["none", "low", "medium", "high", "xhigh", "max"]);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-5.6-sol")?.contextWindowTokens, 1_050_000);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-5.6-sol")?.maxOutputTokens, 128_000);
 	assert.equal(openaiModels.find((model) => model.id === "gpt-5.6-sol")?.capabilities.webSearch, true);

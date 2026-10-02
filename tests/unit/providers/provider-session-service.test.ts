@@ -43,7 +43,7 @@ test("ensuring provider credentials preserves the session selected model", async
 	try {
 		await saveProviderConfig({
 			provider: "moonshot",
-			model: "moonshot-v1-128k",
+			model: "kimi-k2.6",
 			baseUrl: "https://api.moonshot.cn/v1",
 			apiKey: "moonshot-key"
 		});

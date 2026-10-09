@@ -3,7 +3,8 @@ import {
 	buildMcpServerConfigs,
 	GODOT_DOCUMENTATION_MCP_SERVER_ID,
 	getSourceScopedServerId,
-	TERMINAL_MCP_SERVER_ID
+	TERMINAL_MCP_SERVER_ID,
+	SESSIONS_MCP_SERVER_ID
 } from "./mcp-config.js";
 import * as path from "node:path";
 import { buildCustomMcpServerConfigs } from "./custom-mcp-config-store.js";
@@ -947,7 +948,7 @@ export class McpHost {
 
 	async listTools(serverId: string, workspaceId?: string | undefined) {
 		if (isPluginMcpServer(serverId)) return listPluginMcpToolsForServer(serverId);
-		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID || serverId === SESSIONS_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
 
@@ -984,7 +985,7 @@ export class McpHost {
 		const sourceFolderId: string | undefined = typeof args.sourceFolderId === "string"
 			? args.sourceFolderId
 			: undefined;
-		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {
+		if (serverId === TERMINAL_MCP_SERVER_ID || serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID || serverId === SESSIONS_MCP_SERVER_ID) {
 			await this.ensureGlobalInternalServers();
 		}
 		if (serverId === GODOT_DOCUMENTATION_MCP_SERVER_ID) {

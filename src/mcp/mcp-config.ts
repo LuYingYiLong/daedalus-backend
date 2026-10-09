@@ -9,6 +9,7 @@ import { createSelfInvocation } from "../runtime/self-invocation.js";
 export const TERMINAL_MCP_SERVER_ID: string = "terminal";
 export const WORKSPACE_MCP_SERVER_ID: string = "workspace";
 export const GODOT_DOCUMENTATION_MCP_SERVER_ID: string = "godot_documentation";
+export const SESSIONS_MCP_SERVER_ID: string = "sessions";
 
 const defaultWs = getDefaultWorkspace();
 const DEFAULT_GODOT_PROJECT_PATH: string | undefined = process.env.GODOT_PROJECT_PATH ?? defaultWs?.rootPath;
@@ -29,6 +30,7 @@ export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string 
 	const terminalInvocation = createSelfInvocation(["mcp", "terminal"]);
 	const documentationInvocation = createSelfInvocation(["mcp", "documentation"]);
 	const skillsInvocation = createSelfInvocation(["mcp", "skills"]);
+	const sessionsInvocation = createSelfInvocation(["mcp", "sessions"]);
 	const terminalEnv: Record<string, string> = {
 		BACKEND_DIR: process.cwd()
 	};
@@ -43,6 +45,13 @@ export function buildGlobalMcpServerConfigs(defaultGodotExecutablePath?: string 
 	}
 
 	return [
+		{
+			id: SESSIONS_MCP_SERVER_ID,
+			name: "Daedalus Sessions MCP",
+			transport: "stdio",
+			command: sessionsInvocation.command,
+			args: sessionsInvocation.args
+		},
 		{
 			id: TERMINAL_MCP_SERVER_ID,
 			name: "Terminal MCP",

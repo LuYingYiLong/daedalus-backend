@@ -66,6 +66,7 @@ import {
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
 import { listSelectionAskThreads } from "../session/selection-ask-store.js";
+import { readChatSessionContext, searchChatSessions } from "../session/session-context.js";
 import { getTraceDetail, getTracePage, getTraceSummary } from "../trace/trace-store.js";
 import { exportSessionToSqlite } from "../session/session-export.js";
 import { importSessionFromSqlite } from "../session/session-import.js";
@@ -1540,6 +1541,33 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				ok: true,
 				result: await createSessionBrowserSnapshot(session, mcpHost)
 			});
+			break;
+
+		case "session.context.search":
+			sendJson(socket, {
+				type: "response",
+				id: request.id,
+				ok: true,
+				result: await searchChatSessions(request.params)
+			});
+			break;
+
+		case "session.context.read":
+			try {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: true,
+					result: await readChatSessionContext(request.params)
+				});
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: sessionRpcError(error, "session_context_unavailable", "Failed to read session context")
+				});
+			}
 			break;
 
 		case "session.browser.snapshot":

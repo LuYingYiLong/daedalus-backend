@@ -321,6 +321,16 @@ const webElementContextDataSchema = z
 	})
 	.strict();
 
+const sessionContextDataSchema = z.object({
+	sessionId: z.string().regex(/^session-[a-zA-Z0-9_-]+$/),
+	resolvedAt: z.string().datetime().optional(),
+	updatedAt: z.string().datetime().optional(),
+	archived: z.boolean().optional(),
+	messageCount: z.number().int().nonnegative().optional(),
+	truncated: z.boolean().optional(),
+	content: z.string().max(24_000).optional()
+}).strict();
+
 export const additionalContextItemSchema = z
 	.object({
 		id: z.string().min(1).max(160),
@@ -338,7 +348,8 @@ export const additionalContextItemSchema = z
 			"git_diff_comment",
 			"message_selection",
 			"file_selection",
-			"web_element"
+			"web_element",
+			"session"
 		]),
 		title: z.string().min(1).max(200),
 		subtitle: z.string().max(400).optional(),
@@ -352,6 +363,12 @@ export const additionalContextItemSchema = z
 		data: z.unknown().optional()
 	})
 	.superRefine((item, context): void => {
+		if (item.kind === "session") {
+			if (!sessionContextDataSchema.safeParse(item.data).success) {
+				context.addIssue({ code: "custom", path: ["data"], message: "Session context requires a valid session ID and bounded optional snapshot." });
+			}
+			return;
+		}
 		if (item.kind === "web_element") {
 			if (!webElementContextDataSchema.safeParse(item.data).success) {
 				context.addIssue({
@@ -2775,6 +2792,29 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		id: z.string(),
 		method: z.literal("session.list"),
 		params: z.object({}).optional(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.context.search"),
+		params: z.object({
+			query: z.string().max(120).optional(),
+			workspaceId: z.string().min(1).max(200).optional(),
+			preferredWorkspaceId: z.string().min(1).max(200).optional(),
+			includeArchived: z.boolean().optional(),
+			limit: z.number().int().min(1).max(50).optional(),
+			offset: z.number().int().min(0).max(100_000).optional()
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
+		method: z.literal("session.context.read"),
+		params: z.object({
+			sessionId: z.string().regex(/^session-[a-zA-Z0-9_-]+$/),
+			cursor: z.number().int().positive().optional(),
+			limit: z.number().int().min(1).max(20).optional()
+		}).strict(),
 	}),
 	z.object({
 		type: z.literal("request"),

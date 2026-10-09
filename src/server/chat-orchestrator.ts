@@ -21,6 +21,7 @@ import {
 	runProviderAgentStreaming
 } from "../providers/provider-agent.js";
 import type { PendingToolBudget } from "../session/pending-tool-budget.js";
+import { resolveSessionContextItems } from "../session/session-context.js";
 import {
 	readAgentRunState,
 	removeAgentRunContinuation
@@ -2650,7 +2651,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 			const rawParams: AiChatParams = slashCommandResult.type === "ai"
 				? slashCommandResult.params
 				: request.params;
-			const params: AiChatParams = normalizeChatParamsForMode({
+			const normalizedParams: AiChatParams = normalizeChatParamsForMode({
 				...rawParams,
 				message: rawParams.message.length > 0 || rawParams.additionalContext !== undefined
 					? rawParams.message
@@ -2658,6 +2659,24 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				mode: rawParams.mode ?? session.workbenchComposer.chatMode,
 				additionalContext: rawParams.additionalContext ?? session.workbenchComposer.additionalContext
 			});
+			let params: AiChatParams;
+			try {
+				params = {
+					...normalizedParams,
+					additionalContext: await resolveSessionContextItems(normalizedParams.additionalContext, session.sessionId, session.modelProfile.contextWindowTokens)
+				};
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response",
+					id: request.id,
+					ok: false,
+					error: {
+						code: "session_context_unavailable",
+						message: error instanceof Error ? error.message : "Failed to read the attached session."
+					}
+				});
+				break;
+			}
 			if (session.sessionId !== undefined) {
 				await ensureSessionPluginRuntimes({
 					sessionId: session.sessionId,

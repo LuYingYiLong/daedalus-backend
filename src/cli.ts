@@ -11,7 +11,7 @@ import {
 	type SharedRuntimeClient
 } from "./runtime/shared-runtime.js";
 
-type McpCommand = "terminal" | "workspace" | "godot" | "documentation" | "skills" | "external";
+type McpCommand = "terminal" | "workspace" | "godot" | "documentation" | "skills" | "sessions" | "external";
 
 function hasFlag(args: readonly string[], flag: string): boolean {
 	return args.includes(flag);
@@ -61,7 +61,7 @@ function printUsage(): void {
 		"  daedalus-backend runtime acquire --client studio|godot [--project <path>] --json",
 		"  daedalus-backend runtime status --json",
 		"  daedalus-backend runtime release --lease <id> --json",
-		"  daedalus-backend mcp terminal|workspace|godot|documentation|skills|external",
+		"  daedalus-backend mcp terminal|workspace|godot|documentation|skills|sessions|external",
 		""
 	].join("\n"));
 }
@@ -72,6 +72,7 @@ function isMcpCommand(value: string | undefined): value is McpCommand {
 		|| value === "godot"
 		|| value === "documentation"
 		|| value === "skills"
+		|| value === "sessions"
 		|| value === "external";
 }
 
@@ -91,6 +92,9 @@ async function runMcp(command: McpCommand): Promise<void> {
 			return;
 		case "skills":
 			await (await import("./mcp/skills/server.js")).main();
+			return;
+		case "sessions":
+			await (await import("./mcp/sessions/server.js")).main();
 			return;
 		case "external":
 			await (await import("./mcp/external/server.js")).main();

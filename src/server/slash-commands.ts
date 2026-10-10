@@ -17,6 +17,7 @@ import { beginAgentRun, updateAgentRun } from "./agent-run-controller.js";
 import type { WorkflowTodoSnapshot } from "../workflow/types.js";
 import { getPluginP2Snapshot } from "../plugins/extensions/registry.js";
 import { getClientConnection } from "./client-connections.js";
+import { createAgentClarificationControl, TEST_AGENT_QUESTION_TOOL_CALL_ID } from "./agent-clarification.js";
 import { createPlanEventPayload, createPlanMetadata, writeStoredPlan } from "./plan-store.js";
 import { sendPlanMessageDone } from "./plan-mode.js";
 import { appendTranscriptOnlyChatTurnToSession } from "./transcript-history.js";
@@ -214,6 +215,14 @@ const DEV_SLASH_COMMANDS: readonly SlashCommandDefinition[] = [
 		description: "Create a sample Plan card in the current Studio session without calling a model or tool.",
 		requiresArgument: false,
 		examples: ["/test-plan"]
+	},
+	{
+		command: "/test-agent-question",
+		usage: "/test-agent-question [0-5]",
+		insertText: "/test-agent-question",
+		description: "Show a persisted Agent question with the selected number of suggestions; answering it never starts a model.",
+		requiresArgument: false,
+		examples: ["/test-agent-question", "/test-agent-question 0", "/test-agent-question 5"]
 	},
 	{
 		command: "/test-subagent",
@@ -946,6 +955,39 @@ export async function handleSlashCommand(params: {
 			ok: true,
 			result: { text, context: createSessionInfo(session, mcpHost) }
 		});
+		return { type: "handled" };
+	}
+
+	if (command === "/test-agent-question") {
+		if (!isDevelopmentSlashCommandEnabled()) {
+			await sendChatText(socket, request, `Unknown command: \`${command}\`\n\n${createSlashHelpText()}`, session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		if (getClientConnection(socket)?.clientType !== "studio" || session.scheduledTaskOrigin || request.params.mode !== "agent") {
+			await sendChatText(socket, request, "This test command requires an interactive Studio session in Agent mode.", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		if (session.sessionId === undefined) {
+			await sendChatText(socket, request, "Open or create a Studio session before generating a test Agent question.", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		const choiceCount = restText === "" ? 3 : Number(restText);
+		if (!Number.isInteger(choiceCount) || choiceCount < 0 || choiceCount > 5 || (restText !== "" && !/^[0-5]$/u.test(restText))) {
+			await sendChatText(socket, request, "Usage: `/test-agent-question [0-5]`.", session, mcpHost, createSessionInfo);
+			return { type: "handled" };
+		}
+		await createAgentClarificationControl(socket, session, `slash-${request.id}`, request.id).execute({
+			title: "测试追问",
+			question: "这个功能应该优先采用哪种实现方向？",
+			choices: [
+				{ label: "先修复现有行为", text: "先修复现有行为，再考虑扩展。" },
+				{ label: "增加新能力", text: "优先实现新能力，并保持旧行为可用。" },
+				{ label: "先写测试", text: "先补充回归测试，再决定实现方案。" },
+				{ label: "先调查原因", text: "先调查根因并列出可选方案。" },
+				{ label: "最小改动", text: "选择影响范围最小的方案。" }
+			].slice(0, choiceCount)
+		}, TEST_AGENT_QUESTION_TOOL_CALL_ID);
+		await sendChatText(socket, request, "Created a test Agent question. Choose a suggestion or write your own answer; no model will run.", session, mcpHost, createSessionInfo);
 		return { type: "handled" };
 	}
 

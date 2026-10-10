@@ -53,6 +53,7 @@ import {
 	SUBAGENT_TOOL_NAME_SET,
 	type SubagentControlContext
 } from "./subagent-tools.js";
+import { AGENT_ASK_USER_TOOL_DEFINITION, AGENT_ASK_USER_TOOL_NAME, type AgentClarificationContext } from "./agent-clarification.js";
 
 export type ToolExecutionContext = {
 	workspaceId?: string | undefined;
@@ -92,6 +93,7 @@ export type ToolExecutionContext = {
 	scheduledMonitorRun?: boolean | undefined;
 	/** Present only on parent Agent runs that are allowed to orchestrate child runs. */
 	subagentControl?: SubagentControlContext | undefined;
+	agentClarification?: AgentClarificationContext | undefined;
 };
 
 export type ToolPhaseEligibility = "read" | "verify" | "write";
@@ -511,6 +513,16 @@ function createSummaryPreparationEntry(): ToolCatalogEntry {
 	};
 }
 
+function createAgentClarificationEntry(): ToolCatalogEntry {
+	return {
+		id: AGENT_ASK_USER_TOOL_NAME,
+		definition: AGENT_ASK_USER_TOOL_DEFINITION,
+		mapping: { serverId: "internal", toolName: AGENT_ASK_USER_TOOL_NAME },
+		policy: { risk: "read" },
+		phaseEligibility: ["read", "verify", "write"]
+	};
+}
+
 /**
  * 工具定义、映射与风险判断的唯一运行时入口。
  * workspace 必须由调用方显式提供，避免并发请求借用活动 workspace。
@@ -555,7 +567,7 @@ export class WorkspaceToolCatalog {
 		const summaryPreparationEntries: ToolCatalogEntry[] = this.context.summaryPreparation === undefined || this.context.summaryPreparationAvailable === false
 			? []
 			: [createSummaryPreparationEntry()];
-		return [...staticEntries, ...dynamicEntries, ...pluginEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries, ...summaryPreparationEntries];
+		return [...staticEntries, ...dynamicEntries, ...pluginEntries, ...executionControlEntries, ...chatCompletionEntries, ...contextControlEntries, ...todoControlEntries, ...summaryPreparationEntries, ...(this.context.agentClarification === undefined ? [] : [createAgentClarificationEntry()])];
 	}
 
 	getDefinitions(): ChatCompletionTool[] {
@@ -582,6 +594,7 @@ export class WorkspaceToolCatalog {
 		if (this.context.summaryPreparation !== undefined && this.context.summaryPreparationAvailable !== false) {
 			allowedNames.add(SUMMARY_PREPARATION_TOOL_NAME);
 		}
+		if (this.context.agentClarification !== undefined) allowedNames.add(AGENT_ASK_USER_TOOL_NAME);
 		const includeDynamicTools: boolean = allowedNames.has(CUSTOM_MCP_TOOLS_SENTINEL);
 		return this.getEntries()
 			.filter((entry: ToolCatalogEntry): boolean => allowedNames.has(entry.id) || (includeDynamicTools && isDynamicMcpToolName(entry.id)))

@@ -145,6 +145,8 @@ import {
 	serializeQueuedMessage,
 	setQueuedMessageStatus
 } from "./message-queue.js";
+import { enqueueMessage } from "./message-queue.js";
+import { getSessionRuntime } from "./client-connections.js";
 import { bumpWorkbenchRevision, clearWorkbenchComposer, clearWorkbenchNextStepHints, emitWorkbenchUpdated, serializeWorkbench, setWorkbenchActiveRun, setWorkbenchNextStepHints } from "./workbench.js";
 import { hookRuntime } from "../hooks/runtime.js";
 import type { HookDecision, HookRuntimeEvent } from "../hooks/types.js";
@@ -166,6 +168,7 @@ import { createRuntimeSessionUiMetadata } from "./session-ui-metadata.js";
 import { createGodotRuntimeStatus } from "./godot-runtime-status.js";
 import { clipTextByChars, cloneAdditionalContextItems, getAdditionalContextDataRecord, getContextNumber, getContextString, createLineColumnRangeText, appendScriptSelectionPromptLines, appendFilesystemSelectionPromptLines, createAdditionalContextPromptSection } from "./additional-context.js";
 import { MAX_GUIDE_TEXT_CHARS, createGuideId, createPendingGuide, serializePendingGuide, findPendingGuideIndexById, findPendingGuideByClientId, readEventDataObject, hydratePendingGuides, persistGuideEvent, formatGuidePromptSection, consumePendingGuideSection } from "./pending-guides.js";
+import { answerAgentQuestion, cancelAgentQuestions, createAgentClarificationControl, isTestAgentQuestion, listUnappliedAnswers, markAnswersApplied, readAgentQuestion } from "./agent-clarification.js";
 import { DEFAULT_NEXT_STEP_HINT_COUNT, MAX_NEXT_STEP_HINT_COUNT, parseJsonObjectLoose, normalizeNextStepHints, createNextStepHintPrompt, createNextStepHints, resolveNextStepHintOptions } from "./next-step-hints.js";
 import type { NextStepHint } from "./next-step-hints.js";
 import {
@@ -843,6 +846,9 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 	const chatParams: AiChatParams = createHiddenAnswerChatParams(params.chatParams, params.routeDecision);
 	const executionControl: ExecutionControlContext | undefined = createExecutionControlContext(chatParams, params.routeDecision);
 	const chatCompletion: ChatCompletionContext | undefined = createChatCompletionContext(params.routeDecision);
+	const agentClarification = params.chatParams.mode === "agent" && getClientConnection(params.socket)?.clientType === "studio" && params.session.sessionId !== undefined
+		? createAgentClarificationControl(params.socket, params.session, runId, params.requestId)
+		: undefined;
 	const fullSystemPrompt: string = createHiddenAnswerSystemPrompt(
 		params.fullSystemPrompt,
 		params.routeDecision,
@@ -939,6 +945,7 @@ async function runHiddenAnswerExecution(params: HiddenAnswerExecutionParams): Pr
 			executionControl,
 			executionControlAvailable: params.routeDecision.lane !== "probe",
 			chatCompletion,
+			agentClarification,
 			agentLoopRecovery,
 			contextControl: params.session.sessionId === undefined ? undefined : createSessionContextControl({
 				session: params.session,
@@ -1996,6 +2003,40 @@ function createQueueRunRequestId(queueItemId: number): string {
 	return `queue-${queueItemId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const schedulingClarificationFollowups = new Set<string>();
+
+export async function scheduleClarificationFollowups(socket: WebSocket, session: ClientSession, runId: string, mcpHost: McpHost): Promise<void> {
+	if (session.sessionId === undefined || session.activeRunRequestId === runId || getActiveSessionRunController(session.sessionId, runId) !== undefined) return;
+	if (session.approvalGateway.listPending().length > 0 || session.pendingToolBudgets.size > 0) return;
+	const key = `${session.sessionId}:${runId}`;
+	if (schedulingClarificationFollowups.has(key)) return;
+	schedulingClarificationFollowups.add(key);
+	try {
+		for (const question of await listUnappliedAnswers(session.sessionId, runId)) {
+			if (question.answer === null) continue;
+			if (isTestAgentQuestion(question)) {
+				await markAnswersApplied([question.questionId]);
+				sendSessionEvent(socket, question.requestId, session, "agent.clarification.applied", { questionId: question.questionId, runId }, question.requestId);
+				continue;
+			}
+			if (session.queuedMessages.some((item) => item.text.includes(`User clarification for earlier Agent question ${question.questionId} (`))) {
+				await markAnswersApplied([question.questionId]);
+				continue;
+			}
+			const item = enqueueMessage(session, { text: `User clarification for earlier Agent question ${question.questionId} (${question.question}):\n${question.answer}`, mode: "agent" });
+			await persistMessageQueueEvent(session, runId, "message.queue.added", { type: "message.queue.added", item: serializeQueuedMessage(item) });
+			await markAnswersApplied([question.questionId]);
+			sendSessionEvent(socket, runId, session, "agent.clarification.applied", { questionId: question.questionId, runId, followupQueueId: item.id }, runId);
+		}
+		bumpWorkbenchRevision(session);
+		emitMessageQueueUpdated(socket, runId, session);
+		emitWorkbenchUpdated(socket, runId, session);
+		void drainMessageQueue(socket, runId, session, mcpHost);
+	} finally {
+		schedulingClarificationFollowups.delete(key);
+	}
+}
+
 export async function drainMessageQueue(socket: WebSocket, requestId: string, session: ClientSession, mcpHost: McpHost): Promise<void> {
 	if (session.messageQueueDrainActive || session.activeRunRequestId !== undefined) {
 		return;
@@ -2196,6 +2237,9 @@ async function runToolBudgetDecisionContinuation(params: {
 			sessionId: session.sessionId,
 			requestId: pending.requestId,
 			clientType: getClientConnection(socket)?.clientType,
+			agentClarification: continuationParams.mode === "agent" && getClientConnection(socket)?.clientType === "studio" && session.sessionId !== undefined
+				? createAgentClarificationControl(socket, session, pending.requestId, pending.requestId)
+				: undefined,
 			computerControl: getStudioComputerControl(socket, session),
 			browserControl: getStudioBrowserControl(socket, session.sessionId),
 			godotRuntimeControl: getStudioGodotRuntimeControl(socket, session.sessionId, session.activeWorkspace?.id),
@@ -2405,6 +2449,9 @@ async function runToolBudgetDecisionContinuation(params: {
 			session.activeRunRequestId = undefined;
 		}
 		finishSessionRun(session.sessionId, pending.requestId);
+		if (session.sessionId !== undefined && !abortController.signal.aborted) {
+			await scheduleClarificationFollowups(socket, session, pending.requestId, mcpHost);
+		}
 		if (shouldDrainQueueAfterRun) {
 			void drainMessageQueue(socket, pending.requestId, session, mcpHost);
 		}
@@ -2413,6 +2460,43 @@ async function runToolBudgetDecisionContinuation(params: {
 
 export async function handleChatRequest(socket: WebSocket, request: ClientRequest, session: ClientSession, mcpHost: McpHost): Promise<void> {
 	switch (request.method) {
+		case "agent.clarification.answer": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "studio_only", message: "Agent clarification answers require Studio." } });
+				break;
+			}
+			const question = await readAgentQuestion(request.params.questionId);
+			const ownerSession = getSessionRuntime(request.params.sessionId) ?? (session.sessionId === request.params.sessionId ? session : undefined);
+			if (question === null || question.sessionId !== request.params.sessionId || ownerSession === undefined) {
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code: "agent_question_not_found", message: "Question or session is unavailable." } });
+				break;
+			}
+			try {
+				const answer = request.params.answer.trim();
+				const result = await answerAgentQuestion(question.questionId, question.sessionId, answer);
+				if (result.changed) {
+					sendSessionEvent(socket, question.requestId, ownerSession, "agent.clarification.answered", { questionId: question.questionId, runId: question.runId, answer, answeredAt: result.question.answeredAt }, question.requestId);
+					await waitForSessionEventPersistence(ownerSession);
+				}
+				if (isTestAgentQuestion(result.question)) {
+					if (result.changed) {
+						await markAnswersApplied([question.questionId]);
+						sendSessionEvent(socket, question.requestId, ownerSession, "agent.clarification.applied", { questionId: question.questionId, runId: question.runId }, question.requestId);
+						await waitForSessionEventPersistence(ownerSession);
+					}
+					sendJson(socket, { type: "response", id: request.id, ok: true, result: { questionId: question.questionId, status: "applied", changed: result.changed } });
+					break;
+				}
+				sendJson(socket, { type: "response", id: request.id, ok: true, result: { questionId: question.questionId, status: result.question.status, changed: result.changed } });
+				void scheduleClarificationFollowups(socket, ownerSession, question.runId, mcpHost).catch((error: unknown): void => {
+					logger.error("agent_clarification", "followup_schedule_failed", { questionId: question.questionId, error });
+				});
+			} catch (error: unknown) {
+				const code = error instanceof Error ? error.message : "agent_question_answer_failed";
+				sendJson(socket, { type: "response", id: request.id, ok: false, error: { code, message: code } });
+			}
+			break;
+		}
 		case "ai.cancel": {
 			const activeGoal = session.sessionId === undefined
 				? null
@@ -3038,6 +3122,9 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 				const subagentControl: SubagentControlContext | undefined = (
 					effectiveParams.mode === "agent" || effectiveParams.mode === "goal"
 				) ? createSubagentControl({ socket, session, mcpHost, parentRunId: request.id }) : undefined;
+				const agentClarification = effectiveParams.mode === "agent" && getClientConnection(socket)?.clientType === "studio" && session.sessionId !== undefined
+					? createAgentClarificationControl(socket, session, request.id, request.id)
+					: undefined;
 				const budgetToolCatalog = createWorkspaceToolCatalog({
 					workspaceId: session.activeWorkspace?.id,
 					hasGodotWorkspaceCapability: hasGodotWorkspaceCapability(session.activeWorkspace),
@@ -3050,6 +3137,7 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					scheduledTaskControl: getStudioScheduledTaskControl(socket, session.sessionId),
 					pluginDevelopmentControl: getStudioPluginDevelopmentControl(socket, session.sessionId, session.activeWorkspace),
 					subagentControl,
+					agentClarification,
 					scheduledMonitorRun: session.scheduledTaskOrigin?.kind === "monitor",
 					contextControl: budgetContextControl,
 					contextControlAvailable: effectiveParams.mode === "agent" || effectiveParams.mode === "goal",
@@ -3665,7 +3753,13 @@ export async function handleChatRequest(socket: WebSocket, request: ClientReques
 					emitWorkbenchUpdated(socket, request.id, session);
 				}
 				finishSessionRun(runSessionId, request.id);
+				if (session.sessionId !== undefined && (abortController.signal.aborted || queuedRunForcedStatus === "cancelled")) {
+					for (const questionId of await cancelAgentQuestions(session.sessionId, request.id)) sendSessionEvent(socket, request.id, session, "agent.clarification.cancelled", { questionId, runId: request.id }, request.id);
+				}
 				await finishQueueItemForRun(socket, request.id, session, queueItemId, queuedRunForcedStatus);
+				if (session.sessionId !== undefined && !abortController.signal.aborted && queuedRunForcedStatus !== "cancelled") {
+					await scheduleClarificationFollowups(socket, session, request.id, mcpHost);
+				}
 				const queueItemStillExists: boolean = queueItemId !== undefined && findQueuedMessage(session, queueItemId) !== undefined;
 				if (queuedRunForcedStatus !== "cancelled" && (queueItemId === undefined || !queueItemStillExists)) {
 					void drainMessageQueue(socket, request.id, session, mcpHost);

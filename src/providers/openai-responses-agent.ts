@@ -519,6 +519,9 @@ async function runResponsesAgentLoop(
 	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
+		for (const guidance of await toolContext?.agentClarification?.takeAnswers() ?? []) {
+			inputItems.push({ role: "user", content: [{ type: "input_text", text: `User clarification for question ${guidance.questionId} (${guidance.question}): ${guidance.answer}` }] } as ResponseInputItem);
+		}
 		if (toolContext?.requestId) await toolContext.computerControl?.waitUntilRunning?.(toolContext.requestId, abortSignal);
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
@@ -566,9 +569,17 @@ async function runResponsesAgentLoop(
 			}
 			throw error;
 		}
+		await toolContext?.agentClarification?.commitAnswers();
 		const toolCalls: ChatCompletionMessageToolCall[] = convertResponsesToolCalls(assistantMessage.toolCalls, allowedToolNames);
 
 		if (toolCalls.length === 0) {
+			const newGuidance = await toolContext?.agentClarification?.takeAnswers() ?? [];
+			if (newGuidance.length > 0) {
+				appendResponseOutputItems(inputItems, assistantMessage.outputItems);
+				for (const guidance of newGuidance) inputItems.push({ role: "user", content: [{ type: "input_text", text: `User clarification for question ${guidance.questionId} (${guidance.question}): ${guidance.answer}` }] } as ResponseInputItem);
+				step -= 1;
+				continue;
+			}
 			if (shouldRequireToolCallOnStep(params, step, startStep) && allowedToolNames.size > 0) {
 				if (toolProtocolViolationRetries < TOOL_PROTOCOL_VIOLATION_RETRY_LIMIT) {
 					toolProtocolViolationRetries += 1;

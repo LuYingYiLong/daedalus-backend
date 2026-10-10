@@ -3,6 +3,7 @@ import type { ClientRequest } from "../protocol/types.js";
 import { sendJson } from "./send-json.js";
 import { sendSessionEvent } from "./session-events.js";
 import type { ClientSession } from "./client-session.js";
+import { cancelAgentQuestions } from "./agent-clarification.js";
 
 const REQUEST_DEDUP_TTL_MS: number = 5 * 60 * 1000;
 const MAX_COMPLETED_REQUEST_IDS: number = 512;
@@ -74,6 +75,13 @@ export function sendAgentCancelled(socket: WebSocket, requestId: string, session
 		reason,
 		sequence: session.workbenchActiveRun.sequence ?? session.workbenchActiveRunSequence
 	}, requestId);
+	if (session.sessionId !== undefined) {
+		void cancelAgentQuestions(session.sessionId, requestId).then((questionIds): void => {
+			for (const questionId of questionIds) sendSessionEvent(socket, requestId, session, "agent.clarification.cancelled", { questionId, runId: requestId }, requestId);
+		}).catch((error: unknown): void => {
+			console.error("[AgentClarification] failed to close cancelled questions", error);
+		});
+	}
 }
 
 export function pruneCompletedRequestIds(session: ClientSession, now: number = Date.now()): void {

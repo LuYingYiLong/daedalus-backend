@@ -50,3 +50,10 @@ test("plan.clarify has an explicit structured skip path", (): void => {
 	assert.equal(clientRequestSchema.safeParse({ ...base, params: { ...base.params, reply: "Use the existing API." } }).success, true);
 	assert.equal(clientRequestSchema.safeParse(base).success, false);
 });
+
+test("Agent clarification answer requires an explicit nonempty answer and rejects approval fields", (): void => {
+	const request = { type: "request", id: "answer-1", method: "agent.clarification.answer", params: { sessionId: "session-1", questionId: "question-1", answer: "Use option B" } };
+	assert.equal(clientRequestSchema.safeParse(request).success, true);
+	assert.equal(clientRequestSchema.safeParse({ ...request, params: { ...request.params, answer: "  " } }).success, false);
+	assert.equal(clientRequestSchema.safeParse({ ...request, params: { ...request.params, approved: true } }).success, false);
+});

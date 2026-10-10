@@ -7,6 +7,7 @@ import { filterToolNamesForWorkspace, getDefaultWorkflowToolNames, getNoWorkspac
 import { CUSTOM_MCP_TOOLS_SENTINEL } from "../../../src/tools/tool-sentinels.js";
 import { EXECUTION_CONTROL_TOOL_NAME } from "../../../src/tools/execution-control.js";
 import { CHAT_COMPLETION_CONTROL_TOOL_NAME } from "../../../src/tools/chat-completion-control.js";
+import { AGENT_ASK_USER_TOOL_NAME } from "../../../src/tools/agent-clarification.js";
 import { CONTEXT_CONTROL_TOOL_NAMES, type ContextControlContext } from "../../../src/tools/context-control.js";
 import { godotRuntimeTestBridge } from "../../../src/mcp/godot/bridges/runtime-test-bridge.js";
 
@@ -30,6 +31,19 @@ function getFunctionToolProperties(tool: { type: string; function?: { parameters
 	assert.notEqual(properties, null);
 	return properties as Record<string, unknown>;
 }
+
+test("Agent clarification is hidden without an interactive context and survives a restricted tool list", (): void => {
+	assert.equal(createWorkspaceToolCatalog({}).getDefinitions().map(getFunctionToolName).includes(AGENT_ASK_USER_TOOL_NAME), false);
+	const catalog = createWorkspaceToolCatalog({
+		agentClarification: {
+			async execute() { return { questionId: "question-1", status: "pending" as const }; },
+			async takeAnswers() { return []; },
+			async commitAnswers() {}
+		}
+	});
+	assert.equal(catalog.getDefinitionsForNames([]).map(getFunctionToolName).includes(AGENT_ASK_USER_TOOL_NAME), true);
+	assert.equal(catalog.getPolicy(AGENT_ASK_USER_TOOL_NAME)?.risk, "read");
+});
 
 test("workspace tool catalog keeps dynamic MCP definitions isolated", (): void => {
 	replaceDynamicMcpToolsForWorkspace("catalog-a", [{

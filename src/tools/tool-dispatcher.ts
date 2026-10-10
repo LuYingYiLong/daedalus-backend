@@ -56,6 +56,7 @@ import { BROWSER_TOOL_NAME_SET, type BrowserToolName } from "./browser-tools.js"
 import { COMPUTER_TOOL_NAME_SET, type ComputerToolName } from "./computer-tools.js";
 import { executeComputerTool } from "./computer-tool-execution.js";
 import { SCHEDULED_TASK_TOOL_NAME_SET, type ScheduledTaskToolName } from "./scheduled-task-tools.js";
+import { AGENT_ASK_USER_TOOL_NAME, agentQuestionSchema } from "./agent-clarification.js";
 import { PLUGIN_DEVELOPMENT_TOOL_NAME_SET, type PluginDevelopmentToolName } from "../plugins/development/types.js";
 import { GODOT_RUNTIME_START_TOOL_NAME } from "./godot-runtime-control.js";
 import {
@@ -429,6 +430,23 @@ async function executeSingleToolCall(
 		}
 		if (preHook.updatedInput !== undefined) executionArgs = preHook.updatedInput;
 		preToolAdditionalContext = preHook.additionalContext;
+	}
+	if (functionName === AGENT_ASK_USER_TOOL_NAME) {
+		if (toolContext?.agentClarification === undefined) {
+			const failure: ToolFailure = { code: "agent_clarification_unavailable", category: "protocol", message: "Interactive Agent clarification is unavailable.", retryable: false, artifactRefs: [] };
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
+		try {
+			const input = agentQuestionSchema.parse(executionArgs);
+			const value = await toolContext.agentClarification.execute(input, toolCall.id);
+			const content = JSON.stringify(value);
+			onEvent?.({ type: "tool.result", step, toolCallId: toolCall.id, toolName: functionName, resultChars: content.length, truncated: false, ok: true, validationStatus: "passed", summary: "Question sent; independent work may continue" });
+			return { role: "tool", tool_call_id: toolCall.id, content };
+		} catch (error: unknown) {
+			const failure: ToolFailure = { code: "agent_clarification_failed", category: "protocol", message: error instanceof Error ? error.message : "Failed to ask user.", retryable: true, artifactRefs: [] };
+			onEvent?.({ type: "tool.error", step, toolCallId: toolCall.id, toolName: functionName, message: failure.message, failure });
+			return { role: "tool", tool_call_id: toolCall.id, content: serializeToolFailure(failure) };
+		}
 	}
 	if (functionName === TODO_UPDATE_TOOL_NAME) {
 		if (toolContext?.todoControl === undefined || toolContext.todoControlAvailable === false) {

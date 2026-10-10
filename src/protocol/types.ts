@@ -150,6 +150,10 @@ export type ServerResponse =
 
 export type CanonicalServerEventName =
 	| "agent.run.state"
+	| "agent.clarification.required"
+	| "agent.clarification.answered"
+	| "agent.clarification.applied"
+	| "agent.clarification.cancelled"
 	| "agent.goal.state"
 	| "agent.subgraph.created"
 	| "agent.subgraph.state"

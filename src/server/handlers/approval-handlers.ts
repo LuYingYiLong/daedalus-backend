@@ -150,7 +150,8 @@ import {
 import { createAgentToolEventForwarder } from "../workflow/tool-events.js";
 import { persistFileEditBatch } from "../file-edit-batches.js";
 import { ensureProviderConfigured } from "../../application/provider-session-service.js";
-import { findSessionWithPendingApproval, getClientActorSummary } from "../client-connections.js";
+import { findSessionWithPendingApproval, getClientActorSummary, getClientConnection } from "../client-connections.js";
+import { createAgentClarificationControl } from "../agent-clarification.js";
 import { withMcpRequestContext } from "../../mcp/request-context.js";
 import {
 	getAgentRun,
@@ -338,6 +339,9 @@ async function continueAfterRejectedApproval(params: {
 			editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 			sessionId: pending.sessionId ?? session.sessionId,
 			requestId: pendingContinuation.requestId,
+			agentClarification: continuationParams.mode === "agent" && getClientConnection(socket)?.clientType === "studio" && session.sessionId !== undefined
+				? createAgentClarificationControl(socket, session, pendingContinuation.requestId, pendingContinuation.requestId)
+				: undefined,
 			executionControl: pendingContinuation.executionControl,
 			chatCompletion: pendingContinuation.chatCompletion,
 			agentLoopRecovery: pendingContinuation.agentLoopState === undefined
@@ -405,6 +409,7 @@ async function continueAfterRejectedApproval(params: {
 		setWorkbenchActiveRun(session, { status: "idle" });
 		const queueHelpers = await import("../chat-orchestrator.js");
 		await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
+		await queueHelpers.scheduleClarificationFollowups(socket, session, pendingContinuation.requestId, mcpHost);
 		void queueHelpers.drainMessageQueue(socket, requestId, session, mcpHost);
 		emitWorkbenchUpdated(socket, requestId, session);
 	} finally {
@@ -800,6 +805,9 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 				requestId: pendingContinuation.requestId,
 				abortSignal: abortController.signal
 			});
+			const agentClarification = continuationParams.mode === "agent" && getClientConnection(socket)?.clientType === "studio" && session.sessionId !== undefined
+				? createAgentClarificationControl(socket, session, pendingContinuation.requestId, pendingContinuation.requestId)
+				: undefined;
 			const agentResultPromise: Promise<ProviderAgentResult> = pendingContinuation.stream
 				? continueProviderAgentStreaming(
 					continuationParams,
@@ -820,6 +828,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
+						agentClarification,
 						executionControl: pendingContinuation.executionControl,
 						chatCompletion: pendingContinuation.chatCompletion,
 						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
@@ -852,6 +861,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 						editorInstanceId: pending.editorInstanceId ?? session.editorInstanceId,
 						sessionId: pending.sessionId ?? session.sessionId,
 						requestId: pendingContinuation.requestId,
+						agentClarification,
 						executionControl: pendingContinuation.executionControl,
 						chatCompletion: pendingContinuation.chatCompletion,
 						agentLoopRecovery: pendingContinuation.agentLoopState === undefined
@@ -892,6 +902,7 @@ export async function handleApprovalRequest(socket: WebSocket, request: ClientRe
 			setWorkbenchActiveRun(session, { status: "idle" });
 			const queueHelpers = await import("../chat-orchestrator.js");
 			await queueHelpers.finishQueueItemForRun(socket, pendingContinuation.requestId, session, queueItemId);
+			await queueHelpers.scheduleClarificationFollowups(socket, session, pendingContinuation.requestId, mcpHost);
 			void queueHelpers.drainMessageQueue(socket, request.id, session, mcpHost);
 			emitWorkbenchUpdated(socket, request.id, session);
 		} catch (error: unknown) {

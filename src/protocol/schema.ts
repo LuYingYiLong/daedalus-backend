@@ -1772,6 +1772,10 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 		params: aiChatParamsSchema,
 	}),
 	z.object({
+		type: z.literal("request"), id: z.string(), method: z.literal("agent.clarification.answer"),
+		params: z.object({ sessionId: z.string().min(1), questionId: z.string().min(1), answer: z.string().trim().min(1).max(4000) }).strict()
+	}),
+	z.object({
 		type: z.literal("request"),
 		id: z.string(),
 		method: z.literal("flow.create"),

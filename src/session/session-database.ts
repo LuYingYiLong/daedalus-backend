@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 31;
+const DB_SCHEMA_VERSION: number = 32;
 const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
@@ -81,6 +81,20 @@ function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/
 		CREATE INDEX IF NOT EXISTS idx_events_workflow ON session_events (session_id, workflow_id);
 		CREATE INDEX IF NOT EXISTS idx_events_run ON session_events (session_id, run_id);
 		CREATE INDEX IF NOT EXISTS idx_events_name ON session_events (session_id, event_name, sequence DESC);
+		CREATE TABLE IF NOT EXISTS agent_clarification_questions (
+			question_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			run_id TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			tool_call_id TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'applied', 'cancelled')),
+			answer TEXT,
+			created_at TEXT NOT NULL,
+			answered_at TEXT,
+			UNIQUE(session_id, run_id, tool_call_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_agent_clarification_run ON agent_clarification_questions (session_id, run_id, status);
 		CREATE TABLE IF NOT EXISTS trace_records (
 			record_id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,

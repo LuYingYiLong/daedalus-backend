@@ -1207,6 +1207,8 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 
 		case "session.open": {
 			try {
+				const { reconcileAgentQuestionEvents } = await import("./agent-clarification.js");
+				await reconcileAgentQuestionEvents(request.params.sessionId);
 				const openMessageLimit: number = clampSessionOpenMessageLimit(request.params.limit);
 				const timeline = await openSessionRecentTimeline(request.params.sessionId, openMessageLimit);
 				const existingRuntime: ClientSession | undefined = getSessionRuntime(request.params.sessionId);
@@ -1341,6 +1343,17 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 						workspaceWarning: workspaceWarning ?? null
 					}
 				});
+				if (!reusingRuntime && timeline.metadata.forkedFrom === undefined) {
+					const recoveredSession = session;
+					void (async (): Promise<void> => {
+						const { listUnappliedAnswers } = await import("./agent-clarification.js");
+						const { scheduleClarificationFollowups } = await import("./chat-orchestrator.js");
+						const answered = await listUnappliedAnswers(timeline.metadata.id);
+						for (const runId of new Set(answered.map((question) => question.runId))) await scheduleClarificationFollowups(socket, recoveredSession, runId, mcpHost);
+					})().catch((error: unknown): void => {
+						logger.error("agent_clarification", "recovery_failed", error, { sessionId: timeline.metadata.id });
+					});
+				}
 			} catch (error: unknown) {
 				sendJson(socket, {
 					type: "response",

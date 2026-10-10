@@ -157,6 +157,18 @@ export type TimelinePlanPart = {
 	previewMarkdown: string;
 };
 
+export type TimelineAgentClarificationPart = {
+	type: "agent_clarification";
+	questionId: string;
+	sessionId: string;
+	runId: string;
+	title: string;
+	question: string;
+	choices: Array<{ label: string; text: string; description?: string }>;
+	status: "pending" | "answered" | "applied" | "cancelled";
+	answer: string | null;
+};
+
 export type TimelineInlineDiffPart = {
 	type: "inline_diff";
 	sessionId: string;
@@ -201,6 +213,7 @@ export type TimelineBodyPart =
 	| TimelineCompressionPart
 	| TimelineStatusPart
 	| TimelinePlanPart
+	| TimelineAgentClarificationPart
 	| TimelineInlineDiffPart
 	| TimelineImageGenerationPart
 	| TimelinePluginPart;
@@ -1164,6 +1177,19 @@ function buildAssistantBodyParts(
 			appendThinkingPart(parts, "", true, getActivityMetadata(eventData));
 		} else if (event.event === "agent.provider.reconnect") {
 			appendProviderReconnectPart(parts, eventData);
+		} else if (event.event === "agent.clarification.required") {
+			const questionId = asString(eventData.questionId);
+			if (questionId.length > 0 && !parts.some((part): boolean => part.type === "agent_clarification" && part.questionId === questionId)) {
+				parts.push({ type: "agent_clarification", questionId, sessionId: asString(eventData.sessionId), runId: asString(eventData.runId), title: asString(eventData.title), question: asString(eventData.question), choices: Array.isArray(eventData.choices) ? eventData.choices as TimelineAgentClarificationPart["choices"] : [], status: "pending", answer: null });
+			}
+		} else if (event.event === "agent.clarification.answered" || event.event === "agent.clarification.applied" || event.event === "agent.clarification.cancelled") {
+			const questionId = asString(eventData.questionId);
+			for (let index = 0; index < parts.length; index += 1) {
+				const part = parts[index];
+				if (part?.type !== "agent_clarification" || part.questionId !== questionId) continue;
+				parts[index] = { ...part, status: event.event === "agent.clarification.answered" ? "answered" : event.event === "agent.clarification.applied" ? "applied" : "cancelled", answer: event.event === "agent.clarification.answered" ? asString(eventData.answer) : part.answer };
+				break;
+			}
 		} else if (event.event === "plugin.timeline.part") {
 			appendPluginPart(parts, eventData);
 		} else if (event.event === "ai.status") {

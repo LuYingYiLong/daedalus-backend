@@ -12,8 +12,10 @@ import { createClientSession, type ClientSession } from "../../../src/server/cli
 import { createSlashHelpText, handleSlashCommand, listSlashCommands } from "../../../src/server/slash-commands.js";
 import { registerClientConnection, unregisterClientConnection, updateClientConnection, type ClientType } from "../../../src/server/client-connections.js";
 import { computerOverlayPreviewSchema } from "../../../src/protocol/computer-overlay-preview.js";
-import { createSession } from "../../../src/session/session-store.js";
+import { createSession, openSessionRecentTimeline } from "../../../src/session/session-store.js";
 import { readStoredPlan } from "../../../src/server/plan-store.js";
+import { listAgentQuestions } from "../../../src/server/agent-clarification.js";
+import { handleChatRequest } from "../../../src/server/chat-orchestrator.js";
 import { handlePlanRequest } from "../../../src/server/handlers/plan-handlers.js";
 
 function createSocketMock(): WebSocket & { sent: unknown[] } {
@@ -100,6 +102,7 @@ test("slash command list exposes test commands in development mode", async (): P
 			"/test-message-queue",
 			"/test-todo-list",
 			"/test-plan",
+			"/test-agent-question",
 			"/test-subagent",
 			"/ask",
 			"/agent",
@@ -354,6 +357,66 @@ test("/test-plan cannot create a plan outside development mode", async (): Promi
 		const response = socket.sent.find((message): boolean => (message as { type?: string }).type === "response") as { result?: { text?: string } } | undefined;
 		assert.match(response?.result?.text ?? "", /Unknown command: `\/test-plan`/u);
 	});
+});
+
+test("/test-agent-question persists a replyable preview without starting a model", async (): Promise<void> => {
+	await withTempUserProfile(async (): Promise<void> => {
+		await withBackendMode("development", async (): Promise<void> => {
+			for (const choiceCount of [0, 3, 5]) {
+				const socket = createSocketMock();
+				const session = createClientSession(undefined);
+				session.sessionId = (await createSession(`Test Agent question ${choiceCount}`)).id;
+				registerClientConnection(socket, session);
+				updateClientConnection(socket, { clientType: "studio" });
+				try {
+					const request: ClientRequest = {
+						type: "request", id: `test-question-${choiceCount}`, method: "ai.chat",
+						params: { message: choiceCount === 3 ? "/test-agent-question" : `/test-agent-question ${choiceCount}`, mode: "agent", options: { stream: true } }
+					};
+					assert.deepEqual(await handleSlashCommand({ socket, request, session, mcpHost: {} as McpHost, createSessionInfo: () => ({}) }), { type: "handled" });
+					const questions = await listAgentQuestions(session.sessionId);
+					assert.equal(questions.length, 1);
+					assert.equal(questions[0]?.choices.length, choiceCount);
+					assert.equal(questions[0]?.runId, `slash-${request.id}`);
+					assert.equal(socket.sent.filter((message): boolean => (message as { event?: string }).event === "agent.clarification.required").length, 1);
+					assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.tool.call"), false);
+					await handleChatRequest(socket, { type: "request", id: `answer-${choiceCount}`, method: "agent.clarification.answer", params: { sessionId: session.sessionId, questionId: questions[0]!.questionId, answer: "My custom answer" } }, session, {} as McpHost);
+					assert.equal((await listAgentQuestions(session.sessionId))[0]?.status, "applied");
+					assert.equal(session.queuedMessages.length, 0);
+					assert.equal(socket.sent.some((message): boolean => (message as { event?: string }).event === "agent.clarification.answered"), true);
+					const reopened = await openSessionRecentTimeline(session.sessionId, 20);
+					const questionParts = reopened.timelineBlocks.flatMap((block) => block.type === "assistant" ? block.bodyParts.filter((part) => part.type === "agent_clarification") : []);
+					assert.equal(questionParts.length, 1);
+					assert.equal(questionParts[0]?.status, "applied");
+					assert.equal(questionParts[0]?.answer, "My custom answer");
+				} finally {
+					unregisterClientConnection(socket);
+				}
+			}
+		});
+	});
+});
+
+test("/test-agent-question stays unavailable outside development Agent sessions", async (): Promise<void> => {
+	for (const scenario of [
+		{ backendMode: "runtime", mode: "agent" },
+		{ backendMode: "development", mode: "ask" },
+		{ backendMode: "development", mode: "agent", command: "/test-agent-question 6" }
+	] as const) {
+		await withBackendMode(scenario.backendMode, async (): Promise<void> => {
+			const socket = createSocketMock();
+			const session = createClientSession(undefined);
+			session.sessionId = (await createSession("Rejected test question")).id;
+			registerClientConnection(socket, session);
+			updateClientConnection(socket, { clientType: "studio" });
+			try {
+				await handleSlashCommand({ socket, request: { type: "request", id: `rejected-${scenario.backendMode}-${scenario.mode}`, method: "ai.chat", params: { message: "command" in scenario ? scenario.command : "/test-agent-question", mode: scenario.mode, options: { stream: true } } }, session, mcpHost: {} as McpHost, createSessionInfo: () => ({}) });
+				assert.equal((await listAgentQuestions(session.sessionId)).length, 0);
+			} finally {
+				unregisterClientConnection(socket);
+			}
+		});
+	}
 });
 
 test("/test-subagent sends a harmless DAG snapshot in development mode", async (): Promise<void> => {

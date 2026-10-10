@@ -314,6 +314,9 @@ async function runAgentLoop(
 	let stepReconnectState: ProviderReconnectState | undefined;
 
 	for (let step: number = startStep; step < maxSteps; step += 1) {
+		for (const guidance of await toolContext?.agentClarification?.takeAnswers() ?? []) {
+			messages.push({ role: "user", content: `User clarification for question ${guidance.questionId} (${guidance.question}): ${guidance.answer}` });
+		}
 		if (toolContext?.requestId) await toolContext.computerControl?.waitUntilRunning?.(toolContext.requestId, abortSignal);
 		if (abortSignal?.aborted) {
 			throw new Error("Request cancelled");
@@ -358,7 +361,15 @@ async function runAgentLoop(
 			throw error;
 		}
 
+		await toolContext?.agentClarification?.commitAnswers();
 		if (assistant.toolUseBlocks.length === 0) {
+			const newGuidance = await toolContext?.agentClarification?.takeAnswers() ?? [];
+			if (newGuidance.length > 0) {
+				messages.push(createAssistantMessage(assistant.text, []));
+				for (const guidance of newGuidance) messages.push({ role: "user", content: `User clarification for question ${guidance.questionId} (${guidance.question}): ${guidance.answer}` });
+				step -= 1;
+				continue;
+			}
 			if (shouldRequireToolCallOnStep(params, step, startStep) && anthropicTools.length > 0) {
 				if (toolProtocolViolationRetries < TOOL_PROTOCOL_VIOLATION_RETRY_LIMIT) {
 					toolProtocolViolationRetries += 1;

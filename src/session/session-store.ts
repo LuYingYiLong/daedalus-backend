@@ -964,6 +964,15 @@ function replaceMessages(db: DatabaseSync, sessionId: string, messages: ChatMess
 		};
 		insert.run(sessionId, index + 1, toSqlValue(message.requestId), message.role, sqlJson(stored), stored.createdAt);
 	}
+	db.prepare(`
+		DELETE FROM assistant_feedback
+		WHERE session_id = ? AND NOT EXISTS (
+			SELECT 1 FROM messages
+			WHERE messages.session_id = assistant_feedback.session_id
+				AND messages.request_id = assistant_feedback.request_id
+				AND messages.role = 'assistant'
+		)
+	`).run(sessionId);
 }
 
 export async function updateSessionTranscript<T>(

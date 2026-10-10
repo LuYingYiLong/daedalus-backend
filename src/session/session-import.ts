@@ -127,6 +127,7 @@ function copyTableRows(
 		return 0;
 	}
 	if (!tableExists(source, table.name)) {
+		if (table.optionalOnImport === true) return 0;
 		throw Object.assign(new Error(`Daedalus session export is missing table: ${table.name}.`), {
 			code: "session_import_invalid_format"
 		});

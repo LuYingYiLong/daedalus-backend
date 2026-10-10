@@ -4,7 +4,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { getSessionsDatabasePath, getDaedalusPath } from "../app-paths.js";
 import { logger } from "../logger.js";
 
-const DB_SCHEMA_VERSION: number = 32;
+const DB_SCHEMA_VERSION: number = 33;
 const FLOW_PARAMETER_SCHEMA_VERSION: number = 27;
 
 export type SessionDatabaseState =
@@ -61,6 +61,13 @@ function migrateSchema(db: DatabaseSync, flowRegistry: typeof import("../server/
 			UNIQUE(session_id, sequence)
 		);
 		CREATE INDEX IF NOT EXISTS idx_messages_session_request ON messages (session_id, request_id, sequence);
+		CREATE TABLE IF NOT EXISTS assistant_feedback (
+			session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+			request_id TEXT NOT NULL,
+			rating TEXT NOT NULL CHECK (rating IN ('good', 'bad')),
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (session_id, request_id)
+		);
 		CREATE TABLE IF NOT EXISTS session_events (
 			row_id INTEGER PRIMARY KEY AUTOINCREMENT,
 			event_id TEXT NOT NULL UNIQUE,

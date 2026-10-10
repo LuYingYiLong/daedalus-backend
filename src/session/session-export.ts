@@ -18,6 +18,7 @@ export type SessionTableCopySpec = {
 	name: string;
 	where?: string;
 	params?: (sessionId: string) => SQLInputValue[];
+	optionalOnImport?: boolean;
 };
 
 export const SESSION_EXPORT_TABLES: readonly SessionTableCopySpec[] = [
@@ -25,6 +26,7 @@ export const SESSION_EXPORT_TABLES: readonly SessionTableCopySpec[] = [
 	{ name: "sessions", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "session_search_source_state", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "messages", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
+	{ name: "assistant_feedback", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId], optionalOnImport: true },
 	{ name: "session_events", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "summaries", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },
 	{ name: "context_blocks", where: "session_id = ?", params: (sessionId): SQLInputValue[] => [sessionId] },

@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../protocol/types.js";
+import type { AssistantFeedbackRating } from "./assistant-feedback.js";
 import type { SessionForkOrigin, StoredMessage, StoredSession, StoredSessionEvent } from "./session-store.js";
 import { annotateActivityEvent, createActivityGroupAccumulator, type TimelineActivityStats } from "./activity-groups.js";
 
@@ -21,6 +22,7 @@ export type TimelineAssistantBlock = {
 	completedAtUtc: string;
 	status?: "failed" | "stopped" | undefined;
 	completionStatus?: "responded" | "stopped" | undefined;
+	feedback?: AssistantFeedbackRating | null | undefined;
 	bodyParts: TimelineBodyPart[];
 	renderHints?: TimelineRenderHints | undefined;
 };

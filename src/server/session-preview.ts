@@ -5,6 +5,7 @@ import {
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
 import { readImageAttachmentDataUrl } from "../session/session-attachments.js";
+import { readAssistantFeedback } from "../session/assistant-feedback.js";
 import type { TimelineBlock } from "../session/timeline-blocks.js";
 import type { ClientSession } from "./client-session.js";
 import { hydratePendingGuides } from "./pending-guides.js";
@@ -159,6 +160,11 @@ async function hydrateTimelineImageThumbnails(sessionId: string, blocks: Timelin
 }
 
 export async function createTimelinePageResult(page: StoredSessionTimelinePage, limit: number): Promise<Record<string, unknown>> {
+	const feedback = await readAssistantFeedback(
+		page.metadata.id,
+		page.timelineBlocks.filter((block): boolean => block.type === "assistant").map((block): string => block.requestId),
+	);
+	const hydratedBlocks = await hydrateTimelineImageThumbnails(page.metadata.id, page.timelineBlocks);
 	return {
 		blockCount: page.blockCount,
 		blockOffset: page.blockOffset,
@@ -166,7 +172,9 @@ export async function createTimelinePageResult(page: StoredSessionTimelinePage, 
 		limit,
 		hasMoreBefore: page.hasMoreBefore,
 		hasMoreAfter: page.hasMoreAfter,
-		timelineBlocks: await hydrateTimelineImageThumbnails(page.metadata.id, page.timelineBlocks),
+		timelineBlocks: hydratedBlocks.map((block): TimelineBlock => block.type === "assistant"
+			? { ...block, feedback: feedback.get(block.requestId) ?? null }
+			: block),
 		latestWorkflowSnapshot: page.latestWorkflowSnapshot === null ? null : createPreviewValue(page.latestWorkflowSnapshot),
 		latestAgentSnapshot: page.latestAgentSnapshot === null ? null : createPreviewValue(page.latestAgentSnapshot),
 		latestPlanClarification: page.latestPlanClarification,

@@ -66,6 +66,7 @@ import {
 	type StoredSessionTimelinePage
 } from "../session/session-store.js";
 import { listSelectionAskThreads } from "../session/selection-ask-store.js";
+import { setAssistantFeedback } from "../session/assistant-feedback.js";
 import { readChatSessionContext, searchChatSessions } from "../session/session-context.js";
 import { getTraceDetail, getTracePage, getTraceSummary } from "../trace/trace-store.js";
 import { exportSessionToSqlite } from "../session/session-export.js";
@@ -1457,6 +1458,33 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 					id: request.id,
 					ok: false,
 					error: sessionRpcError(error, "session_timeline_error", "Failed to load session timeline")
+				});
+			}
+			break;
+		}
+
+		case "session.assistant.feedback.set": {
+			if (getClientConnection(socket)?.clientType !== "studio") {
+				sendJson(socket, {
+					type: "response", id: request.id, ok: false,
+					error: { code: "studio_only", message: "Assistant feedback is only available to Daedalus Studio." },
+				});
+				break;
+			}
+			if (request.params.sessionId !== session.sessionId) {
+				sendJson(socket, {
+					type: "response", id: request.id, ok: false,
+					error: { code: "session_mismatch", message: "Open the session before rating its response." },
+				});
+				break;
+			}
+			try {
+				const result = await setAssistantFeedback(request.params.sessionId, request.params.requestId, request.params.rating);
+				sendJson(socket, { type: "response", id: request.id, ok: true, result });
+			} catch (error: unknown) {
+				sendJson(socket, {
+					type: "response", id: request.id, ok: false,
+					error: sessionRpcError(error, "assistant_feedback_failed", "Failed to save assistant feedback"),
 				});
 			}
 			break;

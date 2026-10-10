@@ -2685,6 +2685,16 @@ export const clientRequestSchema = z.discriminatedUnion("method", [
 	z.object({
 		type: z.literal("request"),
 		id: z.string(),
+		method: z.literal("session.assistant.feedback.set"),
+		params: z.object({
+			sessionId: z.string().min(1),
+			requestId: z.string().min(1),
+			rating: z.enum(["good", "bad"]).nullable(),
+		}).strict(),
+	}),
+	z.object({
+		type: z.literal("request"),
+		id: z.string(),
 		method: z.literal("session.timeline.search.index"),
 		params: z.object({
 			sessionId: z.string().min(1),

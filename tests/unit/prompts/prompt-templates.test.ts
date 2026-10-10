@@ -183,6 +183,17 @@ test("all user-facing role prompts inherit CORE before mode and custom instructi
 	}
 });
 
+test("Agent system prompt explains nonblocking clarification and preserves approval boundaries", async (): Promise<void> => {
+	const agentPrompt: string = await composeSystemPrompt("workspace.assistant", undefined, "", "agent");
+	const askPrompt: string = await composeSystemPrompt("workspace.assistant", undefined, "", "ask");
+	assert.match(agentPrompt, /本轮工具列表提供 `daedalus_ask_user`/u);
+	assert.match(agentPrompt, /`choices` 可为 0–5 个/u);
+	assert.match(agentPrompt, /不要等待或轮询/u);
+	assert.match(agentPrompt, /不能用追问替代写入审批/u);
+	assert.match(agentPrompt, /收到后结合已完成工作调整方向/u);
+	assert.doesNotMatch(askPrompt, /daedalus_ask_user/u);
+});
+
 test("system prompts include the backend local calendar date as a runtime fact", async (): Promise<void> => {
 	const date: Date = new Date(2026, 6, 19, 12, 0, 0);
 	assert.equal(formatRuntimeDate(date), "2026-7-19");

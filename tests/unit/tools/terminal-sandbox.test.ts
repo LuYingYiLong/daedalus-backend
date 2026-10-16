@@ -10,7 +10,10 @@ import {
 	getSandboxAvailability
 } from "../../../src/mcp/terminal/sandbox-runner.js";
 import { createTerminalCommandAuthorization } from "../../../src/mcp/terminal/authorization.js";
-import { resolveSandboxedProcessInvocation } from "../../../src/mcp/terminal/sandbox-execution.js";
+import { createReviewedRuntimeEnvironment, resolveSandboxedProcessInvocation } from "../../../src/mcp/terminal/sandbox-execution.js";
+import { annotateTerminalEnvironmentFailure } from "../../../src/mcp/terminal/environment-diagnostics.js";
+import { preflightTerminalEnvironment } from "../../../src/mcp/terminal/environment-preflight.js";
+import { createWorkspaceRuntimeEnvironment, ensureWorkspaceRuntimeHome, getWorkspaceRuntimeHome } from "../../../src/mcp/terminal/runtime-home.js";
 
 test("sandbox environments inherit only process essentials and explicit values", (): void => {
 	const env = createSandboxEnvironment({ EXPLICIT_TOKEN: "configured" }, {
@@ -25,6 +28,92 @@ test("sandbox environments inherit only process essentials and explicit values",
 	assert.equal(env.SystemRoot, "C:\\Windows");
 	assert.equal(env.EXPLICIT_TOKEN, "configured");
 	assert.equal(env.SECRET_API_KEY, undefined);
+});
+
+test("reviewed execute targets enter PATH while read-only targets do not", async (): Promise<void> => {
+	const root: string = await mkdtemp(path.join(tmpdir(), "daedalus-runtime-profile-"));
+	try {
+		const executeRoot: string = path.join(root, "runtime");
+		const readRoot: string = path.join(root, "data");
+		await mkdir(executeRoot);
+		await mkdir(readRoot);
+		const env = createReviewedRuntimeEnvironment({ RUNTIME_HOME: executeRoot }, [
+			{ path: executeRoot, mode: "execute" },
+			{ path: readRoot, mode: "read" }
+		], { platform: "win32", hostEnv: { Path: "C:\\Windows\\System32" } });
+		assert.equal(env?.Path, `${executeRoot};C:\\Windows\\System32`);
+		assert.equal(env?.RUNTIME_HOME, executeRoot);
+		assert.equal(env?.PATH, undefined);
+		assert.equal(env?.Path?.includes(readRoot), false);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("workspace terminal home is writable, stable and isolated from the host profile", async (): Promise<void> => {
+	const workspace: string = await mkdtemp(path.join(tmpdir(), "daedalus-terminal-home-"));
+	try {
+		const env = createWorkspaceRuntimeEnvironment(workspace, { TOOL_SETTING: "safe" }, "win32");
+		assert.equal(env.USERPROFILE, path.join(workspace, ".daedalus-terminal", "home"));
+		assert.equal(env.TOOL_SETTING, "safe");
+		ensureWorkspaceRuntimeHome(workspace);
+		ensureWorkspaceRuntimeHome(workspace);
+		assert.equal(realpathSync(getWorkspaceRuntimeHome(workspace)), getWorkspaceRuntimeHome(workspace));
+	} finally {
+		await rm(workspace, { recursive: true, force: true });
+	}
+});
+
+test("terminal preflight distinguishes sandbox-ready, reviewed external and absent runtimes", async (): Promise<void> => {
+	const root: string = await mkdtemp(path.join(tmpdir(), "daedalus-runtime-preflight-"));
+	try {
+		const workspace: string = path.join(root, "workspace");
+		const external: string = path.join(root, "external");
+		await mkdir(workspace);
+		await mkdir(external);
+		await writeFile(path.join(workspace, "local-tool"), "tool");
+		await writeFile(path.join(workspace, "local-tool.cmd"), "@echo off");
+		await writeFile(path.join(external, "external-tool"), "tool");
+		const result = preflightTerminalEnvironment({
+			workspaceRoot: workspace,
+			commands: ["local-tool", "external-tool", "missing-tool"],
+			environmentVariables: ["LANG", "RUNTIME_HOME", "MISSING_HOME"],
+			platform: "linux",
+			env: { PATH: `${workspace}:${external}`, LANG: "en_US.UTF-8", RUNTIME_HOME: external }
+		});
+		assert.deepEqual(result.commands.map((item) => item.status), ["sandbox_ready", "external_access_required", "not_found"]);
+		assert.deepEqual(result.environmentVariables.map((item) => item.status), ["sandbox_ready", "explicit_value_required", "not_set"]);
+		const windowsResult = preflightTerminalEnvironment({
+			workspaceRoot: workspace,
+			commands: ["local-tool.cmd"],
+			platform: "win32",
+			env: { Path: external }
+		});
+		assert.equal(windowsResult.commands[0]?.status, "sandbox_ready");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("terminal launch errors are environment failures, not code validation failures", (): void => {
+	const base = {
+		preset: "terminal.command",
+		ok: false,
+		status: "failed" as const,
+		exitCode: 2,
+		command: ["helper"],
+		commandLine: "echo hello",
+		cwd: "C:\\workspace",
+		stdout: "",
+		stderr: "daedalus sandbox helper: sandbox command was not found in the restricted PATH",
+		durationMs: 1,
+		truncated: false
+	};
+	const environmentFailure = annotateTerminalEnvironmentFailure(base);
+	assert.equal(environmentFailure.validationStatus, "not_applicable");
+	assert.equal(environmentFailure.applicabilityCode, "terminal_runtime_unavailable");
+	assert.equal(environmentFailure.environmentIssue, true);
+	assert.equal(annotateTerminalEnvironmentFailure({ ...base, stderr: "src/main.ts: error TS1234" }).environmentIssue, undefined);
 });
 
 test("sandbox profiles deny network sharing and default macOS access", async (): Promise<void> => {

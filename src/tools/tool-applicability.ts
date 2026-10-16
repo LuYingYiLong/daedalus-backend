@@ -5,7 +5,8 @@ export const TOOL_APPLICABILITY_CODES = [
 	"godot_project_missing",
 	"godot_runtime_unavailable",
 	"diagnostics_unavailable",
-	"workspace_unavailable"
+	"workspace_unavailable",
+	"terminal_runtime_unavailable"
 ] as const;
 
 export type ToolApplicabilityCode = typeof TOOL_APPLICABILITY_CODES[number];

@@ -235,6 +235,11 @@ export function createSandboxEnvironment(
 	for (const [key, value] of Object.entries(extraEnv ?? {})) {
 		env[key] = value;
 	}
+	if (platform === "win32") {
+		const configuredPath: string | undefined = extraEnv?.Path ?? extraEnv?.PATH ?? sourceEnv.Path ?? sourceEnv.PATH;
+		delete env.PATH;
+		if (configuredPath !== undefined) env.Path = configuredPath;
+	}
 	return env;
 }
 

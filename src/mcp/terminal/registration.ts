@@ -6,6 +6,9 @@ import { terminalJobStore } from "./job-store.js";
 import { runCommandInvocationWait, startCommandInvocationJob, type CommandInvocation, type TerminalOutputListener } from "./process-runner.js";
 import { serializeTerminalMcpProgress, type TerminalOutputStream } from "./progress.js";
 import { sanitizeTerminalDisplayText } from "./display-output.js";
+import { annotateTerminalEnvironmentFailure } from "./environment-diagnostics.js";
+import { preflightTerminalEnvironment } from "./environment-preflight.js";
+import { createWorkspaceRuntimeEnvironment, ensureWorkspaceRuntimeHome, getWorkspaceRuntimeHome } from "./runtime-home.js";
 import { CROSS_WORKSPACE_UNSANDBOXED_CONSENT_PREFIX, getSandboxAvailability } from "./sandbox-runner.js";
 import {
 	resolveSandboxedProcessInvocation,
@@ -411,6 +414,9 @@ async function runCommand(
 		risk: "verify"
 	}, input.executionMode === "job" ? DEFAULT_JOB_TIMEOUT_MS : resolveDefaultCommandTimeoutMs(input.commandLine));
 	const wakeAfterMs: number | undefined = normalizeWakeAfterMs(input.wakeAfterMs);
+	const runtimeEnv: Record<string, string> | undefined = trusted
+		? input.env
+		: createWorkspaceRuntimeEnvironment(sandboxWorkspaceRoot, input.env);
 	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
 		input: input as TerminalInternalInput & Record<string, unknown>,
 		command: { kind: "shell", commandLine: input.commandLine },
@@ -418,13 +424,26 @@ async function runCommand(
 		cwd,
 		workspaceRoot: sandboxWorkspaceRoot,
 		workspaceId: context.workspace?.id ?? context.workspaceId,
-		env: input.env,
+		env: runtimeEnv,
 		externalReadOnlyPaths: authorizedExternalTargets.map((target): string => target.path)
 	});
 	if (!invocationResolution.ok) {
 		return invocationResolution.result;
 	}
 	const executableInvocation: CommandInvocation = invocationResolution.invocation;
+	if (executableInvocation.sandboxMode !== "full-trust") {
+		try {
+			ensureWorkspaceRuntimeHome(sandboxWorkspaceRoot);
+		} catch (error: unknown) {
+			return {
+				ok: false,
+				validationStatus: "not_applicable",
+				environmentIssue: true,
+				applicabilityCode: "terminal_runtime_unavailable",
+				error: error instanceof Error ? error.message : "Cannot prepare the workspace terminal runtime directory."
+			};
+		}
+	}
 
 	if (input.executionMode === "job") {
 		const record: TerminalJobRecord = startCommandInvocationJob({
@@ -465,7 +484,7 @@ async function runCommand(
 		durationMs: result.durationMs
 	});
 	return {
-		...result,
+		...annotateTerminalEnvironmentFailure(result),
 		executionMode: result.sandboxMode === "approved-unsandboxed" ? "approved_unsandboxed" : "sandboxed"
 	} as unknown as Record<string, unknown>;
 }
@@ -553,12 +572,19 @@ async function runPreset(input: PresetRunInput & TerminalInternalInput, allowedR
 			godotExecutablePath: preset.requiresGodotProject ? context.godotExecutablePath : undefined
 		};
 	}
+	const presetRuntimeRoot: string | undefined = context.workspaceRoot.length > 0
+		&& isPathInsideRoot(path.resolve(cwd), path.resolve(context.workspaceRoot))
+		? path.resolve(cwd)
+		: undefined;
 	const invocationResolution: ProcessInvocationResolution = resolveSandboxedProcessInvocation({
 		input: input as PresetRunInput & TerminalInternalInput & Record<string, unknown>,
 		command: { kind: "argv", command: command[0]!, args: command.slice(1) },
 		commandLine: describePresetCommand(command),
 		cwd,
 		workspaceRoot: path.resolve(cwd),
+		env: input.__daedalusApprovalMode === "full-trust" || presetRuntimeRoot === undefined
+			? undefined
+			: createWorkspaceRuntimeEnvironment(presetRuntimeRoot, undefined),
 		externalReadOnlyPaths: preset.requiresGodotProject && path.isAbsolute(command[0]!)
 			? [path.dirname(command[0]!)]
 			: [],
@@ -566,6 +592,19 @@ async function runPreset(input: PresetRunInput & TerminalInternalInput, allowedR
 	});
 	if (!invocationResolution.ok) {
 		return invocationResolution.result;
+	}
+	if (invocationResolution.invocation.sandboxMode !== "full-trust" && presetRuntimeRoot !== undefined) {
+		try {
+			ensureWorkspaceRuntimeHome(presetRuntimeRoot);
+		} catch (error: unknown) {
+			return {
+				ok: false,
+				validationStatus: "not_applicable",
+				environmentIssue: true,
+				applicabilityCode: "terminal_runtime_unavailable",
+				error: error instanceof Error ? error.message : "Cannot prepare the workspace terminal runtime directory."
+			};
+		}
 	}
 	const executableInvocation: CommandInvocation = {
 		...invocationResolution.invocation,
@@ -625,7 +664,7 @@ async function runPreset(input: PresetRunInput & TerminalInternalInput, allowedR
 		stderrChars: result.stderr.length,
 		truncated: result.truncated
 	});
-	return annotateTerminalApplicability(result as unknown as Record<string, unknown>);
+	return annotateTerminalApplicability(annotateTerminalEnvironmentFailure(result) as unknown as Record<string, unknown>);
 }
 
 const presetRunSchema = z.object({
@@ -659,12 +698,19 @@ export function registerTerminalTools(server: McpServer): void {
 			title: "Get Terminal Capabilities",
 			description: "返回当前终端 MCP 支持的所有预设命令列表及其风险等级。",
 			inputSchema: z.object({
-				sourceFolderId: z.string().min(1).optional().describe("可选源目录 ID；多源工作区用于查看指定源的终端能力。")
+				sourceFolderId: z.string().min(1).optional().describe("可选源目录 ID；多源工作区用于查看指定源的终端能力。"),
+				commands: z.array(z.string().min(1).max(260)).max(16).optional().describe("预检这些可执行文件名或绝对路径，不会启动进程。"),
+				environmentVariables: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u)).max(16).optional().describe("预检环境变量是否会进入沙箱；只返回状态，不返回值。")
 			}).passthrough()
 		},
-		async (input: TerminalInternalInput) => {
+		async (input: TerminalInternalInput & { commands?: string[] | undefined; environmentVariables?: string[] | undefined }) => {
 			const context = resolveTerminalContext(input);
 			const sandboxAvailability = getSandboxAvailability();
+			const environmentPreflight = preflightTerminalEnvironment({
+				workspaceRoot: context.workspaceRoot,
+				commands: input.commands,
+				environmentVariables: input.environmentVariables
+			});
 			return asJsonTextResult({
 				workspaceId: context.workspace?.id ?? context.workspaceId ?? null,
 				selectedSourceFolderId: input.__daedalusSourceFolderId ?? context.workspace?.primarySourceFolderId ?? null,
@@ -678,8 +724,13 @@ export function registerTerminalTools(server: McpServer): void {
 					normalModeRequiresSandbox: true,
 					sandboxAvailable: sandboxAvailability.available,
 					sandboxError: sandboxAvailability.available ? null : sandboxAvailability.error,
-					unsandboxedFallbackRequiresExplicitConsent: true
+					unsandboxedFallbackRequiresExplicitConsent: true,
+					externalExecutableDirectoriesRequireReviewedExternalAccess: true,
+					approvedExecuteTargetsArePrependedToRestrictedPath: true,
+					extraEnvironmentVariablesMustBePassedExplicitly: true,
+					workspaceRuntimeHome: context.workspaceRoot.length > 0 ? getWorkspaceRuntimeHome(context.workspaceRoot) : null
 				},
+				environmentPreflight,
 				presets: COMMAND_PRESETS.map((preset: CommandPreset) => ({
 					name: preset.name,
 					description: preset.description,

@@ -1,4 +1,5 @@
-import { realpathSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
+import * as path from "node:path";
 import {
 	consumeTerminalCommandAuthorization,
 	getAuthorizedExternalAccessTargets,
@@ -29,6 +30,30 @@ function createTrustedEnvironment(inputEnv: Record<string, string> | undefined):
 		...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
 		...(inputEnv ?? {})
 	};
+}
+
+export function createReviewedRuntimeEnvironment(
+	inputEnv: Record<string, string> | undefined,
+	targets: readonly ExternalAccessTarget[],
+	options: { platform?: NodeJS.Platform | undefined; hostEnv?: NodeJS.ProcessEnv | undefined } = {}
+): Record<string, string> | undefined {
+	const platform: NodeJS.Platform = options.platform ?? process.platform;
+	const pathKey: string = platform === "win32" ? "Path" : "PATH";
+	const hostEnv: NodeJS.ProcessEnv = options.hostEnv ?? process.env;
+	const approvedDirectories: string[] = targets
+		.filter((target: ExternalAccessTarget): boolean => target.mode === "execute")
+		.map((target: ExternalAccessTarget): string => statSync(target.path).isDirectory() ? target.path : path.dirname(target.path));
+	if (approvedDirectories.length === 0) return inputEnv;
+	const originalPath: string = inputEnv?.PATH ?? inputEnv?.Path ?? hostEnv.PATH ?? hostEnv.Path ?? "";
+	const uniqueDirectories: string[] = [...new Map(approvedDirectories.map((directory: string): [string, string] => [
+		platform === "win32" ? directory.toLowerCase() : directory,
+		directory
+	])).values()];
+	const env: Record<string, string> = { ...(inputEnv ?? {}) };
+	delete env.PATH;
+	delete env.Path;
+	env[pathKey] = [...uniqueDirectories, originalPath].filter(Boolean).join(platform === "win32" ? ";" : ":");
+	return env;
 }
 
 export function resolveSandboxedProcessInvocation(params: {
@@ -101,11 +126,27 @@ export function resolveSandboxedProcessInvocation(params: {
 	const externalTargets: ExternalAccessTarget[] = [...externalTargetsByPath.values()].sort(
 		(left: ExternalAccessTarget, right: ExternalAccessTarget): number => externalTargetKey(left.path).localeCompare(externalTargetKey(right.path))
 	);
+	let runtimeEnv: Record<string, string> | undefined;
+	try {
+		runtimeEnv = createReviewedRuntimeEnvironment(params.env, externalTargets, {
+			platform: params.runtime?.platform,
+			hostEnv: params.runtime?.env
+		});
+	} catch {
+		return {
+			ok: false,
+			result: {
+				ok: false,
+				code: "cross_sandbox_access_invalid",
+				error: "An authorized external runtime path became unavailable before launch."
+			}
+		};
+	}
 	const sandboxInvocation = createSandboxInvocation({
 		command: params.command,
 		cwd: params.cwd,
 		workspaceRoot: params.workspaceRoot,
-		env: params.env,
+		env: runtimeEnv,
 		readOnlyPaths: [
 			...(params.readOnlyPaths ?? []),
 			...externalTargets.map((target: ExternalAccessTarget): string => target.path),
@@ -202,7 +243,7 @@ export function resolveSandboxedProcessInvocation(params: {
 				command: params.command.commandLine,
 				args: [],
 				shell: true,
-				env: createSandboxEnvironment(params.env),
+				env: createSandboxEnvironment(runtimeEnv),
 				sandboxMode: "approved-unsandboxed",
 				authorizationSource: authorization.source
 			}
@@ -210,7 +251,7 @@ export function resolveSandboxedProcessInvocation(params: {
 				...commonInvocation,
 				command: params.command.command,
 				args: [...params.command.args],
-				env: createSandboxEnvironment(params.env),
+				env: createSandboxEnvironment(runtimeEnv),
 				sandboxMode: "approved-unsandboxed",
 				authorizationSource: authorization.source
 			}

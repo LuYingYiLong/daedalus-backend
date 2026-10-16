@@ -11,7 +11,7 @@ import { createSandboxEnvironment, getSandboxAvailability } from "../../../src/m
 function snapshotAcls(paths: string[]): unknown {
 	const result = execFileSync(join(process.env.SystemRoot!, "System32/WindowsPowerShell/v1.0/powershell.exe"), [
 		"-NoProfile", "-NonInteractive", "-Command",
-		"$ErrorActionPreference='Stop'; $result = foreach ($p in (ConvertFrom-Json $env:DAEDALUS_TEST_ACL_PATHS)) { $acl=[System.IO.File]::GetAccessControl($p); $rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value,[int]$_.FileSystemRights,$_.AccessControlType,$_.InheritanceFlags,$_.PropagationFlags,$_.IsInherited } | Sort-Object); [pscustomobject]@{ path=$p; protected=$acl.AreAccessRulesProtected; rules=$rules } }; ConvertTo-Json -InputObject @($result) -Depth 5 -Compress"
+		"$ErrorActionPreference='Stop'; $result = foreach ($p in (ConvertFrom-Json $env:DAEDALUS_TEST_ACL_PATHS)) { $acl=[System.IO.File]::GetAccessControl($p); $rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.IdentityReference.Value,[int]$_.FileSystemRights,$_.AccessControlType,$_.InheritanceFlags,$_.PropagationFlags } | Sort-Object -Unique); [pscustomobject]@{ path=$p; protected=$acl.AreAccessRulesProtected; rules=$rules } }; ConvertTo-Json -InputObject @($result) -Depth 5 -Compress"
 	], { encoding: "utf8", windowsHide: true, env: { ...process.env, DAEDALUS_TEST_ACL_PATHS: JSON.stringify(paths) }, timeout: 15000 });
 	return JSON.parse(result);
 }
@@ -117,6 +117,26 @@ console.log('external-cwd-ready');
 		assert.equal(await oneShot.line(), "ready");
 		assert.equal(await oneShot.closed, 0);
 		assert.deepEqual(snapshotAcls(paths), before);
+
+		const batchFile = join(workspace, "verify command.cmd");
+		await writeFile(batchFile, "@echo off\r\necho batch-ready\r\n");
+		for (const [commandLine, expected] of [
+			["echo shell-ready", "shell-ready"],
+			['call "verify command.cmd"', "batch-ready"]
+		] as const) {
+			const shell: ChildProcessWithoutNullStreams = spawn(availability.helperPath!, [
+				"--workspace", workspace, "--cwd", workspace, "--no-network", "--shell", "--", commandLine
+			], { env: createSandboxEnvironment({ ComSpec: join(workspace, "untrusted-cmd.exe") }), cwd: workspace, stdio: "pipe", windowsHide: true });
+			children.push(shell);
+			let shellStdout = "";
+			let shellStderr = "";
+			shell.stdout.on("data", (chunk: Buffer): void => { shellStdout += chunk.toString(); });
+			shell.stderr.on("data", (chunk: Buffer): void => { shellStderr += chunk.toString(); });
+			shell.stdin.end();
+			assert.equal((await once(shell, "close"))[0], 0, shellStderr);
+			assert.match(shellStdout, new RegExp(expected, "u"));
+			assert.deepEqual(snapshotAcls(paths), before);
+		}
 
 		const invalidExe = join(workspace, "invalid.exe");
 		await writeFile(invalidExe, "not an executable");

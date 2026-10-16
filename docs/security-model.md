@@ -16,6 +16,8 @@
 
 `createSandboxInvocation` 必须先确认 OS sandbox helper 可用，再生成 argv、cwd、workspace root、只读路径和网络标志。Windows 需要绝对路径的 `DAEDALUS_WINDOWS_SANDBOX_HELPER`；Linux 需要 `bwrap`；macOS 需要 `sandbox-exec`。缺少 helper 时返回 `sandbox_unavailable`。
 
+终端验证的运行时预检、工作区内缓存和按调用审批的外部可执行目录见 [Terminal verification environment](terminal-runtime.md)。
+
 插件运行时可访问：插件托管目录、隔离临时目录和当前授权 workspace 根目录。其他 source folder 只能按显式只读路径挂载。路径在解析后再次检查 realpath，禁止符号链接/junction 逃逸。
 
 环境变量采用 allowlist。默认不传 Provider、MCP、Keytar、Cookie、密码或宿主机认证信息。stdout 只接受 newline-delimited JSON 协议；普通 stdout/stderr 进入有界脱敏日志。

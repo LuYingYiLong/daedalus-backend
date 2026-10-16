@@ -189,6 +189,17 @@ std::wstring resolveCommand(const std::wstring& command) {
     return L"";
 }
 
+std::wstring resolveCommandProcessor() {
+    // Never trust a caller-supplied ComSpec: the helper grants its launcher
+    // execute access, so accepting an arbitrary path would widen the sandbox.
+    wchar_t systemDirectory[MAX_PATH];
+    const UINT length = GetSystemDirectoryW(systemDirectory, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) fail(L"cannot resolve the Windows command processor");
+    const std::wstring commandProcessor = (fs::path(systemDirectory) / L"cmd.exe").wstring();
+    requireAbsoluteExisting(commandProcessor, false);
+    return fullPath(commandProcessor);
+}
+
 void parseArguments(int argc, wchar_t** argv, Options& options) {
     int index = 1;
     while (index < argc) {
@@ -419,28 +430,32 @@ void deleteProfile(Profile& profile) {
     profile.capabilitySids.clear();
 }
 
-std::wstring buildCommandLine(const Options& options, const std::wstring& resolvedCommand) {
+std::wstring buildCommandLine(const Options& options, const std::wstring& resolvedCommand, const std::wstring& launchCommand) {
     if (options.shell) {
         const std::wstring commandLine = std::accumulate(options.command.begin(), options.command.end(), std::wstring(), [](std::wstring result, const std::wstring& value) {
             if (!result.empty()) result.push_back(L' ');
             return result + value;
         });
-        const std::wstring comSpec = environmentValue(L"ComSpec").empty() ? L"C:\\Windows\\System32\\cmd.exe" : environmentValue(L"ComSpec");
-        return quoteArg(comSpec) + L" /d /s /c " + quoteArg(commandLine);
+        // cmd.exe /s strips one outer quote pair; its inner quotes use cmd
+        // syntax, not the backslash escaping used for normal argv values.
+        return quoteArg(launchCommand) + L" /d /s /c \"" + commandLine + L"\"";
     }
     std::wstring result = quoteArg(resolvedCommand);
     for (size_t index = 1; index < options.command.size(); ++index) result += L" " + quoteArg(options.command[index]);
     if (resolvedCommand.ends_with(L".cmd") || resolvedCommand.ends_with(L".bat") || resolvedCommand.ends_with(L".CMD") || resolvedCommand.ends_with(L".BAT")) {
-        const std::wstring comSpec = environmentValue(L"ComSpec").empty() ? L"C:\\Windows\\System32\\cmd.exe" : environmentValue(L"ComSpec");
-        return quoteArg(comSpec) + L" /d /s /c call " + result;
+        return quoteArg(launchCommand) + L" /d /s /c call " + result;
     }
     return result;
 }
 
 DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<AclGrant>& grants) {
-    const std::wstring originalCommand = resolveCommand(options.command.front());
+    // A shell command is opaque text for cmd.exe, not a PATH lookup key.
+    const std::wstring originalCommand = options.shell ? resolveCommandProcessor() : resolveCommand(options.command.front());
     StagedCommand staging;
-    const std::wstring resolvedCommand = stageProtectedCommand(originalCommand, staging.directory);
+    const std::wstring resolvedCommand = options.shell ? originalCommand : stageProtectedCommand(originalCommand, staging.directory);
+    const bool batchCommand = resolvedCommand.ends_with(L".cmd") || resolvedCommand.ends_with(L".bat")
+        || resolvedCommand.ends_with(L".CMD") || resolvedCommand.ends_with(L".BAT");
+    const std::wstring launchCommand = options.shell || batchCommand ? resolveCommandProcessor() : resolvedCommand;
     // CreateProcessAsUser requires the current-drive entry when it receives a
     // deliberately reduced environment block. Node's child_process environment
     // object does not preserve these `=C:` entries, so restore the one used by
@@ -451,12 +466,9 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
         grantAcl(resolvedCommand, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
         grantAcl(fs::path(resolvedCommand).parent_path().wstring(), profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
     }
-    if (options.shell) {
-        const std::wstring comSpec = environmentValue(L"ComSpec").empty() ? L"C:\\Windows\\System32\\cmd.exe" : environmentValue(L"ComSpec");
-        if (!isSystemPath(comSpec)) {
-            grantAcl(comSpec, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
-            grantAcl(fs::path(comSpec).parent_path().wstring(), profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
-        }
+    if (launchCommand != resolvedCommand && !isSystemPath(launchCommand)) {
+        grantAcl(launchCommand, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
+        grantAcl(fs::path(launchCommand).parent_path().wstring(), profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
     }
     grantAcl(options.workspace, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE, grants);
     for (const std::wstring& path : options.readOnly) grantAcl(path, profile.sid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, grants);
@@ -519,14 +531,14 @@ DWORD runInAppContainer(const Options& options, Profile& profile, std::vector<Ac
     startup.StartupInfo.hStdError = childStderrWrite;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInfo{};
-    std::wstring commandLine = buildCommandLine(options, resolvedCommand);
+    std::wstring commandLine = buildCommandLine(options, resolvedCommand, launchCommand);
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
     ScopedHandle job{CreateJobObjectW(nullptr, nullptr)};
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobLimits{};
     jobLimits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (job.value == nullptr || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &jobLimits, sizeof(jobLimits))) fail(L"cannot create sandbox process job");
-    const BOOL created = CreateProcessAsUserW(nullptr, nullptr, mutableCommand.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, options.cwd.c_str(), &startup.StartupInfo, &processInfo);
+    const BOOL created = CreateProcessAsUserW(nullptr, launchCommand.c_str(), mutableCommand.data(), nullptr, nullptr, TRUE, EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, options.cwd.c_str(), &startup.StartupInfo, &processInfo);
     DeleteProcThreadAttributeList(attributes);
     HeapFree(GetProcessHeap(), 0, attributes);
     if (!created) {

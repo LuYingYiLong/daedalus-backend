@@ -48,7 +48,8 @@ const ENVIRONMENT_CODES: ReadonlySet<ToolApplicabilityCode> = new Set([
 	"godot_project_missing",
 	"godot_runtime_unavailable",
 	"diagnostics_unavailable",
-	"workspace_unavailable"
+	"workspace_unavailable",
+	"terminal_runtime_unavailable"
 ]);
 
 function parseJsonObject(text: string): Record<string, unknown> | null {

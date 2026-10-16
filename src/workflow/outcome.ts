@@ -20,7 +20,8 @@ const ENVIRONMENT_APPLICABILITY_CODES: ReadonlySet<string> = new Set([
 	"godot_project_missing",
 	"godot_runtime_unavailable",
 	"diagnostics_unavailable",
-	"workspace_unavailable"
+	"workspace_unavailable",
+	"terminal_runtime_unavailable"
 ]);
 const GODOT_INPUT_ACTION_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"mcp_godot_propose_set_input_action",

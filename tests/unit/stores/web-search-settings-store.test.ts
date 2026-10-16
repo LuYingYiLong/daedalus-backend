@@ -37,9 +37,14 @@ test("web search settings expose supported catalog models", async (): Promise<vo
 		assert.equal(status.maxKeywords, 1);
 		assert.equal(status.available, false);
 		assert.equal(status.configured, false);
-		assert.equal(status.models.length, 4);
+		assert.equal(status.models.length, 5);
 		assert.equal(status.models[0]?.provider, "zhipu");
 		assert.equal(status.models[0]?.model, "glm-5.2");
+		assert.deepEqual(status.models
+			.filter((model: { provider: string }): boolean => model.provider === "deepseek")
+			.map((model: { model: string }): string => model.model), [
+			"deepseek-flash",
+		]);
 		assert.deepEqual(status.models
 			.filter((model: { provider: string }): boolean => model.provider === "mimo")
 			.map((model: { model: string }): string => model.model), [

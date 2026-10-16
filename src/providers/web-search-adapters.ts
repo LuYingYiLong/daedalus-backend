@@ -15,6 +15,13 @@ const MAX_RETRIES: number = 2;
 const MIMO_MAX_KEYWORDS_MIN: number = 1;
 const MIMO_MAX_KEYWORDS_MAX: number = 3;
 const MIMO_MAX_LIMIT: number = 50;
+const DEEPSEEK_SEARCH_PATH: string = "/v1/tools/search";
+const DEEPSEEK_COUNT_MIN: number = 1;
+const DEEPSEEK_COUNT_MAX: number = 50;
+const DEEPSEEK_API_VERSION_SUFFIX: string = "/v1";
+const DEEPSEEK_RETRYABLE_STATUS_CODES: ReadonlySet<number> = new Set([408, 429, 500, 503, 504]);
+const DEEPSEEK_QUERY_MAX: number = 128;
+const DEEPSEEK_ORI_QUESTION_MAX: number = 128;
 
 type AbortSignalHandle = {
 	signal: AbortSignal;
@@ -48,6 +55,11 @@ function getNestedValue(record: Record<string, unknown>, path: readonly string[]
 
 function clampInteger(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, Math.floor(value)));
+}
+
+function clampUnicodeText(value: string, maxChars: number): string {
+	const characters: string[] = [...value];//按码点截断
+	return characters.length <= maxChars ? value : characters.slice(0, maxChars).join("");
 }
 
 function createAbortSignalHandle(parentSignal?: AbortSignal | undefined): AbortSignalHandle {
@@ -118,10 +130,15 @@ async function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void>
 	});
 }
 
-async function fetchWithRetry(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+async function fetchWithRetry(
+	url: string,
+	init: RequestInit,
+	signal: AbortSignal,
+	retryableStatusCodes: ReadonlySet<number> = RETRYABLE_STATUS_CODES
+): Promise<Response> {
 	for (let attempt: number = 0; ; attempt += 1) {
 		const response: Response = await fetch(url, { ...init, signal });
-		if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt >= MAX_RETRIES) {
+		if (!retryableStatusCodes.has(response.status) || attempt >= MAX_RETRIES) {
 			return response;
 		}
 		const retryAfterMs: number | undefined = parseRetryAfterMs(response);
@@ -296,6 +313,76 @@ async function executeMimoWebSearch(
 	}
 }
 
+// 本文件端点固定在/v1/tools/search
+function resolveDeepSeekSearchUrl(baseUrl?: string | undefined): string {
+	const resolved: string = resolveProviderBaseUrl("deepseek", baseUrl);
+	const root: string = resolved.endsWith(DEEPSEEK_API_VERSION_SUFFIX)
+		? resolved.slice(0, -DEEPSEEK_API_VERSION_SUFFIX.length)
+		: resolved;
+	return `${root}${DEEPSEEK_SEARCH_PATH}`;
+}
+
+// DeepSeek 用 date 表示发布时间，不在 parseSearchResultItem 认得的键里。
+function normalizeDeepSeekSearchRecord(record: Record<string, unknown>): Record<string, unknown> {
+	const publishedAt: string | undefined = getString(record.date);
+	return publishedAt === undefined ? record : { ...record, publishedAt };
+}
+
+function resolveDeepSeekOriQuestion(reason?: string | undefined): string | undefined {
+	const trimmed: string | undefined = getString(reason);
+	return trimmed === undefined ? undefined : clampUnicodeText(trimmed, DEEPSEEK_ORI_QUESTION_MAX);
+}
+
+async function executeDeepSeekWebSearch(
+	config: WebSearchExecutionConfig,
+	input: WebSearchToolArgs,
+	abortSignal?: AbortSignal | undefined
+): Promise<WebSearchResult> {
+	const signalHandle: AbortSignalHandle = createAbortSignalHandle(abortSignal);
+	const maxResults: number = input.maxResults ?? config.maxResults;
+	try {
+		const requestBody: Record<string, unknown> = {
+			query: clampUnicodeText(input.query.trim(), DEEPSEEK_QUERY_MAX),
+			count: clampInteger(maxResults, DEEPSEEK_COUNT_MIN, DEEPSEEK_COUNT_MAX),
+			need_content: false//这里保持关闭以免整页正文挤掉摘要。
+		};
+		const oriQuestion: string | undefined = resolveDeepSeekOriQuestion(input.reason);
+		if (oriQuestion !== undefined) {
+			requestBody.ori_question = oriQuestion;
+		}
+		const response: Response = await fetchWithRetry(resolveDeepSeekSearchUrl(config.baseUrl), {
+			method: "POST",
+			headers: {
+				"Authorization": `Bearer ${config.apiKey}`,
+				"Content-Type": "application/json"
+			},
+			body: JSON.stringify(requestBody)
+		}, signalHandle.signal, DEEPSEEK_RETRYABLE_STATUS_CODES);
+		if (!response.ok) {
+			throw new Error(`Web search request failed: ${await parseErrorMessage(response)}`);
+		}
+		const body: unknown = await response.json() as unknown;
+		if (!isRecord(body)) {
+			throw new Error("Web search response is not an object.");
+		}
+		const results: WebSearchResultItem[] = dedupeAndLimitResults(
+			getObjectArray(body.results).map(normalizeDeepSeekSearchRecord),
+			maxResults
+		);
+		return {
+			ok: true,
+			type: "web_search",
+			provider: config.provider,
+			model: config.model,
+			query: input.query,
+			answer: `Web search returned ${results.length} result${results.length === 1 ? "" : "s"}.`,
+			results
+		};
+	} finally {
+		signalHandle.dispose();
+	}
+}
+
 const zhipuAdapter: WebSearchProviderAdapter = {
 	provider: "zhipu",
 	execute: executeZhipuWebSearch
@@ -314,5 +401,11 @@ const mimoAdapter: WebSearchProviderAdapter = {
 	execute: executeMimoWebSearch
 };
 
+const deepseekAdapter: WebSearchProviderAdapter = {
+	provider: "deepseek",
+	execute: executeDeepSeekWebSearch
+};
+
 registerWebSearchProviderAdapter(zhipuAdapter);
 registerWebSearchProviderAdapter(mimoAdapter);
+registerWebSearchProviderAdapter(deepseekAdapter);

@@ -24,7 +24,8 @@
           "fallback": "max"
         }
       ],
-      "tools": true
+      "tools": true,
+      "webSearch": true
     },
     "ownedBy": "deepseek"
   },

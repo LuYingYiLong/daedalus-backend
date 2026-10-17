@@ -150,7 +150,7 @@ The runtime also supports user-defined providers using:
 
 Model discovery, local display-name and capability overrides, logical model exclusion/restoration, task-specific model routing, and per-session model binding are managed centrally. API keys are stored through keytar or the platform credential store under provider-scoped accounts; they are not written into ordinary configuration files or returned through RPC.
 
-Independent web-search adapters currently exist for Zhipu AI and Xiaomi MiMo. Web search is an explicit tool operation, is disabled until configured, and does not become available merely because a custom model is marked as search-capable.
+Independent web-search adapters currently exist for Zhipu AI, Xiaomi MiMo, and DeepSeek. Web search is an explicit tool operation, is disabled until configured, and does not become available merely because a custom model is marked as search-capable.
 
 ## Agent Runs and Workflow
 

@@ -69,17 +69,19 @@ test("terminal preflight distinguishes sandbox-ready, reviewed external and abse
 	try {
 		const workspace: string = path.join(root, "workspace");
 		const external: string = path.join(root, "external");
+		const executableSuffix: string = process.platform === "win32" ? ".cmd" : "";
+		const pathVariable: string = process.platform === "win32" ? "Path" : "PATH";
 		await mkdir(workspace);
 		await mkdir(external);
-		await writeFile(path.join(workspace, "local-tool"), "tool");
-		await writeFile(path.join(workspace, "local-tool.cmd"), "@echo off");
-		await writeFile(path.join(external, "external-tool"), "tool");
+		await writeFile(path.join(workspace, `local-tool${executableSuffix}`), "tool");
+		if (process.platform !== "win32") await writeFile(path.join(workspace, "local-tool.cmd"), "@echo off");
+		await writeFile(path.join(external, `external-tool${executableSuffix}`), "tool");
 		const result = preflightTerminalEnvironment({
 			workspaceRoot: workspace,
-			commands: ["local-tool", "external-tool", "missing-tool"],
-			environmentVariables: ["LANG", "RUNTIME_HOME", "MISSING_HOME"],
-			platform: "linux",
-			env: { PATH: `${workspace}:${external}`, LANG: "en_US.UTF-8", RUNTIME_HOME: external }
+			commands: [`local-tool${executableSuffix}`, `external-tool${executableSuffix}`, "missing-tool"],
+			environmentVariables: [pathVariable, "RUNTIME_HOME", "MISSING_HOME"],
+			platform: process.platform,
+			env: { [pathVariable]: [workspace, external].join(path.delimiter), RUNTIME_HOME: external }
 		});
 		assert.deepEqual(result.commands.map((item) => item.status), ["sandbox_ready", "external_access_required", "not_found"]);
 		assert.deepEqual(result.environmentVariables.map((item) => item.status), ["sandbox_ready", "explicit_value_required", "not_set"]);

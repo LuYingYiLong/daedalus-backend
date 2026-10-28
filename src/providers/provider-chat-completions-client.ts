@@ -15,7 +15,7 @@ import { resolveReasoningEffort } from "./reasoning-effort.js";
 import { ProviderEmptyResponseError } from "./provider-response-error.js";
 import { getProviderUsageErrorCode, getProviderUsageStatusForError, recordProviderUsage } from "../usage/provider-recorder.js";
 import { parseOpenAIChatUsage } from "../usage/usage-parser.js";
-import { createProviderRequestOverrideFetch } from "./provider-request-overrides.js";
+import { createProviderRequestFetch } from "./provider-request-transport.js";
 
 export type ProviderTransportActivity = () => void;
 
@@ -83,7 +83,7 @@ export function createOpenAICompatibleClient(options: ProviderChatOptions, onTra
 	if (options.sensitivePayload === true) {
 		clientOptions.logLevel = "off";
 	}
-	const requestFetch: typeof fetch = createProviderRequestOverrideFetch(globalThis.fetch, options.requestOverrides);
+	const requestFetch: typeof fetch = createProviderRequestFetch(globalThis.fetch, options);
 	if (onTransportActivity !== undefined) {
 		clientOptions.fetch = createTransportActivityFetch(requestFetch, onTransportActivity);
 	} else if (requestFetch !== globalThis.fetch) {

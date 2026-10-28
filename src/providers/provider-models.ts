@@ -26,7 +26,7 @@ import {
 import { resolveProviderBaseUrl } from "./provider-base-url.js";
 import type { ProviderChatOptions } from "./provider-types.js";
 import type { ProviderRequestOverrides } from "./provider-request-overrides.js";
-import { createProviderRequestOverrideFetch } from "./provider-request-overrides.js";
+import { createProviderRequestFetch } from "./provider-request-transport.js";
 import { resolveProviderAdapter } from "./provider-adapter.js";
 import type { ProviderTaskModelKind } from "./task-model-routing.js";
 import { getWebSearchSettings, type WebSearchSettings } from "../web-search-settings-store.js";
@@ -236,7 +236,7 @@ function parseApiModels(provider: ProviderId, value: unknown): ProviderModelInfo
 
 export async function fetchOpenAICompatibleModels(options: ProviderChatOptions): Promise<ProviderModelInfo[]> {
 	const endpoint: string = `${resolveProviderBaseUrl(options.provider, options.baseUrl)}${getProviderDefinition(options.provider).modelsPath}`;
-	const requestFetch: typeof fetch = createProviderRequestOverrideFetch(globalThis.fetch, options.requestOverrides);
+	const requestFetch: typeof fetch = createProviderRequestFetch(globalThis.fetch, options);
 	const response: Response = await requestFetch(endpoint, {
 		method: "GET",
 		headers: {

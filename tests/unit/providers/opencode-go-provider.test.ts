@@ -57,6 +57,8 @@ function createMockMcpHost(): McpHost {
 async function withOpenCodeGoMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
 	const requests: RecordedRequest[] = [];
 	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		assert.match(String(request.headers["x-opencode-session"] ?? ""), /^(?:daedalus-[0-9a-f-]{36}|session-)/u);
+		assert.match(String(request.headers["user-agent"] ?? ""), /^daedalus-backend\/\d+\.\d+\.\d+$/u);
 		if (request.url === "/models") {
 			assert.equal(request.headers.authorization, "Bearer opencode-go-test-key");
 			response.writeHead(200, { "Content-Type": "application/json" });
@@ -177,6 +179,8 @@ async function withOpenCodeGoMockServer(run: (baseUrl: string, requests: Recorde
 async function withInterruptedAnthropicStreamMockServer(run: (baseUrl: string, requests: RecordedRequest[]) => Promise<void>): Promise<void> {
 	const requests: RecordedRequest[] = [];
 	const server: Server = createServer(async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+		assert.match(String(request.headers["x-opencode-session"] ?? ""), /^(?:daedalus-[0-9a-f-]{36}|session-)/u);
+		assert.match(String(request.headers["user-agent"] ?? ""), /^daedalus-backend\/\d+\.\d+\.\d+$/u);
 		const body: Record<string, unknown> = await readRequestBody(request);
 		requests.push({ url: request.url ?? "", authorization: request.headers.authorization, body });
 		response.writeHead(200, { "Content-Type": "text/event-stream" });

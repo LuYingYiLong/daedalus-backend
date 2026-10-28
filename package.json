@@ -1,6 +1,6 @@
 {
   "name": "daedalus-backend",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "description": "Daedalus Studio backend and Godot Editor Bridge host.",
   "main": "./src/main.ts",
   "daedalusBinary": {
@@ -26,6 +26,7 @@
     "scripts/automation-smoke-matrix.ts",
     "scripts/beta-smoke.ps1",
     "scripts/llm-inline-diff-smoke.ts",
+    "CHANGELOG.md",
     "README.md"
   ],
   "scripts": {

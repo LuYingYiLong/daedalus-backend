@@ -229,7 +229,7 @@ export async function startBackendApplication(): Promise<BackendApplication> {
 export async function runBackendUntilShutdown(): Promise<void> {
 	const application: BackendApplication = await startBackendApplication();
 	let shuttingDown: boolean = false;
-	let stopParentMonitor: () => void = (): void => {};
+	let stopParentMonitor: () => void = (): void => { };
 	let idleSince: number | null = null;
 	const shutdown = (reason: string): Promise<void> => {
 		if (shuttingDown) {

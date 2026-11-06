@@ -1820,8 +1820,8 @@
     "ownedBy": "opencode"
   },
   {
-    "id": "deepseek-v4-flash",
-    "displayName": "DeepSeek V4 Flash",
+    "id": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek V4.1 Flash",
     "provider": "opencode",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,
@@ -1929,8 +1929,8 @@
     "ownedBy": "opencode"
   },
   {
-    "id": "deepseek-v4-flash",
-    "displayName": "DeepSeek V4 Flash",
+    "id": "deepseek-v4.1-flash",
+    "displayName": "DeepSeek V4.1 Flash",
     "provider": "opencode_go",
     "endpointType": "openai-chat-completions",
     "contextWindowTokens": 1000000,

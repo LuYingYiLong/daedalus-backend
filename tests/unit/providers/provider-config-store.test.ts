@@ -79,6 +79,44 @@ test("provider config ignores legacy single-provider file and legacy keytar acco
 	});
 });
 
+test("stored OpenCode Go model selections migrate away from deprecated DeepSeek V4 Flash", async (): Promise<void> => {
+	await withTempAppData(async (): Promise<void> => {
+		installMemorySecretStore();
+		const configDir: string = join(process.env.USERPROFILE!, ".daedalus", "config");
+		const configPath: string = join(configDir, "provider.json");
+		await mkdir(configDir, { recursive: true });
+		await writeFile(configPath, JSON.stringify({
+			schemaVersion: 3,
+			activeModel: { providerId: "opencode_go", modelId: "deepseek-v4-flash" },
+			providers: {
+				opencode_go: {
+					model: "deepseek-v4-flash",
+					keyStorage: "keytar",
+					updatedAt: "2026-10-26T00:00:00.000Z",
+					modelsCache: {
+						models: [{
+							id: "deepseek-v4-flash",
+							displayName: "DeepSeek V4 Flash",
+							provider: "opencode_go",
+							contextWindowTokens: 1000000,
+							maxOutputTokens: 384000,
+							capabilities: {}
+						}],
+						updatedAt: "2026-10-26T00:00:00.000Z"
+					}
+				}
+			},
+			modelRouting: { sessionTitle: { provider: "opencode_go", model: "deepseek-v4-flash" } }
+		}), "utf8");
+
+		const selection = await getProviderModelSelectionStatus();
+		assert.equal(selection.activeModel.modelId, "deepseek-v4.1-flash");
+		assert.equal(selection.providers.find((provider) => provider.provider === "opencode_go")?.selectedModel, "deepseek-v4.1-flash");
+		assert.equal(selection.modelRouting.sessionTitle?.model, "deepseek-v4.1-flash");
+		assert.doesNotMatch(await readFile(configPath, "utf8"), /"deepseek-v4-flash"/u);
+	});
+});
+
 test("provider config saves keys under provider-scoped keytar accounts", async (): Promise<void> => {
 	await withTempAppData(async (): Promise<void> => {
 		const secrets: Map<string, string> = installMemorySecretStore();

@@ -17,6 +17,7 @@ import {
 	isProviderId,
 	mergeProviderModelsWithCatalog,
 	normalizeProviderModelCapabilities,
+	resolveCurrentProviderModelId,
 	type ProviderModelInfo
 } from "./provider-registry.js";
 import type { CustomProviderType } from "./provider-customizations-store.js";
@@ -254,7 +255,7 @@ function getModelDisplayName(models: readonly ProviderModelInfo[], modelId: stri
 function createModelRef(provider: ProviderId = DEFAULT_PROVIDER_ID, model?: string | undefined): ModelRef {
 	return {
 		providerId: provider,
-		modelId: normalizeOptionalString(model) ?? getProviderDefaultModel(provider)
+		modelId: resolveCurrentProviderModelId(provider, normalizeOptionalString(model) ?? getProviderDefaultModel(provider))
 	};
 }
 
@@ -339,7 +340,7 @@ function mergeModelRouting(existing: ProviderModelRouting | undefined, input: Pr
 		if (!isProviderId(value.provider)) {
 			throw new Error(`Invalid task model provider for ${key}: ${String(value.provider)}`);
 		}
-		const model: string = value.model.trim();
+		const model: string = resolveCurrentProviderModelId(value.provider, value.model.trim());
 		if (model.length === 0) {
 			throw new Error(`Invalid task model for ${key}: model is required`);
 		}
@@ -513,6 +514,44 @@ function parseStoredEntry(value: unknown): StoredProviderEntry | undefined {
 	return entry;
 }
 
+function migrateDeprecatedOpenCodeModels(config: StoredProviderConfig): boolean {
+	let changed: boolean = false;
+	const activeModel: ModelRef = config.activeModel;
+	const currentActiveModel: string = resolveCurrentProviderModelId(activeModel.providerId, activeModel.modelId);
+	if (currentActiveModel !== activeModel.modelId) {
+		config.activeModel = createModelRef(activeModel.providerId, currentActiveModel);
+		changed = true;
+	}
+	for (const provider of ["opencode", "opencode_go"] as const) {
+		const entry: StoredProviderEntry | undefined = config.providers[provider];
+		if (entry?.model !== undefined) {
+			const currentModel: string = resolveCurrentProviderModelId(provider, entry.model);
+			if (currentModel !== entry.model) {
+				entry.model = currentModel;
+				changed = true;
+			}
+		}
+		if (entry?.modelsCache !== undefined) {
+			const availableModels: ProviderModelInfo[] = entry.modelsCache.models.filter((model: ProviderModelInfo): boolean => model.id !== "deepseek-v4-flash");
+			if (availableModels.length !== entry.modelsCache.models.length) {
+				if (availableModels.length > 0) entry.modelsCache.models = availableModels;
+				else delete entry.modelsCache;
+				changed = true;
+			}
+		}
+	}
+	for (const task of Object.keys(config.modelRouting) as Array<keyof ProviderModelRouting>) {
+		const ref: ProviderTaskModelRef | null = config.modelRouting[task];
+		if (ref === null) continue;
+		const currentModel: string = resolveCurrentProviderModelId(ref.provider, ref.model);
+		if (currentModel !== ref.model) {
+			ref.model = currentModel;
+			changed = true;
+		}
+	}
+	return changed;
+}
+
 function parseActiveModel(value: unknown, fallbackProvider?: ProviderId | undefined, fallbackModel?: string | undefined): ModelRef {
 	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
 		const record: Record<string, unknown> = value as Record<string, unknown>;
@@ -546,7 +585,7 @@ function parseStoredProviderConfig(parsed: unknown): ParsedStoredConfig {
 			}
 		}
 		config.modelRouting = parseModelRouting(record.modelRouting);
-		return { config, migrated: false };
+		return { config, migrated: migrateDeprecatedOpenCodeModels(config) };
 	}
 
 	// v2 只在这里迁移一次，后续写回 schemaVersion 3。
@@ -568,6 +607,7 @@ function parseStoredProviderConfig(parsed: unknown): ParsedStoredConfig {
 	}
 	config.activeModel = activeModel;
 	config.modelRouting = parseModelRouting(record.modelRouting);
+	migrateDeprecatedOpenCodeModels(config);
 	return { config, migrated: true };
 }
 
@@ -633,7 +673,8 @@ export async function saveProviderConfig(input: ProviderConfigInput): Promise<Pr
 	const effectiveModelIds: Set<string> = new Set(
 		effectiveModels.map((candidate: ProviderModelInfo): string => candidate.id)
 	);
-	const requestedModel: string | undefined = normalizeOptionalString(input.model);
+	const inputModel: string | undefined = normalizeOptionalString(input.model);
+	const requestedModel: string | undefined = inputModel === undefined ? undefined : resolveCurrentProviderModelId(input.provider, inputModel);
 	if (requestedModel !== undefined && !effectiveModelIds.has(requestedModel)) {
 		throw new Error(`provider_model_not_found: Model ${requestedModel} does not exist for provider ${input.provider}.`);
 	}

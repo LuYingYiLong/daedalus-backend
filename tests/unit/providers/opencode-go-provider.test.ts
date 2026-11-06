@@ -11,7 +11,8 @@ import { runAnthropicCompatibleAgent, runAnthropicCompatibleAgentStreaming } fro
 import { listProviderModels } from "../../../src/providers/provider-models.js";
 import { modelSupportsImageInput } from "../../../src/providers/provider-image-content.js";
 import { createProviderChatOptions } from "../../../src/server/provider-chat-options.js";
-import type { ClientSession } from "../../../src/server/client-session.js";
+import { applySessionMetadata, createClientSession, type ClientSession } from "../../../src/server/client-session.js";
+import type { SessionMetadata } from "../../../src/session/session-store.js";
 import { resolveModelProfile } from "../../../src/tokens/model-profiles.js";
 import { ApprovalGateway } from "../../../src/tools/approval-gateway.js";
 import type { ToolEvent } from "../../../src/tools/tool-dispatcher.js";
@@ -65,6 +66,7 @@ async function withOpenCodeGoMockServer(run: (baseUrl: string, requests: Recorde
 			response.end(JSON.stringify({
 				data: [
 					{ id: "kimi-k3", owned_by: "opencode", context_length: 256000 },
+					{ id: "deepseek-v4-flash", owned_by: "opencode", context_length: 1000000 },
 					{ id: "minimax-m3", owned_by: "opencode", context_length: 1000000 },
 					{ id: "qwen3.7-plus", owned_by: "opencode", context_length: 1000000 },
 					{ id: "unsupported-extra-model", owned_by: "opencode", context_length: 8192 }
@@ -247,6 +249,25 @@ test("OpenCode Go selects endpoint by model catalog entry", async (): Promise<vo
 	});
 });
 
+test("OpenCode Go replaces a deprecated model in an existing session before sending", (): void => {
+	const options = createProviderChatOptions(createSession("deepseek-v4-flash", "https://opencode.ai/zen/go/v1"), "opencode-go-test-key");
+	assert.equal(options.model, "deepseek-v4.1-flash");
+	assert.equal(options.modelProfile?.model, "deepseek-v4.1-flash");
+	assert.equal(options.endpointType, "openai-chat-completions");
+});
+
+test("opening an older OpenCode Go session selects the replacement model", (): void => {
+	const session: ClientSession = createClientSession(undefined);
+	applySessionMetadata(session, {
+		id: "session-opencode-go-legacy",
+		title: "Existing session",
+		provider: "opencode_go",
+		model: "deepseek-v4-flash"
+	} as SessionMetadata);
+	assert.equal(session.providerModel, "deepseek-v4.1-flash");
+	assert.equal(session.modelProfile.model, "deepseek-v4.1-flash");
+});
+
 test("OpenCode Go uses OpenAI-compatible chat for openai-chat-completions models", async (): Promise<void> => {
 	await withOpenCodeGoMockServer(async (baseUrl: string, requests: RecordedRequest[]): Promise<void> => {
 		const text = await chatWithProvider(
@@ -331,6 +352,8 @@ test("OpenCode Go model refresh keeps only recommended mixed-endpoint models", a
 			assert.equal(result.models.find((model): boolean => model.id === "kimi-k3")?.endpointType, "openai-chat-completions");
 			assert.equal(result.models.find((model): boolean => model.id === "minimax-m3")?.endpointType, "anthropic-messages");
 			assert.equal(result.models.find((model): boolean => model.id === "qwen3.7-plus")?.endpointType, "anthropic-messages");
+			assert.equal(result.models.find((model): boolean => model.id === "deepseek-v4.1-flash")?.displayName, "DeepSeek V4.1 Flash");
+			assert.equal(result.models.some((model): boolean => model.id === "deepseek-v4-flash"), false);
 			assert.equal(result.models.some((model): boolean => model.id === "unsupported-extra-model"), false);
 		});
 	});

@@ -249,7 +249,7 @@ test("provider catalog exposes valid built-in providers and model references", (
 	assert.equal(opencodeModels.find((model) => model.id === "kimi-k2.7-code")?.capabilities.reasoning, true);
 	assert.equal(opencodeModels.find((model) => model.id === "kimi-k2.7-code")?.capabilities.tools, true);
 	assert.equal(opencodeModels.find((model) => model.id === "deepseek-v4-pro")?.maxOutputTokens, 384_000);
-	assert.equal(opencodeModels.find((model) => model.id === "deepseek-v4-flash")?.contextWindowTokens, 1_000_000);
+	assert.equal(opencodeModels.find((model) => model.id === "deepseek-v4.1-flash")?.contextWindowTokens, 1_000_000);
 	assert.equal(opencodeModels.find((model) => model.id === "glm-5.2")?.maxOutputTokens, 128_000);
 	assert.equal(opencodeModels.find((model) => model.id === "minimax-m3")?.maxOutputTokens, 131_072);
 	assert.equal(opencodeModels.find((model) => model.id === "grok-4.5")?.contextWindowTokens, 256_000);

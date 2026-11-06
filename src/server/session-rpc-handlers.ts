@@ -101,6 +101,7 @@ import {
 	getProviderEndpointTypeForModel,
 	isProviderId,
 	mergeProviderModelsWithCatalog,
+	resolveCurrentProviderModelId,
 	type ProviderModelInfo
 } from "../providers/provider-registry.js";
 import { resolveReasoningEffortForModelChange } from "../providers/reasoning-effort.js";
@@ -314,7 +315,9 @@ function createSessionUiMetadata(params: {
 		metadata.provider = params.provider;
 	}
 	if (params.model !== undefined) {
-		metadata.model = params.model;
+		metadata.model = metadata.provider === undefined
+			? params.model
+			: resolveCurrentProviderModelId(metadata.provider, params.model);
 	}
 	if (params.reasoningEffort !== undefined) {
 		metadata.reasoningEffort = params.reasoningEffort;
@@ -804,7 +807,7 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				text: "",
 				chatMode: request.params.chatMode,
 				provider: request.params.provider,
-				model: request.params.model,
+				model: metadata.model,
 				reasoningEffort: session.workbenchComposer.reasoningEffort,
 				additionalContext: [],
 				updatedAt: new Date().toISOString()
@@ -1212,6 +1215,13 @@ export async function handleSessionRequest(socket: WebSocket, request: ClientReq
 				await reconcileAgentQuestionEvents(request.params.sessionId);
 				const openMessageLimit: number = clampSessionOpenMessageLimit(request.params.limit);
 				const timeline = await openSessionRecentTimeline(request.params.sessionId, openMessageLimit);
+				if (timeline.metadata.provider !== undefined && timeline.metadata.model !== undefined) {
+					const currentModel: string = resolveCurrentProviderModelId(timeline.metadata.provider, timeline.metadata.model);
+					if (currentModel !== timeline.metadata.model) {
+						timeline.metadata.model = currentModel;
+						await updateSessionMetadata(timeline.metadata.id, { model: currentModel, updatedAt: timeline.metadata.updatedAt });
+					}
+				}
 				const existingRuntime: ClientSession | undefined = getSessionRuntime(request.params.sessionId);
 				const reusingRuntime: boolean = existingRuntime !== undefined;
 				if (existingRuntime !== undefined) {

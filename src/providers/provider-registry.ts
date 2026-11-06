@@ -82,6 +82,13 @@ const CUSTOM_MODEL_CONTEXT_WINDOW_TOKENS: number = 128_000;
 const CUSTOM_MODEL_MAX_OUTPUT_TOKENS: number = 8_192;
 export const DEFAULT_PROVIDER_ID: ProviderId = "deepseek";
 
+export function resolveCurrentProviderModelId(provider: ProviderId, modelId: string): string {
+	if ((provider === "opencode" || provider === "opencode_go") && modelId === "deepseek-v4-flash") {
+		return "deepseek-v4.1-flash";
+	}
+	return modelId;
+}
+
 function readJsonAsset(assetKey: "provider.providers" | "provider.models"): unknown {
 	return JSON.parse(readRuntimeAssetTextSync(assetKey)) as unknown;
 }
@@ -584,13 +591,14 @@ export function getProviderDefaultModel(provider: ProviderId): string {
 	if (model === null) {
 		throw new Error(`provider_not_ready: Provider ${provider} has no models.`);
 	}
-	return model;
+	return resolveCurrentProviderModelId(provider, model);
 }
 
 export function getProviderDefaultModelOrNull(provider: ProviderId): string | null {
 	const definition: ProviderDefinition = getProviderDefinition(provider);
 	const envModel: string | undefined = definition.envModel !== undefined ? process.env[definition.envModel] : undefined;
-	return envModel !== undefined && envModel.trim().length > 0 ? envModel.trim() : definition.defaultModel;
+	const model: string | null = envModel !== undefined && envModel.trim().length > 0 ? envModel.trim() : definition.defaultModel;
+	return model === null ? null : resolveCurrentProviderModelId(provider, model);
 }
 
 export function getProviderFallbackModels(provider: ProviderId): ProviderModelInfo[] {
@@ -619,7 +627,7 @@ export function mergeProviderModelsWithCatalog(
 			fallbackModels.map((model: ProviderModelInfo): [string, ProviderModelInfo] => [model.id, model])
 		);
 		const seenModelIds: Set<string> = new Set();
-		mergedModels = models.map((model: ProviderModelInfo): ProviderModelInfo => {
+		mergedModels = models.filter((model: ProviderModelInfo): boolean => resolveCurrentProviderModelId(provider, model.id) === model.id).map((model: ProviderModelInfo): ProviderModelInfo => {
 			seenModelIds.add(model.id);
 			const fallback: ProviderModelInfo | undefined = fallbackById.get(model.id);
 			return {

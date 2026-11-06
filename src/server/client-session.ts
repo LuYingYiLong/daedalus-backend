@@ -4,7 +4,7 @@ import type { PendingAiContinuation } from "../session/pending-continuation.js";
 import type { PendingToolBudget } from "../session/pending-tool-budget.js";
 import { ApprovalGateway } from "../tools/approval-gateway.js";
 import { getDefaultModelProfile, resolveModelProfile } from "../tokens/model-profiles.js";
-import { getProviderDefaultModel, isProviderId } from "../providers/provider-registry.js";
+import { getProviderDefaultModel, isProviderId, resolveCurrentProviderModelId } from "../providers/provider-registry.js";
 import { resolveReasoningEffort } from "../providers/reasoning-effort.js";
 import type { WorktreeLifecycleStatus, WorkspaceConfig } from "../workspace/types.js";
 import type { AgentRunState } from "../workflow/agent-run-state.js";
@@ -242,7 +242,7 @@ export function applySessionMetadata(session: ClientSession, metadata: SessionMe
 	session.scheduledTaskOrigin = metadata.scheduledTaskOrigin;
 	if (metadata.provider !== undefined && isProviderId(metadata.provider)) {
 		session.activeProvider = metadata.provider;
-		session.providerModel = metadata.model ?? getProviderDefaultModel(metadata.provider);
+		session.providerModel = resolveCurrentProviderModelId(metadata.provider, metadata.model ?? getProviderDefaultModel(metadata.provider));
 		session.modelProfile = resolveModelProfile(metadata.provider, session.providerModel);
 		session.providerApiKey = undefined;
 		session.providerBaseUrl = undefined;
